@@ -1,0 +1,10 @@
+.persona-settings { display: grid; gap: 12px; margin-top: 20px; }
+.persona-settings header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.persona-settings h2 { margin: 0 0 4px; }
+.persona-settings header p, .persona-settings .muted { margin: 0; }
+.persona-settings form { display: grid; gap: 14px; }
+.persona-settings label:not(.check-row) { display: grid; gap: 6px; }
+.persona-settings textarea { resize: vertical; }
+.persona-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.persona-actions { display: flex; align-items: center; gap: 12px; }
+@media (max-width: 720px) { .persona-row { grid-template-columns: 1fr; } }

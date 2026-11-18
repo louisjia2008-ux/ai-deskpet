@@ -1,0 +1,27 @@
+.attention-center { min-width: 0; }
+.attention-center .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+.attention-center .page-header h1 { margin-bottom: 6px; }
+.attention-center .page-header p, .attention-note { color: var(--muted, #5d6d84); line-height: 1.6; }
+.attention-center .page-header button { flex-shrink: 0; }
+.attention-overview { display: flex; align-items: center; gap: 12px; padding: 14px 18px; margin: 20px 0; border: 1px solid var(--border, #dce2df); border-radius: 14px; background: var(--blue-soft, #edf3fc); color: var(--muted, #5d6d84); }
+.attention-overview strong { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.attention-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.attention-filters button { border: 1px solid var(--border, #dce2df); border-radius: 22px; background: transparent; color: var(--muted, #5d6d84); padding: 8px 14px; }
+.attention-filters button[aria-pressed="true"] { background: var(--blue-soft, #edf3fc); border-color: currentColor; color: var(--accent, #3e669a); }
+.attention-filters span { margin-left: 8px; font-variant-numeric: tabular-nums; }
+.attention-note { font-size: .82rem; }
+.attention-list { display: grid; gap: 14px; margin-top: 18px; }
+.attention-card { border: 1px solid var(--border, #dce2df); border-radius: 16px; padding: 18px 20px; min-width: 0; }
+.attention-card h2 { margin: 12px 0 7px; font-size: 1.06rem; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.attention-card p { margin: 6px 0; }
+.attention-card-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; font-size: .76rem; color: var(--muted, #5d6d84); }
+.attention-card-heading time { margin-left: auto; }
+.attention-kind { padding: 4px 9px; border-radius: 8px; background: var(--blue-soft, #edf3fc); color: var(--accent, #3e669a); font-weight: 600; }
+.attention-action .attention-kind { background: var(--surface, #f5f6fa); }
+.attention-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
+.attention-empty { padding: 40px 20px; text-align: center; border: 1px dashed var(--border, #dce2df); border-radius: 16px; color: var(--muted, #5d6d84); }
+.attention-more { margin-top: 14px; }
+.attention-center footer { margin-top: 24px; }
+.attention-notice { background: var(--surface, #f5f6fa); }
+.attention-diagnostics { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border, #dce2df); overflow-wrap: anywhere; }
+@media (max-width: 620px) { .attention-card { padding: 16px; } .attention-card-heading time { width: 100%; margin-left: 0; } .attention-actions button { flex: 1; } }

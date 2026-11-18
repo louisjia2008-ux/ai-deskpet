@@ -1,0 +1,556 @@
+{
+  "approved_clips_root": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips",
+  "clips": [
+    {
+      "baseline_drift": 0,
+      "bbox_height_drift": 0,
+      "clip": "walk_left",
+      "expected_frame_count": 16,
+      "failures": [],
+      "frame_count": 16,
+      "frames": [
+        {
+          "alpha_bbox": [
+            53,
+            25,
+            332,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 0,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_000.png"
+        },
+        {
+          "alpha_bbox": [
+            63,
+            25,
+            320,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 1,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_001.png"
+        },
+        {
+          "alpha_bbox": [
+            63,
+            25,
+            322,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 2,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_002.png"
+        },
+        {
+          "alpha_bbox": [
+            51,
+            25,
+            332,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 3,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_003.png"
+        },
+        {
+          "alpha_bbox": [
+            59,
+            25,
+            325,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 4,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_004.png"
+        },
+        {
+          "alpha_bbox": [
+            47,
+            25,
+            336,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 5,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_005.png"
+        },
+        {
+          "alpha_bbox": [
+            74,
+            25,
+            310,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 6,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_006.png"
+        },
+        {
+          "alpha_bbox": [
+            75,
+            25,
+            310,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 7,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_007.png"
+        },
+        {
+          "alpha_bbox": [
+            57,
+            25,
+            328,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 8,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_008.png"
+        },
+        {
+          "alpha_bbox": [
+            52,
+            25,
+            332,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 9,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_009.png"
+        },
+        {
+          "alpha_bbox": [
+            63,
+            25,
+            320,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 10,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_010.png"
+        },
+        {
+          "alpha_bbox": [
+            51,
+            25,
+            334,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 11,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_011.png"
+        },
+        {
+          "alpha_bbox": [
+            74,
+            25,
+            310,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 12,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_012.png"
+        },
+        {
+          "alpha_bbox": [
+            75,
+            25,
+            309,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 13,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_013.png"
+        },
+        {
+          "alpha_bbox": [
+            68,
+            25,
+            316,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 14,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_014.png"
+        },
+        {
+          "alpha_bbox": [
+            57,
+            25,
+            328,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 15,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left/frame_015.png"
+        }
+      ],
+      "image_sizes": [
+        [
+          384,
+          512
+        ]
+      ],
+      "passed": true,
+      "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_left"
+    },
+    {
+      "baseline_drift": 0,
+      "bbox_height_drift": 0,
+      "clip": "walk_right",
+      "expected_frame_count": 16,
+      "failures": [],
+      "frame_count": 16,
+      "frames": [
+        {
+          "alpha_bbox": [
+            52,
+            25,
+            331,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 0,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_000.png"
+        },
+        {
+          "alpha_bbox": [
+            64,
+            25,
+            321,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 1,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_001.png"
+        },
+        {
+          "alpha_bbox": [
+            62,
+            25,
+            321,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 2,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_002.png"
+        },
+        {
+          "alpha_bbox": [
+            52,
+            25,
+            333,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 3,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_003.png"
+        },
+        {
+          "alpha_bbox": [
+            59,
+            25,
+            325,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 4,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_004.png"
+        },
+        {
+          "alpha_bbox": [
+            48,
+            25,
+            337,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 5,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_005.png"
+        },
+        {
+          "alpha_bbox": [
+            74,
+            25,
+            310,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 6,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_006.png"
+        },
+        {
+          "alpha_bbox": [
+            74,
+            25,
+            309,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 7,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_007.png"
+        },
+        {
+          "alpha_bbox": [
+            56,
+            25,
+            327,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 8,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_008.png"
+        },
+        {
+          "alpha_bbox": [
+            52,
+            25,
+            332,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 9,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_009.png"
+        },
+        {
+          "alpha_bbox": [
+            64,
+            25,
+            321,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 10,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_010.png"
+        },
+        {
+          "alpha_bbox": [
+            50,
+            25,
+            333,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 11,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_011.png"
+        },
+        {
+          "alpha_bbox": [
+            74,
+            25,
+            310,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 12,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_012.png"
+        },
+        {
+          "alpha_bbox": [
+            75,
+            25,
+            309,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 13,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_013.png"
+        },
+        {
+          "alpha_bbox": [
+            68,
+            25,
+            316,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 14,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_014.png"
+        },
+        {
+          "alpha_bbox": [
+            56,
+            25,
+            327,
+            489
+          ],
+          "bbox_height": 464,
+          "foot_baseline_estimate": 489,
+          "frame_index": 15,
+          "image_size": [
+            384,
+            512
+          ],
+          "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right/frame_015.png"
+        }
+      ],
+      "image_sizes": [
+        [
+          384,
+          512
+        ]
+      ],
+      "passed": true,
+      "path": "/path/to/workspace\u5916\u63a5/\u684c\u5ba0/DeskPet/Assets/CharacterV2/approved/clips/walk_right"
+    }
+  ],
+  "max_baseline_drift": 3,
+  "max_bbox_height_drift": 6,
+  "passed": true
+}

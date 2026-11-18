@@ -1,0 +1,21 @@
+.chat-markdown { min-width: 0; overflow-wrap: anywhere; }
+.chat-markdown > :first-child { margin-top: 0; }
+.chat-markdown > :last-child { margin-bottom: 0; }
+.chat-markdown p { margin: 0 0 .7em; white-space: pre-wrap; }
+.chat-markdown h1, .chat-markdown h2, .chat-markdown h3, .chat-markdown h4 { margin: 1em 0 .45em; font-size: 1.05em; font-weight: 650; line-height: 1.4; }
+.chat-markdown h1 { font-size: 1.25em; }
+.chat-markdown h2 { font-size: 1.15em; }
+.chat-markdown ul, .chat-markdown ol { margin: 0 0 .7em; padding-left: 1.5em; }
+.chat-markdown li + li { margin-top: .25em; }
+.chat-markdown li > p { margin: 0; }
+.chat-markdown a { color: var(--accent, #365b8c); text-decoration: underline; text-underline-offset: 2px; }
+.chat-markdown blockquote { margin: 0 0 .7em; padding: 2px 0 2px 12px; border-left: 3px solid var(--border, #d7dfe9); opacity: .85; }
+.chat-markdown hr { margin: 1em 0; border: 0; border-top: 1px solid var(--border, #d7dfe9); }
+.chat-markdown code { padding: .1em .35em; border-radius: 5px; background: var(--soft, #f5f8fc); font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chat-markdown pre { margin: 0 0 .7em; padding: 10px 12px; overflow-x: auto; border-radius: 8px; background: var(--soft, #f5f8fc); }
+.chat-markdown pre code { padding: 0; background: none; white-space: pre; overflow-wrap: normal; }
+.chat-markdown-table { margin: 0 0 .7em; overflow-x: auto; }
+.chat-markdown table { border-collapse: collapse; font-size: .95em; }
+.chat-markdown th, .chat-markdown td { padding: 5px 10px; border: 1px solid var(--border, #d7dfe9); text-align: left; overflow-wrap: normal; }
+.chat-markdown th { background: var(--soft, #f5f8fc); font-weight: 600; }
+.reply-bubbles .chat-markdown { white-space: normal; }

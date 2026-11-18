@@ -1,0 +1,231 @@
+{
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "app.chat.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chat"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天"
+          }
+        }
+      }
+    },
+    "app.menu.open" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开"
+          }
+        }
+      }
+    },
+    "app.startup.failed.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeskPet failed to start"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeskPet 启动失败"
+          }
+        }
+      }
+    },
+    "app.startup.failed.body" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeskPet couldn't finish startup configuration.\n\nReason: %@\n\nThe app is about to quit. Please check:\n• Free disk space and permissions on ~/Library/Application Support\n• macOS version (14.0+ required)\n• Stale lock files from a previous crash\n\nLogs are on stderr; search \"DESKPET_ENVIRONMENT_ERROR\" in Console.app for details."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeskPet 无法完成启动前的环境配置。\n\n原因：%@\n\n应用即将退出。请检查：\n• 磁盘空间与 ~/Library/Application Support 权限\n• macOS 版本（需要 14.0+）\n• 上一次崩溃后残留的锁文件\n\n详细日志已写入标准错误流；可在 Console.app 搜索 \"DESKPET_ENVIRONMENT_ERROR\" 查看。"
+          }
+        }
+      }
+    },
+    "focus.mode.active" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Focus companion active"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "专注陪伴中"
+          }
+        }
+      }
+    },
+    "focus.mode.start" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start focus"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始专注"
+          }
+        }
+      }
+    },
+    "focus.mode.pause" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pause"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂停"
+          }
+        }
+      }
+    },
+    "focus.mode.resume" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续"
+          }
+        }
+      }
+    },
+    "task.complete.confetti.text" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Task complete"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成"
+          }
+        }
+      }
+    },
+    "ai.error.cancelled" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelled"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消"
+          }
+        }
+      }
+    },
+    "ai.error.unavailable" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI unavailable: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 暂不可用：%@"
+          }
+        }
+      }
+    },
+    "settings.reduce_motion.override.label" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Override system accessibility settings in DeskPet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在应用内覆盖系统设置"
+          }
+        }
+      }
+    },
+    "settings.reduce_motion.label" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disable all animations (Reduce Motion)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "禁用所有动画（Reduce Motion）"
+          }
+        }
+      }
+    },
+    "settings.reduce_transparency.label" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disable glass / transparency (Reduce Transparency)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "禁用玻璃材质 / 透明背景（Reduce Transparency）"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

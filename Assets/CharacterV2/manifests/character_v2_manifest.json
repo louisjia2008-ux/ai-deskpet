@@ -1,0 +1,1001 @@
+{
+  "schemaVersion": 2,
+  "manifestID": "deskpet_character_v2_p6_2_locomotion",
+  "character": {
+    "id": "default_blue_white_v2",
+    "displayName": "Default Blue White Companion V2",
+    "canonicalScale": "desktop_sd_3_2_to_3_8_heads",
+    "asymmetricFeatures": [
+      "side_ponytail",
+      "hair_accessory",
+      "asymmetric_hair_volume"
+    ],
+    "runtimeFallback": "Resources/Characters/Default/character_anchor_rgba_v3.png"
+  },
+  "pipeline": {
+    "candidatePath": "DeskPet/Assets/CharacterV2/candidates",
+    "reviewPath": "DeskPet/Assets/CharacterV2/review",
+    "approvedPath": "DeskPet/Assets/CharacterV2/approved",
+    "ruleSummary": [
+      "candidate assets are never loaded as production assets",
+      "review validates identity, alpha, canvas, pivot, hitbox, foot contacts, speed tier, and asymmetry",
+      "approved left/right locomotion clips must come from explicit human-accepted review sources; mirrored pairs are allowed only when acceptance records declare that scope",
+      "placeholder or legacy clips may use explicit same-direction fallback only and must not be reported as final art"
+    ]
+  },
+  "clips": [
+    {
+      "id": "idle",
+      "state": "idle",
+      "category": "idle",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 6,
+      "targetFrameCount": 6,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Approved front idle frames promoted from left_motion_image2 human-accepted runtime candidate on 2026-06-28."
+    },
+    {
+      "id": "blink",
+      "state": "blink",
+      "category": "idle",
+      "fps": 12,
+      "baseFps": 12,
+      "minFps": 12,
+      "maxFps": 12,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 3,
+      "targetFrameCount": 4,
+      "frames": [
+        "blink_00",
+        "blink_01",
+        "blink_02"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [
+        {
+          "frame": 1,
+          "type": "eyes_closed"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Static PNG MVP uses procedural squash; final rig should swap eye layers."
+    },
+    {
+      "id": "idle_look_around",
+      "state": "idleLookAround",
+      "category": "idle",
+      "fps": 8,
+      "baseFps": 8,
+      "minFps": 8,
+      "maxFps": 8,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 4,
+      "targetFrameCount": 8,
+      "frames": [
+        "idle_look_around_00",
+        "idle_look_around_01",
+        "idle_look_around_02",
+        "idle_look_around_03"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [
+        {
+          "frame": 2,
+          "type": "look_side"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Procedural offset fallback until separate head/eye layers are approved."
+    },
+    {
+      "id": "start_move",
+      "state": "startMoving",
+      "category": "locomotion_legacy",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "legacy",
+      "required": true,
+      "minFrameCount": 4,
+      "targetFrameCount": 8,
+      "frames": [
+        "start_move_00",
+        "start_move_01",
+        "start_move_02",
+        "start_move_03"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.66,
+        "height": 0.09,
+        "alpha": 0.25
+      },
+      "events": [
+        {
+          "frame": 1,
+          "type": "weight_shift"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Legacy directionless 4-frame start clip retained only as explicit fallback for directional placeholders."
+    },
+    {
+      "id": "stop_move",
+      "state": "stopMoving",
+      "category": "locomotion_legacy",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "legacy",
+      "required": true,
+      "minFrameCount": 4,
+      "targetFrameCount": 8,
+      "frames": [
+        "stop_move_00",
+        "stop_move_01",
+        "stop_move_02",
+        "stop_move_03"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.66,
+        "height": 0.09,
+        "alpha": 0.25
+      },
+      "events": [
+        {
+          "frame": 3,
+          "type": "settle"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Legacy directionless 4-frame stop clip retained only as explicit fallback for directional placeholders."
+    },
+    {
+      "id": "start_move_left",
+      "state": "startMovingLeft",
+      "category": "locomotion",
+      "direction": "left",
+      "speedTier": "walk",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 6,
+      "targetFrameCount": 6,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.66,
+        "height": 0.09,
+        "alpha": 0.25
+      },
+      "events": [
+        {
+          "frame": 1,
+          "type": "left_turn_start"
+        },
+        {
+          "frame": 5,
+          "type": "left_turn_complete"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Approved front-to-left turn clip promoted from left_motion_image2 human-accepted runtime candidate on 2026-06-28."
+    },
+    {
+      "id": "start_move_right",
+      "state": "startMovingRight",
+      "category": "locomotion",
+      "direction": "right",
+      "speedTier": "walk",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 6,
+      "targetFrameCount": 6,
+      "frames": [
+        "start_move_right_00",
+        "start_move_right_01",
+        "start_move_right_02",
+        "start_move_right_03",
+        "start_move_right_04",
+        "start_move_right_05"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.66,
+        "height": 0.09,
+        "alpha": 0.25
+      },
+      "events": [
+        {
+          "frame": 1,
+          "type": "right_weight_shift"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Approved right start clip derived by horizontal mirror from the human-accepted start_move_left runtime candidate on 2026-06-28; replaces legacy directionless fallback."
+    },
+    {
+      "id": "stop_move_left",
+      "state": "stopMovingLeft",
+      "category": "locomotion",
+      "direction": "left",
+      "speedTier": "walk",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 6,
+      "targetFrameCount": 6,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.66,
+        "height": 0.09,
+        "alpha": 0.25
+      },
+      "events": [
+        {
+          "frame": 0,
+          "type": "left_stop_start"
+        },
+        {
+          "frame": 5,
+          "type": "left_settle"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Approved left stop clip promoted from left_motion_image2 human-accepted runtime candidate on 2026-06-28."
+    },
+    {
+      "id": "turn_left_to_front",
+      "state": "turnLeftToFront",
+      "category": "locomotion",
+      "direction": "left",
+      "speedTier": "walk",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 6,
+      "targetFrameCount": 6,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.66,
+        "height": 0.09,
+        "alpha": 0.25
+      },
+      "events": [
+        {
+          "frame": 0,
+          "type": "left_turn_back_start"
+        },
+        {
+          "frame": 5,
+          "type": "front_settle"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Approved left-to-front turnback clip promoted from left_motion_image2 human-accepted runtime candidate on 2026-06-28."
+    },
+    {
+      "id": "stop_move_right",
+      "state": "stopMovingRight",
+      "category": "locomotion",
+      "direction": "right",
+      "speedTier": "walk",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 6,
+      "targetFrameCount": 6,
+      "frames": [
+        "stop_move_right_00",
+        "stop_move_right_01",
+        "stop_move_right_02",
+        "stop_move_right_03",
+        "stop_move_right_04",
+        "stop_move_right_05"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.66,
+        "height": 0.09,
+        "alpha": 0.25
+      },
+      "events": [
+        {
+          "frame": 5,
+          "type": "right_settle"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Approved right stop clip derived by horizontal mirror from the human-accepted stop_move_left runtime candidate on 2026-06-28; replaces legacy directionless fallback."
+    },
+    {
+      "id": "walk_left",
+      "state": "walkLeft",
+      "category": "locomotion",
+      "direction": "left",
+      "speedTier": "walk",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12,
+      "speedRange": {
+        "min": 35,
+        "max": 85
+      },
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 16,
+      "targetFrameCount": 16,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005",
+        "frame_006",
+        "frame_007",
+        "frame_008",
+        "frame_009",
+        "frame_010",
+        "frame_011",
+        "frame_012",
+        "frame_013",
+        "frame_014",
+        "frame_015"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.68,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [
+        {
+          "frame": 0,
+          "type": "foot_contact",
+          "foot": "left"
+        },
+        {
+          "frame": 4,
+          "type": "foot_contact",
+          "foot": "right"
+        }
+      ],
+      "footContacts": [
+        {
+          "frame": 0,
+          "foot": "left"
+        },
+        {
+          "frame": 4,
+          "foot": "right"
+        }
+      ],
+      "fallback": null,
+      "notes": "Approved left walk loop promoted from left_motion_image2 state-machine runtime candidate on 2026-06-28."
+    },
+    {
+      "id": "walk_right",
+      "state": "walkRight",
+      "category": "locomotion",
+      "direction": "right",
+      "speedTier": "walk",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12,
+      "speedRange": {
+        "min": 35,
+        "max": 85
+      },
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 16,
+      "targetFrameCount": 16,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005",
+        "frame_006",
+        "frame_007",
+        "frame_008",
+        "frame_009",
+        "frame_010",
+        "frame_011",
+        "frame_012",
+        "frame_013",
+        "frame_014",
+        "frame_015"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.68,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [
+        {
+          "frame": 0,
+          "type": "foot_contact",
+          "foot": "right"
+        },
+        {
+          "frame": 4,
+          "type": "foot_contact",
+          "foot": "left"
+        }
+      ],
+      "footContacts": [
+        {
+          "frame": 0,
+          "foot": "right"
+        },
+        {
+          "frame": 4,
+          "foot": "left"
+        }
+      ],
+      "fallback": null,
+      "notes": "Approved first runtime walk animation from human-accepted walk_from_keyposes_20260622_v3 normalized right frames. Known foot contact drift accepted for first runtime integration."
+    },
+    {
+      "id": "brisk_walk_left",
+      "state": "briskWalkLeft",
+      "category": "locomotion",
+      "direction": "left",
+      "speedTier": "briskWalk",
+      "fps": 12,
+      "baseFps": 12,
+      "minFps": 10,
+      "maxFps": 14,
+      "speedRange": {
+        "min": 85,
+        "max": 130
+      },
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 12,
+      "targetFrameCount": 16,
+      "frames": [
+        "brisk_walk_left_00",
+        "brisk_walk_left_01",
+        "brisk_walk_left_02",
+        "brisk_walk_left_03",
+        "brisk_walk_left_04",
+        "brisk_walk_left_05",
+        "brisk_walk_left_06",
+        "brisk_walk_left_07",
+        "brisk_walk_left_08",
+        "brisk_walk_left_09",
+        "brisk_walk_left_10",
+        "brisk_walk_left_11",
+        "brisk_walk_left_12",
+        "brisk_walk_left_13",
+        "brisk_walk_left_14",
+        "brisk_walk_left_15"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.69,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [
+        {
+          "frame": 0,
+          "type": "foot_contact",
+          "foot": "left"
+        },
+        {
+          "frame": 8,
+          "type": "foot_contact",
+          "foot": "right"
+        }
+      ],
+      "footContacts": [
+        {
+          "frame": 0,
+          "foot": "left"
+        },
+        {
+          "frame": 8,
+          "foot": "right"
+        }
+      ],
+      "fallback": {
+        "clipID": "walk_left",
+        "mode": "TEMP_LEGACY_SAME_DIRECTION_FALLBACK",
+        "notes": "Runtime placeholder until independently authored brisk left frames exist."
+      },
+      "notes": "P6.2 target clip. Not final art yet."
+    },
+    {
+      "id": "brisk_walk_right",
+      "state": "briskWalkRight",
+      "category": "locomotion",
+      "direction": "right",
+      "speedTier": "briskWalk",
+      "fps": 12,
+      "baseFps": 12,
+      "minFps": 10,
+      "maxFps": 14,
+      "speedRange": {
+        "min": 85,
+        "max": 130
+      },
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 12,
+      "targetFrameCount": 16,
+      "frames": [
+        "brisk_walk_right_00",
+        "brisk_walk_right_01",
+        "brisk_walk_right_02",
+        "brisk_walk_right_03",
+        "brisk_walk_right_04",
+        "brisk_walk_right_05",
+        "brisk_walk_right_06",
+        "brisk_walk_right_07",
+        "brisk_walk_right_08",
+        "brisk_walk_right_09",
+        "brisk_walk_right_10",
+        "brisk_walk_right_11",
+        "brisk_walk_right_12",
+        "brisk_walk_right_13",
+        "brisk_walk_right_14",
+        "brisk_walk_right_15"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.69,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [
+        {
+          "frame": 0,
+          "type": "foot_contact",
+          "foot": "right"
+        },
+        {
+          "frame": 8,
+          "type": "foot_contact",
+          "foot": "left"
+        }
+      ],
+      "footContacts": [
+        {
+          "frame": 0,
+          "foot": "right"
+        },
+        {
+          "frame": 8,
+          "foot": "left"
+        }
+      ],
+      "fallback": {
+        "clipID": "walk_right",
+        "mode": "TEMP_LEGACY_SAME_DIRECTION_FALLBACK",
+        "notes": "Runtime placeholder until independently authored brisk right frames exist."
+      },
+      "notes": "P6.2 target clip. Not final art yet."
+    },
+    {
+      "id": "run_left",
+      "state": "runLeft",
+      "category": "locomotion",
+      "direction": "left",
+      "speedTier": "run",
+      "fps": 15,
+      "baseFps": 15,
+      "minFps": 12,
+      "maxFps": 18,
+      "speedRange": {
+        "min": 130,
+        "max": 220
+      },
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 12,
+      "targetFrameCount": 16,
+      "frames": [
+        "run_left_00",
+        "run_left_01",
+        "run_left_02",
+        "run_left_03",
+        "run_left_04",
+        "run_left_05",
+        "run_left_06",
+        "run_left_07",
+        "run_left_08",
+        "run_left_09",
+        "run_left_10",
+        "run_left_11"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.72,
+        "height": 0.1,
+        "alpha": 0.25
+      },
+      "events": [
+        {
+          "frame": 0,
+          "type": "foot_contact",
+          "foot": "left"
+        },
+        {
+          "frame": 6,
+          "type": "foot_contact",
+          "foot": "right"
+        }
+      ],
+      "footContacts": [
+        {
+          "frame": 0,
+          "foot": "left"
+        },
+        {
+          "frame": 6,
+          "foot": "right"
+        }
+      ],
+      "fallback": {
+        "clipID": "walk_left",
+        "mode": "TEMP_LEGACY_SAME_DIRECTION_FALLBACK",
+        "notes": "Runtime placeholder until independently authored run left frames exist."
+      },
+      "notes": "P6.2 target clip. Not final art yet."
+    },
+    {
+      "id": "run_right",
+      "state": "runRight",
+      "category": "locomotion",
+      "direction": "right",
+      "speedTier": "run",
+      "fps": 15,
+      "baseFps": 15,
+      "minFps": 12,
+      "maxFps": 18,
+      "speedRange": {
+        "min": 130,
+        "max": 220
+      },
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 12,
+      "targetFrameCount": 16,
+      "frames": [
+        "run_right_00",
+        "run_right_01",
+        "run_right_02",
+        "run_right_03",
+        "run_right_04",
+        "run_right_05",
+        "run_right_06",
+        "run_right_07",
+        "run_right_08",
+        "run_right_09",
+        "run_right_10",
+        "run_right_11"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.22,
+        "y": 0.08,
+        "width": 0.56,
+        "height": 0.84
+      },
+      "shadow": {
+        "width": 0.72,
+        "height": 0.1,
+        "alpha": 0.25
+      },
+      "events": [
+        {
+          "frame": 0,
+          "type": "foot_contact",
+          "foot": "right"
+        },
+        {
+          "frame": 6,
+          "type": "foot_contact",
+          "foot": "left"
+        }
+      ],
+      "footContacts": [
+        {
+          "frame": 0,
+          "foot": "right"
+        },
+        {
+          "frame": 6,
+          "foot": "left"
+        }
+      ],
+      "fallback": {
+        "clipID": "walk_right",
+        "mode": "TEMP_LEGACY_SAME_DIRECTION_FALLBACK",
+        "notes": "Runtime placeholder until independently authored run right frames exist."
+      },
+      "notes": "P6.2 target clip. Not final art yet."
+    }
+  ],
+  "habitat": {
+    "id": "blue_white_magic_book_soft_bed",
+    "placeholder": false,
+    "style": "blue-white magic book cushion with soft cloud platform and small star accent",
+    "anchor": {
+      "x": 0.5,
+      "y": 0.18
+    },
+    "hitbox": {
+      "x": 0.08,
+      "y": 0.08,
+      "width": 0.84,
+      "height": 0.52
+    },
+    "resources": [
+      "approved/habitat/habitat_blue_white_magic_book_soft_bed_20260620_02.png"
+    ],
+    "notes": "Generated with image_gen on 2026-06-20, alpha extracted from green chroma-key source and validated as RGBA. Runtime still uses the SpriteKit procedural habitat until image loading is wired."
+  }
+}

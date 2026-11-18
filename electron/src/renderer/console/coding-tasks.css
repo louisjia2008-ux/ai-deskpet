@@ -1,0 +1,5 @@
+.coding-repository { align-items: center; flex-wrap: wrap; }
+.coding-repository span, .coding-task p { overflow-wrap: anywhere; }
+.coding-task details { padding-block: 8px; }
+.coding-task summary { cursor: pointer; font-weight: 600; }
+.coding-task pre { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "installedApp": "/absolute/path/to/DeskPet Electron.app",
+  "profileRoot": "/absolute/path/to/profile",
+  "backupRoot": "/absolute/path/to/backups",
+  "stageRoot": "/absolute/path/to/stages",
+  "signingIdentity": "<certificate SHA-1, 40 hexadecimal characters>",
+  "electronZipDir": "/absolute/path/to/electron-archive-cache",
+  "workerDir": "/absolute/path/to/listener-code",
+  "wechatRoot": "/absolute/path/to/wechat-runtime-root",
+  "launchAgent": "/absolute/path/to/listener.plist",
+  "launchAgentLabel": "<launchd label>",
+  "python": "/absolute/path/to/python3"
+}

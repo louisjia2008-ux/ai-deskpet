@@ -1,0 +1,27 @@
+.artifacts-page { max-width: 1400px; margin: 0 auto; padding: 24px; color: var(--text, #243951); }
+.artifacts-page h1 { margin: 6px 0 12px; }
+.artifacts-page header p { color: var(--muted, #61738b); }
+.artifact-search { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 24px 0; }
+.artifact-search label { flex: 1 1 250px; }
+.artifact-search input { display: block; width: 100%; margin-top: 7px; }
+.artifact-workspace { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(0, 1.3fr); align-items: start; gap: 20px; }
+.artifact-list { display: grid; min-width: 0; gap: 10px; }
+.artifact-card, .artifact-detail { border: 1px solid var(--border, #dce4ef); border-radius: 10px; padding: 14px; min-width: 0; background: var(--base, #fff); }
+.artifact-card p { margin: 7px 0; font-size: 13px; overflow-wrap: anywhere; }
+.artifact-card small { display: block; margin: 7px 0; color: var(--muted, #61738b); font-size: 11px; overflow-wrap: anywhere; }
+.artifact-name { text-align: left; width: 100%; overflow-wrap: anywhere; background: none; color: var(--strong, #1e3655); padding: 0; border: 0; font-weight: 650; }
+.artifact-name[aria-pressed="true"] { color: var(--blue-strong, #3f6aa1); text-decoration: underline; }
+.artifact-detail { position: sticky; top: 12px; max-height: calc(100vh - 90px); overflow: auto; }
+.artifact-detail h2 { font-size: 14px; overflow-wrap: anywhere; margin: 0 0 14px; }
+.artifact-preview { min-width: 0; max-height: 72vh; overflow: auto; }
+.artifact-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.artifact-preview p[role="note"] { font-size: 12px; color: var(--muted, #61738b); }
+.artifact-preview .chat-markdown { font-size: 13px; }
+.artifact-table { overflow: auto; max-height: 60vh; }
+.artifact-table table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.artifact-table th, .artifact-table td { text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border, #dce4ef); padding: 8px; min-width: 70px; max-width: 300px; }
+.artifact-table th { position: sticky; top: 0; background: var(--soft, #f5f8fc); }
+.artifact-pdf-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.artifact-pdf canvas { max-width: 100%; height: auto; background: #fff; }
+.artifact-pdf canvas[hidden] { display: none; }
+@media (max-width: 1000px) { .artifact-workspace { grid-template-columns: minmax(0, 1fr); } .artifact-detail { position: static; max-height: none; } .artifacts-page { padding: 16px; } }

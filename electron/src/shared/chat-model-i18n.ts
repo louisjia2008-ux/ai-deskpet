@@ -1,0 +1,26 @@
+export const chatModelEn = {
+  'chat.model': 'Chat model',
+  'chat.refreshModels': 'Refresh models',
+  'chat.modelsLoading': 'Loading models…',
+  'chat.modelSaving': 'Saving model selection…',
+  'chat.modelNextTurn': 'This reply keeps the model it started with. Your new selection applies to the next message; conversation history stays.',
+  'chat.modelShared': 'History stays when you switch. New messages and companion check-ins use your saved selection.',
+  'chat.modelSaveFailed': 'The model selection could not be saved. Your previous selection is still in use.',
+  'chat.modelsUnavailable': 'The model list is unavailable. You can keep the current model or enter a model ID supported by this service.',
+  'chat.manualModel': 'Enter a model ID',
+  'chat.modelId': 'Model ID',
+  'chat.useModel': 'Use this model',
+} as const;
+export const chatModelZhCN: Record<keyof typeof chatModelEn, string> = {
+  'chat.model': '聊天模型',
+  'chat.refreshModels': '刷新模型',
+  'chat.modelsLoading': '读取模型中…',
+  'chat.modelSaving': '正在保存模型选择…',
+  'chat.modelNextTurn': '本条回复继续使用发送时的模型，切换对下一条消息生效，历史对话保留。',
+  'chat.modelShared': '切换后保留历史对话，新消息和主动聊天都会使用保存的选择。',
+  'chat.modelSaveFailed': '模型选择未能保存，仍使用之前的选择。',
+  'chat.modelsUnavailable': '暂时无法读取模型列表，可以继续用当前模型，或手动填写此服务支持的模型名。',
+  'chat.manualModel': '手动填写模型名',
+  'chat.modelId': '模型名称',
+  'chat.useModel': '使用这个模型',
+};

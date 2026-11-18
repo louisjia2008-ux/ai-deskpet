@@ -1,0 +1,118 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# SwiftPM and Xcode generated data
+.build/
+.swiftpm/
+DerivedData/
+build/
+xcuserdata/
+**/xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Local compiler and Codex caches
+.codex-build/
+.codex-build-*/
+.codex-clang-cache/
+.codex-swiftpm-cache/
+.codex_tmp/
+
+# Node and Python generated dependencies/caches
+Live2DRuntime/node_modules/
+Live2DRuntime/.cache/
+electron/node_modules/
+electron/.vitest/
+electron/minecraft-runtime/node_modules/
+electron/minecraft-companion-runtime/node_modules/
+electron/playwright-mcp-runtime/node_modules/
+electron/.minecraft-package/
+electron/migration/.build/
+electron/migration/bin/
+electron/.swiftpm-cache/
+electron/.webpack/
+electron/out/
+electron/coverage/
+electron/playwright-report/
+electron/test-results/
+electron/.cache/
+__pycache__/
+*.py[cod]
+
+# Local logs and temporary output
+*.log
+tmp/
+temp/
+
+# Local environment and credential material
+.env
+.env.*
+!.env.example
+electron/**/*.env
+electron/**/*.env.*
+!electron/**/.env.example
+*.key
+*.pem
+*.p12
+*.mobileprovision
+*.cer
+*.pfx
+
+# Machine-local pointers
+.live2d-review-path
+
+# Local long-task execution state
+.ralph/
+
+# Electron runtime data and user-supplied licensed content
+electron/user-data/
+electron/runtime-data/
+electron/managed/
+electron/downloads/
+electron/evidence/
+electron/screenshots/
+electron/**/*.zip
+electron/**/live2dcubismcore*.js
+electron/**/model3.json
+electron/**/moc3
+electron/**/motions/
+electron/**/textures/
+
+# Proprietary/user-supplied Live2D material must stay local for both editions.
+Resources/Live2DRuntime/live2dcubismcore*.js
+Resources/Live2DModels/
+Resources/Characters/FluffyDemo/
+*.moc3
+*.cmo3
+*.can3
+*.model3.json
+*.motion3.json
+*.exp3.json
+*.physics3.json
+
+# Runtime verification evidence is intentionally retained in the protected
+# source snapshot/backup, but is not suitable for the public source repository:
+# it contains duplicated patches, app builds, logs, screenshots, and local paths.
+review/
+
+# Regenerable character-production intermediates. Only reviewed project-owned
+# assets, manifests, and production Resources remain versioned.
+Assets/CharacterV2/backups/
+Assets/CharacterV2/candidates/
+Assets/CharacterV2/review/
+Assets/CharacterV2/reference/
+Assets/DragonV1/candidates/
+Assets/DragonV1/review/
+Assets/DragonV2/candidates/
+Assets/DragonV2/rejected/
+Assets/DragonV2/review/
+Assets/HatchedGirl/hatch_run/
+Assets/HatchedDragon/hatch_run/
+Assets/**/qa/
+!Assets/LumiScholar/qa/
+Assets/LumiScholar/qa/*
+!Assets/LumiScholar/qa/import_report.json
+Assets/LumiScholar/review/
+Assets/**/*.inspect.json

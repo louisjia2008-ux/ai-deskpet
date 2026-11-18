@@ -1,0 +1,1244 @@
+{
+  "inputs": {
+    "src/bridge.ts": {
+      "bytes": 3278,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/@pixi/constants/dist/esm/constants.mjs": {
+      "bytes": 21344,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/@pixi/settings/dist/esm/settings.mjs": {
+      "bytes": 14655,
+      "imports": [
+        {
+          "path": "node_modules/@pixi/constants/dist/esm/constants.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/constants"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/eventemitter3/index.js": {
+      "bytes": 9141,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/earcut/src/earcut.js": {
+      "bytes": 20816,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/punycode/punycode.js": {
+      "bytes": 14670,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/es-errors/type.js": {
+      "bytes": 75,
+      "imports": [],
+      "format": "cjs"
+    },
+    "(disabled):node_modules/object-inspect/util.inspect": {
+      "bytes": 0,
+      "imports": []
+    },
+    "node_modules/object-inspect/index.js": {
+      "bytes": 19059,
+      "imports": [
+        {
+          "path": "(disabled):node_modules/object-inspect/util.inspect",
+          "kind": "require-call",
+          "original": "./util.inspect"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/side-channel-list/index.js": {
+      "bytes": 3289,
+      "imports": [
+        {
+          "path": "node_modules/object-inspect/index.js",
+          "kind": "require-call",
+          "original": "object-inspect"
+        },
+        {
+          "path": "node_modules/es-errors/type.js",
+          "kind": "require-call",
+          "original": "es-errors/type"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/es-object-atoms/index.js": {
+      "bytes": 67,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/es-errors/index.js": {
+      "bytes": 66,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/es-errors/eval.js": {
+      "bytes": 75,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/es-errors/range.js": {
+      "bytes": 77,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/es-errors/ref.js": {
+      "bytes": 79,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/es-errors/syntax.js": {
+      "bytes": 79,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/es-errors/uri.js": {
+      "bytes": 73,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/math-intrinsics/abs.js": {
+      "bytes": 73,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/math-intrinsics/floor.js": {
+      "bytes": 77,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/math-intrinsics/max.js": {
+      "bytes": 73,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/math-intrinsics/min.js": {
+      "bytes": 73,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/math-intrinsics/pow.js": {
+      "bytes": 73,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/math-intrinsics/round.js": {
+      "bytes": 77,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/math-intrinsics/isNaN.js": {
+      "bytes": 121,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/math-intrinsics/sign.js": {
+      "bytes": 214,
+      "imports": [
+        {
+          "path": "node_modules/math-intrinsics/isNaN.js",
+          "kind": "require-call",
+          "original": "./isNaN"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/gopd/gOPD.js": {
+      "bytes": 97,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/gopd/index.js": {
+      "bytes": 206,
+      "imports": [
+        {
+          "path": "node_modules/gopd/gOPD.js",
+          "kind": "require-call",
+          "original": "./gOPD"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/es-define-property/index.js": {
+      "bytes": 288,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/has-symbols/shams.js": {
+      "bytes": 1922,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/has-symbols/index.js": {
+      "bytes": 447,
+      "imports": [
+        {
+          "path": "node_modules/has-symbols/shams.js",
+          "kind": "require-call",
+          "original": "./shams"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/get-proto/Reflect.getPrototypeOf.js": {
+      "bytes": 150,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/get-proto/Object.getPrototypeOf.js": {
+      "bytes": 156,
+      "imports": [
+        {
+          "path": "node_modules/es-object-atoms/index.js",
+          "kind": "require-call",
+          "original": "es-object-atoms"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/function-bind/implementation.js": {
+      "bytes": 2043,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/function-bind/index.js": {
+      "bytes": 126,
+      "imports": [
+        {
+          "path": "node_modules/function-bind/implementation.js",
+          "kind": "require-call",
+          "original": "./implementation"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/call-bind-apply-helpers/functionCall.js": {
+      "bytes": 97,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/call-bind-apply-helpers/functionApply.js": {
+      "bytes": 99,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/call-bind-apply-helpers/reflectApply.js": {
+      "bytes": 132,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/call-bind-apply-helpers/actualApply.js": {
+      "bytes": 280,
+      "imports": [
+        {
+          "path": "node_modules/function-bind/index.js",
+          "kind": "require-call",
+          "original": "function-bind"
+        },
+        {
+          "path": "node_modules/call-bind-apply-helpers/functionApply.js",
+          "kind": "require-call",
+          "original": "./functionApply"
+        },
+        {
+          "path": "node_modules/call-bind-apply-helpers/functionCall.js",
+          "kind": "require-call",
+          "original": "./functionCall"
+        },
+        {
+          "path": "node_modules/call-bind-apply-helpers/reflectApply.js",
+          "kind": "require-call",
+          "original": "./reflectApply"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/call-bind-apply-helpers/index.js": {
+      "bytes": 511,
+      "imports": [
+        {
+          "path": "node_modules/function-bind/index.js",
+          "kind": "require-call",
+          "original": "function-bind"
+        },
+        {
+          "path": "node_modules/es-errors/type.js",
+          "kind": "require-call",
+          "original": "es-errors/type"
+        },
+        {
+          "path": "node_modules/call-bind-apply-helpers/functionCall.js",
+          "kind": "require-call",
+          "original": "./functionCall"
+        },
+        {
+          "path": "node_modules/call-bind-apply-helpers/actualApply.js",
+          "kind": "require-call",
+          "original": "./actualApply"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/dunder-proto/get.js": {
+      "bytes": 980,
+      "imports": [
+        {
+          "path": "node_modules/call-bind-apply-helpers/index.js",
+          "kind": "require-call",
+          "original": "call-bind-apply-helpers"
+        },
+        {
+          "path": "node_modules/gopd/index.js",
+          "kind": "require-call",
+          "original": "gopd"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/get-proto/index.js": {
+      "bytes": 821,
+      "imports": [
+        {
+          "path": "node_modules/get-proto/Reflect.getPrototypeOf.js",
+          "kind": "require-call",
+          "original": "./Reflect.getPrototypeOf"
+        },
+        {
+          "path": "node_modules/get-proto/Object.getPrototypeOf.js",
+          "kind": "require-call",
+          "original": "./Object.getPrototypeOf"
+        },
+        {
+          "path": "node_modules/dunder-proto/get.js",
+          "kind": "require-call",
+          "original": "dunder-proto/get"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/hasown/index.js": {
+      "bytes": 206,
+      "imports": [
+        {
+          "path": "node_modules/function-bind/index.js",
+          "kind": "require-call",
+          "original": "function-bind"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/get-intrinsic/index.js": {
+      "bytes": 14439,
+      "imports": [
+        {
+          "path": "node_modules/es-object-atoms/index.js",
+          "kind": "require-call",
+          "original": "es-object-atoms"
+        },
+        {
+          "path": "node_modules/es-errors/index.js",
+          "kind": "require-call",
+          "original": "es-errors"
+        },
+        {
+          "path": "node_modules/es-errors/eval.js",
+          "kind": "require-call",
+          "original": "es-errors/eval"
+        },
+        {
+          "path": "node_modules/es-errors/range.js",
+          "kind": "require-call",
+          "original": "es-errors/range"
+        },
+        {
+          "path": "node_modules/es-errors/ref.js",
+          "kind": "require-call",
+          "original": "es-errors/ref"
+        },
+        {
+          "path": "node_modules/es-errors/syntax.js",
+          "kind": "require-call",
+          "original": "es-errors/syntax"
+        },
+        {
+          "path": "node_modules/es-errors/type.js",
+          "kind": "require-call",
+          "original": "es-errors/type"
+        },
+        {
+          "path": "node_modules/es-errors/uri.js",
+          "kind": "require-call",
+          "original": "es-errors/uri"
+        },
+        {
+          "path": "node_modules/math-intrinsics/abs.js",
+          "kind": "require-call",
+          "original": "math-intrinsics/abs"
+        },
+        {
+          "path": "node_modules/math-intrinsics/floor.js",
+          "kind": "require-call",
+          "original": "math-intrinsics/floor"
+        },
+        {
+          "path": "node_modules/math-intrinsics/max.js",
+          "kind": "require-call",
+          "original": "math-intrinsics/max"
+        },
+        {
+          "path": "node_modules/math-intrinsics/min.js",
+          "kind": "require-call",
+          "original": "math-intrinsics/min"
+        },
+        {
+          "path": "node_modules/math-intrinsics/pow.js",
+          "kind": "require-call",
+          "original": "math-intrinsics/pow"
+        },
+        {
+          "path": "node_modules/math-intrinsics/round.js",
+          "kind": "require-call",
+          "original": "math-intrinsics/round"
+        },
+        {
+          "path": "node_modules/math-intrinsics/sign.js",
+          "kind": "require-call",
+          "original": "math-intrinsics/sign"
+        },
+        {
+          "path": "node_modules/gopd/index.js",
+          "kind": "require-call",
+          "original": "gopd"
+        },
+        {
+          "path": "node_modules/es-define-property/index.js",
+          "kind": "require-call",
+          "original": "es-define-property"
+        },
+        {
+          "path": "node_modules/has-symbols/index.js",
+          "kind": "require-call",
+          "original": "has-symbols"
+        },
+        {
+          "path": "node_modules/get-proto/index.js",
+          "kind": "require-call",
+          "original": "get-proto"
+        },
+        {
+          "path": "node_modules/get-proto/Object.getPrototypeOf.js",
+          "kind": "require-call",
+          "original": "get-proto/Object.getPrototypeOf"
+        },
+        {
+          "path": "node_modules/get-proto/Reflect.getPrototypeOf.js",
+          "kind": "require-call",
+          "original": "get-proto/Reflect.getPrototypeOf"
+        },
+        {
+          "path": "node_modules/call-bind-apply-helpers/functionApply.js",
+          "kind": "require-call",
+          "original": "call-bind-apply-helpers/functionApply"
+        },
+        {
+          "path": "node_modules/call-bind-apply-helpers/functionCall.js",
+          "kind": "require-call",
+          "original": "call-bind-apply-helpers/functionCall"
+        },
+        {
+          "path": "node_modules/function-bind/index.js",
+          "kind": "require-call",
+          "original": "function-bind"
+        },
+        {
+          "path": "node_modules/hasown/index.js",
+          "kind": "require-call",
+          "original": "hasown"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/call-bound/index.js": {
+      "bytes": 687,
+      "imports": [
+        {
+          "path": "node_modules/get-intrinsic/index.js",
+          "kind": "require-call",
+          "original": "get-intrinsic"
+        },
+        {
+          "path": "node_modules/call-bind-apply-helpers/index.js",
+          "kind": "require-call",
+          "original": "call-bind-apply-helpers"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/side-channel-map/index.js": {
+      "bytes": 1981,
+      "imports": [
+        {
+          "path": "node_modules/get-intrinsic/index.js",
+          "kind": "require-call",
+          "original": "get-intrinsic"
+        },
+        {
+          "path": "node_modules/call-bound/index.js",
+          "kind": "require-call",
+          "original": "call-bound"
+        },
+        {
+          "path": "node_modules/object-inspect/index.js",
+          "kind": "require-call",
+          "original": "object-inspect"
+        },
+        {
+          "path": "node_modules/es-errors/type.js",
+          "kind": "require-call",
+          "original": "es-errors/type"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/side-channel-weakmap/index.js": {
+      "bytes": 2708,
+      "imports": [
+        {
+          "path": "node_modules/get-intrinsic/index.js",
+          "kind": "require-call",
+          "original": "get-intrinsic"
+        },
+        {
+          "path": "node_modules/call-bound/index.js",
+          "kind": "require-call",
+          "original": "call-bound"
+        },
+        {
+          "path": "node_modules/object-inspect/index.js",
+          "kind": "require-call",
+          "original": "object-inspect"
+        },
+        {
+          "path": "node_modules/side-channel-map/index.js",
+          "kind": "require-call",
+          "original": "side-channel-map"
+        },
+        {
+          "path": "node_modules/es-errors/type.js",
+          "kind": "require-call",
+          "original": "es-errors/type"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/side-channel/index.js": {
+      "bytes": 1222,
+      "imports": [
+        {
+          "path": "node_modules/es-errors/type.js",
+          "kind": "require-call",
+          "original": "es-errors/type"
+        },
+        {
+          "path": "node_modules/object-inspect/index.js",
+          "kind": "require-call",
+          "original": "object-inspect"
+        },
+        {
+          "path": "node_modules/side-channel-list/index.js",
+          "kind": "require-call",
+          "original": "side-channel-list"
+        },
+        {
+          "path": "node_modules/side-channel-map/index.js",
+          "kind": "require-call",
+          "original": "side-channel-map"
+        },
+        {
+          "path": "node_modules/side-channel-weakmap/index.js",
+          "kind": "require-call",
+          "original": "side-channel-weakmap"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/qs/lib/formats.js": {
+      "bytes": 476,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/qs/lib/utils.js": {
+      "bytes": 12593,
+      "imports": [
+        {
+          "path": "node_modules/qs/lib/formats.js",
+          "kind": "require-call",
+          "original": "./formats"
+        },
+        {
+          "path": "node_modules/side-channel/index.js",
+          "kind": "require-call",
+          "original": "side-channel"
+        },
+        {
+          "path": "node_modules/es-define-property/index.js",
+          "kind": "require-call",
+          "original": "es-define-property"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/qs/lib/stringify.js": {
+      "bytes": 12153,
+      "imports": [
+        {
+          "path": "node_modules/side-channel/index.js",
+          "kind": "require-call",
+          "original": "side-channel"
+        },
+        {
+          "path": "node_modules/qs/lib/utils.js",
+          "kind": "require-call",
+          "original": "./utils"
+        },
+        {
+          "path": "node_modules/qs/lib/formats.js",
+          "kind": "require-call",
+          "original": "./formats"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/qs/lib/parse.js": {
+      "bytes": 16015,
+      "imports": [
+        {
+          "path": "node_modules/qs/lib/utils.js",
+          "kind": "require-call",
+          "original": "./utils"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/qs/lib/index.js": {
+      "bytes": 211,
+      "imports": [
+        {
+          "path": "node_modules/qs/lib/stringify.js",
+          "kind": "require-call",
+          "original": "./stringify"
+        },
+        {
+          "path": "node_modules/qs/lib/parse.js",
+          "kind": "require-call",
+          "original": "./parse"
+        },
+        {
+          "path": "node_modules/qs/lib/formats.js",
+          "kind": "require-call",
+          "original": "./formats"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/url/url.js": {
+      "bytes": 23534,
+      "imports": [
+        {
+          "path": "node_modules/punycode/punycode.js",
+          "kind": "require-call",
+          "original": "punycode/"
+        },
+        {
+          "path": "node_modules/qs/lib/index.js",
+          "kind": "require-call",
+          "original": "qs"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/@pixi/utils/dist/esm/utils.mjs": {
+      "bytes": 54510,
+      "imports": [
+        {
+          "path": "node_modules/@pixi/settings/dist/esm/settings.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/settings"
+        },
+        {
+          "path": "node_modules/@pixi/settings/dist/esm/settings.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/settings"
+        },
+        {
+          "path": "node_modules/eventemitter3/index.js",
+          "kind": "import-statement",
+          "original": "eventemitter3"
+        },
+        {
+          "path": "node_modules/earcut/src/earcut.js",
+          "kind": "import-statement",
+          "original": "earcut"
+        },
+        {
+          "path": "node_modules/url/url.js",
+          "kind": "import-statement",
+          "original": "url"
+        },
+        {
+          "path": "node_modules/@pixi/constants/dist/esm/constants.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/constants"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/@pixi/extensions/dist/esm/extensions.mjs": {
+      "bytes": 7717,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/@pixi/runner/dist/esm/runner.mjs": {
+      "bytes": 5263,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/@pixi/ticker/dist/esm/ticker.mjs": {
+      "bytes": 26618,
+      "imports": [
+        {
+          "path": "node_modules/@pixi/settings/dist/esm/settings.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/settings"
+        },
+        {
+          "path": "node_modules/@pixi/extensions/dist/esm/extensions.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/extensions"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/@pixi/math/dist/esm/math.mjs": {
+      "bytes": 56215,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/@pixi/core/dist/esm/core.mjs": {
+      "bytes": 424304,
+      "imports": [
+        {
+          "path": "node_modules/@pixi/settings/dist/esm/settings.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/settings"
+        },
+        {
+          "path": "node_modules/@pixi/constants/dist/esm/constants.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/constants"
+        },
+        {
+          "path": "node_modules/@pixi/utils/dist/esm/utils.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/utils"
+        },
+        {
+          "path": "node_modules/@pixi/extensions/dist/esm/extensions.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/extensions"
+        },
+        {
+          "path": "node_modules/@pixi/extensions/dist/esm/extensions.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/extensions"
+        },
+        {
+          "path": "node_modules/@pixi/runner/dist/esm/runner.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/runner"
+        },
+        {
+          "path": "node_modules/@pixi/ticker/dist/esm/ticker.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/ticker"
+        },
+        {
+          "path": "node_modules/@pixi/math/dist/esm/math.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/math"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/@pixi/display/dist/esm/display.mjs": {
+      "bytes": 73324,
+      "imports": [
+        {
+          "path": "node_modules/@pixi/settings/dist/esm/settings.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/settings"
+        },
+        {
+          "path": "node_modules/@pixi/math/dist/esm/math.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/math"
+        },
+        {
+          "path": "node_modules/@pixi/utils/dist/esm/utils.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/utils"
+        },
+        {
+          "path": "node_modules/@pixi/constants/dist/esm/constants.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/constants"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/@pixi/app/dist/esm/app.mjs": {
+      "bytes": 12098,
+      "imports": [
+        {
+          "path": "node_modules/@pixi/core/dist/esm/core.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/core"
+        },
+        {
+          "path": "node_modules/@pixi/display/dist/esm/display.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/display"
+        },
+        {
+          "path": "node_modules/@pixi/utils/dist/esm/utils.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/utils"
+        }
+      ],
+      "format": "esm"
+    },
+    "src/pixi-stage.ts": {
+      "bytes": 1821,
+      "imports": [
+        {
+          "path": "node_modules/@pixi/app/dist/esm/app.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/app"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/pixi-live2d-display/dist/cubism4.es.js": {
+      "bytes": 208691,
+      "imports": [
+        {
+          "path": "node_modules/@pixi/utils/dist/esm/utils.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/utils"
+        },
+        {
+          "path": "node_modules/@pixi/math/dist/esm/math.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/math"
+        },
+        {
+          "path": "node_modules/@pixi/core/dist/esm/core.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/core"
+        },
+        {
+          "path": "node_modules/@pixi/display/dist/esm/display.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/display"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jszip/dist/jszip.min.js": {
+      "bytes": 97630,
+      "imports": [
+        {
+          "path": "<runtime>",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "src/loader/decode-zip-filename.ts": {
+      "bytes": 384,
+      "imports": [],
+      "format": "esm"
+    },
+    "src/loader/paths.ts": {
+      "bytes": 2203,
+      "imports": [],
+      "format": "esm"
+    },
+    "src/loader/live2d-zip-loader.ts": {
+      "bytes": 4908,
+      "imports": [
+        {
+          "path": "node_modules/jszip/dist/jszip.min.js",
+          "kind": "import-statement",
+          "original": "jszip"
+        },
+        {
+          "path": "src/loader/decode-zip-filename.ts",
+          "kind": "import-statement",
+          "original": "./decode-zip-filename"
+        },
+        {
+          "path": "src/loader/paths.ts",
+          "kind": "import-statement",
+          "original": "./paths"
+        }
+      ],
+      "format": "esm"
+    },
+    "src/fit-model.ts": {
+      "bytes": 950,
+      "imports": [],
+      "format": "esm"
+    },
+    "src/expression-controller.ts": {
+      "bytes": 2477,
+      "imports": [],
+      "format": "esm"
+    },
+    "src/motion-manager.ts": {
+      "bytes": 391,
+      "imports": [],
+      "format": "esm"
+    },
+    "src/idle-eye.ts": {
+      "bytes": 1398,
+      "imports": [],
+      "format": "esm"
+    },
+    "src/lip-sync.ts": {
+      "bytes": 670,
+      "imports": [],
+      "format": "esm"
+    },
+    "src/live2d-model.ts": {
+      "bytes": 6448,
+      "imports": [
+        {
+          "path": "node_modules/@pixi/utils/dist/esm/utils.mjs",
+          "kind": "import-statement",
+          "original": "@pixi/utils"
+        },
+        {
+          "path": "node_modules/pixi-live2d-display/dist/cubism4.es.js",
+          "kind": "import-statement",
+          "original": "pixi-live2d-display/cubism4"
+        },
+        {
+          "path": "src/loader/live2d-zip-loader.ts",
+          "kind": "import-statement",
+          "original": "./loader/live2d-zip-loader"
+        },
+        {
+          "path": "src/loader/paths.ts",
+          "kind": "import-statement",
+          "original": "./loader/paths"
+        },
+        {
+          "path": "src/fit-model.ts",
+          "kind": "import-statement",
+          "original": "./fit-model"
+        },
+        {
+          "path": "src/expression-controller.ts",
+          "kind": "import-statement",
+          "original": "./expression-controller"
+        },
+        {
+          "path": "src/motion-manager.ts",
+          "kind": "import-statement",
+          "original": "./motion-manager"
+        },
+        {
+          "path": "src/idle-eye.ts",
+          "kind": "import-statement",
+          "original": "./idle-eye"
+        },
+        {
+          "path": "src/lip-sync.ts",
+          "kind": "import-statement",
+          "original": "./lip-sync"
+        },
+        {
+          "path": "src/bridge.ts",
+          "kind": "import-statement",
+          "original": "./bridge"
+        }
+      ],
+      "format": "esm"
+    },
+    "src/index.ts": {
+      "bytes": 2903,
+      "imports": [
+        {
+          "path": "src/bridge.ts",
+          "kind": "import-statement",
+          "original": "./bridge"
+        },
+        {
+          "path": "src/pixi-stage.ts",
+          "kind": "import-statement",
+          "original": "./pixi-stage"
+        },
+        {
+          "path": "src/live2d-model.ts",
+          "kind": "import-statement",
+          "original": "./live2d-model"
+        }
+      ],
+      "format": "esm"
+    }
+  },
+  "outputs": {
+    "../Resources/Live2DRuntime/runtime.js": {
+      "imports": [],
+      "exports": [],
+      "entryPoint": "src/index.ts",
+      "inputs": {
+        "node_modules/eventemitter3/index.js": {
+          "bytesInOutput": 6510
+        },
+        "node_modules/earcut/src/earcut.js": {
+          "bytesInOutput": 16778
+        },
+        "node_modules/punycode/punycode.js": {
+          "bytesInOutput": 9345
+        },
+        "node_modules/es-errors/type.js": {
+          "bytesInOutput": 156
+        },
+        "(disabled):node_modules/object-inspect/util.inspect": {
+          "bytesInOutput": 108
+        },
+        "node_modules/object-inspect/index.js": {
+          "bytesInOutput": 20094
+        },
+        "node_modules/side-channel-list/index.js": {
+          "bytesInOutput": 2622
+        },
+        "node_modules/es-object-atoms/index.js": {
+          "bytesInOutput": 171
+        },
+        "node_modules/es-errors/index.js": {
+          "bytesInOutput": 158
+        },
+        "node_modules/es-errors/eval.js": {
+          "bytesInOutput": 156
+        },
+        "node_modules/es-errors/range.js": {
+          "bytesInOutput": 159
+        },
+        "node_modules/es-errors/ref.js": {
+          "bytesInOutput": 159
+        },
+        "node_modules/es-errors/syntax.js": {
+          "bytesInOutput": 162
+        },
+        "node_modules/es-errors/uri.js": {
+          "bytesInOutput": 153
+        },
+        "node_modules/math-intrinsics/abs.js": {
+          "bytesInOutput": 159
+        },
+        "node_modules/math-intrinsics/floor.js": {
+          "bytesInOutput": 165
+        },
+        "node_modules/math-intrinsics/max.js": {
+          "bytesInOutput": 159
+        },
+        "node_modules/math-intrinsics/min.js": {
+          "bytesInOutput": 159
+        },
+        "node_modules/math-intrinsics/pow.js": {
+          "bytesInOutput": 159
+        },
+        "node_modules/math-intrinsics/round.js": {
+          "bytesInOutput": 165
+        },
+        "node_modules/math-intrinsics/isNaN.js": {
+          "bytesInOutput": 223
+        },
+        "node_modules/math-intrinsics/sign.js": {
+          "bytesInOutput": 337
+        },
+        "node_modules/gopd/gOPD.js": {
+          "bytesInOutput": 173
+        },
+        "node_modules/gopd/index.js": {
+          "bytesInOutput": 310
+        },
+        "node_modules/es-define-property/index.js": {
+          "bytesInOutput": 414
+        },
+        "node_modules/has-symbols/shams.js": {
+          "bytesInOutput": 1757
+        },
+        "node_modules/has-symbols/index.js": {
+          "bytesInOutput": 663
+        },
+        "node_modules/get-proto/Reflect.getPrototypeOf.js": {
+          "bytesInOutput": 247
+        },
+        "node_modules/get-proto/Object.getPrototypeOf.js": {
+          "bytesInOutput": 258
+        },
+        "node_modules/function-bind/implementation.js": {
+          "bytesInOutput": 2355
+        },
+        "node_modules/function-bind/index.js": {
+          "bytesInOutput": 255
+        },
+        "node_modules/call-bind-apply-helpers/functionCall.js": {
+          "bytesInOutput": 200
+        },
+        "node_modules/call-bind-apply-helpers/functionApply.js": {
+          "bytesInOutput": 203
+        },
+        "node_modules/call-bind-apply-helpers/reflectApply.js": {
+          "bytesInOutput": 235
+        },
+        "node_modules/call-bind-apply-helpers/actualApply.js": {
+          "bytesInOutput": 394
+        },
+        "node_modules/call-bind-apply-helpers/index.js": {
+          "bytesInOutput": 570
+        },
+        "node_modules/dunder-proto/get.js": {
+          "bytesInOutput": 1072
+        },
+        "node_modules/get-proto/index.js": {
+          "bytesInOutput": 719
+        },
+        "node_modules/hasown/index.js": {
+          "bytesInOutput": 308
+        },
+        "node_modules/get-intrinsic/index.js": {
+          "bytesInOutput": 15691
+        },
+        "node_modules/call-bound/index.js": {
+          "bytesInOutput": 782
+        },
+        "node_modules/side-channel-map/index.js": {
+          "bytesInOutput": 1737
+        },
+        "node_modules/side-channel-weakmap/index.js": {
+          "bytesInOutput": 2651
+        },
+        "node_modules/side-channel/index.js": {
+          "bytesInOutput": 1416
+        },
+        "node_modules/qs/lib/formats.js": {
+          "bytesInOutput": 654
+        },
+        "node_modules/qs/lib/utils.js": {
+          "bytesInOutput": 11838
+        },
+        "node_modules/qs/lib/stringify.js": {
+          "bytesInOutput": 12509
+        },
+        "node_modules/qs/lib/parse.js": {
+          "bytesInOutput": 14990
+        },
+        "node_modules/qs/lib/index.js": {
+          "bytesInOutput": 329
+        },
+        "node_modules/url/url.js": {
+          "bytesInOutput": 19277
+        },
+        "node_modules/jszip/dist/jszip.min.js": {
+          "bytesInOutput": 155696
+        },
+        "src/bridge.ts": {
+          "bytesInOutput": 3140
+        },
+        "node_modules/@pixi/constants/dist/esm/constants.mjs": {
+          "bytesInOutput": 9862
+        },
+        "node_modules/@pixi/settings/dist/esm/settings.mjs": {
+          "bytesInOutput": 12068
+        },
+        "node_modules/@pixi/utils/dist/esm/utils.mjs": {
+          "bytesInOutput": 9035
+        },
+        "node_modules/@pixi/extensions/dist/esm/extensions.mjs": {
+          "bytesInOutput": 5424
+        },
+        "node_modules/@pixi/core/dist/esm/core.mjs": {
+          "bytesInOutput": 277977
+        },
+        "node_modules/@pixi/runner/dist/esm/runner.mjs": {
+          "bytesInOutput": 2739
+        },
+        "node_modules/@pixi/ticker/dist/esm/ticker.mjs": {
+          "bytesInOutput": 14671
+        },
+        "node_modules/@pixi/math/dist/esm/math.mjs": {
+          "bytesInOutput": 37767
+        },
+        "node_modules/@pixi/display/dist/esm/display.mjs": {
+          "bytesInOutput": 39470
+        },
+        "node_modules/@pixi/app/dist/esm/app.mjs": {
+          "bytesInOutput": 4593
+        },
+        "src/pixi-stage.ts": {
+          "bytesInOutput": 2144
+        },
+        "node_modules/pixi-live2d-display/dist/cubism4.es.js": {
+          "bytesInOutput": 212369
+        },
+        "src/loader/live2d-zip-loader.ts": {
+          "bytesInOutput": 4411
+        },
+        "src/loader/decode-zip-filename.ts": {
+          "bytesInOutput": 299
+        },
+        "src/loader/paths.ts": {
+          "bytesInOutput": 2071
+        },
+        "src/fit-model.ts": {
+          "bytesInOutput": 747
+        },
+        "src/expression-controller.ts": {
+          "bytesInOutput": 2129
+        },
+        "src/motion-manager.ts": {
+          "bytesInOutput": 241
+        },
+        "src/idle-eye.ts": {
+          "bytesInOutput": 1477
+        },
+        "src/lip-sync.ts": {
+          "bytesInOutput": 680
+        },
+        "src/live2d-model.ts": {
+          "bytesInOutput": 6149
+        },
+        "src/index.ts": {
+          "bytesInOutput": 3139
+        }
+      },
+      "bytes": 968812
+    }
+  }
+}

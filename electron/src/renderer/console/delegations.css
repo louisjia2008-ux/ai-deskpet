@@ -1,0 +1,33 @@
+.delegations { margin-top: 22px; min-width: 0; }
+.delegation-draft { display: grid; gap: 16px; margin: 16px 0; }
+.delegation-draft label, .delegation-parent-controls label { display: grid; gap: 7px; font-weight: 600; }
+.delegation-draft textarea { width: 100%; min-height: 90px; resize: vertical; }
+.delegation-child-editor { display: grid; gap: 14px; min-width: 0; padding: 16px; border: 1px solid var(--border-color, #d5d9df); border-radius: 10px; }
+.delegation-child-editor legend { padding: 0 7px; font-weight: 700; }
+.delegation-draft .delegation-checkbox { display: flex; align-items: flex-start; font-weight: 400; }
+.delegation-checkbox input { width: auto; margin-top: 3px; flex-shrink: 0; }
+.delegation-requirements { display: grid; gap: 10px; border-top: 1px solid var(--border-color, #d5d9df); padding-top: 12px; }
+.delegation-run-fields { display: grid; grid-template-columns: minmax(180px, 320px); gap: 12px; }
+.delegation-batches, .delegation-children { display: grid; gap: 14px; margin-top: 14px; }
+.delegation-batch h3, .delegation-child-card h4 { overflow-wrap: anywhere; }
+.delegation-batch > small { overflow-wrap: anywhere; }
+.delegation-usage-summary { display: grid; grid-template-columns: minmax(140px, auto) 1fr; gap: 5px 12px; font-size: 13px; }
+.delegation-usage-summary dd { margin: 0; }
+.delegation-child-card { padding: 14px; border: 1px solid var(--border-color, #d5d9df); border-radius: 10px; min-width: 0; }
+.delegation-child-card p { overflow-wrap: anywhere; }
+.delegation-check-summary ul { padding-left: 22px; }
+.delegation-parent-controls { display: grid; gap: 12px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-color, #d5d9df); }
+.delegation-result { overflow-wrap: anywhere; }
+@media (max-width: 680px) { .delegation-run-fields, .delegation-usage-summary { grid-template-columns: 1fr; } .delegation-usage-summary dd { margin-bottom: 6px; } }
+/* The chat pane normally has header, transcript, composer rows. The optional
+   delegation panel is a fourth row; constrain both scroll regions explicitly
+   so neither can collapse beneath and be covered by the other's content. */
+.chat-pane:has(> .delegation-chat-panel) {
+  grid-template-rows: 90px minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+.chat-pane > .delegation-chat-panel {
+  min-width: 0;
+  min-height: 0;
+  overscroll-behavior: contain;
+  border-bottom: 1px solid var(--border);
+}

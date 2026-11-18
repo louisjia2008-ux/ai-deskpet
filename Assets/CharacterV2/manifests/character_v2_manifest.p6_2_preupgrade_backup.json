@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "manifestID": "deskpet_character_v2_mvp",
+  "character": {
+    "id": "default_blue_white_v2",
+    "displayName": "Default Blue White Companion V2",
+    "canonicalScale": "desktop_sd_3_2_to_3_8_heads",
+    "asymmetricFeatures": [
+      "side_ponytail",
+      "hair_accessory",
+      "asymmetric_hair_volume"
+    ],
+    "runtimeFallback": "Resources/Characters/Default/character_anchor_rgba_v3.png"
+  },
+  "pipeline": {
+    "candidatePath": "DeskPet/Assets/CharacterV2/candidates",
+    "reviewPath": "DeskPet/Assets/CharacterV2/review",
+    "approvedPath": "DeskPet/Assets/CharacterV2/approved",
+    "ruleSummary": [
+      "candidate assets are never loaded as production assets",
+      "review validates identity, alpha, canvas, pivot, hitbox, and asymmetry",
+      "approved left and right locomotion clips must be authored separately"
+    ]
+  },
+  "clips": [
+    {
+      "id": "idle",
+      "state": "idle",
+      "fps": 8,
+      "loop": true,
+      "placeholder": true,
+      "frames": ["idle_00", "idle_01", "idle_02", "idle_03"],
+      "pivot": { "x": 0.5, "y": 0.08 },
+      "hitbox": { "x": 0.22, "y": 0.08, "width": 0.56, "height": 0.84 },
+      "shadow": { "width": 0.64, "height": 0.09, "alpha": 0.24 },
+      "events": [],
+      "notes": "Procedural breathing fallback until approved V2 idle frames exist."
+    },
+    {
+      "id": "blink",
+      "state": "blink",
+      "fps": 12,
+      "loop": false,
+      "placeholder": true,
+      "frames": ["blink_00", "blink_01", "blink_02"],
+      "pivot": { "x": 0.5, "y": 0.08 },
+      "hitbox": { "x": 0.22, "y": 0.08, "width": 0.56, "height": 0.84 },
+      "shadow": { "width": 0.64, "height": 0.09, "alpha": 0.24 },
+      "events": [{ "frame": 1, "type": "eyes_closed" }],
+      "notes": "Static PNG MVP uses procedural squash; final rig should swap eye layers."
+    },
+    {
+      "id": "idle_look_around",
+      "state": "idleLookAround",
+      "fps": 8,
+      "loop": false,
+      "placeholder": true,
+      "frames": ["idle_look_around_00", "idle_look_around_01", "idle_look_around_02", "idle_look_around_03"],
+      "pivot": { "x": 0.5, "y": 0.08 },
+      "hitbox": { "x": 0.22, "y": 0.08, "width": 0.56, "height": 0.84 },
+      "shadow": { "width": 0.64, "height": 0.09, "alpha": 0.24 },
+      "events": [{ "frame": 2, "type": "look_side" }],
+      "notes": "Procedural offset fallback until separate head/eye layers are approved."
+    },
+    {
+      "id": "start_move",
+      "state": "startMoving",
+      "fps": 10,
+      "loop": false,
+      "placeholder": false,
+      "frames": ["start_move_00", "start_move_01", "start_move_02", "start_move_03"],
+      "pivot": { "x": 0.5, "y": 0.08 },
+      "hitbox": { "x": 0.22, "y": 0.08, "width": 0.56, "height": 0.84 },
+      "shadow": { "width": 0.66, "height": 0.09, "alpha": 0.25 },
+      "events": [{ "frame": 1, "type": "weight_shift" }],
+      "notes": "Generated and sliced from green chroma-key sheet on 2026-06-20. Root position remains program-controlled; clip only shows weight shift."
+    },
+    {
+      "id": "stop_move",
+      "state": "stopMoving",
+      "fps": 10,
+      "loop": false,
+      "placeholder": false,
+      "frames": ["stop_move_00", "stop_move_01", "stop_move_02", "stop_move_03"],
+      "pivot": { "x": 0.5, "y": 0.08 },
+      "hitbox": { "x": 0.22, "y": 0.08, "width": 0.56, "height": 0.84 },
+      "shadow": { "width": 0.66, "height": 0.09, "alpha": 0.25 },
+      "events": [{ "frame": 3, "type": "settle" }],
+      "notes": "Generated and sliced from green chroma-key sheet on 2026-06-20. Prevents walk directly freezing into idle."
+    },
+    {
+      "id": "walk_left",
+      "state": "walkLeft",
+      "fps": 10,
+      "loop": true,
+      "placeholder": false,
+      "frames": ["walk_left_00", "walk_left_01", "walk_left_02", "walk_left_03", "walk_left_04", "walk_left_05", "walk_left_06", "walk_left_07"],
+      "pivot": { "x": 0.5, "y": 0.08 },
+      "hitbox": { "x": 0.22, "y": 0.08, "width": 0.56, "height": 0.84 },
+      "shadow": { "width": 0.68, "height": 0.09, "alpha": 0.24 },
+      "events": [
+        { "frame": 0, "type": "foot_contact_left" },
+        { "frame": 4, "type": "foot_contact_right" }
+      ],
+      "notes": "Generated and sliced from green chroma-key sheet on 2026-06-20. Independently authored; do not mirror walk_right."
+    },
+    {
+      "id": "walk_right",
+      "state": "walkRight",
+      "fps": 10,
+      "loop": true,
+      "placeholder": false,
+      "frames": ["walk_right_00", "walk_right_01", "walk_right_02", "walk_right_03", "walk_right_04", "walk_right_05", "walk_right_06", "walk_right_07"],
+      "pivot": { "x": 0.5, "y": 0.08 },
+      "hitbox": { "x": 0.22, "y": 0.08, "width": 0.56, "height": 0.84 },
+      "shadow": { "width": 0.68, "height": 0.09, "alpha": 0.24 },
+      "events": [
+        { "frame": 0, "type": "foot_contact_right" },
+        { "frame": 4, "type": "foot_contact_left" }
+      ],
+      "notes": "Generated and sliced from green chroma-key sheet on 2026-06-20. Independently authored; preserve side ponytail and accessory direction."
+    }
+  ],
+  "habitat": {
+    "id": "blue_white_magic_book_soft_bed",
+    "placeholder": false,
+    "style": "blue-white magic book cushion with soft cloud platform and small star accent",
+    "anchor": { "x": 0.5, "y": 0.18 },
+    "hitbox": { "x": 0.08, "y": 0.08, "width": 0.84, "height": 0.52 },
+    "resources": [
+      "approved/habitat/habitat_blue_white_magic_book_soft_bed_20260620_02.png"
+    ],
+    "notes": "Generated with image_gen on 2026-06-20, alpha extracted from green chroma-key source and validated as RGBA. Runtime still uses the SpriteKit procedural habitat until image loading is wired."
+  }
+}

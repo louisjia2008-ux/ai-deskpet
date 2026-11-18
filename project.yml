@@ -1,0 +1,226 @@
+name: DeskPet
+options:
+  minimumXcodeGenVersion: 2.45.0
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CLANG_ENABLE_MODULES: YES
+    CODE_SIGN_STYLE: Automatic
+  configs:
+    Release:
+      ENABLE_HARDENED_RUNTIME: YES
+      ENABLE_APP_SANDBOX: NO
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: Developer ID Application
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+      OTHER_CODE_SIGN_FLAGS: "--timestamp"
+      DEAD_CODE_STRIPPING: YES
+      VALIDATE_PRODUCT: YES
+configs:
+  Debug: debug
+  Release: release
+  # P22 — App Store lane. Activates `DistributionTier.current == .appStore`
+  # at compile time so the broker / gate / policy / security kernel all
+  # deny P3 + P4 capabilities without any runtime override. To cut an MAS
+  # build locally:
+  #   xcodebuild ... -configuration AppStore
+  # or:
+  #   swift build -Xswiftc -DAPPSTORE
+  # The default Debug / Release lanes still compile to `.developerID`.
+  AppStore: release
+# (legacy cut-now notes — the lane above is what they were describing)
+# D5 App Store lane (not yet cut — notes so the cut is exact when needed):
+targets:
+  AICore:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/AICore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.deskpet.companion.AICore
+  PetBrainCore:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/PetBrainCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.deskpet.companion.PetBrainCore
+    dependencies:
+      - target: AICore
+  PetAgentRuntime:
+    type: framework
+    platform: macOS
+    sources:
+      - Sources/PetAgentRuntime
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.deskpet.companion.PetAgentRuntime
+    dependencies:
+      - target: AICore
+      - target: PetBrainCore
+  DeskPetLLM:
+    type: tool
+    platform: macOS
+    sources:
+      - Sources/DeskPetLLM
+    dependencies:
+      - target: AICore
+  DeskPetToolRunner:
+    type: tool
+    platform: macOS
+    sources:
+      - Sources/DeskPetToolRunner
+    dependencies:
+      - target: AICore
+  DeskPet:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/DeskPet
+      - path: Resources
+        buildPhase: resources
+        excludes:
+          - Info.plist
+          - Release.entitlements
+          - AppStore.entitlements
+          - Live2DRuntime
+      - path: Resources/Live2DRuntime
+        buildPhase: resources
+        type: folder
+      # P16 GAP-02: CharacterV2 is NOT the production character (default is
+      # "lumi-scholar") and contributes ~228MB to the Release bundle. Keep
+      # the source assets on disk for tooling/art review but do NOT bundle
+      # them. The LumiScholar folder below is the only production asset.
+      - path: Assets/LumiScholar
+        buildPhase: resources
+        type: folder
+        optional: true
+      - path: Assets/HatchedGirl
+        buildPhase: resources
+        type: folder
+        optional: true
+      - path: Assets/HatchedDragon
+        buildPhase: resources
+        type: folder
+        optional: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.deskpet.companion
+        INFOPLIST_FILE: Resources/Info.plist
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "9"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+      configs:
+        Debug:
+          # PHASE_HARNESS — phase-acceptance harnesses (P9*, P15_1, P16, P17) compile
+          # only when this flag is set. Release builds drop the ~6.3K-line harness
+          # surface entirely so the shipping binary doesn't carry in-tree test
+          # entry points. To re-enable for a local phase run, build with:
+          #   xcodebuild ... SWIFT_ACTIVE_COMPILATION_CONDITIONS="DEBUG PHASE_HARNESS"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG PHASE_HARNESS"
+        Release:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+          CODE_SIGN_ENTITLEMENTS: Resources/Release.entitlements
+          ENABLE_HARDENED_RUNTIME: YES
+          ENABLE_APP_SANDBOX: NO
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Developer ID Application
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+          OTHER_CODE_SIGN_FLAGS: "--timestamp"
+          DEAD_CODE_STRIPPING: YES
+          COPY_PHASE_STRIP: YES
+          VALIDATE_PRODUCT: YES
+        # P22 — App Store cut. Tightens the sandbox + drops hardened-runtime
+        # entitlements that Developer ID builds rely on (file dialog access,
+        # arbitrary process spawn for the helper). Capability gating is
+        # already done at compile time via `DistributionTier.current`.
+        AppStore:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "APPSTORE"
+          CODE_SIGN_ENTITLEMENTS: Resources/AppStore.entitlements
+          PRODUCT_BUNDLE_IDENTIFIER: com.deskpet.companion.mas
+          ENABLE_HARDENED_RUNTIME: YES
+          ENABLE_APP_SANDBOX: YES
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+          OTHER_CODE_SIGN_FLAGS: "--timestamp"
+          DEAD_CODE_STRIPPING: YES
+          COPY_PHASE_STRIP: YES
+          VALIDATE_PRODUCT: YES
+    dependencies:
+      - target: AICore
+      - target: PetBrainCore
+      - target: PetAgentRuntime
+      - target: DeskPetLLM
+        link: false
+        embed: false
+      - target: DeskPetToolRunner
+        link: false
+        embed: false
+      - sdk: libsqlite3.tbd
+    postBuildScripts:
+      - name: Copy helper executables
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          mkdir -p "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS"
+          cp "$BUILT_PRODUCTS_DIR/DeskPetLLM" "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/DeskPetLLM"
+          cp "$BUILT_PRODUCTS_DIR/DeskPetToolRunner" "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/MacOS/DeskPetToolRunner"
+          if [[ -d "$SRCROOT/Assets/DragonV1/approved" ]]; then
+            mkdir -p "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/DragonV1"
+            /usr/bin/ditto "$SRCROOT/Assets/DragonV1/approved" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/DragonV1/approved"
+          fi
+      - name: Strip LumiScholar dev artifacts
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          # P16 GAP-02: the LumiScholar asset bundle ships with qa/ and
+          # review/ subfolders that contain QA validation reports referencing
+          # absolute local paths (e.g. /path/to/workspace/...). These are
+          # dev-only artifacts and must not reach end users. Strip them in
+          # both Debug and Release configurations.
+          RES="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/LumiScholar"
+          for sub in qa review source; do
+            if [[ -d "$RES/$sub" ]]; then
+              rm -rf "$RES/$sub"
+            fi
+          done
+  DeskPetUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/DeskPetUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.deskpet.companion.uitests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: DeskPet
+schemes:
+  DeskPet:
+    build:
+      targets:
+        DeskPet: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - DeskPetUITests
+  DeskPet-Package:
+    build:
+      targets:
+        DeskPet: all
+    test:
+      config: Debug
+      targets:
+        - DeskPetUITests

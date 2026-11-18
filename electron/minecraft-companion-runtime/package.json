@@ -1,0 +1,27 @@
+{
+  "name": "deskpet-minecraft-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "Isolated Minecraft companion runtime for DeskPet",
+  "main": "runtime.js",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node index.js",
+    "start:core": "node index.js --engine core",
+    "test": "node --test test/*.test.js vendor/server/minecraftModules.test.js vendor/server/minecraftAgentLearning.test.js",
+    "test:core": "node --test test/core-*.test.js",
+    "scenario": "node tools/run-scenarios.cjs",
+    "e2e": "node tools/run-e2e.cjs",
+    "regression": "node tools/run-regression.cjs"
+  },
+  "dependencies": {
+    "mineflayer": "4.37.1",
+    "mineflayer-pathfinder": "2.4.5",
+    "vec3": "0.1.10"
+  },
+  "overrides": {
+    "@azure/msal-node": { "uuid": "11.1.1" },
+    "yggdrasil": { "uuid": "11.1.1" }
+  }
+}

@@ -1,0 +1,35 @@
+.desktop-extensions-settings > h2 { margin:0; }
+.desktop-extensions-settings .extension-section { display:grid; gap:16px; min-width:0; }
+.desktop-extensions-settings .extension-section + .extension-section { margin-top:28px; padding-top:24px; border-top:1px solid var(--border); }
+.desktop-extensions-settings .extension-section > p { margin:0; }
+.desktop-extensions-settings .extension-summary { color:var(--muted); font-size:13px; }
+.desktop-extensions-settings .extension-section > button { justify-self:start; }
+.desktop-extensions-settings .extension-section > label,
+.desktop-extensions-settings .extension-workspace > label { display:grid; gap:7px; font-size:13px; }
+.desktop-extensions-settings input:not([type="checkbox"]),
+.desktop-extensions-settings select,
+.desktop-extensions-settings textarea { box-sizing:border-box; width:100%; min-width:0; }
+.desktop-extensions-settings .extension-entry,
+.desktop-extensions-settings .extension-workspace { min-width:0; padding:18px; border:1px solid var(--border); border-radius:12px; }
+.desktop-extensions-settings .extension-entry-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+.desktop-extensions-settings h4 { margin:0; font-size:15px; overflow-wrap:anywhere; }
+.desktop-extensions-settings .extension-status { padding:4px 8px; border-radius:6px; color:var(--muted); background:var(--blue-soft); font-size:12px; }
+.desktop-extensions-settings .extension-entry code,
+.desktop-extensions-settings .extension-entry dd { overflow-wrap:anywhere; }
+.desktop-extensions-settings .extension-entry dl { display:grid; grid-template-columns:minmax(110px,auto) minmax(0,1fr); gap:8px 16px; font-size:12px; }
+.desktop-extensions-settings .extension-entry dt { color:var(--muted); }
+.desktop-extensions-settings .extension-entry dd { margin:0; }
+.desktop-extensions-settings .button-row { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+.desktop-extensions-settings .button-row label { display:flex; align-items:center; gap:7px; font-size:13px; }
+.desktop-extensions-settings .extension-empty { padding:18px; border:1px dashed var(--border); border-radius:10px; color:var(--muted); }
+.desktop-extensions-settings .extension-add-server { display:grid; gap:16px; padding-top:20px; border-top:1px solid var(--border); }
+.desktop-extensions-settings .extension-add-server > button { justify-self:start; }
+.desktop-extensions-settings .extension-add-server .plugin-fields { margin-top:0; }
+.desktop-extensions-settings .extension-workspace { display:grid; gap:14px; }
+.desktop-extensions-settings .extension-workspace p { margin:0; }
+.desktop-extensions-settings .extension-workspace > button { justify-self:start; }
+@media (max-width:700px) {
+  .desktop-extensions-settings .plugin-card { padding:16px; }
+  .desktop-extensions-settings .extension-entry dl { grid-template-columns:minmax(0,1fr); gap:5px; }
+  .desktop-extensions-settings .extension-entry dd { margin-bottom:8px; }
+}

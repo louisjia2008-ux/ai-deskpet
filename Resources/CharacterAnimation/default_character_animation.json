@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "asset": {
+    "name": "character_anchor_rgba_v3.png",
+    "relativePath": "Characters/Default/character_anchor_rgba_v3.png",
+    "sha256": "96a7ad41707ee544ac44912bc443e361ad761907af0d35624e5dacd036a6fa7a",
+    "pixelWidth": 1024,
+    "pixelHeight": 1536
+  },
+  "canvas": {
+    "logicalWidth": 160,
+    "logicalHeight": 240,
+    "alphaHitThreshold": 18
+  },
+  "breathing": {
+    "amplitude": 0.018,
+    "durationRange": { "min": 2.8, "max": 4.4 },
+    "reduceMotionAmplitude": 0.006
+  },
+  "idle": {
+    "swayAngleDegreesRange": { "min": -1.6, "max": 1.6 },
+    "intervalRange": { "min": 4.5, "max": 8.5 },
+    "microMovementPoints": 1.8
+  },
+  "reactions": {
+    "clickCompression": 0.035,
+    "happyJumpHeight": 10.0,
+    "annoyedShakePoints": 4.0,
+    "cooldown": 0.35,
+    "maxDuration": 0.75
+  },
+  "drag": {
+    "tiltLimitDegrees": 7.0,
+    "smoothing": 0.18,
+    "releaseDuration": 0.32
+  },
+  "speaking": {
+    "motionAmplitude": 0.014,
+    "textFallbackLevel": 0.28,
+    "releaseDuration": 0.22
+  },
+  "sleep": {
+    "idleRate": 0.42,
+    "sinkPoints": 4.0
+  }
+}

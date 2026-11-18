@@ -1,0 +1,19 @@
+.minecraft-companion-panel { display: grid; gap: 1rem; }
+.minecraft-companion-panel fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.minecraft-companion-panel label { display: grid; gap: .35rem; min-width: 0; }
+.companion-config-grid, .companion-task-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .8rem; }
+.companion-coordinates { display: flex; gap: .5rem; }
+.companion-coordinates label { min-width: 0; }
+.companion-coordinates input { width: 100%; }
+.companion-connection { display: flex; flex-wrap: wrap; gap: 1rem; }
+.companion-observations, .companion-task-state dl { display: flex; gap: 1rem; flex-wrap: wrap; }
+.companion-observations dd, .companion-task-state dd { margin: .3rem 0; overflow-wrap: anywhere; }
+.minecraft-companion-panel pre, .minecraft-companion-chat-status pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; font-size: .85em; }
+.companion-events { padding-left: 1.25rem; max-height: 20rem; overflow: auto; }
+.companion-events li { margin-bottom: .55rem; overflow-wrap: anywhere; }
+.companion-events time { opacity: .7; }
+.companion-cancel { margin-top: .6rem; }
+.minecraft-companion-chat-status { border: 1px solid var(--border-color, #8886); border-radius: .8rem; padding: .85rem; margin: .75rem 0; }
+.minecraft-companion-chat-status .button-row { margin: .5rem 0; }
+.minecraft-companion-chat-status small { opacity: .8; }
+@media (max-width: 540px) { .companion-config-grid, .companion-task-fields { grid-template-columns: 1fr; } }

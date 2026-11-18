@@ -1,0 +1,98 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { JSX } from 'react';
+import type { AttentionAPI } from '../../shared/attention';
+import { DOCTOR_SELF_TEST_STAGES, DOCTOR_SELF_TEST_STAGE_LABELS, describeDoctorCase, type DoctorCase, type DoctorStatus } from '../../shared/doctor';
+import './attention-center.css';
+
+type Locale = 'en' | 'zh-CN';
+const copy = {
+  en: {
+    title: 'Doctor', intro: 'A second agent that checks on her every minute. When something stops working it tells you over QQ, or with a desktop notification when QQ is down. It only looks and reports; it never changes anything. Send 「体检」 in your QQ or WeChat private chat for a checkup.',
+    enabled: 'Doctor on', check: 'Check now', loading: 'Loading…', readFailed: 'Could not read the doctor. Try again.',
+    lastCheck: 'Last check: ', never: 'not yet', open: (n: number) => n ? `${n} open` : 'Nothing open', alerts: (n: number, limit: number) => `QQ reports today: ${n}/${limit}`,
+    empty: 'No problems recorded yet.', openState: 'Open', resolved: 'Recovered', since: 'Noticed ', until: ' · recovered ',
+    acknowledged: 'Acknowledged', acknowledgedAt: ' · acknowledged ',
+    reported: { qq: 'Told you on QQ', desktop: 'Desktop notification', held: 'Held for the morning', failed: 'Could not tell you' } satisfies Record<NonNullable<DoctorCase['reported']>, string>,
+    waiting: 'Waiting for the next check before reporting',
+  },
+  'zh-CN': {
+    title: '医生', intro: '和桌宠角色分开的另一个 agent，每分钟检查一次她的状态。发现问题会通过 QQ 告诉你；QQ 也不通时用 Mac 桌面通知。它只看、只报告，不改任何东西。在 QQ 或主人微信私聊发「体检」可以看当前状态。',
+    enabled: '医生开启', check: '立即检查', loading: '正在读取…', readFailed: '读取医生状态失败，请重试。',
+    lastCheck: '上次检查：', never: '还没有', open: (n: number) => n ? `${n} 个问题未恢复` : '没有未恢复的问题', alerts: (n: number, limit: number) => `今天 QQ 已报告 ${n}/${limit} 次`,
+    empty: '还没有记录到问题。', openState: '未恢复', resolved: '已恢复', since: '发现于 ', until: ' · 恢复于 ',
+    acknowledged: '已知道', acknowledgedAt: ' · 确认于 ',
+    reported: { qq: '已在 QQ 告诉你', desktop: '已发桌面通知', held: '深夜记录，早上汇总', failed: '没能通知到你' } satisfies Record<NonNullable<DoctorCase['reported']>, string>,
+    waiting: '等下一次检查确认后再报告',
+  },
+};
+
+export const DoctorPanel = ({ api, locale }: { api: AttentionAPI; locale: string }): JSX.Element => {
+  const lang: Locale = locale === 'zh-CN' ? 'zh-CN' : 'en';
+  const text = copy[lang];
+  const [status, setStatus] = useState<DoctorStatus | null>(null), [readFailed, setReadFailed] = useState(false), [busy, setBusy] = useState(false);
+  const sequence = useRef({ value: 0 });
+  const run = useCallback(async (read: () => Promise<DoctorStatus>): Promise<void> => {
+    const current = ++sequence.current.value;
+    setBusy(true);
+    try { const next = await read(); if (sequence.current.value === current) { setStatus(next); setReadFailed(false); } }
+    catch { if (sequence.current.value === current) setReadFailed(true); }
+    finally { if (sequence.current.value === current) setBusy(false); }
+  }, []);
+  useEffect(() => {
+    const current = sequence.current;
+    void run(() => api.doctor!());
+    const stop = api.onChanged?.(() => void run(() => api.doctor!()));
+    return () => { current.value++; stop?.(); };
+  }, [api, run]);
+  const time = (value: string | null): string => value ? new Intl.DateTimeFormat(lang, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : text.never;
+  const latest = status?.selfTests.at(-1), providerTest = status?.providerTests.at(-1);
+  const outage = status?.appOutage;
+  const epoch = (at: number) => time(new Date(at * 1000).toISOString());
+  const card = (entry: DoctorCase): JSX.Element => <article key={`${entry.key}@${entry.openedAt}`} className="attention-card" data-state={entry.resolvedAt ? 'ok' : 'failing'}>
+    <div className="attention-card-heading"><span className={`status-pill ${entry.acknowledged ? '' : entry.resolvedAt ? 'succeeded' : 'failed'}`}>{entry.acknowledged ? text.acknowledged : entry.resolvedAt ? text.resolved : text.openState}</span></div>
+    <p>{describeDoctorCase(entry)}</p>
+    {status?.runbooks[entry.code] && <details><summary>{lang === 'zh-CN' ? '常见原因与建议' : 'Possible causes and next steps'}</summary>
+      <ul>{status.runbooks[entry.code]!.causes.map(cause => <li key={cause}>{cause}</li>)}</ul>
+      <ul>{status.runbooks[entry.code]!.actions.map(action => <li key={action}>{action}</li>)}</ul>
+    </details>}
+    <p className="attention-note">{text.since}{time(entry.openedAt)}{entry.resolvedAt && <>{entry.acknowledged ? text.acknowledgedAt : text.until}{time(entry.resolvedAt)}</>}
+      {!entry.acknowledged && <> · {entry.reported ? text.reported[entry.reported] : text.waiting}</>} · <code>{entry.code}</code></p>
+    {entry.detail && (DOCTOR_SELF_TEST_STAGES as readonly string[]).includes(entry.detail) && <p className="attention-note">
+      {lang === 'zh-CN' ? '阶段：' : 'Stage: '}{lang === 'zh-CN' ? DOCTOR_SELF_TEST_STAGE_LABELS[entry.detail as typeof DOCTOR_SELF_TEST_STAGES[number]] : entry.detail}</p>}
+  </article>;
+  return <section className="attention-center health-panel doctor-panel">
+    <header className="page-header"><div><h1>{text.title}</h1><p>{text.intro}</p></div>
+      <button type="button" disabled={busy || !status?.enabled} onClick={() => void run(() => api.checkDoctor!())}>{text.check}</button></header>
+    {readFailed && <p role="alert">{text.readFailed}</p>}
+    {status === null ? <p>{text.loading}</p> : <>
+      {status.diagnosis && <article className="attention-card"><h2>{lang === 'zh-CN' ? '医生的看法' : 'Doctor’s view'}</h2>
+        <p>{status.diagnosis.text}</p><p className="attention-note">{time(status.diagnosis.at)} · {status.diagnosis.source === 'local' ? (lang === 'zh-CN' ? '本机' : 'Local') : (lang === 'zh-CN' ? '云端' : 'Cloud')}</p></article>}
+      <div className="setting-row"><div className="setting-label"><label htmlFor="doctor-enabled">{text.enabled}</label>
+        <p className="muted">{text.lastCheck}{time(status.lastCheckAt)} · {text.alerts(status.alertsToday, status.dailyLimit)}</p></div>
+        <span className="switch-row"><input id="doctor-enabled" type="checkbox" checked={status.enabled} disabled={busy}
+          onChange={event => { const enabled = event.currentTarget.checked; setStatus({ ...status, enabled }); void run(() => api.setDoctor!(enabled)); }} /></span></div>
+      <div className="attention-overview"><strong>{status.open || '✓'}</strong><span>{text.open(status.open)}</span></div>
+      {outage && <article className="attention-card">
+        <h2>{lang === 'zh-CN' ? '最近一次桌宠无响应' : 'Latest DeskPet outage'}</h2>
+        <p>{lang === 'zh-CN' ? '最后心跳：' : 'Last heartbeat: '}{epoch(outage.startedAt)}</p>
+        {outage.notifiedAt !== null && <p>{lang === 'zh-CN' ? '微信提醒尝试：' : 'WeChat alert attempted: '}{epoch(outage.notifiedAt)}</p>}
+        {outage.recoveredAt !== null && <p>{lang === 'zh-CN' ? '心跳已恢复：' : 'Heartbeat recovered: '}{epoch(outage.recoveredAt)}</p>}
+      </article>}
+      <article className="attention-card">
+        <h2>{lang === 'zh-CN' ? '微信发送自检' : 'WeChat send self-test'}</h2>
+        <button type="button" disabled={busy || !status.enabled || status.manualSelfTestsToday >= 5 || !api.testDoctorWeChat}
+          onClick={() => void run(() => api.testDoctorWeChat!())}>{lang === 'zh-CN' ? '现在测一次微信发送' : 'Test WeChat sending now'}</button>
+        <p>{lang === 'zh-CN' ? '14 天通过率：' : '14-day pass rate: '}{status.selfTestPassRate === null ? '—' : `${Math.round(status.selfTestPassRate * 100)}%`}</p>
+        <p className="attention-note">{lang === 'zh-CN' ? `按有结果的每日自动自检统计；今天手动 ${status.manualSelfTestsToday}/5 次。` : `Completed automatic test days; manual tests today ${status.manualSelfTestsToday}/5.`}</p>
+        {latest && <><p>{time(latest.at)} · {latest.status} · <code>{latest.code}</code>{' · '}{latest.durationMs} ms</p>
+          <ul>{DOCTOR_SELF_TEST_STAGES.map(stage => <li key={stage}>{lang === 'zh-CN' ? DOCTOR_SELF_TEST_STAGE_LABELS[stage] : stage}：{latest.stages[stage] ? '✓' : '—'}</li>)}</ul></>}
+      </article>
+      {status.vm.latest && <article className="attention-card"><h2>{lang === 'zh-CN' ? '微信虚拟机' : 'WeChat VM'}</h2>
+        <p>{lang === 'zh-CN' ? '磁盘剩余 ' : 'Disk free '}{(status.vm.latest.freeBytes / 1024 ** 3).toFixed(1)} GB · {lang === 'zh-CN' ? '日志 ' : 'Logs '}{((status.vm.latest.authLogBytes + status.vm.latest.journalBytes) / 1024 ** 2).toFixed(0)} MB</p>
+        <p className="attention-note">{time(status.vm.latest.at)} · {status.vm.failures ? (lang === 'zh-CN' ? '最近采样失败' : 'Latest sample failed') : '✓'}</p></article>}
+      {providerTest && <article className="attention-card"><h2>{lang === 'zh-CN' ? '聊天模型自检' : 'Chat model self-test'}</h2>
+        <p>{time(providerTest.at)} · {providerTest.status} · {providerTest.durationMs} ms · <code>{providerTest.code}</code></p></article>}
+      {status.cases.length ? <div className="attention-list">{status.cases.slice(0, 50).map(card)}</div> : <p className="muted">{text.empty}</p>}
+    </>}
+  </section>;
+};

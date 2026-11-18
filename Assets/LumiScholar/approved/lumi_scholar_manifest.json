@@ -1,0 +1,1694 @@
+{
+  "schemaVersion": 2,
+  "manifestID": "deskpet_lumi_scholar_codex_pet_v2",
+  "character": {
+    "id": "lumi-scholar",
+    "displayName": "Lumi Scholar",
+    "canonicalScale": "codex_pet_sprite_v2_192x208_full_canvas",
+    "asymmetricFeatures": [
+      "pink_bow",
+      "book_charm",
+      "pocket_watch_badge"
+    ],
+    "runtimeFallback": "CharacterV2/manifests/character_v2_manifest.json"
+  },
+  "canvas": {
+    "spriteWidth": 192,
+    "spriteHeight": 208,
+    "columns": 8,
+    "rows": 11,
+    "anchor": {
+      "x": 0.5,
+      "y": 0.0
+    },
+    "baseline": "bottom_of_full_canvas"
+  },
+  "provenance": {
+    "source": "Codex Pet Skill",
+    "sourcePetJSON": "Assets/LumiScholar/source/pet.json",
+    "sourceSpritesheet": "Assets/LumiScholar/source/spritesheet.webp",
+    "petJSONSHA256": "960172ee9a0c15775972224f1b3915cf31d049f97e185edc9e6f4cdbab00a2ea",
+    "spritesheetSHA256": "f4345d55df3c60ce4e3093ad55e526a456c1becca4937d134f955c2095737814",
+    "spritesheetPathFromPetJSON": "spritesheet.webp",
+    "spriteVersionNumber": 2
+  },
+  "pipeline": {
+    "candidatePath": "DeskPet/Assets/LumiScholar/source",
+    "reviewPath": "DeskPet/Assets/LumiScholar/review",
+    "approvedPath": "DeskPet/Assets/LumiScholar/approved",
+    "ruleSummary": [
+      "source Codex Pet assets are copied before import and never modified in place",
+      "runtime uses full-cell transparent PNG frames converted from the original WebP spritesheet",
+      "contact sheets are review-only and are never referenced by runtime manifests",
+      "Lumi Scholar is the preferred character; CharacterV2 remains the safe fallback"
+    ]
+  },
+  "clips": [
+    {
+      "id": "idle",
+      "state": "idle",
+      "category": "idle",
+      "fps": 5,
+      "baseFps": 5,
+      "minFps": 5,
+      "maxFps": 5,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 7,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005",
+        "frame_006"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.2135,
+        "y": 0.024,
+        "width": 0.5677,
+        "height": 0.9519
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Imported from Codex Pet row 0 (idle) with full 192x208 canvas frames."
+    },
+    {
+      "id": "move_right",
+      "state": "walkRight",
+      "category": "locomotion",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8.0,
+      "maxFps": 12.5,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 8,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005",
+        "frame_006",
+        "frame_007"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1667,
+        "y": 0.024,
+        "width": 0.6615,
+        "height": 0.9519
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "direction": "right",
+      "speedTier": "walk",
+      "speedRange": {
+        "min": 35,
+        "max": 150
+      },
+      "notes": "Imported from Codex Pet row 1 (running-right) with full 192x208 canvas frames."
+    },
+    {
+      "id": "move_left",
+      "state": "walkLeft",
+      "category": "locomotion",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8.0,
+      "maxFps": 12.5,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 8,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005",
+        "frame_006",
+        "frame_007"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1615,
+        "y": 0.024,
+        "width": 0.6771,
+        "height": 0.9519
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "direction": "left",
+      "speedTier": "walk",
+      "speedRange": {
+        "min": 35,
+        "max": 150
+      },
+      "notes": "Imported from Codex Pet row 2 (running-left) with full 192x208 canvas frames."
+    },
+    {
+      "id": "greet",
+      "state": "greet",
+      "category": "agent_semantic",
+      "fps": 7,
+      "baseFps": 7,
+      "minFps": 7,
+      "maxFps": 7,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 4,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1823,
+        "y": 0.024,
+        "width": 0.6302,
+        "height": 0.9519
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Imported from Codex Pet row 3 (waving) with full 192x208 canvas frames."
+    },
+    {
+      "id": "jump",
+      "state": "jump",
+      "category": "agent_semantic",
+      "fps": 9,
+      "baseFps": 9,
+      "minFps": 9,
+      "maxFps": 9,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 5,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0885,
+        "y": 0.024,
+        "width": 0.8177,
+        "height": 0.9519
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Imported from Codex Pet row 4 (jumping) with full 192x208 canvas frames."
+    },
+    {
+      "id": "task_failed",
+      "state": "taskFailed",
+      "category": "agent_semantic",
+      "fps": 6,
+      "baseFps": 6,
+      "minFps": 6,
+      "maxFps": 6,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 8,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005",
+        "frame_006",
+        "frame_007"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.2083,
+        "y": 0.024,
+        "width": 0.5833,
+        "height": 0.9519
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [
+        {
+          "frame": 7,
+          "type": "hold_final_briefly"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Imported from Codex Pet row 5 (failed) with full 192x208 canvas frames."
+    },
+    {
+      "id": "task_waiting",
+      "state": "taskWaiting",
+      "category": "agent_semantic",
+      "fps": 4,
+      "baseFps": 4,
+      "minFps": 4,
+      "maxFps": 4,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 6,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1875,
+        "y": 0.024,
+        "width": 0.625,
+        "height": 0.9519
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Imported from Codex Pet row 6 (waiting) with full 192x208 canvas frames."
+    },
+    {
+      "id": "task_running",
+      "state": "taskRunning",
+      "category": "agent_semantic",
+      "fps": 6,
+      "baseFps": 6,
+      "minFps": 6,
+      "maxFps": 6,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 6,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.2031,
+        "y": 0.024,
+        "width": 0.5938,
+        "height": 0.9519
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Imported from Codex Pet row 7 (running) with full 192x208 canvas frames."
+    },
+    {
+      "id": "task_review",
+      "state": "taskReview",
+      "category": "agent_semantic",
+      "fps": 4,
+      "baseFps": 4,
+      "minFps": 4,
+      "maxFps": 4,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 6,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1771,
+        "y": 0.024,
+        "width": 0.6458,
+        "height": 0.9519
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Imported from Codex Pet row 8 (review) with full 192x208 canvas frames."
+    },
+    {
+      "id": "blink",
+      "state": "blink",
+      "category": "idle",
+      "fps": 12,
+      "baseFps": 12,
+      "minFps": 12,
+      "maxFps": 12,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "idle",
+        "mode": "TEMP_IDLE_QUALITY_FALLBACK",
+        "notes": "Lumi Scholar source sheet has no explicit blink row; runtime keeps procedural blink over idle fallback."
+      },
+      "notes": "Lumi Scholar source sheet has no explicit blink row; runtime keeps procedural blink over idle fallback."
+    },
+    {
+      "id": "idle_look_around",
+      "state": "idleLookAround",
+      "category": "look",
+      "fps": 8,
+      "baseFps": 8,
+      "minFps": 8,
+      "maxFps": 8,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "look_000",
+        "mode": "TEMP_IDLE_QUALITY_FALLBACK",
+        "notes": "Ambient look uses explicit look poses; default idle-look fallback points at look_000."
+      },
+      "notes": "Ambient look uses explicit look poses; default idle-look fallback points at look_000."
+    },
+    {
+      "id": "start_move",
+      "state": "startMoving",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_right",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "No authored directionless start clip exists; renderer crossfades into movement and aliases to move_right."
+      },
+      "notes": "No authored directionless start clip exists; renderer crossfades into movement and aliases to move_right."
+    },
+    {
+      "id": "stop_move",
+      "state": "stopMoving",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "idle",
+        "mode": "TEMP_IDLE_QUALITY_FALLBACK",
+        "notes": "No authored directionless stop clip exists; renderer crossfades back to idle."
+      },
+      "notes": "No authored directionless stop clip exists; renderer crossfades back to idle."
+    },
+    {
+      "id": "start_move_right",
+      "state": "startMovingRight",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8.0,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_right",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "No authored start_move_right frames; renderer crossfades idle to move_right without reversing run frames."
+      },
+      "direction": "right",
+      "speedTier": "walk",
+      "speedRange": {
+        "min": 35,
+        "max": 150
+      },
+      "notes": "No authored start_move_right frames; renderer crossfades idle to move_right without reversing run frames."
+    },
+    {
+      "id": "start_move_left",
+      "state": "startMovingLeft",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8.0,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_left",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "No authored start_move_left frames; renderer crossfades idle to move_left without reversing run frames."
+      },
+      "direction": "left",
+      "speedTier": "walk",
+      "speedRange": {
+        "min": 35,
+        "max": 150
+      },
+      "notes": "No authored start_move_left frames; renderer crossfades idle to move_left without reversing run frames."
+    },
+    {
+      "id": "stop_move_right",
+      "state": "stopMovingRight",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_right",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "No authored stop_move_right frames; renderer crossfades move_right to idle without reversing run frames."
+      },
+      "direction": "right",
+      "notes": "No authored stop_move_right frames; renderer crossfades move_right to idle without reversing run frames."
+    },
+    {
+      "id": "stop_move_left",
+      "state": "stopMovingLeft",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_left",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "No authored stop_move_left frames; renderer crossfades move_left to idle without reversing run frames."
+      },
+      "direction": "left",
+      "notes": "No authored stop_move_left frames; renderer crossfades move_left to idle without reversing run frames."
+    },
+    {
+      "id": "turn_left_to_front",
+      "state": "turnLeftToFront",
+      "category": "locomotion_transition",
+      "fps": 8,
+      "baseFps": 8,
+      "minFps": 8,
+      "maxFps": 8,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "idle",
+        "mode": "TEMP_IDLE_QUALITY_FALLBACK",
+        "notes": "No authored turn-left-to-front frames; safe fallback returns to idle."
+      },
+      "direction": "left",
+      "notes": "No authored turn-left-to-front frames; safe fallback returns to idle."
+    },
+    {
+      "id": "move_right_brisk",
+      "state": "briskWalkRight",
+      "category": "locomotion",
+      "fps": 12,
+      "baseFps": 12,
+      "minFps": 9.6,
+      "maxFps": 15.0,
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_right",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Brisk right movement aliases to the authored move_right loop."
+      },
+      "direction": "right",
+      "speedTier": "briskWalk",
+      "speedRange": {
+        "min": 35,
+        "max": 150
+      },
+      "notes": "Brisk right movement aliases to the authored move_right loop."
+    },
+    {
+      "id": "move_left_brisk",
+      "state": "briskWalkLeft",
+      "category": "locomotion",
+      "fps": 12,
+      "baseFps": 12,
+      "minFps": 9.6,
+      "maxFps": 15.0,
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_left",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Brisk left movement aliases to the authored move_left loop."
+      },
+      "direction": "left",
+      "speedTier": "briskWalk",
+      "speedRange": {
+        "min": 35,
+        "max": 150
+      },
+      "notes": "Brisk left movement aliases to the authored move_left loop."
+    },
+    {
+      "id": "move_right_fast",
+      "state": "runRight",
+      "category": "locomotion",
+      "fps": 13,
+      "baseFps": 13,
+      "minFps": 10.4,
+      "maxFps": 16.25,
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_right",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Fast right movement aliases to the authored move_right loop; distinct from task_running."
+      },
+      "direction": "right",
+      "speedTier": "run",
+      "speedRange": {
+        "min": 35,
+        "max": 150
+      },
+      "notes": "Fast right movement aliases to the authored move_right loop; distinct from task_running."
+    },
+    {
+      "id": "move_left_fast",
+      "state": "runLeft",
+      "category": "locomotion",
+      "fps": 13,
+      "baseFps": 13,
+      "minFps": 10.4,
+      "maxFps": 16.25,
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.0481,
+        "width": 0.5,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_left",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Fast left movement aliases to the authored move_left loop; distinct from task_running."
+      },
+      "direction": "left",
+      "speedTier": "run",
+      "speedRange": {
+        "min": 35,
+        "max": 150
+      },
+      "notes": "Fast left movement aliases to the authored move_left loop; distinct from task_running."
+    },
+    {
+      "id": "look_000",
+      "state": "look_000",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1302,
+        "y": 0.024,
+        "width": 0.6458,
+        "height": 0.9519
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 000 degrees; no automatic loop."
+    },
+    {
+      "id": "look_022_5",
+      "state": "look_022_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0677,
+        "y": 0.024,
+        "width": 0.6302,
+        "height": 0.9279
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 022.5 degrees; no automatic loop."
+    },
+    {
+      "id": "look_045",
+      "state": "look_045",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0573,
+        "y": 0.024,
+        "width": 0.6354,
+        "height": 0.9423
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 045 degrees; no automatic loop."
+    },
+    {
+      "id": "look_067_5",
+      "state": "look_067_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0312,
+        "y": 0.024,
+        "width": 0.6615,
+        "height": 0.9471
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 067.5 degrees; no automatic loop."
+    },
+    {
+      "id": "look_090",
+      "state": "look_090",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0365,
+        "y": 0.024,
+        "width": 0.6615,
+        "height": 0.9327
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 090 degrees; no automatic loop."
+    },
+    {
+      "id": "look_112_5",
+      "state": "look_112_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1927,
+        "y": 0.024,
+        "width": 0.5938,
+        "height": 0.9038
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 112.5 degrees; no automatic loop."
+    },
+    {
+      "id": "look_135",
+      "state": "look_135",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1927,
+        "y": 0.024,
+        "width": 0.5833,
+        "height": 0.875
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 135 degrees; no automatic loop."
+    },
+    {
+      "id": "look_157_5",
+      "state": "look_157_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1771,
+        "y": 0.024,
+        "width": 0.5885,
+        "height": 0.8173
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 157.5 degrees; no automatic loop."
+    },
+    {
+      "id": "look_180",
+      "state": "look_180",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.2188,
+        "y": 0.024,
+        "width": 0.5104,
+        "height": 0.8125
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 180 degrees; no automatic loop."
+    },
+    {
+      "id": "look_202_5",
+      "state": "look_202_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.2031,
+        "y": 0.024,
+        "width": 0.5052,
+        "height": 0.7981
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 202.5 degrees; no automatic loop."
+    },
+    {
+      "id": "look_225",
+      "state": "look_225",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.2083,
+        "y": 0.024,
+        "width": 0.5,
+        "height": 0.7933
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 225 degrees; no automatic loop."
+    },
+    {
+      "id": "look_247_5",
+      "state": "look_247_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.224,
+        "y": 0.024,
+        "width": 0.4896,
+        "height": 0.7933
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 247.5 degrees; no automatic loop."
+    },
+    {
+      "id": "look_270",
+      "state": "look_270",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.25,
+        "y": 0.024,
+        "width": 0.4896,
+        "height": 0.8077
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 270 degrees; no automatic loop."
+    },
+    {
+      "id": "look_292_5",
+      "state": "look_292_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.2396,
+        "y": 0.024,
+        "width": 0.5156,
+        "height": 0.8365
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 292.5 degrees; no automatic loop."
+    },
+    {
+      "id": "look_315",
+      "state": "look_315",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.2292,
+        "y": 0.024,
+        "width": 0.526,
+        "height": 0.8462
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 315 degrees; no automatic loop."
+    },
+    {
+      "id": "look_337_5",
+      "state": "look_337_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.2292,
+        "y": 0.024,
+        "width": 0.5104,
+        "height": 0.8317
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Single-frame look pose at 337.5 degrees; no automatic loop."
+    }
+  ],
+  "lookDirections": [
+    {
+      "angleDegrees": 0.0,
+      "clipID": "look_000"
+    },
+    {
+      "angleDegrees": 22.5,
+      "clipID": "look_022_5"
+    },
+    {
+      "angleDegrees": 45.0,
+      "clipID": "look_045"
+    },
+    {
+      "angleDegrees": 67.5,
+      "clipID": "look_067_5"
+    },
+    {
+      "angleDegrees": 90.0,
+      "clipID": "look_090"
+    },
+    {
+      "angleDegrees": 112.5,
+      "clipID": "look_112_5"
+    },
+    {
+      "angleDegrees": 135.0,
+      "clipID": "look_135"
+    },
+    {
+      "angleDegrees": 157.5,
+      "clipID": "look_157_5"
+    },
+    {
+      "angleDegrees": 180.0,
+      "clipID": "look_180"
+    },
+    {
+      "angleDegrees": 202.5,
+      "clipID": "look_202_5"
+    },
+    {
+      "angleDegrees": 225.0,
+      "clipID": "look_225"
+    },
+    {
+      "angleDegrees": 247.5,
+      "clipID": "look_247_5"
+    },
+    {
+      "angleDegrees": 270.0,
+      "clipID": "look_270"
+    },
+    {
+      "angleDegrees": 292.5,
+      "clipID": "look_292_5"
+    },
+    {
+      "angleDegrees": 315.0,
+      "clipID": "look_315"
+    },
+    {
+      "angleDegrees": 337.5,
+      "clipID": "look_337_5"
+    }
+  ],
+  "habitat": {
+    "id": "lumi_scholar_no_habitat",
+    "placeholder": true,
+    "style": "none",
+    "anchor": {
+      "x": 0.5,
+      "y": 0.0
+    },
+    "hitbox": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1.0,
+      "height": 1.0
+    },
+    "resources": [],
+    "notes": "Lumi Scholar import is character-only; existing DeskPet habitat behavior is unchanged."
+  }
+}

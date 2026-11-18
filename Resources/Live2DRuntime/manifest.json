@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "upstream": "00c6867b7fd8064938de1805814578db8273dafe",
+  "hashes": {
+    "runtime.js": "f8eda2f7fdb6b63455ff3b6e4c84f03c42707d8a739ae978f7c1f9a0f9046bd1",
+    "index.html": "5f43caae34f5580dc6709f4baa8cf7b61f8cee47f0a8e992e8cfd216876c4a0a"
+  },
+  "localLicensedRuntime": {
+    "filename": "live2dcubismcore.min.js",
+    "sha256Allowlist": [
+      "944988f1523c9f888afe3611b630121ff503ea6246971d2eeee76f45cbfb8004"
+    ],
+    "tracked": false
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "status": "BLOCKED_BY_CUBISM_EDITOR",
+  "motions": [
+    { "id": "Idle_01", "required": true, "exists": false },
+    { "id": "Idle_02", "required": true, "exists": false },
+    { "id": "Idle_03", "required": false, "exists": false },
+    { "id": "Think_01", "required": true, "exists": false },
+    { "id": "Listen_01", "required": true, "exists": false },
+    { "id": "Speak_Subtle_01", "required": true, "exists": false },
+    { "id": "Happy_01", "required": true, "exists": false },
+    { "id": "Happy_02", "required": false, "exists": false },
+    { "id": "Sad_01", "required": true, "exists": false },
+    { "id": "Annoyed_01", "required": true, "exists": false },
+    { "id": "Surprised_01", "required": true, "exists": false },
+    { "id": "Wave_01", "required": false, "exists": false },
+    { "id": "Sleep_01", "required": true, "exists": false },
+    { "id": "Wake_01", "required": true, "exists": false },
+    { "id": "Dragged_01", "required": true, "exists": false },
+    { "id": "Landing_01", "required": true, "exists": false }
+  ],
+  "expressions": [
+    { "id": "Neutral", "required": true, "exists": false },
+    { "id": "Smile", "required": true, "exists": false },
+    { "id": "Happy", "required": true, "exists": false },
+    { "id": "Curious", "required": true, "exists": false },
+    { "id": "Surprised", "required": true, "exists": false },
+    { "id": "Sad", "required": true, "exists": false },
+    { "id": "Annoyed", "required": true, "exists": false },
+    { "id": "Sleepy", "required": true, "exists": false },
+    { "id": "Blush", "required": false, "exists": false }
+  ]
+}

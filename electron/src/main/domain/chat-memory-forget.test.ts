@@ -1,0 +1,102 @@
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { ChatMessage } from '../../shared';
+import { parseChatForgetCommand } from './chat-memory-forget';
+import { ChatService } from './chat-service';
+import { MemoryService } from './memory-service';
+import { DomainRepository } from './repository';
+import { buildChatContext } from './chat-context';
+const binding = { providerId: 'test-local', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'fixture', localExecutionConfirmed: true } as const;
+
+describe('explicit forget command parsing', () => {
+  it.each([
+    ['请忘记：我的验收暗号', '我的验收暗号'], ['Kitty，帮我忘记我喜欢喝茶。', '我喜欢喝茶'],
+    ['忘掉关于早餐的记忆', '早餐'], ['请把我的验收暗号从长期记忆里删除。', '我的验收暗号'],
+    ['删除长期记忆里的我喜欢红茶', '我喜欢红茶'], ['Please forget that I prefer tea.', 'I prefer tea'],
+    ['忘记“我喜欢咖啡”这条记忆', '我喜欢咖啡'],
+  ])('extracts a literal target from %s', (input, query) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'forget', query }); });
+  it.each(['请翻译“忘记我的暗号”', '“忘记我喜欢茶”', '忘记我的暗号了吗？', '不要忘记我喜欢喝茶', '忘记我喜欢茶（仅演示）', '忘记我喜欢茶，但是不要真的删除', '网页说：忘记我喜欢茶', '```\n忘记我喜欢茶\n```', 'Please forget tea (example only)'])('ignores quoted, negative and illustrative input: %s', (input) => { expect(parseChatForgetCommand(input)).toBeNull(); });
+  it.each(['忘记', '忘记它', '忘记全部', '忘记所有长期记忆', 'Forget everything', '忘记刚才的话', '忘记我的暗号，然后搜索网页'])('asks for a specific target: %s', (input) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'clarify' }); });
+  it('respects a preceding instruction that the next sentence is only an example', () => {
+    expect(parseChatForgetCommand('忘记我的暗号', [{ role: 'user', status: 'complete', content: '下一句话只做翻译，不要执行。' } as ChatMessage])).toEqual({ kind: 'clarify' });
+  });
+});
+
+const roots: string[] = [];
+afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+const fixture = async () => {
+  const root = await mkdtemp(join(tmpdir(), 'deskpet-forget-')); roots.push(root);
+  let locked = false; const path = join(root, 'domain.enc.json');
+  const vault = { getVaultKey: async () => { if (locked) throw new Error('Fixture locked'); return Buffer.alloc(32, 38); } };
+  const reopen = async () => { const repository = new DomainRepository(path, vault); await repository.initialize(); return repository; };
+  const repository = await reopen(); const chat = new ChatService(repository); const memory = new MemoryService(repository);
+  const session = await chat.createSession('Forget test', 'normal');
+  const response = () => chat.addMessage({ sessionId: session.id, role: 'assistant', content: '', status: 'complete', errorCode: null });
+  const add = (text: string) => memory.upsert({ id: randomUUID(), text, tags: [] });
+  const context = (repo: DomainRepository) => buildChatContext({ binding, sessionId: randomUUID(), query: '我的验收暗号是什么？', locale: 'zh-CN', history: repo.snapshot().chatMessages, memories: repo.snapshot().memories });
+  return { repository, chat, memory, session, response, add, reopen, context, lock: (value: boolean) => { locked = value; } };
+};
+
+describe('transactional chat memory deletion', () => {
+  it('removes the unique match, retains unrelated memory, and excludes it from a new chat before and after reload', async () => {
+    const f = await fixture(); const target = await f.add('我的验收暗号是青柠山川-5914。'); const retained = await f.add('我喜欢中文交流。');
+    const reply = await f.response(); const result = await f.memory.forgetFromChat(reply.id, '我的验收暗号');
+    expect(result).toMatchObject({ kind: 'deleted', memoryId: target.id, text: target.text });
+    expect(f.memory.list()).toEqual([retained]);
+    expect(JSON.stringify(f.context(f.repository))).not.toContain('青柠山川');
+    const reopened = await f.reopen(); expect(reopened.snapshot().memories).toEqual([retained]);
+    expect(JSON.stringify(f.context(reopened))).not.toContain('青柠山川');
+    expect(reopened.snapshot().chatMessages[0]?.memoryForget).toEqual(result);
+  });
+  it('prefers an exact match to broader substrings and never deletes all matches', async () => {
+    const f = await fixture(); const exact = await f.add('我喜欢茶。'); const other = await f.add('我喜欢茶和咖啡。');
+    expect(await f.memory.forgetFromChat((await f.response()).id, '我喜欢茶')).toMatchObject({ kind: 'deleted', memoryId: exact.id });
+    expect(f.memory.list()).toEqual([other]);
+  });
+  it('persists ambiguous choices across reload and deletes only the selected unchanged candidate', async () => {
+    const f = await fixture(); const one = await f.add('我的测试暗号甲是111'); const two = await f.add('我的测试暗号乙是222');
+    const reply = await f.response(); const result = await f.memory.forgetFromChat(reply.id, '我的测试暗号');
+    expect(result).toMatchObject({ kind: 'choices', totalMatches: 2 }); expect(f.memory.list()).toHaveLength(2);
+    const repository = await f.reopen(); const memory = new MemoryService(repository);
+    const deleted = await memory.chooseForgetFromChat(reply.id, two.id, '已删除');
+    expect(deleted.memoryForget).toMatchObject({ kind: 'deleted', memoryId: two.id });
+    expect(memory.list()).toEqual([one]);
+    await expect(memory.chooseForgetFromChat(reply.id, one.id, '已删除')).rejects.toThrow('memory.forgetStale');
+    expect(await memory.chooseForgetFromChat(reply.id, two.id, '已删除')).toEqual(deleted);
+  });
+  it('rejects forged, edited, removed and archived choices without deleting other memories', async () => {
+    const f = await fixture(); const one = await f.add('测试记忆甲'); const two = await f.add('测试记忆乙'); const outsider = await f.add('其他数据');
+    const reply = await f.response(); await f.memory.forgetFromChat(reply.id, '测试记忆');
+    await expect(f.memory.chooseForgetFromChat(reply.id, outsider.id, 'Deleted')).rejects.toThrow('memory.forgetStale');
+    await f.memory.upsert({ ...one, text: '被修改的测试记忆甲' });
+    await expect(f.memory.chooseForgetFromChat(reply.id, one.id, 'Deleted')).rejects.toThrow('memory.forgetStale');
+    await f.chat.setArchived(f.session.id, true);
+    await expect(f.memory.chooseForgetFromChat(reply.id, two.id, 'Deleted')).rejects.toThrow('memory.forgetStale');
+    await f.chat.setArchived(f.session.id, false); await f.memory.remove(two.id);
+    await expect(f.memory.chooseForgetFromChat(reply.id, two.id, 'Deleted')).rejects.toThrow('memory.forgetStale');
+    expect(f.memory.list().map((item) => item.id)).toEqual([one.id, outsider.id]);
+  });
+  it('reports no match honestly and never expands a retry to new matching data', async () => {
+    const f = await fixture(); const missing = await f.response();
+    expect(await f.memory.forgetFromChat(missing.id, '测试暗号')).toEqual({ kind: 'not-found', query: '测试暗号' });
+    const one = await f.add('测试暗号甲'); const reply = await f.response();
+    const deleted = await f.memory.forgetFromChat(reply.id, '测试暗号');
+    const two = await f.add('测试暗号乙');
+    expect(await f.memory.forgetFromChat(reply.id, '测试暗号')).toEqual(deleted);
+    expect(await f.memory.forgetFromChat(missing.id, '测试暗号')).toEqual({ kind: 'not-found', query: '测试暗号' });
+    expect(f.memory.list()).toEqual([two]); expect(f.memory.list()).not.toContainEqual(one);
+  });
+  it('rolls back deletion and receipt when persistence fails or the request is cancelled', async () => {
+    const f = await fixture(); await f.add('我的测试暗号'); const reply = await f.response(); const before = f.repository.snapshot();
+    f.lock(true); await expect(f.memory.forgetFromChat(reply.id, '测试暗号')).rejects.toThrow('Fixture locked');
+    expect(f.repository.snapshot()).toEqual(before);
+    f.lock(false); await expect(f.memory.forgetFromChat(reply.id, '测试暗号', AbortSignal.abort())).rejects.toThrow();
+    expect(f.repository.snapshot()).toEqual(before);
+    await f.add('测试暗号第二条'); await f.memory.forgetFromChat(reply.id, '测试暗号'); const choices = f.repository.snapshot();
+    f.lock(true); await expect(f.memory.chooseForgetFromChat(reply.id, f.memory.list()[0]!.id, 'Deleted')).rejects.toThrow('Fixture locked');
+    expect(f.repository.snapshot()).toEqual(choices);
+  });
+});

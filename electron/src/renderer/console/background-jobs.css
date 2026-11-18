@@ -1,0 +1,19 @@
+.background-jobs { max-width: 1060px; margin: 0 auto; }
+.background-job-form { display: grid; gap: 16px; }
+.background-job-form label { display: grid; gap: 8px; font-weight: 600; }
+.background-job-form textarea { min-height: 110px; resize: vertical; width: 100%; }
+.background-job-binding { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.background-job-form .background-job-privacy { display: flex; align-items: flex-start; font-weight: 400; }
+.background-job-privacy input { width: auto; margin-top: 3px; flex-shrink: 0; }
+.background-job-note { font-size: 13px; line-height: 1.6; opacity: .8; }
+.background-job-preview { padding: 12px; border: 1px solid var(--border-color, #d5d9df); border-radius: 10px; }
+.background-job-preview summary { cursor: pointer; font-weight: 600; }
+.background-job-preview dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; }
+.background-job-preview dd { margin: 0; overflow-wrap: anywhere; }
+.background-job-preview pre, .background-job-result pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 450px; overflow-y: auto; }
+.background-job-list { display: grid; gap: 12px; margin-top: 16px; }
+.background-job-list h2 { font-size: 16px; overflow-wrap: anywhere; }
+.background-job-id { display: block; margin: 8px 0; font-size: 11px; opacity: .7; overflow-wrap: anywhere; }
+.background-job-actions { display: flex; gap: 10px; margin-top: 14px; }
+.background-job-result { margin-top: 16px; }
+@media (max-width: 680px) { .background-job-binding { grid-template-columns: 1fr; } }

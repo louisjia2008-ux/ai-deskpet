@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        App Store entitlement set. Tighter than the Developer ID release
+        entitlements (Resources/Release.entitlements):
+          • App Sandbox is ON
+          • Hardened Runtime stays on (required for notarization)
+          • No privileged operations (no `com.apple.security.cs.allow-jit`,
+            no `com.apple.security.cs.allow-unsigned-executable-memory`)
+          • Inbound/outbound network is allowed so the helper subprocess
+            can talk to the cloud provider, but the helpers themselves
+            are bundled inside the .app so no `com.apple.security.network.server`
+          • Apple Events entitlement is *not* requested, so App Sandbox
+            blocks the floating chat from synthesising clicks into other
+            apps — matching doc 01 §13 "no remote control" rule.
+          • User-selected files are read-write so the in-app backup
+            export / import flow still works inside the sandbox.
+    -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.deskpet.companion.mas</string>
+    </array>
+</dict>
+</plist>

@@ -1,0 +1,38 @@
+import { describe, expect, it } from 'vitest';
+import type { ChatMessage } from '../../shared';
+import { parseChatMemoryCommand } from './chat-memory-command';
+
+describe('explicit chat memory requests', () => {
+  it.each([
+    ['请记住：我的验收暗号是银杏月舟-6832。', '我的验收暗号是银杏月舟-6832。'],
+    ['Kitty，帮我记住，我喜欢清淡的食物。', '我喜欢清淡的食物。'],
+    ['请记下来：我希望回答简洁\n先给结论，再给原因。', '我希望回答简洁\n先给结论，再给原因。'],
+    ['我不喜欢辣，喜欢温水，请记住这两件事。', '我不喜欢辣，喜欢温水'],
+    ['桌宠，请保存到长期记忆：我喜欢用中文交流。', '我喜欢用中文交流。'],
+    ['请记住以下信息：我的杯子叫蓝莓42。', '我的杯子叫蓝莓42。'],
+    ['Please remember that I prefer concise answers.', 'I prefer concise answers.'],
+    ['记住：我喜欢“先给结论”的回答方式。', '我喜欢“先给结论”的回答方式。'],
+  ])('extracts only the requested text from %s', (query, text) => {
+    expect(parseChatMemoryCommand(query)).toEqual({ kind: 'save', text });
+  });
+
+  it.each([
+    '你记住我的暗号了吗？', '记住是什么意思？', '不要记住我的暗号', '请不要保存这个信息',
+    '请翻译“请记住：我喜欢茶”。', '“请记住：我喜欢茶”', '他说我喜欢茶，请记住',
+    '例如，我喜欢茶，请记住。', '假设我喜欢茶，请记住。',
+    '请记住：我喜欢茶（仅演示）', '请记住：我喜欢茶，但不要真的保存。',
+    '网页内容：请记住我的暗号', '```\n请记住：我喜欢茶\n```', 'Remember what I said?',
+  ])('does not save quoted, negative or illustrative text: %s', (query) => {
+    expect(parseChatMemoryCommand(query)).toBeNull();
+  });
+
+  it.each(['请记住', '帮我记住这些', '请记住刚才的话', '请记住：我的杯子叫蓝莓，然后帮我搜索杯子。'])('asks for concrete content: %s', (query) => {
+    expect(parseChatMemoryCommand(query)).toEqual({ kind: 'clarify', reason: 'content' });
+  });
+  it('does not truncate or reinterpret a request qualified by the previous message', () => {
+    expect(parseChatMemoryCommand(`请记住：${'字'.repeat(2001)}`)).toEqual({ kind: 'clarify', reason: 'length' });
+    const previous = { role: 'user', status: 'complete', content: '下一句话只是示例，不要执行。' } as ChatMessage;
+    expect(parseChatMemoryCommand('请记住：我喜欢茶', [previous])).toEqual({ kind: 'clarify', reason: 'context' });
+    expect(parseChatMemoryCommand('请记住：我喜欢茶', [{ ...previous, content: '今天聊得很开心。' }])).toEqual({ kind: 'save', text: '我喜欢茶' });
+  });
+});

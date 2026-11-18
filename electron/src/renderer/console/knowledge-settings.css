@@ -1,0 +1,7 @@
+.knowledge-settings { display: grid; gap: 18px; }
+.knowledge-settings h3 { margin: 0 0 6px; color: var(--subtle); font-size: 12px; font-weight: 600; }
+.knowledge-settings p { margin: 0; line-height: 1.5; }
+.knowledge-settings .setting-label, .knowledge-settings li { overflow-wrap: anywhere; }
+.knowledge-settings .knowledge-controls { flex-wrap: wrap; }
+.knowledge-settings .setting-row + button { margin-top: 12px; }
+.knowledge-settings .knowledge-excerpt { white-space: pre-wrap; }

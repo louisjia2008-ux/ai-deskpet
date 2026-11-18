@@ -1,0 +1,10 @@
+{
+  "dragonID": "DragonV1",
+  "assetStatus": "rejected",
+  "HUMAN_VISUAL_ACCEPTANCE": "REJECTED",
+  "runtimeHumanAcceptance": "FAILED",
+  "fallbackReason": "dragonV1RejectedOrNoAcceptedManifest",
+  "rejectedArchivePath": "/path/to/DeskPet/Assets/DragonV1/rejected/dragon_v1_full_visual_reject_20260630_093650",
+  "rejectionReason": "DragonV1 wing animation and repeated wing rework attempts failed human visual review. Wings appear artificial, panel-like, disconnected, structurally incorrect, and unsuitable for desktop companion quality.",
+  "runtimeDecision": "DragonV1 should not be loaded by runtime. Use vector fallback unless a future explicit ACCEPTED manifest exists."
+}

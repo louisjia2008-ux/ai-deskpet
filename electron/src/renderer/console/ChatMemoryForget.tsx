@@ -1,0 +1,32 @@
+import { useRef, useState } from 'react';
+import type { JSX } from 'react';
+import type { ChatMessage } from '../../shared';
+
+export const ChatMemoryForget = ({ message, disabled, t, select, view }: {
+  message: ChatMessage; disabled: boolean; t(key: string): string;
+  select(memoryId: string): Promise<void>; view(): void;
+}): JSX.Element | null => {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pending = useRef(false);
+  const result = message.memoryForget;
+  if (!result) return null;
+  const choose = async (id: string): Promise<void> => {
+    if (disabled || pending.current) return;
+    pending.current = true; setBusy(true); setError(null);
+    try { await select(id); }
+    catch (reason) { setError(reason instanceof Error && reason.message.includes('repository.commitUncertain') ? 'repository.commitUncertain' : reason instanceof Error && reason.message.includes('memory.forgetPending') ? 'memory.forgetPending' : reason instanceof Error && reason.message.includes('memory.forgetStale') ? 'memory.forgetStale' : 'memory.forgetFailed'); }
+    finally { pending.current = false; setBusy(false); }
+  };
+  return <section className="memory-receipt memory-forget" aria-label={t(result.kind === 'deleted' ? 'memory.forgotten' : 'memory.title')} aria-busy={busy}>
+    {result.kind === 'deleted' && <><strong role="status">{t('memory.forgotten')}</strong><p>{result.text}</p></>}
+    {result.kind === 'choices' && <>
+      <ul className="memory-forget-choices">{result.candidates.map((candidate) => <li key={candidate.id} aria-label={candidate.text}>
+        <p>{candidate.text}</p><button type="button" className="secondary" disabled={disabled || busy || message.status !== 'complete'} onClick={() => void choose(candidate.id)}>{t('memory.forgetThis')}</button>
+      </li>)}</ul>
+      {result.totalMatches > result.candidates.length && <small>{t('memory.forgetMore')}</small>}
+    </>}
+    {error && <p role="alert">{t(error)}</p>}
+    <button type="button" className="secondary" onClick={view}>{t('memory.view')}</button>
+  </section>;
+};

@@ -1,0 +1,2764 @@
+{
+  "schemaVersion": 2,
+  "manifestID": "deskpet_hatched_dragon_hatch_pet",
+  "character": {
+    "id": "hatched-dragon",
+    "displayName": "Hatched Dragon",
+    "canonicalScale": "hatch_pet_imagegen_reference_192x208_runtime_clips",
+    "asymmetricFeatures": [
+      "tail_arc",
+      "wing_pair",
+      "pearl_horns"
+    ],
+    "runtimeFallback": "LumiScholar/approved/clips/lumi_scholar_manifest.json"
+  },
+  "canvas": {
+    "spriteWidth": 192,
+    "spriteHeight": 208,
+    "columns": 8,
+    "rows": 11,
+    "anchor": {
+      "x": 0.5,
+      "y": 0.0
+    },
+    "baseline": "bottom_of_full_canvas"
+  },
+  "provenance": {
+    "source": "Hatch Pet skill via imagegen base reference plus DeskPet adapter",
+    "sourceSpritesheet": "Assets/HatchedDragon/source/imagegen_reference.png",
+    "spritesheetSHA256": "7a8009f3718d4f520cb2018660a70d0cd219735d4da90720dc2d42500615ff84",
+    "spriteVersionNumber": 2
+  },
+  "pipeline": {
+    "candidatePath": "DeskPet/Assets/HatchedDragon/source",
+    "reviewPath": "DeskPet/Assets/HatchedDragon/qa",
+    "approvedPath": "DeskPet/Assets/HatchedDragon/approved",
+    "ruleSummary": [
+      "imagegen created the base character reference",
+      "DeskPet adapter exports full-cell transparent PNG clips for runtime loading",
+      "interactionStates provide 60 named interactive states mapped to real renderer clips",
+      "future strict hatch-pet atlas output can replace the generated clips without changing runtime state resolution"
+    ]
+  },
+  "clips": [
+    {
+      "id": "idle",
+      "state": "idle",
+      "category": "idle",
+      "fps": 5,
+      "baseFps": 5,
+      "minFps": 5,
+      "maxFps": 5,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 7,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005",
+        "frame_006"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0885,
+        "y": 0.0288,
+        "width": 0.8229,
+        "height": 0.7308
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "move_right",
+      "state": "walkRight",
+      "category": "locomotion",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8.0,
+      "maxFps": 12.5,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 8,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005",
+        "frame_006",
+        "frame_007"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0781,
+        "y": 0.0433,
+        "width": 0.8542,
+        "height": 0.7404
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips.",
+      "direction": "right",
+      "speedTier": "walk",
+      "speedRange": {
+        "min": 35,
+        "max": 150
+      }
+    },
+    {
+      "id": "move_left",
+      "state": "walkLeft",
+      "category": "locomotion",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8.0,
+      "maxFps": 12.5,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 8,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005",
+        "frame_006",
+        "frame_007"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0573,
+        "y": 0.0433,
+        "width": 0.8698,
+        "height": 0.7404
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips.",
+      "direction": "left",
+      "speedTier": "walk",
+      "speedRange": {
+        "min": 35,
+        "max": 150
+      }
+    },
+    {
+      "id": "greet",
+      "state": "greet",
+      "category": "agent_semantic",
+      "fps": 7,
+      "baseFps": 7,
+      "minFps": 7,
+      "maxFps": 7,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 4,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.099,
+        "y": 0.0288,
+        "width": 0.8385,
+        "height": 0.7692
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "jump",
+      "state": "jump",
+      "category": "agent_semantic",
+      "fps": 9,
+      "baseFps": 9,
+      "minFps": 9,
+      "maxFps": 9,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 5,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0885,
+        "y": 0.0288,
+        "width": 0.8281,
+        "height": 0.8269
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "task_failed",
+      "state": "taskFailed",
+      "category": "agent_semantic",
+      "fps": 6,
+      "baseFps": 6,
+      "minFps": 6,
+      "maxFps": 6,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 8,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005",
+        "frame_006",
+        "frame_007"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0938,
+        "y": 0.0288,
+        "width": 0.8281,
+        "height": 0.7452
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [
+        {
+          "frame": 7,
+          "type": "hold_final_briefly"
+        }
+      ],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "task_waiting",
+      "state": "taskWaiting",
+      "category": "agent_semantic",
+      "fps": 4,
+      "baseFps": 4,
+      "minFps": 4,
+      "maxFps": 4,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 6,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0885,
+        "y": 0.0288,
+        "width": 0.8229,
+        "height": 0.7404
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "task_running",
+      "state": "taskRunning",
+      "category": "agent_semantic",
+      "fps": 6,
+      "baseFps": 6,
+      "minFps": 6,
+      "maxFps": 6,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 6,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0729,
+        "y": 0.0288,
+        "width": 0.8438,
+        "height": 0.7356
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "task_review",
+      "state": "taskReview",
+      "category": "agent_semantic",
+      "fps": 4,
+      "baseFps": 4,
+      "minFps": 4,
+      "maxFps": 4,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 6,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004",
+        "frame_005"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0885,
+        "y": 0.0288,
+        "width": 0.8229,
+        "height": 0.7308
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "listening",
+      "state": "listening",
+      "category": "interaction",
+      "fps": 5,
+      "baseFps": 5,
+      "minFps": 5,
+      "maxFps": 5,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 4,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0938,
+        "y": 0.0433,
+        "width": 0.8177,
+        "height": 0.7212
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "thinking",
+      "state": "thinking",
+      "category": "interaction",
+      "fps": 5,
+      "baseFps": 5,
+      "minFps": 5,
+      "maxFps": 5,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 4,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0938,
+        "y": 0.0288,
+        "width": 0.8229,
+        "height": 0.7404
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "speaking",
+      "state": "speaking",
+      "category": "interaction",
+      "fps": 8,
+      "baseFps": 8,
+      "minFps": 8,
+      "maxFps": 8,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 5,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003",
+        "frame_004"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0885,
+        "y": 0.0288,
+        "width": 0.8229,
+        "height": 0.726
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "reacting",
+      "state": "reacting",
+      "category": "interaction",
+      "fps": 8,
+      "baseFps": 8,
+      "minFps": 8,
+      "maxFps": 8,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 4,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0833,
+        "y": 0.0288,
+        "width": 0.8177,
+        "height": 0.7596
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "sleeping",
+      "state": "sleeping",
+      "category": "rest",
+      "fps": 3,
+      "baseFps": 3,
+      "minFps": 3,
+      "maxFps": 3,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 4,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1198,
+        "y": 0.0385,
+        "width": 0.7865,
+        "height": 0.6923
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "dragged",
+      "state": "dragged",
+      "category": "desktop",
+      "fps": 8,
+      "baseFps": 8,
+      "minFps": 8,
+      "maxFps": 8,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 4,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0885,
+        "y": 0.0433,
+        "width": 0.8229,
+        "height": 0.7596
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "falling",
+      "state": "falling",
+      "category": "desktop",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 10,
+      "maxFps": 10,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 4,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0781,
+        "y": 0.0288,
+        "width": 0.8229,
+        "height": 0.8077
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "landing",
+      "state": "landing",
+      "category": "desktop",
+      "fps": 9,
+      "baseFps": 9,
+      "minFps": 9,
+      "maxFps": 9,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 4,
+      "frames": [
+        "frame_000",
+        "frame_001",
+        "frame_002",
+        "frame_003"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.099,
+        "y": 0.0288,
+        "width": 0.8021,
+        "height": 0.726
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "unavailable",
+      "state": "unavailable",
+      "category": "system",
+      "fps": 2,
+      "baseFps": 2,
+      "minFps": 2,
+      "maxFps": 2,
+      "loop": true,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 2,
+      "frames": [
+        "frame_000",
+        "frame_001"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1198,
+        "y": 0.0,
+        "width": 0.7552,
+        "height": 0.6587
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_000",
+      "state": "look_000",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.099,
+        "y": 0.0625,
+        "width": 0.8021,
+        "height": 0.7019
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_022_5",
+      "state": "look_022_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1094,
+        "y": 0.0673,
+        "width": 0.8021,
+        "height": 0.7019
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_045",
+      "state": "look_045",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1146,
+        "y": 0.0625,
+        "width": 0.8021,
+        "height": 0.7019
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_067_5",
+      "state": "look_067_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1198,
+        "y": 0.0577,
+        "width": 0.8021,
+        "height": 0.6971
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_090",
+      "state": "look_090",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.125,
+        "y": 0.0481,
+        "width": 0.7969,
+        "height": 0.6971
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_112_5",
+      "state": "look_112_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1198,
+        "y": 0.0288,
+        "width": 0.8021,
+        "height": 0.6971
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_135",
+      "state": "look_135",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1146,
+        "y": 0.0144,
+        "width": 0.8021,
+        "height": 0.7019
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_157_5",
+      "state": "look_157_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.1094,
+        "y": 0.0096,
+        "width": 0.8021,
+        "height": 0.7019
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_180",
+      "state": "look_180",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.099,
+        "y": 0.0,
+        "width": 0.8021,
+        "height": 0.6971
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_202_5",
+      "state": "look_202_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0833,
+        "y": 0.0144,
+        "width": 0.8125,
+        "height": 0.7115
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_225",
+      "state": "look_225",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0781,
+        "y": 0.0288,
+        "width": 0.8073,
+        "height": 0.7115
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_247_5",
+      "state": "look_247_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0781,
+        "y": 0.0433,
+        "width": 0.8073,
+        "height": 0.7163
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_270",
+      "state": "look_270",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0729,
+        "y": 0.0625,
+        "width": 0.8073,
+        "height": 0.7163
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_292_5",
+      "state": "look_292_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0781,
+        "y": 0.0721,
+        "width": 0.8073,
+        "height": 0.7163
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_315",
+      "state": "look_315",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0781,
+        "y": 0.0769,
+        "width": 0.8073,
+        "height": 0.7115
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "look_337_5",
+      "state": "look_337_5",
+      "category": "look",
+      "fps": 1,
+      "baseFps": 1,
+      "minFps": 1,
+      "maxFps": 1,
+      "loop": false,
+      "placeholder": false,
+      "assetStatus": "approved",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.0833,
+        "y": 0.0721,
+        "width": 0.8125,
+        "height": 0.7115
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": null,
+      "notes": "Generated from a hatch-pet imagegen base reference and adapted into DeskPet PNG clips."
+    },
+    {
+      "id": "blink",
+      "state": "blink",
+      "category": "idle",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "idle",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip."
+    },
+    {
+      "id": "idle_look_around",
+      "state": "idleLookAround",
+      "category": "look",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "look_000",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip."
+    },
+    {
+      "id": "start_move",
+      "state": "startMoving",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_right",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip."
+    },
+    {
+      "id": "stop_move",
+      "state": "stopMoving",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "idle",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip."
+    },
+    {
+      "id": "start_move_right",
+      "state": "startMovingRight",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_right",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip.",
+      "direction": "right",
+      "speedTier": "walk"
+    },
+    {
+      "id": "start_move_left",
+      "state": "startMovingLeft",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_left",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip.",
+      "direction": "left",
+      "speedTier": "walk"
+    },
+    {
+      "id": "stop_move_right",
+      "state": "stopMovingRight",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_right",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip.",
+      "direction": "right"
+    },
+    {
+      "id": "stop_move_left",
+      "state": "stopMovingLeft",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_left",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip.",
+      "direction": "left"
+    },
+    {
+      "id": "turn_left_to_front",
+      "state": "turnLeftToFront",
+      "category": "locomotion_transition",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": false,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "idle",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip.",
+      "direction": "left"
+    },
+    {
+      "id": "move_right_brisk",
+      "state": "briskWalkRight",
+      "category": "locomotion",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_right",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip.",
+      "direction": "right",
+      "speedTier": "briskWalk"
+    },
+    {
+      "id": "move_left_brisk",
+      "state": "briskWalkLeft",
+      "category": "locomotion",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_left",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip.",
+      "direction": "left",
+      "speedTier": "briskWalk"
+    },
+    {
+      "id": "move_right_fast",
+      "state": "runRight",
+      "category": "locomotion",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_right",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip.",
+      "direction": "right",
+      "speedTier": "run"
+    },
+    {
+      "id": "move_left_fast",
+      "state": "runLeft",
+      "category": "locomotion",
+      "fps": 10,
+      "baseFps": 10,
+      "minFps": 8,
+      "maxFps": 12.5,
+      "loop": true,
+      "placeholder": true,
+      "assetStatus": "placeholder",
+      "required": true,
+      "minFrameCount": 1,
+      "targetFrameCount": 1,
+      "frames": [
+        "frame_000"
+      ],
+      "pivot": {
+        "x": 0.5,
+        "y": 0.08
+      },
+      "hitbox": {
+        "x": 0.18,
+        "y": 0.02,
+        "width": 0.64,
+        "height": 0.94
+      },
+      "shadow": {
+        "width": 0.64,
+        "height": 0.09,
+        "alpha": 0.24
+      },
+      "events": [],
+      "footContacts": [],
+      "fallback": {
+        "clipID": "move_left",
+        "mode": "TEMP_LOCOMOTION_ALIAS_FALLBACK",
+        "notes": "Explicit DeskPet-safe alias to an authored hatch clip."
+      },
+      "notes": "Interaction alias; renderer resolves this to an authored hatch clip.",
+      "direction": "left",
+      "speedTier": "run"
+    }
+  ],
+  "lookDirections": [
+    {
+      "angleDegrees": 0.0,
+      "clipID": "look_000"
+    },
+    {
+      "angleDegrees": 22.5,
+      "clipID": "look_022_5"
+    },
+    {
+      "angleDegrees": 45.0,
+      "clipID": "look_045"
+    },
+    {
+      "angleDegrees": 67.5,
+      "clipID": "look_067_5"
+    },
+    {
+      "angleDegrees": 90.0,
+      "clipID": "look_090"
+    },
+    {
+      "angleDegrees": 112.5,
+      "clipID": "look_112_5"
+    },
+    {
+      "angleDegrees": 135.0,
+      "clipID": "look_135"
+    },
+    {
+      "angleDegrees": 157.5,
+      "clipID": "look_157_5"
+    },
+    {
+      "angleDegrees": 180.0,
+      "clipID": "look_180"
+    },
+    {
+      "angleDegrees": 202.5,
+      "clipID": "look_202_5"
+    },
+    {
+      "angleDegrees": 225.0,
+      "clipID": "look_225"
+    },
+    {
+      "angleDegrees": 247.5,
+      "clipID": "look_247_5"
+    },
+    {
+      "angleDegrees": 270.0,
+      "clipID": "look_270"
+    },
+    {
+      "angleDegrees": 292.5,
+      "clipID": "look_292_5"
+    },
+    {
+      "angleDegrees": 315.0,
+      "clipID": "look_315"
+    },
+    {
+      "angleDegrees": 337.5,
+      "clipID": "look_337_5"
+    }
+  ],
+  "interactionStates": [
+    {
+      "id": "dragon_tap_hello",
+      "displayName": "轻点问候",
+      "category": "touch",
+      "trigger": "tap",
+      "clipID": "greet",
+      "state": "greet",
+      "emotion": "happy",
+      "intensity": 0.62,
+      "loop": false,
+      "notes": "轻点问候 resolves to greet for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_double_tap_cheer",
+      "displayName": "双击鼓励",
+      "category": "touch",
+      "trigger": "doubleTap",
+      "clipID": "jump",
+      "state": "jump",
+      "emotion": "happy",
+      "intensity": 0.72,
+      "loop": false,
+      "notes": "双击鼓励 resolves to jump for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_right_click_attention",
+      "displayName": "右键注意",
+      "category": "touch",
+      "trigger": "rightClick",
+      "clipID": "listening",
+      "state": "listening",
+      "emotion": "curious",
+      "intensity": 0.55,
+      "loop": true,
+      "notes": "右键注意 resolves to listening for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_drag_start",
+      "displayName": "开始拖拽",
+      "category": "desktop",
+      "trigger": "dragStart",
+      "clipID": "dragged",
+      "state": "dragged",
+      "emotion": "surprised",
+      "intensity": 0.62,
+      "loop": true,
+      "notes": "开始拖拽 resolves to dragged for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_drag_hover",
+      "displayName": "拖拽悬停",
+      "category": "desktop",
+      "trigger": "dragMove",
+      "clipID": "dragged",
+      "state": "dragged",
+      "emotion": "curious",
+      "intensity": 0.48,
+      "loop": true,
+      "notes": "拖拽悬停 resolves to dragged for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_drag_release",
+      "displayName": "释放落地",
+      "category": "desktop",
+      "trigger": "dragRelease",
+      "clipID": "landing",
+      "state": "landing",
+      "emotion": "happy",
+      "intensity": 0.58,
+      "loop": false,
+      "notes": "释放落地 resolves to landing for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_edge_bump",
+      "displayName": "碰到屏幕边缘",
+      "category": "desktop",
+      "trigger": "edgeBump",
+      "clipID": "reacting",
+      "state": "reacting",
+      "emotion": "surprised",
+      "intensity": 0.55,
+      "loop": false,
+      "notes": "碰到屏幕边缘 resolves to reacting for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_window_watch",
+      "displayName": "观察窗口",
+      "category": "desktop",
+      "trigger": "windowFocus",
+      "clipID": "look_090",
+      "state": "look_090",
+      "emotion": "curious",
+      "intensity": 0.45,
+      "loop": true,
+      "notes": "观察窗口 resolves to look_090 for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_left_watch",
+      "displayName": "观察左侧",
+      "category": "desktop",
+      "trigger": "lookLeft",
+      "clipID": "look_270",
+      "state": "look_270",
+      "emotion": "curious",
+      "intensity": 0.45,
+      "loop": true,
+      "notes": "观察左侧 resolves to look_270 for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_up_watch",
+      "displayName": "观察上方",
+      "category": "desktop",
+      "trigger": "lookUp",
+      "clipID": "look_000",
+      "state": "look_000",
+      "emotion": "curious",
+      "intensity": 0.45,
+      "loop": true,
+      "notes": "观察上方 resolves to look_000 for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_down_watch",
+      "displayName": "观察下方",
+      "category": "desktop",
+      "trigger": "lookDown",
+      "clipID": "look_180",
+      "state": "look_180",
+      "emotion": "curious",
+      "intensity": 0.45,
+      "loop": true,
+      "notes": "观察下方 resolves to look_180 for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_chat_open",
+      "displayName": "聊天打开",
+      "category": "chat",
+      "trigger": "chatOpen",
+      "clipID": "listening",
+      "state": "listening",
+      "emotion": "curious",
+      "intensity": 0.65,
+      "loop": true,
+      "notes": "聊天打开 resolves to listening for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_chat_close",
+      "displayName": "聊天收起",
+      "category": "chat",
+      "trigger": "chatClose",
+      "clipID": "idle",
+      "state": "idle",
+      "emotion": "neutral",
+      "intensity": 0.35,
+      "loop": true,
+      "notes": "聊天收起 resolves to idle for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_user_typing",
+      "displayName": "等待输入",
+      "category": "chat",
+      "trigger": "userTyping",
+      "clipID": "task_waiting",
+      "state": "taskWaiting",
+      "emotion": "curious",
+      "intensity": 0.55,
+      "loop": true,
+      "notes": "等待输入 resolves to task_waiting for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_message_received",
+      "displayName": "收到消息",
+      "category": "chat",
+      "trigger": "messageReceived",
+      "clipID": "greet",
+      "state": "greet",
+      "emotion": "happy",
+      "intensity": 0.55,
+      "loop": false,
+      "notes": "收到消息 resolves to greet for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_thinking_short",
+      "displayName": "短思考",
+      "category": "agent",
+      "trigger": "thinkingShort",
+      "clipID": "thinking",
+      "state": "thinking",
+      "emotion": "curious",
+      "intensity": 0.54,
+      "loop": true,
+      "notes": "短思考 resolves to thinking for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_thinking_deep",
+      "displayName": "深思考",
+      "category": "agent",
+      "trigger": "thinkingDeep",
+      "clipID": "task_review",
+      "state": "taskReview",
+      "emotion": "curious",
+      "intensity": 0.72,
+      "loop": true,
+      "notes": "深思考 resolves to task_review for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_tool_waiting",
+      "displayName": "等待授权",
+      "category": "agent",
+      "trigger": "approvalRequired",
+      "clipID": "task_waiting",
+      "state": "taskWaiting",
+      "emotion": "curious",
+      "intensity": 0.7,
+      "loop": true,
+      "notes": "等待授权 resolves to task_waiting for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_tool_running",
+      "displayName": "工具执行",
+      "category": "agent",
+      "trigger": "toolRunning",
+      "clipID": "task_running",
+      "state": "taskRunning",
+      "emotion": "curious",
+      "intensity": 0.76,
+      "loop": true,
+      "notes": "工具执行 resolves to task_running for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_tool_review",
+      "displayName": "整理结果",
+      "category": "agent",
+      "trigger": "toolReview",
+      "clipID": "task_review",
+      "state": "taskReview",
+      "emotion": "curious",
+      "intensity": 0.65,
+      "loop": true,
+      "notes": "整理结果 resolves to task_review for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_tool_success",
+      "displayName": "任务成功",
+      "category": "agent",
+      "trigger": "taskSucceeded",
+      "clipID": "jump",
+      "state": "jump",
+      "emotion": "happy",
+      "intensity": 0.78,
+      "loop": false,
+      "notes": "任务成功 resolves to jump for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_tool_failed",
+      "displayName": "任务失败",
+      "category": "agent",
+      "trigger": "taskFailed",
+      "clipID": "task_failed",
+      "state": "taskFailed",
+      "emotion": "sad",
+      "intensity": 0.78,
+      "loop": false,
+      "notes": "任务失败 resolves to task_failed for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_retry_ready",
+      "displayName": "准备重试",
+      "category": "agent",
+      "trigger": "retryReady",
+      "clipID": "task_waiting",
+      "state": "taskWaiting",
+      "emotion": "curious",
+      "intensity": 0.66,
+      "loop": true,
+      "notes": "准备重试 resolves to task_waiting for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_recovering",
+      "displayName": "恢复中",
+      "category": "agent",
+      "trigger": "recovering",
+      "clipID": "reacting",
+      "state": "reacting",
+      "emotion": "neutral",
+      "intensity": 0.52,
+      "loop": false,
+      "notes": "恢复中 resolves to reacting for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_speaking_soft",
+      "displayName": "轻声说话",
+      "category": "voice",
+      "trigger": "speakingSoft",
+      "clipID": "speaking",
+      "state": "speaking",
+      "emotion": "happy",
+      "intensity": 0.46,
+      "loop": true,
+      "notes": "轻声说话 resolves to speaking for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_speaking_fast",
+      "displayName": "快速说话",
+      "category": "voice",
+      "trigger": "speakingFast",
+      "clipID": "speaking",
+      "state": "speaking",
+      "emotion": "curious",
+      "intensity": 0.68,
+      "loop": true,
+      "notes": "快速说话 resolves to speaking for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_listening_voice",
+      "displayName": "语音聆听",
+      "category": "voice",
+      "trigger": "voiceListening",
+      "clipID": "listening",
+      "state": "listening",
+      "emotion": "curious",
+      "intensity": 0.62,
+      "loop": true,
+      "notes": "语音聆听 resolves to listening for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_voice_error",
+      "displayName": "语音失败",
+      "category": "voice",
+      "trigger": "voiceError",
+      "clipID": "task_failed",
+      "state": "taskFailed",
+      "emotion": "sad",
+      "intensity": 0.62,
+      "loop": false,
+      "notes": "语音失败 resolves to task_failed for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_walk_left_slow",
+      "displayName": "慢走向左",
+      "category": "motion",
+      "trigger": "walkLeftSlow",
+      "clipID": "move_left",
+      "state": "walkLeft",
+      "emotion": "neutral",
+      "intensity": 0.45,
+      "loop": true,
+      "notes": "慢走向左 resolves to move_left for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_walk_right_slow",
+      "displayName": "慢走向右",
+      "category": "motion",
+      "trigger": "walkRightSlow",
+      "clipID": "move_right",
+      "state": "walkRight",
+      "emotion": "neutral",
+      "intensity": 0.45,
+      "loop": true,
+      "notes": "慢走向右 resolves to move_right for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_walk_left",
+      "displayName": "向左移动",
+      "category": "motion",
+      "trigger": "walkLeft",
+      "clipID": "move_left",
+      "state": "walkLeft",
+      "emotion": "neutral",
+      "intensity": 0.55,
+      "loop": true,
+      "notes": "向左移动 resolves to move_left for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_walk_right",
+      "displayName": "向右移动",
+      "category": "motion",
+      "trigger": "walkRight",
+      "clipID": "move_right",
+      "state": "walkRight",
+      "emotion": "neutral",
+      "intensity": 0.55,
+      "loop": true,
+      "notes": "向右移动 resolves to move_right for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_run_left",
+      "displayName": "快跑向左",
+      "category": "motion",
+      "trigger": "runLeft",
+      "clipID": "move_left_fast",
+      "state": "runLeft",
+      "emotion": "curious",
+      "intensity": 0.72,
+      "loop": true,
+      "notes": "快跑向左 resolves to move_left_fast for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_run_right",
+      "displayName": "快跑向右",
+      "category": "motion",
+      "trigger": "runRight",
+      "clipID": "move_right_fast",
+      "state": "runRight",
+      "emotion": "curious",
+      "intensity": 0.72,
+      "loop": true,
+      "notes": "快跑向右 resolves to move_right_fast for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_start_left",
+      "displayName": "左移启动",
+      "category": "motion",
+      "trigger": "startLeft",
+      "clipID": "start_move_left",
+      "state": "startMovingLeft",
+      "emotion": "neutral",
+      "intensity": 0.55,
+      "loop": true,
+      "notes": "左移启动 resolves to start_move_left for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_start_right",
+      "displayName": "右移启动",
+      "category": "motion",
+      "trigger": "startRight",
+      "clipID": "start_move_right",
+      "state": "startMovingRight",
+      "emotion": "neutral",
+      "intensity": 0.55,
+      "loop": true,
+      "notes": "右移启动 resolves to start_move_right for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_stop_left",
+      "displayName": "左移停止",
+      "category": "motion",
+      "trigger": "stopLeft",
+      "clipID": "stop_move_left",
+      "state": "stopMovingLeft",
+      "emotion": "neutral",
+      "intensity": 0.5,
+      "loop": true,
+      "notes": "左移停止 resolves to stop_move_left for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_stop_right",
+      "displayName": "右移停止",
+      "category": "motion",
+      "trigger": "stopRight",
+      "clipID": "stop_move_right",
+      "state": "stopMovingRight",
+      "emotion": "neutral",
+      "intensity": 0.5,
+      "loop": true,
+      "notes": "右移停止 resolves to stop_move_right for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_idle_breathe",
+      "displayName": "安静呼吸",
+      "category": "idle",
+      "trigger": "idle",
+      "clipID": "idle",
+      "state": "idle",
+      "emotion": "neutral",
+      "intensity": 0.3,
+      "loop": true,
+      "notes": "安静呼吸 resolves to idle for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_idle_blink",
+      "displayName": "眨眼",
+      "category": "idle",
+      "trigger": "blink",
+      "clipID": "blink",
+      "state": "blink",
+      "emotion": "neutral",
+      "intensity": 0.28,
+      "loop": true,
+      "notes": "眨眼 resolves to blink for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_idle_scan",
+      "displayName": "环顾四周",
+      "category": "idle",
+      "trigger": "idleLookAround",
+      "clipID": "idle_look_around",
+      "state": "idleLookAround",
+      "emotion": "curious",
+      "intensity": 0.46,
+      "loop": true,
+      "notes": "环顾四周 resolves to idle_look_around for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_idle_curious",
+      "displayName": "好奇待机",
+      "category": "idle",
+      "trigger": "curiousIdle",
+      "clipID": "look_045",
+      "state": "look_045",
+      "emotion": "curious",
+      "intensity": 0.45,
+      "loop": true,
+      "notes": "好奇待机 resolves to look_045 for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_idle_sleepy",
+      "displayName": "困倦待机",
+      "category": "idle",
+      "trigger": "sleepyIdle",
+      "clipID": "sleeping",
+      "state": "sleeping",
+      "emotion": "sleepy",
+      "intensity": 0.44,
+      "loop": true,
+      "notes": "困倦待机 resolves to sleeping for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_sleep_start",
+      "displayName": "开始睡觉",
+      "category": "rest",
+      "trigger": "sleepStart",
+      "clipID": "sleeping",
+      "state": "sleeping",
+      "emotion": "sleepy",
+      "intensity": 0.58,
+      "loop": true,
+      "notes": "开始睡觉 resolves to sleeping for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_sleep_loop",
+      "displayName": "睡眠循环",
+      "category": "rest",
+      "trigger": "sleepLoop",
+      "clipID": "sleeping",
+      "state": "sleeping",
+      "emotion": "sleepy",
+      "intensity": 0.5,
+      "loop": true,
+      "notes": "睡眠循环 resolves to sleeping for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_wake_up",
+      "displayName": "醒来",
+      "category": "rest",
+      "trigger": "wakeUp",
+      "clipID": "greet",
+      "state": "greet",
+      "emotion": "happy",
+      "intensity": 0.62,
+      "loop": false,
+      "notes": "醒来 resolves to greet for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_happy",
+      "displayName": "开心",
+      "category": "mood",
+      "trigger": "happy",
+      "clipID": "jump",
+      "state": "jump",
+      "emotion": "happy",
+      "intensity": 0.72,
+      "loop": false,
+      "notes": "开心 resolves to jump for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_sad",
+      "displayName": "难过",
+      "category": "mood",
+      "trigger": "sad",
+      "clipID": "task_failed",
+      "state": "taskFailed",
+      "emotion": "sad",
+      "intensity": 0.64,
+      "loop": false,
+      "notes": "难过 resolves to task_failed for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_surprised",
+      "displayName": "惊讶",
+      "category": "mood",
+      "trigger": "surprised",
+      "clipID": "reacting",
+      "state": "reacting",
+      "emotion": "surprised",
+      "intensity": 0.7,
+      "loop": false,
+      "notes": "惊讶 resolves to reacting for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_annoyed",
+      "displayName": "小生气",
+      "category": "mood",
+      "trigger": "annoyed",
+      "clipID": "reacting",
+      "state": "reacting",
+      "emotion": "annoyed",
+      "intensity": 0.62,
+      "loop": false,
+      "notes": "小生气 resolves to reacting for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_curious",
+      "displayName": "好奇",
+      "category": "mood",
+      "trigger": "curious",
+      "clipID": "thinking",
+      "state": "thinking",
+      "emotion": "curious",
+      "intensity": 0.58,
+      "loop": true,
+      "notes": "好奇 resolves to thinking for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_calm",
+      "displayName": "平静",
+      "category": "mood",
+      "trigger": "calm",
+      "clipID": "idle",
+      "state": "idle",
+      "emotion": "neutral",
+      "intensity": 0.3,
+      "loop": true,
+      "notes": "平静 resolves to idle for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_focus_start",
+      "displayName": "开始专注",
+      "category": "focus",
+      "trigger": "focusStart",
+      "clipID": "task_review",
+      "state": "taskReview",
+      "emotion": "curious",
+      "intensity": 0.62,
+      "loop": true,
+      "notes": "开始专注 resolves to task_review for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_focus_loop",
+      "displayName": "专注中",
+      "category": "focus",
+      "trigger": "focusLoop",
+      "clipID": "task_running",
+      "state": "taskRunning",
+      "emotion": "curious",
+      "intensity": 0.66,
+      "loop": true,
+      "notes": "专注中 resolves to task_running for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_focus_break",
+      "displayName": "休息提醒",
+      "category": "focus",
+      "trigger": "focusBreak",
+      "clipID": "greet",
+      "state": "greet",
+      "emotion": "happy",
+      "intensity": 0.58,
+      "loop": false,
+      "notes": "休息提醒 resolves to greet for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_schedule_alert",
+      "displayName": "日程提醒",
+      "category": "scheduler",
+      "trigger": "scheduleAlert",
+      "clipID": "task_waiting",
+      "state": "taskWaiting",
+      "emotion": "curious",
+      "intensity": 0.64,
+      "loop": true,
+      "notes": "日程提醒 resolves to task_waiting for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_memory_saved",
+      "displayName": "记忆保存",
+      "category": "memory",
+      "trigger": "memorySaved",
+      "clipID": "jump",
+      "state": "jump",
+      "emotion": "happy",
+      "intensity": 0.58,
+      "loop": false,
+      "notes": "记忆保存 resolves to jump for the dragon hatch pet.",
+      "duration": 0.72
+    },
+    {
+      "id": "dragon_memory_recall",
+      "displayName": "回忆中",
+      "category": "memory",
+      "trigger": "memoryRecall",
+      "clipID": "task_review",
+      "state": "taskReview",
+      "emotion": "curious",
+      "intensity": 0.56,
+      "loop": true,
+      "notes": "回忆中 resolves to task_review for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_provider_loading",
+      "displayName": "模型加载",
+      "category": "system",
+      "trigger": "providerLoading",
+      "clipID": "task_waiting",
+      "state": "taskWaiting",
+      "emotion": "curious",
+      "intensity": 0.62,
+      "loop": true,
+      "notes": "模型加载 resolves to task_waiting for the dragon hatch pet."
+    },
+    {
+      "id": "dragon_offline",
+      "displayName": "暂不可用",
+      "category": "system",
+      "trigger": "offline",
+      "clipID": "unavailable",
+      "state": "unavailable",
+      "emotion": "sad",
+      "intensity": 0.62,
+      "loop": true,
+      "notes": "暂不可用 resolves to unavailable for the dragon hatch pet."
+    }
+  ],
+  "habitat": {
+    "id": "hatched-dragon_desktop",
+    "placeholder": true,
+    "style": "desktop_overlay",
+    "anchor": {
+      "x": 0.5,
+      "y": 0.0
+    },
+    "hitbox": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1.0,
+      "height": 1.0
+    },
+    "resources": [],
+    "notes": "珍珠薄荷色小龙桌宠，支持观察、悬停、任务、语音和桌面交互。"
+  }
+}

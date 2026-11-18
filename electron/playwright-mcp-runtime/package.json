@@ -1,0 +1,10 @@
+{
+  "name": "deskpet-playwright-mcp-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned Microsoft Playwright MCP runtime managed by DeskPet",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.25.2",
+    "@playwright/mcp": "0.0.84"
+  }
+}

@@ -1,0 +1,1313 @@
+'use strict';
+// Always-on survival behaviors. They outrank any goal; the brain preempts the
+// goal while one of them wants the body and the goal re-plans afterwards.
+// Kept deliberately simple; hardening them is the next milestone.
+
+const { Vec3 } = require('vec3');
+const defaultActions = require('../actions');
+const defaultSkills = require('../skills');
+const { BAND } = require('../brain');
+const { sleep, waitUntil, abortError } = require('../confirm');
+const { isFireResistancePotion, hasEffect } = require('../netherStructures');
+const { createBlacklist } = require('../blacklist');
+const { isHostile } = require('../perception');
+const { createStance } = require('../stance');
+const { goals } = require('mineflayer-pathfinder');
+
+// Entity flag bit 0 is "on fire".
+const burning = (bot) => (Number(bot.entity?.metadata?.[0]) & 1) === 1 || bot.entity?.isInLava === true;
+const dimensionOf = (bot) => String(bot?.game?.dimension || 'overworld').replace(/^minecraft:/, '');
+const FIRE = new Set(['fire', 'soul_fire']);
+const FIRE_UNSAFE = /^(lava|water|bubble_column|magma_block|campfire|soul_campfire|cactus|powder_snow)$/;
+const fireKey = (p) => `${p.x},${p.y},${p.z}`;
+const fullFireFloor = (b) => b?.boundingBox === 'block' && !FIRE_UNSAFE.test(b.name)
+  && Array.isArray(b.shapes) && b.shapes.length === 1 && b.shapes[0].length === 6
+  && b.shapes[0].every((v, i) => v === [0, 0, 0, 1, 1, 1][i]);
+
+// A standing body can touch the fire beside its dry feet cell. A burning
+// metadata flag alone is deliberately insufficient: moving again after the
+// contact ended would interrupt eating without removing the residual burn.
+function fireBodyCells(bot, at = bot.entity?.position) {
+  if (!at || ![at.x, at.y, at.z].every(Number.isFinite) || typeof bot.blockAt !== 'function') return [];
+  const width = bot.entity.width > 0 && bot.entity.width <= 2 ? bot.entity.width : 0.6;
+  const height = bot.entity.height > 0 && bot.entity.height <= 3 ? bot.entity.height : 1.8;
+  const cells = [];
+  for (let x = Math.floor(at.x - width / 2 + 1e-7); x <= Math.floor(at.x + width / 2 - 1e-7); x++) {
+    for (let z = Math.floor(at.z - width / 2 + 1e-7); z <= Math.floor(at.z + width / 2 - 1e-7); z++) {
+      for (let y = Math.floor(at.y + 1e-7); y <= Math.floor(at.y + height - 1e-7); y++) cells.push(new Vec3(x, y, z));
+    }
+  }
+  return cells;
+}
+const fireContacts = (bot, at) => fireBodyCells(bot, at).filter((p) => FIRE.has(bot.blockAt(p)?.name));
+
+// Only one same-height, straight neighbour edge (or the current cell centre).
+// Every swept body voxel is loaded and open; only the fire already touching
+// the starting body may be crossed while leaving it. No planner can detour.
+function fireEdgeSafe(bot, from, to, allowedFire) {
+  const start = from.floored(), target = to.floored();
+  if (!bot.entity.onGround || Math.abs(from.y - start.y) > 0.05 || start.y !== target.y
+    || Math.abs(start.x - target.x) + Math.abs(start.z - target.z) > 1
+    || !fullFireFloor(bot.blockAt(start.offset(0, -1, 0))) || !fullFireFloor(bot.blockAt(target.offset(0, -1, 0)))) return false;
+  const first = fireBodyCells(bot, from), last = fireBodyCells(bot, to);
+  if (!first.length || !last.length) return false;
+  const points = [...first, ...last];
+  for (let x = Math.min(...points.map((p) => p.x)); x <= Math.max(...points.map((p) => p.x)); x++) {
+    for (let z = Math.min(...points.map((p) => p.z)); z <= Math.max(...points.map((p) => p.z)); z++) {
+      for (let y = start.y; y <= Math.max(...points.map((p) => p.y)); y++) {
+        const p = new Vec3(x, y, z), b = bot.blockAt(p);
+        if (!b || b.boundingBox !== 'empty' || FIRE_UNSAFE.test(b.name)
+          || (FIRE.has(b.name) && !allowedFire.has(fireKey(p)))) return false;
+      }
+    }
+  }
+  return true;
+}
+
+function nearbyGhast(bot, range) {
+  const here = bot.entity?.position;
+  if (!here) return null;
+  return Object.values(bot.entities || {}).find((e) => e.name === 'ghast' && e.position && e.position.distanceTo(here) <= range) || null;
+}
+
+/** The top lava cell above `feet`: a bot sunk deep in a lava sea is far below it. */
+function lavaSurface(bot, feet) {
+  let surface = feet.y;
+  while (surface < feet.y + 32 && bot.blockAt(feet.offset(0, surface - feet.y + 1, 0))?.name === 'lava') surface += 1;
+  return surface;
+}
+
+/**
+ * The nearest solid cell, out of the lava, that a swimmer can climb onto: its
+ * top no higher than one block above the lava's surface.
+ */
+const SIDES = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)];
+
+function lavaShore(bot, radius = 16, usable = () => true, lip = 0) {
+  const feet = bot.entity.position.floored();
+  // Under the edge of an overhang its own column's surface is the overhang's
+  // underside: the open lava a stroke away is higher. One run sat under a
+  // bastion's slab an hour, the slab's top a ledge from the open lava beside.
+  let top = lavaSurface(bot, feet);
+  if (lip) {
+    for (let dx = -2; dx <= 2; dx += 1) {
+      for (let dz = -2; dz <= 2; dz += 1) {
+        const beside = feet.offset(dx, 0, dz);
+        if (bot.blockAt(beside)?.name === 'lava') top = Math.max(top, lavaSurface(bot, beside));
+      }
+    }
+  }
+  const surface = top + lip;
+  const open = (b) => b && b.boundingBox === 'empty' && !/lava|fire/.test(b.name);
+  let best = null;
+  for (let dx = -radius; dx <= radius; dx += 1) {
+    for (let dz = -radius; dz <= radius; dz += 1) {
+      for (let y = feet.y - 1; y <= surface; y += 1) {
+        const p = new Vec3(feet.x + dx, y, feet.z + dz);
+        const d = Math.hypot(dx, dz);
+        if (best && d >= best.d) continue;
+        const floor = bot.blockAt(p);
+        if (!floor || floor.boundingBox !== 'block' || /magma/.test(floor.name)) continue;
+        if (!open(bot.blockAt(p.offset(0, 1, 0))) || !open(bot.blockAt(p.offset(0, 2, 0)))) continue;
+        // A ledge a block up is climbed from open lava beside it, not from
+        // under the ledge's own overhang.
+        if (lip && y > surface - lip && !SIDES.some((s) => {
+          const beside = p.plus(s);
+          return bot.blockAt(beside.offset(0, -1, 0))?.name === 'lava' && open(bot.blockAt(beside)) && open(bot.blockAt(beside.offset(0, 1, 0)));
+        })) continue;
+        if (!usable(p)) continue;
+        best = { p, d };
+      }
+    }
+  }
+  return best?.p || null;
+}
+
+/**
+ * With no shore to climb: the top lava cell nearest the bot that has a solid
+ * block beside it, where a placed block makes a step out.
+ */
+function lavaStep(bot, radius = 40) {
+  const feet = bot.entity.position.floored();
+  const surface = lavaSurface(bot, feet);
+  const sides = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)];
+  let best = null;
+  for (let dx = -radius; dx <= radius; dx += 1) {
+    for (let dz = -radius; dz <= radius; dz += 1) {
+      const d = Math.hypot(dx, dz);
+      if (best && d >= best.d) continue;
+      const cell = new Vec3(feet.x + dx, surface, feet.z + dz);
+      if (bot.blockAt(cell)?.name !== 'lava') continue;
+      // Not a cell the bot itself is in: no block can be placed there.
+      const at = bot.entity.position;
+      if (Math.abs(at.x - (cell.x + 0.5)) < 0.8 && Math.abs(at.z - (cell.z + 0.5)) < 0.8) continue;
+      // Room to stand on the step once it is placed.
+      if (![1, 2].every((up) => { const b = bot.blockAt(cell.offset(0, up, 0)); return b?.boundingBox === 'empty' && b.name !== 'lava'; })) continue;
+      // The floor under a shallow sea is a wall too: out on a lava sea one
+      // block deep, with no shore in 40 blocks, a pillar never got up (a jump
+      // in lava is a swim stroke) and the bot spent the last half hour there.
+      const wall = [...sides, new Vec3(0, -1, 0)].map((f) => cell.plus(f)).find((p) => {
+        const b = bot.blockAt(p);
+        return b && b.boundingBox === 'block' && !/magma/.test(b.name);
+      });
+      if (wall) best = { cell, wall, d };
+    }
+  }
+  return best;
+}
+
+/** True when no full block lies on the straight line between two points. */
+function clearLine(bot, from, to) {
+  const d = to.minus(from);
+  const steps = Math.ceil(d.norm() * 3);
+  for (let i = 1; i < steps; i += 1) {
+    const b = bot.blockAt(from.plus(d.scaled(i / steps)));
+    if (b && b.boundingBox === 'block') return false;
+  }
+  return true;
+}
+
+/** The ghast that can see the bot's head, or null. */
+function exposedTo(bot, range) {
+  const head = bot.entity.position.offset(0, 1.6, 0);
+  for (const e of Object.values(bot.entities || {})) {
+    if (e.name !== 'ghast' || !e.position || e.position.distanceTo(head) > range) continue;
+    if (clearLine(bot, e.position.offset(0, 2, 0), head)) return e;
+  }
+  return null;
+}
+
+/** A nearby standable cell with a roof that the ghast cannot see into. */
+function coverSpot(bot, ghast) {
+  const feet = bot.entity.position.floored();
+  const eye = ghast.position.offset(0, 2, 0);
+  let best = null;
+  for (let dx = -6; dx <= 6; dx += 1) {
+    for (let dz = -6; dz <= 6; dz += 1) {
+      for (let dy = -2; dy <= 2; dy += 1) {
+        const p = feet.offset(dx, dy, dz);
+        const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy);
+        if (best && d >= best.d) continue;
+        const floor = bot.blockAt(p.offset(0, -1, 0));
+        if (!floor || floor.boundingBox !== 'block' || /magma|lava/.test(floor.name)) continue;
+        if (bot.blockAt(p)?.boundingBox !== 'empty' || bot.blockAt(p.offset(0, 1, 0))?.boundingBox !== 'empty') continue;
+        if (/lava|fire/.test(bot.blockAt(p)?.name || '')) continue;
+        if (bot.blockAt(p.offset(0, 2, 0))?.boundingBox !== 'block') continue;
+        if (clearLine(bot, eye, p.offset(0.5, 1.6, 0.5)) || clearLine(bot, eye, p.offset(0.5, 0.5, 0.5))) continue;
+        best = { p, d };
+      }
+    }
+  }
+  return best?.p || null;
+}
+
+/** A ghast fireball within 6 blocks that is closing in. */
+function incomingFireball(bot) {
+  const head = bot.entity?.position?.offset(0, 1.6, 0);
+  if (!head) return null;
+  return Object.values(bot.entities || {}).find((e) => {
+    if (e.name !== 'fireball' || !e.position) return false;
+    const distance = e.position.distanceTo(head);
+    if (distance > 6) return false;
+    const v = e.velocity;
+    return !v || v.norm() === 0 || e.position.plus(v).distanceTo(head) < distance;
+  }) || null;
+}
+
+/** A blaze's fireball flying at the bot, or null. */
+function incomingBlazeShot(bot, range = 10) {
+  const head = bot.entity?.position?.offset(0, 1.2, 0);
+  if (!head) return null;
+  return Object.values(bot.entities || {}).find((e) => {
+    if (e.name !== 'small_fireball' || !e.position) return false;
+    const distance = e.position.distanceTo(head);
+    if (distance > range) return false;
+    const v = e.velocity;
+    return !v || v.norm() === 0 || e.position.plus(v).distanceTo(head) < distance;
+  }) || null;
+}
+
+const { RISKY_FOODS } = defaultActions;
+const RANGED = new Set(['skeleton', 'stray', 'bogged']);
+// Pillagers come in groups from outposts that keep spawning them: keep away.
+const AVOIDED = new Set(['pillager', 'vindicator', 'evoker', 'ravager']);
+// Piglin brutes ignore gold armour and hit for half a heart bar with their axe: keep clear of them too.
+const BRUTE_RANGE = 12;
+// Anything solid it carries makes a lava step: a fortress run ends with
+// stacks of nether bricks and no cobblestone left after a tower.
+const STEP_BLOCKS = new Set(['cobblestone', 'netherrack', 'blackstone', 'cobbled_deepslate', 'dirt', 'basalt', 'soul_soil',
+  'nether_bricks', 'polished_basalt', 'smooth_basalt', 'soul_sand', 'stone', 'end_stone']);
+const GOLDEN_APPLES = new Set(['golden_apple', 'enchanted_golden_apple']);
+const SHOOTERS = new Set(['blaze', 'ghast']);
+// Air (of 20) below which a hurt bot in water goes up before anything else.
+const HURT_AIR = 16;
+const KEPT_DROPS = new Set(['string', 'blaze_rod', 'wither_skeleton_skull', 'ender_pearl']);
+// The mobs that can drop one of them.
+const KEEPERS = new Set(['spider', 'cave_spider', 'blaze', 'wither_skeleton', 'enderman']);
+const SKULL_DROPPERS = new Set(['wither_skeleton', 'blaze']);
+// Hoglins too: their charge tosses the bot, into lava as often as not.
+const CHARGERS = new Set(['piglin_brute', 'hoglin']);
+// One that got this close outruns the bot: turn and fight it.
+const BRUTE_FIGHT = 4;
+// Guarding the owner: mobs this close to them, within this of the bot, are fought too (followOwner's own ranges).
+const GUARD_RANGE = 8;
+const GUARD_REACH = 16;
+// followOwner's HURT_HOLD: at or below it the guard stops putting the owner first.
+const GUARD_SWITCH_HEALTH = 10;
+// Neutral mobs are left alone unless they are right next to us.
+const NEUTRAL = new Set(['enderman', 'zombified_piglin', 'piglin', 'spider', 'cave_spider']);
+const SEALS = new Set(['dirt', 'cobblestone', 'cobbled_deepslate', 'coarse_dirt']);
+const CALM_UNLESS_PROVOKED = new Set(['zombified_piglin', 'piglin']);
+const OTHER_ATTACKERS = new Set(['wither_skeleton', 'skeleton', 'blaze', 'ghast', 'magma_cube', 'hoglin', 'piglin_brute', 'zombie', 'husk', 'spider', 'cave_spider', 'creeper', 'stray', 'bogged']);
+const PROJECTILES = new Set(['arrow', 'small_fireball', 'fireball', 'spectral_arrow']);
+const wearsGold = (bot) => /^golden_/.test(bot.inventory?.slots?.[5]?.name || '');
+const FOOD_ANIMALS = ['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom'];
+// While a goal brings food itself, only animals this close are hunted.
+const FEEDING_RANGE = 32;
+
+function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defaultSkills, isFood, spare = () => false,
+  feeding = () => false, home = () => null, activeGoal = () => null, thresholds = {} } = {}) {
+  // At night an archer is not chased far: out there more of them spawn, and
+  // the way home to bed is the better defence.
+  const t = { ghastRange: 48, escapeHealth: 6, healHealth: 10, escapeRange: 6, defendRange: 5, rangedRange: 14, nightRangedRange: 6, rangedHealth: 14, eatFood: 14,
+    eatQuietRange: 4, provisionFood: 12, provisionHealth: 10, recoverHealth: 10, provisionInjured: 16, recoverFood: 18, oxygen: 8, dropsTtlMs: 270000,
+    walkSpeed: 4, dropsMaxDistance: 600, swimScale: 1, provisionRange: 160,
+    stockFood: 6, stockRange: 24, stockWindowMs: 60000,
+    ...thresholds };
+  const huntBlacklist = createBlacklist({ ttlMs: 60000 });
+  const exploreMemory = {};
+  let stuckStreak = 0;
+  const foodCheck = isFood || ((name) => Boolean(bot.registry.foodsByName?.[name]));
+  const hasSafeFood = (state, desperate) => Object.entries(state.inventory)
+    .some(([name, count]) => count > 0 && foodCheck(name) && (desperate || !RISKY_FOODS.has(name)));
+  const desperateForFood = (state) => state.food <= 6 || state.health <= 8;
+  // Zombified piglins (and piglins, while the bot wears gold) leave the bot
+  // alone unless provoked, and hitting one turns the whole group. Only a mob
+  // of a pack that has hurt the bot counts as a threat.
+  const provoked = new Map(); // entity id -> until
+  const creepyIndex = bot.registry?.entitiesByName?.enderman?.metadataKeys?.indexOf('creepy') ?? -1;
+  const endermanAngry = (h) => (creepyIndex >= 0 && bot.entities?.[h.id]?.metadata?.[creepyIndex] === true)
+    || (provoked.get(h.id) || 0) > Date.now();
+  // The server flags a mob that is going for its target (mob_flags bit 4).
+  // In a fortress the swing heuristic below never blames a zombified piglin
+  // (a wither skeleton is always about), so a pack that turned on the bot
+  // hit it to death while it was let alone as calm.
+  const mobFlagsIndex = bot.registry?.entitiesByName?.zombified_piglin?.metadataKeys?.indexOf('mob_flags') ?? -1;
+  const aggressive = (h) => mobFlagsIndex >= 0 && ((bot.entities?.[h.id]?.metadata?.[mobFlagsIndex] || 0) & 4) !== 0;
+  const calm = (h) => {
+    // Proximity does not make an enderman hostile. Attacking a calm one is
+    // precisely what turns an avoidable encounter into a deadly fight.
+    if (h.name === 'enderman') return !endermanAngry(h);
+    if (!CALM_UNLESS_PROVOKED.has(h.name)) return false;
+    if ((provoked.get(h.id) || 0) > Date.now()) return false;
+    if (aggressive(h)) return false;
+    return h.name === 'zombified_piglin' || wearsGold(bot);
+  };
+  // A mob that died stays in view for its death animation: one zombie took a
+  // sixth hit, a second wasted, after the fifth had killed it.
+  const deaths = new Map(); // entity id -> time it died
+  const onDead = (entity) => {
+    if (!entity || entity === bot.entity) return;
+    const now = Date.now();
+    for (const [id, at] of deaths) if (now - at > 5000) deaths.delete(id);
+    deaths.set(entity.id, now);
+  };
+  bot.on?.('entityDead', onDead);
+  const threats = (state) => state.hostiles.filter((h) => !calm(h) && !deaths.has(h.id));
+  // entityHurt names no attacker, so a mob counts as the culprit only if it
+  // swung its arm at melee range just before the hit; a skeleton arrow, a fall
+  // or fire next to a calm piglin must not turn the pack hostile.
+  const swings = new Map(); // entity id -> time of last arm swing
+  const trackedNeutral = (e) => CALM_UNLESS_PROVOKED.has(e.name) || e.name === 'enderman';
+  const onSwing = (entity) => {
+    if (entity && trackedNeutral(entity)) swings.set(entity.id, Date.now());
+  };
+  const onHurt = (entity) => {
+    if (entity !== bot.entity) return;
+    const here = bot.entity.position;
+    const culprit = Object.values(bot.entities || {})
+      .filter((e) => trackedNeutral(e) && e.position && e.position.distanceTo(here) <= 4
+        && Date.now() - (swings.get(e.id) || 0) <= 600)
+      .sort((a, b) => a.position.distanceTo(here) - b.position.distanceTo(here))[0];
+    if (!culprit) return;
+    if (culprit.name === 'enderman') {
+      // Endermen do not share the piglin group's provocation state.
+      provoked.set(culprit.id, Date.now() + 60000);
+      return;
+    }
+    // Another attacker in reach (a wither skeleton's blade, a blaze's fireball,
+    // an arrow) makes the swing a coincidence; hitting the pack then turns all
+    // of it. Blame the pack only when nothing else could have done it.
+    const other = Object.values(bot.entities || {}).some((e) => e.position && e !== bot.entity
+      && ((OTHER_ATTACKERS.has(e.name) && e.position.distanceTo(here) <= 24)
+        || (PROJECTILES.has(e.name) && e.position.distanceTo(here) <= 6)));
+    if (other) return;
+    for (const e of Object.values(bot.entities || {})) {
+      if (e.name === culprit.name && e.position && e.position.distanceTo(culprit.position) <= 24) provoked.set(e.id, Date.now() + 60000);
+    }
+  };
+  bot.on?.('entitySwingArm', onSwing);
+  bot.on?.('entityHurt', onHurt);
+  const nearest = (state) => threats(state)[0] || null;
+  // Chasing an archer bare-handed, or down into the cave it shoots from, loses.
+  const armed = (state) => Object.keys(state.inventory).some((n) => n.endsWith('_sword') || n.endsWith('_axe'));
+  // Melee anything close; go after archers only while healthy enough to close in.
+  // A brute by the way home keeps coming back however often the bot runs.
+  // Fled from five times in three minutes, it is fought instead, while
+  // the bot is armed and healthy. A hoglin is fought straight away: crimson
+  // forests are full of them, and running from each one turned a walk to a
+  // fortress into a hundred aborted legs.
+  const flights = new Map(); // entity id -> times fled from
+  const standing = (state, h) => CHARGERS.has(h.name) && armed(state) && state.health > 12
+    && (h.name === 'hoglin' || (flights.get(h.id) || []).filter((at) => Date.now() - at < 180000).length >= 5);
+  // A pillager patrol chased a bot in diamond armour with a sword across the
+  // map for seven minutes, away from the portal it was building. So kitted,
+  // pillagers are fought like skeletons; the rest of a raid is still avoided.
+  const kitted = (state) => armed(state) && /^(diamond|netherite)_chestplate$/.test(bot.inventory?.slots?.[6]?.name || '');
+  const avoided = (state, h) => AVOIDED.has(h.name) && !(h.name === 'pillager' && kitted(state) && state.health > t.rangedHealth);
+  // The owner the bot is following and guarding, while it is.
+  const guarded = () => (activeGoal?.() === 'follow_owner' && bot.companionGuarding
+    ? bot.players?.[bot.companionGuarding]?.entity?.position || null : null);
+  // A mob near enough the owner, and the bot, for the guard to go for it.
+  const goesForOwner = (state, h, owner) => h.name !== 'creeper' && !avoided(state, h)
+    && !NEUTRAL.has(h.name) && !CHARGERS.has(h.name) && h.distance <= GUARD_REACH
+    && h.position.distanceTo(owner) <= GUARD_RANGE && Math.abs(h.position.y - owner.y) <= 4;
+  const target = (state) => {
+    // In shelter only something that got right next to the bot is fought.
+    if (state.sheltered) return threats(state).find((h) => h.distance <= 2) || null;
+    const fights = threats(state).filter((h) => h.name !== 'creeper' && !((avoided(state, h) && h.distance > 2.5) || (CHARGERS.has(h.name) && h.distance > BRUTE_FIGHT && !standing(state, h)))
+      && (h.distance <= (NEUTRAL.has(h.name) ? 2.5 : t.defendRange)
+        || ((RANGED.has(h.name) || (h.name === 'pillager' && !avoided(state, h))) && h.distance <= (state.isDay === false ? t.nightRangedRange : t.rangedRange)
+          && state.health > t.rangedHealth && armed(state)
+          && Math.abs(h.position.y - state.position.y) <= 4)));
+    // Guarding the owner, what goes for them is fought too, the one closest to
+    // them first unless another is already on the bot: it fought the zombie
+    // beside itself for four seconds while the other one killed the owner.
+    const owner = guarded();
+    if (owner && !fights.some((h) => h.distance <= 2)) {
+      const atOwner = threats(state).filter((h) => !fights.includes(h) && goesForOwner(state, h, owner));
+      const all = [...fights, ...atOwner];
+      if (all.length) return all.sort((a, b) => a.position.distanceTo(owner) - b.position.distanceTo(owner))[0];
+    }
+    return fights[0] || null;
+  };
+
+  // One reading of the encounter for escape, defend, hunting and drops alike;
+  // published for goals (a guard, a builder) that need to know it too.
+  const stance = createStance({ escapeHealth: t.escapeHealth, escapeRange: t.escapeRange });
+  const reading = (state) => {
+    // Guarding the owner first (minecraft.policy) while following them: stand and fight.
+    const holdGround = bot.companionGuardOwnerFirst === true && activeGoal?.() === 'follow_owner';
+    const difficulty = String(bot.game?.difficulty ?? 'normal');
+    const r = stance.read(state, threats(state), target(state), { holdGround, difficulty });
+    bot.companionStance = r;
+    return r;
+  };
+  bot.companionSetRisk = (level) => stance.setRisk(level);
+
+  const escape = {
+    name: 'escape',
+    band: BAND.ESCAPE,
+    want(state) {
+      const threat = nearest(state);
+      if (!threat || state.sheltered) return 0;
+      if (threat.name === 'creeper' && threat.distance <= 4) return 1;
+      // A brute or hoglin on the bot outruns it: running only takes the hits in the back.
+      if (CHARGERS.has(threat.name) && threat.distance <= BRUTE_FIGHT) return 0;
+      // In the End an enderman teleports after anything that runs, and the
+      // run ends in the void: fight it out there instead.
+      if (threat.name === 'enderman' && dimensionOf(bot) === 'the_end') return 0;
+      return reading(state).stance === 'retreat' ? 1 : 0;
+    },
+    run: (ctx) => actions.fleeFrom(bot, ctx, nearest(ctx.perceive())?.position || bot.entity.position),
+  };
+
+  // Guarding, a fight is broken off for a mob that has reached the owner
+  // while the one fought is well away from them: the bot finished a zombie
+  // eight blocks from the owner while the other hit them three times. Not
+  // when hurt: then what is on the bot is fought out (followOwner holds back).
+  const SWITCH_AT_OWNER = 3;
+  const SWITCH_MARGIN = 3;
+  const guardSwitch = (ctx, fought) => {
+    let checkedAt = 0;
+    return () => {
+      if (Date.now() - checkedAt < 300) return false;
+      checkedAt = Date.now();
+      const owner = guarded();
+      const current = bot.entities?.[fought.id];
+      if (!owner || !current?.position || !(bot.health > GUARD_SWITCH_HEALTH)) return false;
+      // Even one on the bot is left for it: it follows the bot to the owner.
+      const state = ctx.perceive();
+      const next = threats(state).filter((h) => h.id !== fought.id && goesForOwner(state, h, owner))
+        .sort((a, b) => a.position.distanceTo(owner) - b.position.distanceTo(owner))[0];
+      if (!next) return false;
+      const near = next.position.distanceTo(owner);
+      if (near > SWITCH_AT_OWNER || current.position.distanceTo(owner) < near + SWITCH_MARGIN) return false;
+      ctx.record('defend_switch', { from: fought.name, to: next.name, toOwner: Math.round(near) });
+      return true;
+    };
+  };
+
+  const droppedNear = (at, radius) => Object.values(bot.entities || {})
+    .filter((e) => e.name === 'item' && e.position && e.position.distanceTo(at) <= radius)
+    .map((e) => { try { return e.getDroppedItem?.()?.name || '?'; } catch { return '?'; } });
+  const defend = {
+    name: 'defend',
+    band: BAND.DEFENSE,
+    // Sealed in, whatever reaches the bot is hit back whatever the odds: there is nowhere to run.
+    want: (state) => ((state.sheltered ? target(state) : reading(state).stance === 'fight') ? 1 : 0),
+    async run(ctx) {
+      const threat = target(ctx.perceive());
+      if (!threat) return { ok: true };
+      ctx.record('defend_target', { mob: threat.name, distance: Math.round(threat.distance) });
+      let last = threat.position.clone();
+      const tracker = setInterval(() => { const e = bot.entities?.[threat.id]; if (e) last = e.position.clone(); }, 100);
+      let result;
+      try {
+        result = await actions.attack(bot, ctx, threat.id, guarded() ? { yieldTo: guardSwitch(ctx, threat) } : undefined);
+      } finally {
+        clearInterval(tracker);
+      }
+      if (result.ok) {
+        // What fell where it died (a skull lost to lava shows here as nothing).
+        if (result.died && SKULL_DROPPERS.has(threat.name)) await sleep(600, ctx.signal);
+        const drops = result.died && SKULL_DROPPERS.has(threat.name) ? droppedNear(last, 6) : undefined;
+        ctx.record('defend_result', { mob: threat.name, died: result.died === true, hits: result.hits, ...(result.yielded ? { yielded: true } : {}), ...(drops ? { drops, y: Math.round(last.y) } : {}) });
+      }
+      // Spiders drop string (wool where there are no sheep); blazes and wither
+      // skeletons fought off in a fortress drop what the expedition is there for.
+      // Nothing else drops anything kept: waiting on a zombie's drops cost 2.5 s
+      // a kill while the next one went for the owner.
+      if (result.ok && KEEPERS.has(threat.name) && typeof actions.collectDrops === 'function') {
+        await actions.collectDrops(bot, ctx, last, (n) => KEPT_DROPS.has(n), { radius: 6, timeoutMs: 4000 });
+      }
+      return result;
+    },
+  };
+
+  const eat = {
+    name: 'eat',
+    band: BAND.MAINTENANCE,
+    want(state) {
+      if (threats(state).some((h) => h.distance <= t.eatQuietRange)) return 0;
+      // A goal mid-dodge (out of a taking-off dragon's path) must not stop to eat.
+      if ((bot.companionNoEatUntil || 0) > Date.now() && state.health > 6) return 0;
+      const hungry = state.food <= t.eatFood || (state.health < 16 && state.food < 20);
+      // Risky food (rotten flesh, raw chicken) only when starving or nearly dead.
+      return hungry && hasSafeFood(state, desperateForFood(state)) ? 1 : 0;
+    },
+    run: (ctx) => actions.eat(bot, ctx),
+  };
+
+  // Burning (lava, a blaze's fireball): drink fire resistance if there is any.
+  // Rides along with any other escape: it takes under two seconds.
+  const quench = {
+    name: 'quench',
+    band: BAND.ESCAPE,
+    want: () => (burning(bot) && !hasEffect(bot, 'FireResistance') && bot.inventory?.items?.().some(isFireResistancePotion) ? 3 : 0),
+    async run(ctx) {
+      const potion = bot.inventory.items().find(isFireResistancePotion);
+      if (!potion) return { ok: false, reason: 'no_potion' };
+      ctx.record('quench', { inLava: bot.entity.isInLava === true });
+      try {
+        await bot.equip(potion, 'hand');
+        await bot.consume();
+      } catch { /* confirmed by the effect below */ }
+      const ok = await waitUntil(() => hasEffect(bot, 'FireResistance'), { timeoutMs: 2000, signal: ctx.signal });
+      return ok ? { ok: true } : { ok: false, reason: 'drink_unconfirmed' };
+    },
+  };
+
+  // Badly hurt mid-fight (wither skeletons, brutes): a golden apple's absorption
+  // and regeneration buy the time running away does not.
+  const heal = {
+    name: 'heal',
+    band: BAND.ESCAPE,
+    want: (state) => (state.health <= t.healHealth && !hasEffect(bot, 'Regeneration')
+      && bot.inventory?.items?.().some((i) => GOLDEN_APPLES.has(i.name)) ? 1.2 : 0),
+    async run(ctx) {
+      const apple = bot.inventory.items().find((i) => i.name === 'enchanted_golden_apple')
+        || bot.inventory.items().find((i) => i.name === 'golden_apple');
+      if (!apple) return { ok: false, reason: 'no_golden_apple' };
+      ctx.record('heal', { item: apple.name, health: Math.round(bot.health) });
+      try {
+        await bot.equip(apple, 'hand');
+        await bot.consume();
+      } catch { /* confirmed by the effect below */ }
+      const ok = await waitUntil(() => hasEffect(bot, 'Regeneration'), { timeoutMs: 2000, signal: ctx.signal });
+      return ok ? { ok: true } : { ok: false, reason: 'eat_unconfirmed' };
+    },
+  };
+
+  // Swimming in lava (a hoglin's toss, a slip): the pathfinder cannot plan from
+  // there. Swim for the nearest shore it can climb; with only cliffs around,
+  // swim to one, put a block on the lava against it and climb onto that.
+  // Magma cubes live in the lava seas: one beside a swimming bot knocks it
+  // back off every step it climbs and hits it to death with fire resistance
+  // on. Hit any in reach on the way, without stopping the swim.
+  let lastSwimHit = 0;
+  async function hitInPassing() {
+    if (Date.now() - lastSwimHit < 500) return;
+    const here = bot.entity.position;
+    const cube = Object.values(bot.entities || {}).find((e) => e.name === 'magma_cube' && e.position
+      && e.position.distanceTo(here) <= 3);
+    if (!cube) return;
+    const sword = bot.inventory.items().find((i) => i.name.endsWith('_sword'));
+    if (sword && bot.heldItem?.name !== sword.name) {
+      try { await bot.equip(sword, 'hand'); } catch { return; }
+    }
+    lastSwimHit = Date.now();
+    bot.attack(cube);
+  }
+  // A long escape (a pillar, an hour-long hold) outlasts the potion, and the
+  // drink waits on leave_lava finishing: a bot died a minute after its last
+  // one ran out mid-pillar with eight left. Drink on the way.
+  async function quenchInPassing() {
+    if (hasEffect(bot, 'FireResistance')) return;
+    const potion = bot.inventory?.items?.().find(isFireResistancePotion);
+    if (!potion) return;
+    try {
+      await bot.equip(potion, 'hand');
+      await bot.consume();
+    } catch { /* tried again next tick */ }
+  }
+  // Physics plays every jump in lava as a swim stroke; the server lets a
+  // player on the floor of a shallow (flowing) pool jump out like on land.
+  const hopOffFloor = () => {
+    if (bot.entity?.onGround && bot.entity.isInLava && bot.entity.velocity) {
+      bot.entity.velocity.y = Math.max(bot.entity.velocity.y, 0.42);
+    }
+  };
+  async function swimTo(ctx, point, until, maxTicks = 150) {
+    try {
+      for (let i = 0; i < maxTicks * t.swimScale && !until(); i += 1) {
+        await quenchInPassing();
+        await hitInPassing();
+        await bot.lookAt(point, true);
+        for (const control of ['jump', 'forward', 'sprint']) bot.setControlState(control, true);
+        hopOffFloor();
+        await sleep(100, ctx.signal);
+      }
+    } finally {
+      for (const control of ['jump', 'forward', 'sprint']) bot.setControlState(control, false);
+    }
+  }
+  // A dig under way when the bot dies never settles (mineflayer drops its
+  // listeners on death): leave_lava then held the body for the last hour of a
+  // run, respawned in the overworld. Bounded, and given up on abort.
+  // Raced, not awaited: a stop does not settle it either.
+  async function digNow(ctx, block) {
+    let timer = null;
+    let onAbort = null;
+    const done = bot.dig(block, true);
+    done.catch(() => {});
+    try {
+      await Promise.race([done, new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('dig_timeout')), 10000);
+        onAbort = () => reject(new Error('aborted'));
+        if (ctx.signal?.aborted) onAbort();
+        ctx.signal?.addEventListener('abort', onAbort, { once: true });
+      })]);
+    } catch (error) {
+      try { bot.stopDigging(); } catch { /* not digging */ }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      if (onAbort) ctx.signal?.removeEventListener('abort', onAbort);
+    }
+  }
+  // Jump, and once clear of the floor put a block on it: one block higher
+  // each round, until the head is out of the lava.
+  // Something over its head (its own bridge, an overhang, the roof of a
+  // lava cave) stops both the hop out and a pillar one block short of the
+  // surface: dig the two cells above open, unless lava waits behind them.
+  async function digRoof(ctx) {
+    const feet = bot.entity.position.floored();
+    const roof = [1, 2].map((up) => bot.blockAt(feet.offset(0, up, 0)))
+      .filter((b) => b && b.boundingBox === 'block' && b.diggable !== false && !/lava/.test(bot.blockAt(b.position.offset(0, 1, 0))?.name || ''));
+    if (!roof.length) return false;
+    ctx.record('leave_lava', { roof: roof.map((b) => `${b.name}@${b.position.y - feet.y}`) });
+    const pick = bot.inventory.items().find((i) => i.name.endsWith('_pickaxe'));
+    try {
+      if (pick) await bot.equip(pick, 'hand');
+      for (const b of roof) await digNow(ctx, b);
+    } catch { /* the next try looks again */ }
+    return true;
+  }
+  async function towerUp(ctx, block, out) {
+    for (let i = 0; i < 12 && !out() && !ctx.signal?.aborted; i += 1) {
+      const floor = bot.blockAt(bot.entity.position.offset(0, -0.5, 0));
+      if (!floor || floor.boundingBox !== 'block') return;
+      if (!bot.inventory.items().some((it) => it.name === block.name)) return;
+      // Two pillars ended a block under the surface, heads against a cave roof.
+      await quenchInPassing();
+      await digRoof(ctx);
+      try { await bot.equip(block, 'hand'); } catch { return; }
+      try {
+        await bot.look(bot.entity.yaw, -Math.PI / 2, true);
+        bot.setControlState('jump', true);
+        await waitUntil(() => bot.entity.position.y >= floor.position.y + 2, { timeoutMs: 2500, signal: ctx.signal });
+        await bot.placeBlock(floor, new Vec3(0, 1, 0));
+      } catch { /* checked by the next round's floor */ } finally {
+        bot.setControlState('jump', false);
+      }
+      await waitUntil(() => bot.entity.onGround, { timeoutMs: 1500, signal: ctx.signal }).catch(() => {});
+    }
+  }
+  // Still in lava is not a failure to back off from: the next try comes at
+  // once, before the bot sinks out of reach of the walls.
+  const shoreMisses = new Map(); // "(x, y, z)" -> { count, until }
+  // Tries in a row that ended still in lava: a shallow pocket under a ledge
+  // held the bot for an hour with every shore just out of reach, drifting
+  // from one spot to the next. Getting out, or two quiet minutes, ends it.
+  let lavaStuck = { count: 0, last: 0 };
+  const lavaResult = (ctx, done) => {
+    if (done) lavaStuck = { count: 0, last: 0 };
+    else {
+      lavaStuck = { count: Date.now() - lavaStuck.last < 120000 ? lavaStuck.count + 1 : 1, last: Date.now() };
+      ctx.record('still_in_lava', { tries: lavaStuck.count });
+    }
+    return { ok: true, waited: !done };
+  };
+  // A pocket of lava under a low roof has no shore with room to stand: dig
+  // out the two blocks above a wall beside the bot, so the wall becomes one.
+  async function digShore(ctx) {
+    const feet = bot.entity.position.floored();
+    const surface = lavaSurface(bot, feet);
+    // Two under is still a swim up: one pillar ended two blocks under the
+    // surface beside a cliff, could build no higher, and the bot sat on it
+    // for a quarter of an hour until magma cubes killed it.
+    if (surface - feet.y > 2) return false;
+    const sides = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)];
+    for (const side of sides) {
+      const wall = new Vec3(feet.x, surface, feet.z).plus(side);
+      const b = bot.blockAt(wall);
+      if (!b || b.boundingBox !== 'block' || /magma/.test(b.name)) continue;
+      const above = [1, 2].map((up) => bot.blockAt(wall.offset(0, up, 0)));
+      // Digging into more lava only floods the pocket.
+      if (above.some((a) => a?.name === 'lava') || bot.blockAt(wall.offset(0, 3, 0))?.name === 'lava') continue;
+      const solid = above.filter((a) => a && a.boundingBox === 'block' && a.diggable !== false);
+      if (!solid.length) continue;
+      ctx.record('leave_lava', { dig: `${wall.x},${wall.y},${wall.z}`, blocks: solid.length });
+      const pick = bot.inventory.items().find((i) => i.name.endsWith('_pickaxe'));
+      try {
+        if (pick) await bot.equip(pick, 'hand');
+        for (const a of solid) await digNow(ctx, a);
+      } catch { return false; }
+      await swimTo(ctx, wall.offset(0.5, 1.2, 0.5), () => !bot.entity.isInLava && bot.entity.onGround !== false, 80);
+      return true;
+    }
+    return false;
+  }
+  // What is around a bot stuck in lava, for the log: solid cells only.
+  function surroundings(feet) {
+    const cells = [];
+    for (let dy = -1; dy <= 3; dy += 1) {
+      for (let dx = -2; dx <= 2; dx += 1) {
+        for (let dz = -2; dz <= 2; dz += 1) {
+          const b = bot.blockAt(feet.offset(dx, dy, dz));
+          if (b && b.boundingBox === 'block') cells.push(`${dx},${dy},${dz}:${b.name}`);
+        }
+      }
+    }
+    return cells.join(' ');
+  }
+  const leaveLava = {
+    name: 'leave_lava',
+    band: BAND.ESCAPE,
+    want: () => (bot.entity?.isInLava === true ? 2 : 0),
+    async run(ctx) {
+      bot.pathfinder?.setGoal(null);
+      // Out means standing out of it: bobbing up at the surface for a tick is
+      // not, and stopping the swim there lets the bot slide straight back.
+      const out = () => !bot.entity.isInLava && bot.entity.onGround !== false;
+      const usable = (p) => {
+        const miss = shoreMisses.get(p.toString());
+        return !miss || miss.until <= Date.now() || miss.count < 4;
+      };
+      // Nothing level with the lava: a ledge one block up will do. One run
+      // sat an hour in a hole in a basalt crust over the lava sea, every
+      // block around it a step up, with nothing to build with.
+      const shore = lavaShore(bot, 16, usable) || lavaShore(bot, 8, usable, 1);
+      // Sunk to the floor of a deep pool, or held in the same spot try after
+      // try: build a pillar up through the lava.
+      const block = bot.inventory.items().find((i) => STEP_BLOCKS.has(i.name));
+      const feet = bot.entity.position.floored();
+      const held = lavaStuck.count >= 3 && Date.now() - lavaStuck.last < 120000;
+      if (held) {
+        if (lavaStuck.count === 3) ctx.record('lava_held', { around: surroundings(feet) });
+        await digRoof(ctx);
+      }
+      // Shallow, with a cell beside it to put a step on: the step, not a pillar.
+      const step = lavaStep(bot);
+      const stepBeside = step && step.d <= 2 && lavaSurface(bot, feet) - feet.y <= 1;
+      if (block && bot.entity.onGround && !stepBeside && (held || (!shore && lavaSurface(bot, feet) - feet.y >= 2))) {
+        ctx.record('leave_lava', { tower: `${feet.x},${feet.y},${feet.z}`, surface: lavaSurface(bot, feet), block: block.name });
+        await towerUp(ctx, block, out);
+        if (out()) return { ok: true };
+      }
+      // Overhangs over the lava sea: the wall beside it has no room on top
+      // either. Make room there (every hold seen had a roof two blocks up).
+      if (held && await digShore(ctx)) return lavaResult(ctx, out());
+      // A shore it keeps failing to reach (a current from flowing lava, a lip):
+      // build its own step instead, which also stems the flow.
+      if (shore && !(held && step && block)) {
+        ctx.record('leave_lava', { shore: `${shore.x},${shore.y},${shore.z}` });
+        await swimTo(ctx, shore.offset(0.5, 1.2, 0.5), out);
+        if (out()) await sleep(400, ctx.signal);
+        if (!out()) {
+          // A shore it keeps failing to climb (a flowing edge, a lip) is
+          // given up for a while in favour of another shore or a step.
+          const key = shore.toString();
+          const miss = shoreMisses.get(key);
+          shoreMisses.set(key, { count: (miss && miss.until > Date.now() ? miss.count : 0) + 1, until: Date.now() + 120000 });
+        }
+        return lavaResult(ctx, out());
+      }
+      ctx.record('leave_lava', { shore: null, step: step ? `${step.cell.x},${step.cell.y},${step.cell.z}` : null, block: block?.name || null });
+      if (!step && await digShore(ctx)) return lavaResult(ctx, out());
+      // A step but nothing to build it with: swim over to its wall and dig
+      // standing room into the wall's top. One run sank to the lava floor
+      // with no blocks left and sat there ninety minutes, a wall eight
+      // blocks off.
+      if (step && !block && step.wall.y === step.cell.y) {
+        const centre = step.cell.offset(0.5, 0.5, 0.5);
+        await swimTo(ctx, centre, () => out() || Math.hypot(bot.entity.position.x - centre.x, bot.entity.position.z - centre.z) <= 0.6, 400);
+        const above = [1, 2].map((up) => bot.blockAt(step.wall.offset(0, up, 0)));
+        const solid = above.filter((a) => a && a.boundingBox === 'block' && a.diggable !== false);
+        if (!out() && !above.some((a) => a?.name === 'lava')) {
+          ctx.record('leave_lava', { dig: `${step.wall.x},${step.wall.y},${step.wall.z}`, blocks: solid.length, noBlocks: true });
+          const pick = bot.inventory.items().find((i) => i.name.endsWith('_pickaxe'));
+          try {
+            if (pick && solid.length) await bot.equip(pick, 'hand');
+            for (const a of solid) await digNow(ctx, a);
+          } catch { /* the next try looks again */ }
+          await swimTo(ctx, step.wall.offset(0.5, 1.2, 0.5), out, 80);
+          return lavaResult(ctx, out());
+        }
+      }
+      if (!step || !block) {
+        await swimTo(ctx, bot.entity.position.offset(0, 3, 0), out, 20);
+        if (out()) return { ok: true };
+        lavaResult(ctx, false);
+        return { ok: false, reason: step ? 'no_step_block' : 'no_shore' };
+      }
+      const centre = step.cell.offset(0.5, 0.5, 0.5);
+      // Out in a lava sea the nearest wall can be far: a long swim with fire resistance.
+      // Sunk deep, it also has to come up within reach of the wall's top. It
+      // swims for the cell beyond the step and stops short of the step's own
+      // column: with its head in that cell the server refuses the block.
+      const beyond = centre.plus(step.cell.minus(step.wall).scaled(1.2));
+      const inCell = () => Math.abs(bot.entity.position.x - centre.x) < 0.8 && Math.abs(bot.entity.position.z - centre.z) < 0.8;
+      await swimTo(ctx, beyond, () => out() || (!inCell() && Math.hypot(bot.entity.position.x - centre.x, bot.entity.position.z - centre.z) <= 2.2
+        && bot.entity.position.y >= step.cell.y - 1.5), 400);
+      if (!out()) {
+        try {
+          await bot.equip(block, 'hand');
+          const wall = bot.blockAt(step.wall);
+          await bot.lookAt(step.wall.offset(0.5, 0.5, 0.5).plus(step.cell.minus(step.wall).scaled(0.5)), true);
+          await bot.placeBlock(wall, step.cell.minus(step.wall));
+        } catch { /* checked below */ }
+        const placed = bot.blockAt(step.cell)?.boundingBox === 'block';
+        ctx.record('lava_step', { placed });
+        if (placed) await swimTo(ctx, step.cell.offset(0.5, 1.2, 0.5), out, 50);
+      }
+      if (out()) await sleep(300, ctx.signal);
+      return lavaResult(ctx, out());
+    },
+  };
+
+  const leaveFire = {
+    name: 'leave_fire',
+    band: BAND.ESCAPE,
+    want: () => (!bot.entity?.isInLava && fireContacts(bot).length > 0 ? 1.8 : 0),
+    async run(ctx) {
+      const m = bot.pathfinder?.movements;
+      const keys = ['canDig', 'allowParkour', 'allow1by1towers', 'scafoldingBlocks', 'maxDropDown', 'allowSprinting', 'companionWalkOnly'];
+      const saved = m && keys.map((key) => [key, Object.hasOwn(m, key),
+        key === 'allowSprinting' ? (m.sprintSetting ?? m.allowSprinting) : m[key]]);
+      const ownedSneaking = Object.hasOwn(bot, 'companionSneaking'), savedSneaking = bot.companionSneaking;
+      const halt = () => {
+        try { actions.haltBody?.(bot); } catch { /* still clear each native control */ }
+        try { bot.pathfinder?.setGoal(null); } catch { /* cleanup remains best effort */ }
+        for (const key of ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']) {
+          try { bot.setControlState?.(key, false); } catch { /* restore the movement profile below */ }
+        }
+      };
+      const finish = (ok, reason) => {
+        ctx.record?.('fire_escape_result', { ok, reason: reason || null, at: fireKey(bot.entity.position), contacts: fireContacts(bot).map(fireKey) });
+        return ok ? { ok: true } : { ok: false, reason };
+      };
+      try {
+        halt();
+        if (ctx.signal?.aborted) throw abortError(ctx.signal);
+        if (bot.entity.isInLava) return finish(false, 'in_lava');
+        const from = bot.entity.position.clone(), feet = from.floored();
+        const contacts = fireContacts(bot), allowedFire = new Set(contacts.map(fireKey));
+        if (!contacts.length) return finish(false, 'fire_contact_changed');
+        const candidates = [feet, ...SIDES.map((side) => feet.plus(side))].map((p) => p.offset(0.5, 0, 0.5));
+        const target = candidates.find((p) => !fireContacts(bot, p).length && fireEdgeSafe(bot, from, p, allowedFire));
+        if (!target) return finish(false, 'no_safe_fire_exit');
+        const targetCell = target.floored();
+        if (m) Object.assign(m, { canDig: false, allowParkour: false, allow1by1towers: false,
+          scafoldingBlocks: [], maxDropDown: 0, allowSprinting: false, companionWalkOnly: true });
+        ctx.record?.('fire_escape_start', { from: fireKey(from), target: fireKey(target),
+          mode: targetCell.equals(feet) ? 'recentre' : 'neighbour', contacts: contacts.map(fireKey) });
+        bot.companionSneaking = true;
+        for (let i = 0; i < 40; i++) {
+          if (ctx.signal?.aborted) throw abortError(ctx.signal);
+          const here = bot.entity.position, cell = here.floored();
+          if ((!cell.equals(feet) && !cell.equals(targetCell)) || !fireEdgeSafe(bot, here, target, allowedFire)) {
+            return finish(false, 'fire_escape_changed');
+          }
+          if (!fireContacts(bot).length) return finish(true);
+          await bot.lookAt(target.offset(0, 1.6, 0), true);
+          if (ctx.signal?.aborted) throw abortError(ctx.signal);
+          if (!fireEdgeSafe(bot, bot.entity.position, target, allowedFire)) return finish(false, 'fire_escape_changed');
+          bot.setControlState('sneak', true);
+          bot.setControlState('forward', true);
+          await sleep(50, ctx.signal);
+          bot.setControlState('forward', false);
+        }
+        return finish(false, 'fire_escape_stuck');
+      } finally {
+        halt();
+        if (ownedSneaking) bot.companionSneaking = savedSneaking;
+        else delete bot.companionSneaking;
+        if (m) for (const [key, owned, value] of saved) {
+          if (owned) m[key] = value;
+          else delete m[key];
+        }
+      }
+    },
+  };
+
+  /** The nearest column (within three) whose water ends in open air, reachable at body height. */
+  const WET = /^(water|bubble_column|seagrass|tall_seagrass|kelp|kelp_plant)$/;
+  function airColumn() {
+    const feet = bot.entity.position.floored();
+    const passable = (p) => { const b = bot.blockAt(p); return Boolean(b) && b.boundingBox === 'empty'; };
+    let best = null;
+    for (let dx = -3; dx <= 3; dx += 1) {
+      for (let dz = -3; dz <= 3; dz += 1) {
+        const d = Math.hypot(dx, dz);
+        if (d > 3.2 || (best && d >= best.d)) continue;
+        const col = feet.offset(dx, 0, dz);
+        if (d > 0 && !(passable(col) && passable(col.offset(0, 1, 0)))) continue;
+        let y = 0;
+        while (y < 6 && WET.test(bot.blockAt(col.offset(0, y, 0))?.name || '')) y += 1;
+        const top = bot.blockAt(col.offset(0, y, 0));
+        if (top && top.boundingBox === 'empty' && !WET.test(top.name) && top.name !== 'lava') best = { x: col.x, z: col.z, d };
+      }
+    }
+    return best;
+  }
+
+  // Times breathe had to surface lately: back under again and again means
+  // a goal keeps swimming down after something across the water.
+  let breaths = [];
+  const breathe = {
+    name: 'breathe',
+    band: BAND.ESCAPE,
+    // Hurt and short of air: up now, before the air runs out. Not at the
+    // first bubble lost, though: eating in water costs a little air, and
+    // breathe cutting every meal short kept a hurt bot from ever eating
+    // (340 times over, half an hour in a flooded cave).
+    want: (state) => (state.inWater && Number.isFinite(state.oxygen)
+      && (state.oxygen < t.oxygen || (state.oxygen < HURT_AIR && state.health < t.recoverHealth)) ? 1 : 0),
+    async run(ctx) {
+      bot.pathfinder?.setGoal(null);
+      bot.setControlState('jump', true);
+      try {
+        // Under a ceiling no swim reaches air: take the water away instead.
+        if (!airColumn() && typeof actions.drainPocket === 'function' && await actions.drainPocket(bot, ctx)) return { ok: true, drained: true };
+        for (let i = 0; i < 40 && bot.oxygenLevel < 20 && bot.entity.isInWater; i += 1) {
+          // Under a ledge (the shore's rock reaching out over the water): swim
+          // sideways to open air. Rising alone pinned the head under the lip
+          // until the bot drowned, a third of a block from open water.
+          const air = airColumn();
+          if (air && (air.x !== Math.floor(bot.entity.position.x) || air.z !== Math.floor(bot.entity.position.z))) {
+            await bot.lookAt(new Vec3(air.x + 0.5, bot.entity.position.y + 1.6, air.z + 0.5), true);
+            bot.setControlState('forward', true);
+          } else {
+            bot.setControlState('forward', false);
+          }
+          // Swimming up into a ceiling with no air beside it (a flooded pit or
+          // tunnel): dig it open. Floating in water a block takes 25 times as
+          // long as on the ground: give it the time.
+          const above = bot.blockAt(bot.entity.position.offset(0, 2, 0).floored());
+          if (!air && above && above.boundingBox === 'block' && bot.canDigBlock(above)) {
+            // Bare-handed (every pickaxe worn out) cobblestone takes ten
+            // seconds: a four-second limit never broke the lid of a flooded
+            // hole, and the bot surfaced under it for hours.
+            const digMs = typeof bot.digTime === 'function' ? bot.digTime(above) : 0;
+            await actions.digBlock(bot, ctx, above, { timeoutMs: Math.max(15000, digMs + 1500) });
+            bot.setControlState('jump', true);
+          }
+          await sleep(100, ctx.signal);
+        }
+      } finally {
+        bot.setControlState('jump', false);
+        bot.setControlState('forward', false);
+      }
+      // A breath at a time only bought another dive: a goal hunting a rabbit
+      // across a lake took the bot back under for seven minutes until it
+      // drowned. The third time in a minute, out of the water altogether.
+      const time = Date.now();
+      breaths = breaths.filter((at) => time - at < 60000);
+      breaths.push(time);
+      if (breaths.length >= 3 && bot.entity.isInWater && typeof actions.swimAshore === 'function') {
+        ctx.record('breathe', { action: 'swim_ashore', surfaced: breaths.length });
+        await actions.swimAshore(bot, ctx);
+      }
+      return { ok: bot.oxygenLevel >= t.oxygen, reason: 'still_underwater' };
+    },
+  };
+
+  // Buried (sand fell in on it on the climb out of a pit): eyes inside a full
+  // block cost a heart every half second. Nothing else noticed: the bot ate,
+  // then waited to heal in there, and suffocated. Dig the head free first.
+  const fullCube = (b) => b?.boundingBox === 'block' && Array.isArray(b.shapes) && b.shapes.length === 1
+    && b.shapes[0].join(',') === '0,0,0,1,1,1';
+  const eyeBlock = () => (bot.entity?.position ? bot.blockAt(bot.entity.position.offset(0, 1.62, 0).floored()) : null);
+  const unbury = {
+    name: 'unbury',
+    band: BAND.ESCAPE,
+    // Lying in bed is not buried: the first night home after a reconnect, the
+    // bot dug a plank out of its own roof and never slept.
+    want: () => (!bot.isSleeping && fullCube(eyeBlock()) ? 1 : 0),
+    async run(ctx) {
+      bot.pathfinder?.setGoal(null);
+      // More sand can follow the first block down.
+      for (let i = 0; i < 6 && fullCube(eyeBlock()); i += 1) {
+        const block = eyeBlock();
+        ctx.record('unbury', { block: block.name });
+        if (typeof bot.canDigBlock === 'function' && !bot.canDigBlock(block)) return { ok: false, reason: 'cannot_dig' };
+        const dug = await actions.digBlock(bot, ctx, block, { timeoutMs: 15000 });
+        if (!dug.ok) return dug;
+      }
+      return fullCube(eyeBlock()) ? { ok: false, reason: 'still_buried' } : { ok: true };
+    },
+  };
+
+  // Hungry with nothing to eat: hunt the nearest food animal.
+  const animalNear = (state, range) => Object.values(bot.entities || {}).some((e) => FOOD_ANIMALS.includes(e?.name)
+    && e.position && !spare(e) && e.position.distanceTo(state.position) <= range);
+  let lastHuntAt = 0;
+  const safeFoodCount = (state) => Object.entries(state.inventory)
+    .reduce((n, [name, count]) => n + (count > 0 && foodCheck(name) && !RISKY_FOODS.has(name) ? count : 0), 0);
+  const stockingUp = (state) => Date.now() - lastHuntAt < t.stockWindowMs && safeFoodCount(state) < t.stockFood
+    && dimensionOf(bot) === 'overworld' && state.isDay !== false && !threats(state).some((h) => h.distance <= 16)
+    && animalNear(state, t.stockRange);
+  const provision = {
+    name: 'provision',
+    band: BAND.MAINTENANCE,
+    want(state) {
+      // Hunger alone is not the only reason to get food: below 18 a badly
+      // injured bot cannot regenerate, even at food 16. Stop supplying at the
+      // same threshold at which recovery can take over, and eat carried food
+      // first using exactly the eat behavior's risky-food policy.
+      // Hurt to where eat would eat (below 16) and nothing to eat: food it is.
+      // Short of 14 health a bucket of lava is not fetched, and a bot at 11
+      // health and 16 food failed its obsidian forty times without ever healing.
+      const needsFood = state.food <= t.provisionFood
+        || (state.health < t.provisionInjured && state.food < t.recoverFood);
+      if (state.sheltered) return 0;
+      // Out hunting with animals still close by: a few more for the bag. One
+      // kill at a time, the bot was back out hunting every few minutes of
+      // mining, and spent a third of its hours on it.
+      if (stockingUp(state)) return 0.5;
+      if (!needsFood || hasSafeFood(state, desperateForFood(state))) return 0;
+      // The goal itself is getting food (bread from the farm), or keeps the bot
+      // by the owner: an animal close by is still worth it, but no wandering
+      // off after ones long since hunted out.
+      if (feeding() && !animalNear(state, FEEDING_RANGE)) return 0;
+      // Nothing to hunt in the nether but hoglins; wandering off there to look for food kills.
+      if (dimensionOf(bot) !== 'overworld') return 0;
+      // An archer twelve blocks off still hits: hunt only when nothing hostile is about.
+      if (reading(state).stance !== 'calm') return 0;
+      // Chasing animals at low health gets the bot killed at night; by day with
+      // nothing hostile around it is the only way back to regenerating.
+      if (state.health < t.provisionHealth && state.food > 6
+        && (state.isDay === false || threats(state).some((h) => h.distance <= 16))) return 0;
+      return 0.5;
+    },
+    async run(ctx) {
+      // Animals graze on the surface: hunting from down a cave only digs.
+      if (typeof actions.underground === 'function' && typeof actions.surface === 'function' && actions.underground(bot)) {
+        // A climb that fails still leaves whatever is in reach down here.
+        ctx.record('provision', { action: 'surface' });
+        await actions.surface(bot, ctx);
+      }
+      // Animals are visible out to about 100 blocks; go for the nearest one seen.
+      const near = feeding();
+      const stocking = stockingUp(ctx.perceive());
+      const result = await skills.huntOne(bot, ctx, { mobs: FOOD_ANIMALS, dropMatch: foodCheck,
+        radius: stocking ? t.stockRange : near ? FEEDING_RANGE : 96, blacklist: huntBlacklist, accept: (e) => !spare(e) });
+      if (result.ok) lastHuntAt = Date.now();
+      // Nothing to hunt in sight: berries, else look further afield instead of waiting to starve.
+      // Could not reach anything: the bot itself is probably stuck (tree top, ledge).
+      if (['NoPath', 'Timeout', 'path_timeout', 'no_progress', 'not_arrived', 'chase_stuck'].includes(result.reason)) {
+        stuckStreak += 1;
+        if (stuckStreak >= 2) { stuckStreak = 0; return actions.unstick(bot, ctx); }
+        return result;
+      }
+      stuckStreak = 0;
+      if (result.reason === 'no_mob_in_range' && !near) {
+        const berries = await skills.pickBerries(bot, ctx, { blacklist: huntBlacklist });
+        if (berries.ok || berries.reason !== 'no_berries') return berries;
+        // Not out of reach of home: a search for food once ran 1000 blocks
+        // off, and the farm and the house were then out of reach.
+        const centre = home();
+        exploreMemory.around = centre ? { x: centre.x, z: centre.z, radius: t.provisionRange } : null;
+        return skills.explore(bot, ctx, exploreMemory);
+      }
+      return result;
+    },
+  };
+
+  // Low health with a full stomach: stand still a few seconds and let it regenerate.
+  const recover = {
+    name: 'recover',
+    band: BAND.MAINTENANCE,
+    // Not in the sight of something that shoots: a blaze or ghast out of
+    // melee reach still hits a bot standing still to heal.
+    // Nor in water: standing still there sinks, and a bot hurt by drowning
+    // stood still on the sea floor to heal until it drowned.
+    want: (state) => (state.health < t.recoverHealth && state.food >= t.recoverFood && !state.inWater
+      && !threats(state).some((h) => h.distance <= 8 || (SHOOTERS.has(h.name) && h.distance <= 24)) ? 0.3 : 0),
+    async run(ctx) {
+      actions.haltBody(bot);
+      await sleep(3000, ctx.signal);
+      return { ok: true };
+    },
+  };
+
+  // Items dropped on death stay for five minutes: go back for them once it is safe.
+  let lastDeath = null;
+  const onDeathDrops = () => {
+    // Died in lava: whatever dropped burnt up, and going back is the same swim.
+    const feet = bot.blockAt?.(bot.entity.position.floored());
+    const burnt = /lava/.test(feet?.name || '');
+    // Killed by mobs down in a cave: they are still there in the dark, and a bot
+    // digging back down to them spent the whole five minutes and died again.
+    const here = bot.entity.position;
+    const mobbed = Object.values(bot.entities || {}).some((e) => e !== bot.entity && e.position && isHostile(e)
+      && e.position.distanceTo(here) <= 12);
+    // A cave hall can be too wide and tall for underground(); rock anywhere overhead counts.
+    const caved = mobbed && dimensionOf(bot) === 'overworld'
+      && (actions.underground?.(bot) || actions.openSky?.(bot, here.floored()) === false);
+    lastDeath = burnt || caved ? null : { position: here.clone(), dimension: dimensionOf(bot), at: Date.now(), tries: 0 };
+  };
+  // Back alive with the bag still full (keepInventory): nothing was dropped.
+  // A bot went back for its "drops" into the lava that killed it, five deaths running.
+  const onSpawnDrops = () => {
+    if (lastDeath && !lastDeath.respawned) {
+      lastDeath.respawned = true;
+      if ((bot.inventory?.items?.() || []).length > 0) lastDeath = null;
+    }
+  };
+  bot.on?.('death', onDeathDrops);
+  bot.on?.('spawn', onSpawnDrops);
+  const recoverDrops = {
+    name: 'recover_drops',
+    band: BAND.MAINTENANCE,
+    dispose: () => { bot.removeListener?.('death', onDeathDrops); bot.removeListener?.('spawn', onSpawnDrops); },
+    want(state) {
+      if (state.sheltered || !lastDeath || Date.now() - lastDeath.at > t.dropsTtlMs || lastDeath.tries >= 3) return 0;
+      if (state.health < 10 || reading(state).stance !== 'calm') return 0;
+      // Drops left in the other dimension wait until a goal takes the bot back there.
+      if (lastDeath.dimension !== dimensionOf(bot)) return 0;
+      // Where the bot keeps dying, the drops are bait: leave them.
+      const danger = bot.companionDeathDanger;
+      if (danger && danger.until > Date.now() && danger.dimension === lastDeath.dimension
+        && lastDeath.position.distanceTo(new Vec3(danger.center.x, danger.center.y, danger.center.z)) <= 24) return 0;
+      // Worth the trip while the bot can still get there before they despawn.
+      const reachable = Math.min(t.dropsMaxDistance, ((t.dropsTtlMs - (Date.now() - lastDeath.at)) / 1000) * t.walkSpeed);
+      return state.position.distanceTo(lastDeath.position) < reachable ? 0.8 : 0;
+    },
+    async run(ctx) {
+      const target = lastDeath;
+      target.tries += 1;
+      ctx.record('recover_drops', { position: target.position.floored(), try: target.tries });
+      const left = t.dropsTtlMs - (Date.now() - target.at);
+      // Twice the walking time: a route that has to dig its way there costs more
+      // than the drops are worth, and they despawn meanwhile anyway.
+      const walk = (bot.entity.position.distanceTo(target.position) / t.walkSpeed) * 2000;
+      const moved = await actions.goNear(bot, ctx, target.position, 2, { timeoutMs: Math.min(left, Math.max(30000, walk)) });
+      if (!moved.ok) return moved;
+      const result = await actions.collectDrops(bot, ctx, target.position, () => true, { radius: 8, timeoutMs: 15000 });
+      if (result.ok || target.tries >= 3) lastDeath = null;
+      return result;
+    },
+  };
+
+  // An angry enderman out-damages a stone or iron sword and teleports out of
+  // reach, but cannot follow into a sealed 1x1 hole: hide there until it calms
+  // down or wanders off, then climb out.
+  const angryEnderman = (state, range) => threats(state).find((h) => h.name === 'enderman' && h.distance <= range
+    && endermanAngry(h));
+  // Remember where raiders were seen; the homestead keeps its site away from there.
+  const danger = (bot.companionDanger = bot.companionDanger || []);
+  const avoid = {
+    name: 'avoid',
+    band: BAND.DEFENSE,
+    want(state) {
+      const brute = threats(state).find((h) => CHARGERS.has(h.name) && h.distance <= BRUTE_RANGE && !standing(state, h));
+      if (brute) return !state.sheltered && brute.distance > BRUTE_FIGHT ? 1 : 0;
+      const raider = threats(state).find((h) => avoided(state, h) && h.distance <= 24);
+      if (raider && !danger.some((d) => Math.hypot(d.x - raider.position.x, d.z - raider.position.z) < 32)) {
+        danger.push({ x: Math.round(raider.position.x), z: Math.round(raider.position.z) });
+      }
+      return raider && !state.sheltered && raider.distance > 2.5 ? 1 : 0;
+    },
+    async run(ctx) {
+      const state = ctx.perceive();
+      const raider = state.hostiles.find((h) => avoided(state, h) || (CHARGERS.has(h.name) && !standing(state, h)));
+      if (!raider) return { ok: true };
+      ctx.record('avoid', { mob: raider.name, distance: Math.round(raider.distance) });
+      const brute = CHARGERS.has(raider.name);
+      if (brute) flights.set(raider.id, [...(flights.get(raider.id) || []).slice(-9), Date.now()]);
+      return actions.fleeFrom(bot, ctx, raider.position, { distance: brute ? BRUTE_RANGE + 6 : 32, timeoutMs: 15000 });
+    },
+  };
+  let hidden = null;
+  const hide = {
+    name: 'hide',
+    band: BAND.ESCAPE,
+    want(state) {
+      if (hidden) return 1;
+      // The End is full of them and the fight cannot wait: there an angry one
+      // is fought (defend). A bunker dug mid-fight left the bot to the dragon.
+      if (dimensionOf(bot) === 'the_end') return 0;
+      // Hunting pearls, the angry one is the quarry: struck in melee it stays
+      // and fights (defend), where hiding from every enderman the hunt turned
+      // let six nights pass without a pearl. Hurt, too: a hole dug mid-fight
+      // took five seconds of free hits and the bot died in it every time.
+      if (activeGoal() === 'hunt_pearls') return 0;
+      return !state.sheltered && angryEnderman(state, 12) ? 1 : 0;
+    },
+    async run(ctx) {
+      if (!hidden) {
+        ctx.record('hide', { from: 'enderman' });
+        const dug = await skills.digIn(bot, ctx, { sealMatch: (n) => SEALS.has(n) });
+        if (!dug.ok) return dug;
+        hidden = { bunker: dug.bunker, since: Date.now() };
+        return { ok: true };
+      }
+      const waited = Date.now() - hidden.since;
+      if (waited < 90000 && (waited < 25000 || angryEnderman(ctx.perceive(), 24))) {
+        await sleep(2000, ctx.signal);
+        return { ok: true, waited: true };
+      }
+      const out = await skills.digOut(bot, ctx, hidden.bunker);
+      hidden = null;
+      return out;
+    },
+  };
+  const onDeathHide = () => { hidden = null; };
+  bot.on?.('death', onDeathHide);
+  hide.dispose = () => bot.removeListener?.('death', onDeathHide);
+
+  // A ghast's fireball is sent back by hitting it.
+  const deflect = {
+    name: 'deflect',
+    band: BAND.ESCAPE,
+    want: () => (incomingFireball(bot) ? 1 : 0),
+    async run(ctx) {
+      for (let i = 0; i < 10; i += 1) {
+        const ball = incomingFireball(bot);
+        if (!ball) return { ok: true };
+        ctx.record('deflect', { distance: Math.round(ball.position.distanceTo(bot.entity.position) * 10) / 10 });
+        await bot.lookAt(ball.position, true);
+        if (ball.position.distanceTo(bot.entity.position.offset(0, 1.6, 0)) <= 3.5) bot.attack(ball);
+        await sleep(100, ctx.signal);
+      }
+      return { ok: true };
+    },
+  };
+
+  // A blaze out of reach of the sword fires volley after volley; each ball
+  // hits for a heart and a half through fire resistance. A raised shield
+  // takes them all: it was golden apples, then a death, without one.
+  const hasShield = () => bot.inventory?.slots?.[45]?.name === 'shield' || bot.inventory?.items?.().some((i) => i.name === 'shield');
+  const block = {
+    name: 'block',
+    band: BAND.ESCAPE,
+    // Fire resistance makes a blaze's fireball harmless (it is fire damage):
+    // then raising the shield only cuts a tower up to a deck short, again and again.
+    want: () => (hasShield() && !hasEffect(bot, 'FireResistance') && incomingBlazeShot(bot) ? 1 : 0),
+    async run(ctx) {
+      const shield = bot.inventory.items().find((i) => i.name === 'shield');
+      if (bot.inventory.slots?.[45]?.name !== 'shield' && shield) {
+        try { await bot.equip(shield, 'off-hand'); } catch { return { ok: false, reason: 'no_shield' }; }
+      }
+      const first = incomingBlazeShot(bot);
+      if (!first) return { ok: true };
+      ctx.record('block', { distance: Math.round(first.position.distanceTo(bot.entity.position) * 10) / 10 });
+      bot.pathfinder?.setGoal?.(null);
+      try {
+        bot.activateItem(true);
+        // A volley is three shots: hold the shield until none is coming.
+        for (let quiet = 0, i = 0; i < 40 && quiet < 6; i += 1) {
+          const ball = incomingBlazeShot(bot, 16);
+          if (ball) {
+            quiet = 0;
+            await bot.lookAt(ball.position, true);
+          } else quiet += 1;
+          await sleep(100, ctx.signal);
+        }
+      } finally {
+        bot.deactivateItem();
+      }
+      return { ok: true };
+    },
+  };
+
+  // A ghast that can see the bot keeps shooting: get under a roof, out of its sight.
+  let coverUntil = 0;
+  const cover = {
+    name: 'take_cover',
+    band: BAND.DEFENSE,
+    want(state) {
+      if (state.sheltered || Date.now() < coverUntil) return 0;
+      return exposedTo(bot, t.ghastRange) ? 1 : 0;
+    },
+    async run(ctx) {
+      const ghast = exposedTo(bot, t.ghastRange);
+      if (!ghast) return { ok: true };
+      ctx.record('take_cover', { from: 'ghast', distance: Math.round(ghast.position.distanceTo(bot.entity.position)) });
+      const spot = coverSpot(bot, ghast);
+      try {
+        if (spot) {
+          await actions.goTo(bot, ctx, new goals.GoalBlock(spot.x, spot.y, spot.z), { timeoutMs: 8000 });
+        } else {
+          const dug = await skills.digIn(bot, ctx, { sealMatch: (n) => SEALS.has(n) || n === 'netherrack' });
+          if (dug.ok) {
+            await sleep(8000, ctx.signal);
+            await skills.digOut(bot, ctx, dug.bunker);
+          }
+        }
+        // Wait out its attention while covered; give up after a few seconds either way.
+        for (let i = 0; i < 16 && exposedTo(bot, t.ghastRange) === null && nearbyGhast(bot, t.ghastRange); i += 1) {
+          await sleep(500, ctx.signal);
+        }
+      } finally {
+        // Work resumes for a while even if the ghast is still around, or nothing gets done.
+        coverUntil = Date.now() + 10000;
+      }
+      return { ok: true };
+    },
+  };
+
+  const disposeNether = () => {
+    bot.removeListener?.('entityHurt', onHurt);
+    bot.removeListener?.('entitySwingArm', onSwing);
+    bot.removeListener?.('entityDead', onDead);
+  };
+  deflect.dispose = disposeNether;
+
+  return [quench, leaveLava, leaveFire, unbury, heal, escape, breathe, deflect, block, hide, defend, cover, avoid, eat, provision, recover, recoverDrops];
+}
+
+module.exports = { createSurvivalBehaviors };

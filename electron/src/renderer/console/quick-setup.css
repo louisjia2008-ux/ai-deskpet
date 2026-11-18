@@ -1,0 +1,12 @@
+.quick-setup { width: min(100%, 620px); margin: auto; text-align: center; animation: rise-in .4s var(--ease-out, ease) both; }
+.quick-setup h2 { margin: 0 0 8px; color: var(--strong); font-size: 22px; font-weight: 650; }
+.quick-setup > p { margin: 0 0 20px; color: var(--muted); }
+.quick-setup-options { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; text-align: left; }
+.quick-setup-options article { display: flex; flex-direction: column; gap: 10px; padding: 18px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface, var(--base)); box-shadow: var(--shadow-sm, none); }
+.quick-setup-options article > svg { color: var(--blue); }
+.quick-setup-options h3 { margin: 0; color: var(--strong); font-size: 15px; }
+.quick-setup-options p { margin: 0; font-size: 13px; line-height: 1.6; }
+.quick-setup-options label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+.quick-setup-options button { margin-top: auto; }
+.quick-setup-error { color: var(--error); }
+@media (max-width: 720px) { .quick-setup-options { grid-template-columns: 1fr; } }

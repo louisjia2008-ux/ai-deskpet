@@ -1,0 +1,97 @@
+name: Electron cross-platform preview
+
+on:
+  pull_request:
+    paths:
+      - 'electron/**'
+      - '.github/workflows/electron-preview.yml'
+      - 'README.md'
+      - 'README.zh-CN.md'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'ASSETS_AND_MODELS.md'
+  push:
+    branches: ['codex/electron-cross-platform']
+    paths:
+      - 'electron/**'
+      - '.github/workflows/electron-preview.yml'
+      - 'README.md'
+      - 'README.zh-CN.md'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-package:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macOS ZIP (unsigned)
+            artifact: electron-macos-unsigned-preview
+            package_glob: electron/out/make/zip/darwin/**/*.zip
+          - os: windows-2022
+            label: Windows x64 Squirrel (unsigned)
+            artifact: electron-windows-x64-unsigned-preview
+            package_glob: electron/out/make/squirrel.windows/x64/*.exe
+          - os: ubuntu-24.04
+            label: Linux x64 deb (unsigned)
+            artifact: electron-linux-x64-unsigned-preview
+            package_glob: electron/out/make/deb/x64/*.deb
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: electron
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Dependency vulnerability audit
+        run: npm audit --audit-level=high && npm audit --prefix minecraft-runtime --omit=dev --audit-level=high && npm audit --prefix minecraft-companion-runtime --omit=dev --audit-level=high
+      - name: Lint and typecheck
+        run: npm run lint && npm run typecheck
+      - name: Unit and coverage tests
+        run: npm run test:coverage
+      - name: Security contract tests
+        run: npm run test:security && npm run test:release-policy
+      - name: Minecraft engine and bridge tests
+        run: npm run test:minecraft && npm run test:minecraft-companion
+      - name: Build renderer, main process, and unsigned package
+        run: npm run build
+      - name: Packaged Minecraft legacy and Companion core smoke
+        run: npm run smoke:minecraft-package
+      - name: Electron E2E smoke (macOS and Windows)
+        if: runner.os != 'Linux'
+        run: npm run test:e2e
+      - name: Electron E2E smoke (Linux Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm run test:e2e
+      - name: Build platform installer
+        run: npm run make
+      - name: Audit package content
+        run: npm run audit:package
+      - name: Upload unsigned installer preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.package_glob }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload test report and sanitized fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-tests
+          path: |
+            electron/coverage/
+            electron/playwright-report/
+            electron/test-results/
+          if-no-files-found: warn
+          retention-days: 14
