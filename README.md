@@ -205,6 +205,8 @@ Rights Reserved. Read [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md),
 [ASSETS_AND_MODELS.md](ASSETS_AND_MODELS.md), and
 [ASSET_LICENSE.md](ASSET_LICENSE.md) before redistribution.
 
+The Minecraft companion runtime in `electron/minecraft-companion-runtime/` comes from the separate repository [louisjia2008-ux/minecraft-companion](https://github.com/louisjia2008-ux/minecraft-companion) and is licensed under **AGPL-3.0-only**, not MIT. See its `LICENSE`, `COMPANION_SOURCE.json` and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 The AIRI-derived Live2D algorithms retain the pinned origin `moeru-ai/airi@00c6867b7fd8064938de1805814578db8273dafe`, copyright notice, and MIT text under `ThirdParty/`.
 
 Neither edition's tracked source nor generated Electron installers contain

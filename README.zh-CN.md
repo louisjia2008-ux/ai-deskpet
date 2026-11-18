@@ -160,6 +160,8 @@ ThirdParty/       现有第三方来源与 Live2D 通知
 
 顶层 [MIT 许可](LICENSE) 只适用于项目自有源码与文档，不重新许可 Live2D Cubism Core、Cubism SDK 组件、用户模型、角色美术、图片、音频、字体或任何第三方作品。保留的项目自有创意素材单独采用“保留所有权利”。再分发前请阅读 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)、[ASSETS_AND_MODELS.md](ASSETS_AND_MODELS.md) 和 [ASSET_LICENSE.md](ASSET_LICENSE.md)。
 
+`electron/minecraft-companion-runtime/` 下的 Minecraft 陪玩运行时来自独立仓库 [louisjia2008-ux/minecraft-companion](https://github.com/louisjia2008-ux/minecraft-companion)，采用 **AGPL-3.0-only**，不适用 MIT。见该目录的 `LICENSE`、`COMPANION_SOURCE.json` 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 AIRI 派生 Live2D 算法保留固定来源 `moeru-ai/airi@00c6867b7fd8064938de1805814578db8273dafe`、版权通知和 `ThirdParty/` 下 MIT 文本。
 
 两套实现的已跟踪源码和 Electron 安装包都不包含 Cubism Core 或用户模型。原先的第三方示例角色、带本机路径的 rejected 评审证据和来源未确认的参考视频已从公开源码配置中移除。旧私有 Git 提交仍需经授权历史改写和全引用复扫，之后才能改变仓库可见性。源码公开本身不等于已经满足 Live2D 应用发布、签名、notarization 或商业分发要求。
