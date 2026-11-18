@@ -1,6 +1,6 @@
 # DeskPet Minecraft runtime
 
-This isolated helper migrates the Minecraft task engine from `live2d-mc-companion` into DeskPet Electron. The Electron app owns the interface, configuration, provider access and process lifecycle. This helper owns the Java Edition game connection, world observations, pathfinding, physical actions, task cancellation and local Minecraft learning data.
+This isolated helper migrates the Minecraft task engine from [`minecraft-companion`](https://github.com/louisjia2008-ux/minecraft-companion) (formerly `live2d-mc-companion`, AGPL-3.0-only) into DeskPet Electron. The Electron app owns the interface, configuration, provider access and process lifecycle. This helper owns the Java Edition game connection, world observations, pathfinding, physical actions, task cancellation and local Minecraft learning data.
 
 The copied engine includes following and escorting, navigation, gathering and mining, combat, crafting and smelting, farming, nearby container transfer, and house or portal blueprints. These are source capabilities, not a claim that every action has passed a live game regression in DeskPet. The migrated registry also retains longer progression actions; the first DeskPet interface focuses on companion commands.
 

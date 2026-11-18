@@ -1,6 +1,6 @@
 # Minecraft 陪玩 / Minecraft companion
 
-Minecraft 陪玩位于 Electron 控制台左侧的“陪玩 / Minecraft”。它使用迁移自 `live2d-mc-companion` 的 Mineflayer 执行引擎，在独立子进程中连接 Minecraft **Java 版**服务器。无需导入 Live2D 模型即可使用陪玩控制台；桌面角色继续使用 DeskPet 当前的模型。
+Minecraft 陪玩位于 Electron 控制台左侧的“陪玩 / Minecraft”。它使用迁移自 [`minecraft-companion`](https://github.com/louisjia2008-ux/minecraft-companion)（原名 `live2d-mc-companion`）的 Mineflayer 执行引擎，在独立子进程中连接 Minecraft **Java 版**服务器。无需导入 Live2D 模型即可使用陪玩控制台；桌面角色继续使用 DeskPet 当前的模型。
 
 ## 使用
 

@@ -18,7 +18,7 @@ The Electron edition uses Electron, React, PixiJS, pixi-live2d-display, JSZip, Z
 
 ## Minecraft companion runtime
 
-`electron/minecraft-runtime/vendor/` is migrated from the user's `live2d-mc-companion` project. Its file-level source inventory and actual copied-file digests are recorded in `electron/minecraft-runtime/PROVENANCE.json`; the source working tree included local changes. This migration does not include that project's Cubism SDK, models, user configuration, credentials, or chat history. Source provenance does not relicense any third-party material.
+`electron/minecraft-runtime/vendor/` is migrated from the project owner's `live2d-mc-companion` project, since renamed [louisjia2008-ux/minecraft-companion](https://github.com/louisjia2008-ux/minecraft-companion). Like that project, it is licensed under **AGPL-3.0-only**, not under this repository's MIT license; its full text is `electron/minecraft-runtime/LICENSE`. Its file-level source inventory and actual copied-file digests are recorded in `electron/minecraft-runtime/PROVENANCE.json`; the source working tree included local changes. This migration does not include that project's Cubism SDK, models, user configuration, credentials, or chat history. Source provenance does not relicense any third-party material.
 
 Mineflayer, mineflayer-pathfinder, vec3 and their transitive dependencies retain their own licenses. `electron/minecraft-runtime/package-lock.json` pins this independent dependency graph. Their installed license notices are included with the packaged runtime. Minecraft is a Mojang/Microsoft product; this companion is an independent client integration.
 
