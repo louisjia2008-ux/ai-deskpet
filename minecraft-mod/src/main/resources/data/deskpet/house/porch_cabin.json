@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "kind": "house",
+  "entrance": [
+    4,
+    0,
+    -1
+  ],
+  "door": [
+    4,
+    0,
+    2
+  ],
+  "phases": [
+    "walls",
+    "roof",
+    "furnish"
+  ],
+  "scaffold": [],
+  "buildOrder": "roof_outside_in"
+}

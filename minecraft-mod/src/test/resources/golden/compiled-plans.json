@@ -1,0 +1,386 @@
+{
+  "starter_house/0": {
+    "planHash": "90a177b696543d0b54561478a65e503fbe8dd6eeb6a04a2d6f2b729ba347a7c9",
+    "snapshotHash": "15eba3fbdf0826c710a3f52a5b15663a8cfa392473308ff03efa19a3a0c425ab",
+    "operations": 106,
+    "template": {
+      "id": "starter_house",
+      "version": 1,
+      "rotation": 0,
+      "anchor": {
+        "x": 3,
+        "y": 64,
+        "z": 3
+      },
+      "entrance": {
+        "x": 6,
+        "y": 64,
+        "z": 2
+      },
+      "door": {
+        "x": 6,
+        "y": 64,
+        "z": 3
+      }
+    }
+  },
+  "starter_house/90": {
+    "planHash": "2d1477593b62a6eb7b94036c62ec27d6236768a7a8621ab97b702b40bac8520b",
+    "snapshotHash": "15eba3fbdf0826c710a3f52a5b15663a8cfa392473308ff03efa19a3a0c425ab",
+    "operations": 106,
+    "template": {
+      "id": "starter_house",
+      "version": 1,
+      "rotation": 90,
+      "anchor": {
+        "x": 3,
+        "y": 64,
+        "z": 3
+      },
+      "entrance": {
+        "x": 10,
+        "y": 64,
+        "z": 6
+      },
+      "door": {
+        "x": 9,
+        "y": 64,
+        "z": 6
+      }
+    }
+  },
+  "starter_house/180": {
+    "planHash": "a1e659e2c9bc13495b6b740a0eaebeacdbd87a7207ebddb58bff73dfa9a8b33a",
+    "snapshotHash": "15eba3fbdf0826c710a3f52a5b15663a8cfa392473308ff03efa19a3a0c425ab",
+    "operations": 106,
+    "template": {
+      "id": "starter_house",
+      "version": 1,
+      "rotation": 180,
+      "anchor": {
+        "x": 3,
+        "y": 64,
+        "z": 3
+      },
+      "entrance": {
+        "x": 6,
+        "y": 64,
+        "z": 10
+      },
+      "door": {
+        "x": 6,
+        "y": 64,
+        "z": 9
+      }
+    }
+  },
+  "starter_house/270": {
+    "planHash": "10a04e58eae5387207c9a22f033f4bc8bf6be4ff3f613eb519c984542ac0efa9",
+    "snapshotHash": "15eba3fbdf0826c710a3f52a5b15663a8cfa392473308ff03efa19a3a0c425ab",
+    "operations": 106,
+    "template": {
+      "id": "starter_house",
+      "version": 1,
+      "rotation": 270,
+      "anchor": {
+        "x": 3,
+        "y": 64,
+        "z": 3
+      },
+      "entrance": {
+        "x": 2,
+        "y": 64,
+        "z": 6
+      },
+      "door": {
+        "x": 3,
+        "y": 64,
+        "z": 6
+      }
+    }
+  },
+  "porch_cabin/0": {
+    "planHash": "d9da501fe8c4b4cec995d2438963744a31709397a35371c3c3f9ad4f820cd750",
+    "snapshotHash": "a403ef2543f9f39c241c4256513321872144add30ea02e13f44216cc411861aa",
+    "operations": 154,
+    "template": {
+      "id": "porch_cabin",
+      "version": 1,
+      "rotation": 0,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 6,
+        "y": 64,
+        "z": 1
+      },
+      "door": {
+        "x": 6,
+        "y": 64,
+        "z": 4
+      }
+    }
+  },
+  "porch_cabin/90": {
+    "planHash": "d9bb199ab2fe0346505f1e66386ec7f7a0ed662c96af2a2f545cc6a86c19c37b",
+    "snapshotHash": "a403ef2543f9f39c241c4256513321872144add30ea02e13f44216cc411861aa",
+    "operations": 154,
+    "template": {
+      "id": "porch_cabin",
+      "version": 1,
+      "rotation": 90,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 11,
+        "y": 64,
+        "z": 6
+      },
+      "door": {
+        "x": 8,
+        "y": 64,
+        "z": 6
+      }
+    }
+  },
+  "porch_cabin/180": {
+    "planHash": "d2e09f23d26939f7366323390317c4ad880d1cd7b4221480de71c2c075c03cdf",
+    "snapshotHash": "a403ef2543f9f39c241c4256513321872144add30ea02e13f44216cc411861aa",
+    "operations": 154,
+    "template": {
+      "id": "porch_cabin",
+      "version": 1,
+      "rotation": 180,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 6,
+        "y": 64,
+        "z": 11
+      },
+      "door": {
+        "x": 6,
+        "y": 64,
+        "z": 8
+      }
+    }
+  },
+  "porch_cabin/270": {
+    "planHash": "994d6d1c126356ee9f4664b86abb5c5a559fbc4b5394dbea3012a50d48746e88",
+    "snapshotHash": "a403ef2543f9f39c241c4256513321872144add30ea02e13f44216cc411861aa",
+    "operations": 154,
+    "template": {
+      "id": "porch_cabin",
+      "version": 1,
+      "rotation": 270,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 1,
+        "y": 64,
+        "z": 6
+      },
+      "door": {
+        "x": 4,
+        "y": 64,
+        "z": 6
+      }
+    }
+  },
+  "two_storey_house/0": {
+    "planHash": "be5744d4c0947515b939edaa9dd029463421bff195067b0651ae315e628d35ea",
+    "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
+    "operations": 331,
+    "template": {
+      "id": "two_storey_house",
+      "version": 1,
+      "rotation": 0,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 6,
+        "y": 64,
+        "z": 1
+      },
+      "door": {
+        "x": 6,
+        "y": 64,
+        "z": 2
+      }
+    }
+  },
+  "two_storey_house/90": {
+    "planHash": "83c41881569b7eb16aa5de1cff6bd757c1a20dcd74d2ac9fd2ce9c6d53b8eaa1",
+    "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
+    "operations": 331,
+    "template": {
+      "id": "two_storey_house",
+      "version": 1,
+      "rotation": 90,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 11,
+        "y": 64,
+        "z": 6
+      },
+      "door": {
+        "x": 10,
+        "y": 64,
+        "z": 6
+      }
+    }
+  },
+  "two_storey_house/180": {
+    "planHash": "d91704b7162e6c52266377358704067515a1b74156435d01a1c93f39885f008c",
+    "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
+    "operations": 331,
+    "template": {
+      "id": "two_storey_house",
+      "version": 1,
+      "rotation": 180,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 6,
+        "y": 64,
+        "z": 11
+      },
+      "door": {
+        "x": 6,
+        "y": 64,
+        "z": 10
+      }
+    }
+  },
+  "two_storey_house/270": {
+    "planHash": "b0d6a2dc9372ef8d084b21a229f4f60410433992358017624cbde79781d1dc24",
+    "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
+    "operations": 331,
+    "template": {
+      "id": "two_storey_house",
+      "version": 1,
+      "rotation": 270,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 1,
+        "y": 64,
+        "z": 6
+      },
+      "door": {
+        "x": 2,
+        "y": 64,
+        "z": 6
+      }
+    }
+  },
+  "wheat_field/0": {
+    "planHash": "b383a5aa8023788bde3e9242f886bdcf41ad20094cc1dba26ffc2e2cfe7d56bd",
+    "snapshotHash": "f3f24c491bdfa622be0cc6b8987b7a58eb1f0f9beef89a879227eb3af209daaf",
+    "operations": 161,
+    "template": {
+      "id": "wheat_field",
+      "version": 1,
+      "rotation": 0,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 6,
+        "y": 64,
+        "z": 1
+      },
+      "door": null
+    }
+  },
+  "wheat_field/90": {
+    "planHash": "3c9500ebef4532cae22a2fecd95ec611c639e272389eeff90653689de9a97ea4",
+    "snapshotHash": "f3f24c491bdfa622be0cc6b8987b7a58eb1f0f9beef89a879227eb3af209daaf",
+    "operations": 161,
+    "template": {
+      "id": "wheat_field",
+      "version": 1,
+      "rotation": 90,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 11,
+        "y": 64,
+        "z": 6
+      },
+      "door": null
+    }
+  },
+  "wheat_field/180": {
+    "planHash": "607171711a3d6182d1b4dabc98712364ed5bc37f976c16d1fdd37687355fd131",
+    "snapshotHash": "f3f24c491bdfa622be0cc6b8987b7a58eb1f0f9beef89a879227eb3af209daaf",
+    "operations": 161,
+    "template": {
+      "id": "wheat_field",
+      "version": 1,
+      "rotation": 180,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 6,
+        "y": 64,
+        "z": 11
+      },
+      "door": null
+    }
+  },
+  "wheat_field/270": {
+    "planHash": "b5790c96b4d2aa674827428b563bdc991df8233a7a862fc7c2c747ad97ff15c7",
+    "snapshotHash": "f3f24c491bdfa622be0cc6b8987b7a58eb1f0f9beef89a879227eb3af209daaf",
+    "operations": 161,
+    "template": {
+      "id": "wheat_field",
+      "version": 1,
+      "rotation": 270,
+      "anchor": {
+        "x": 2,
+        "y": 64,
+        "z": 2
+      },
+      "entrance": {
+        "x": 1,
+        "y": 64,
+        "z": 6
+      },
+      "door": null
+    }
+  }
+}

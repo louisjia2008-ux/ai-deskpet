@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "kind": "farm",
+  "entrance": [
+    4,
+    0,
+    -1
+  ],
+  "door": null,
+  "phases": [
+    "irrigate",
+    "till",
+    "sow"
+  ],
+  "scaffold": [],
+  "buildOrder": "tile"
+}
