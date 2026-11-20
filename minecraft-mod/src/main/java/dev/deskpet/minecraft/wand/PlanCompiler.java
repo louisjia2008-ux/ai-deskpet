@@ -530,7 +530,7 @@ public final class PlanCompiler {
         return matchesExpect(kind, expected, current, () -> tree(view(world), pos, area, new HashMap<>()).natural());
     }
 
-    private static boolean matchesExpect(String kind, String expected, BlockState current, BooleanSupplier naturalLog) {
+    static boolean matchesExpect(String kind, String expected, BlockState current, BooleanSupplier naturalLog) {
         return switch (kind) {
             case "clear", "cut" -> TerrainRules.naturalToClear(current) || TerrainRules.log(current) &&
                 // During construction the canopy may already be gone. An exact log from the

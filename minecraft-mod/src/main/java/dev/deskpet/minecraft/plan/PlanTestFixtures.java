@@ -15,6 +15,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -38,7 +39,7 @@ final class PlanTestFixtures {
                 new Step(origin, dirt, air, "cut", "terrain"),
                 new Step(origin.east(), dirt, air, "cut", "terrain"),
                 new Step(origin.east(2), air, dirt, "fill", "terrain"));
-            case "interactions" -> List.of(
+            case "interactions", "execution" -> List.of(
                 new Step(origin.down(), dirt, Blocks.FARMLAND.getDefaultState(), "build", "structure"),
                 new Step(origin.east(3), air, door, "build", "structure"),
                 new Step(origin.east(3).up(), air, door.with(Properties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.UPPER),
@@ -46,6 +47,10 @@ final class PlanTestFixtures {
                 new Step(origin.east(8), air, Blocks.WATER.getDefaultState(), "furnish", "furnish"));
             default -> throw UNKNOWN_FIXTURE.create();
         };
+        if (profile.equals("execution")) {
+            steps = new ArrayList<>(steps);
+            steps.add(1, new Step(origin, air, Blocks.WHEAT.getDefaultState(), "build", "sow"));
+        }
         var bot = PlanService.botUuid(player);
         if (bot == null) throw NO_BOT.create();
         var world = player.getWorld();

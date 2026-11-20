@@ -8,6 +8,8 @@ import net.minecraft.Bootstrap;
 import net.minecraft.SharedConstants;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.command.argument.BlockArgumentParser;
+import net.minecraft.registry.Registries;
 import net.minecraft.state.property.Properties;
 import net.minecraft.util.BlockRotation;
 import net.minecraft.util.math.BlockPos;
@@ -257,6 +259,24 @@ class PlanCompilerTest {
         world.put(door, wrongDoor);
         assertTrue(PlanCompiler.firstSiteConflict(world, plan, new JsonArray(), finalTargets, protectedBaseline)
             .contains("expected_block_changed"));
+    }
+
+    @Test
+    void sharedExpectationCasesAgreeWithServerRules() throws Exception {
+        try (var stream = PlanCompilerTest.class.getResourceAsStream("/survey-expect-cases.json")) {
+            assertTrue(stream != null, "Missing shared Core/Mod expectation fixture");
+            var cases = JsonParser.parseReader(new InputStreamReader(stream, StandardCharsets.UTF_8)).getAsJsonArray();
+            for (var entry : cases) {
+                var row = entry.getAsJsonObject();
+                String kind = row.get("kind").getAsString();
+                String expect = row.get("expect").getAsString();
+                String state = row.get("actual").getAsString();
+                var actual = BlockArgumentParser.block(Registries.BLOCK, state, false).blockState();
+                assertEquals(state, PlanCompiler.stateName(actual), row::toString);
+                assertEquals(row.get("matches").getAsBoolean(),
+                    PlanCompiler.matchesExpect(kind, expect, actual, () -> row.get("naturalLog").getAsBoolean()), row::toString);
+            }
+        }
     }
 
     private static String siteConflict(Ground ground, JsonObject plan) {

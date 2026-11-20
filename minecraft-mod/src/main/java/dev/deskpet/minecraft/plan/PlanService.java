@@ -1,6 +1,7 @@
 package dev.deskpet.minecraft.plan;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import dev.deskpet.minecraft.PlanChannel;
 import dev.deskpet.minecraft.WorldIdentity;
@@ -12,19 +13,24 @@ import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.registry.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static dev.deskpet.minecraft.plan.SurveyPlan.Status.*;
@@ -36,11 +42,13 @@ public final class PlanService {
     private static final long PREVIEW_MILLIS = Duration.ofMinutes(10).toMillis();
     private static final int CHUNK_BYTES = 23 * 1024;
     private static final int MAX_CHUNKS = 512;
+    private static final Set<String> CLIENT_MESSAGES = Set.of("accept", "heartbeat", "progress", "state", "blocked");
+    private static final Set<String> WAITING_REASONS = Set.of("night", "materials", "chest_full");
     private static boolean stopping;
     private static PlanConfig config = new PlanConfig(false, null, null, "");
 
     private enum BlockDenial {
-        VIOLATION, SITE_CHANGE, LATE_ATTEMPT
+        VIOLATION, SITE_CHANGE, LATE_ATTEMPT, MISPLACEMENT
     }
 
     private PlanService() {}
@@ -68,7 +76,7 @@ public final class PlanService {
         PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {
             if (world instanceof ServerWorld serverWorld && player instanceof ServerPlayerEntity serverPlayer
                 && config.enabled() && config.isBot(serverPlayer)) {
-                PlanInteraction.footprint(pos, state, null).forEach((block, before) -> observeChange(serverWorld, serverPlayer, block, before));
+                observeInteraction(serverWorld, serverPlayer, PlanInteraction.footprint(pos, state, null));
             }
         });
         WandInteractions.authorization(new WandInteractions.Authorization() {
@@ -171,8 +179,10 @@ public final class PlanService {
         renewed.finalTargets.putAll(plan.finalTargets);
         renewed.protectedBaseline.putAll(plan.protectedBaseline);
         renewed.violations = plan.violations;
+        renewed.misplacements = plan.misplacements;
         renewed.siteChanges = plan.siteChanges;
         renewed.lateAttempts = plan.lateAttempts;
+        renewed.completedBefore = plan.completed();
         renewed.status = PAUSED;
         return issue(server, store, renewed, "resume");
     }
@@ -207,9 +217,50 @@ public final class PlanService {
             case CANCELLED -> "已取消";
             case EXPIRED -> "已过期";
         };
-        return label + (plan.reason.isEmpty() ? "" : " · " + reasonLabel(plan.reason))
-            + (plan.status == RUNNING ? " · " + plan.reportedProgress + "/" + plan.document.getAsJsonArray("ops").size() : "")
-            + " · 越界 " + plan.violations + " · 现场变化 " + plan.siteChanges + " · 迟到操作 " + plan.lateAttempts;
+        return label + (plan.reason.isEmpty() ? "" : " · " + describeReason(plan))
+            + (plan.status == RUNNING ? " · " + progressLabel(plan) : "")
+            + " · 越界 " + plan.violations + " · 放错 " + plan.misplacements
+            + " · 现场变化 " + plan.siteChanges + " · 迟到操作 " + plan.lateAttempts;
+    }
+
+    private static String describeReason(SurveyPlan plan) {
+        String reason = reasonLabel(plan.reason);
+        if (plan.status != PAUSED || plan.blockage == null) return reason;
+        if (plan.blockage.has("pos")) {
+            reason += " · " + SurveyPlan.readPosition(plan.blockage.getAsJsonObject("pos")).toShortString();
+        }
+        if (plan.blockage.has("detail")) reason += " · " + plan.blockage.get("detail").getAsString();
+        return reason;
+    }
+
+    private static String progressLabel(SurveyPlan plan) {
+        String phase = switch (plan.phase) {
+            case "terrain" -> "整地";
+            case "foundation" -> "地基";
+            case "scaffold" -> "搭脚手架";
+            case "walls" -> "砌墙";
+            case "floor" -> "铺楼板与楼梯";
+            case "roof" -> "盖屋顶";
+            case "furnish" -> "布置家具";
+            case "remove_scaffold" -> "拆脚手架";
+            case "irrigate" -> "放水";
+            case "till" -> "锄地";
+            case "sow" -> "播种";
+            case "" -> "施工";
+            default -> plan.phase;
+        };
+        String waiting = switch (plan.waiting) {
+            case "night" -> " · 夜里停工";
+            case "chest_full" -> " · 等材料箱腾出空间";
+            case "materials" -> {
+                var requirements = new ArrayList<String>();
+                plan.missing.entrySet().forEach(entry -> requirements.add(entry.getKey() + " ×" + entry.getValue().getAsInt()));
+                yield " · 等材料" + (requirements.isEmpty() ? "" : " " + String.join("、", requirements));
+            }
+            default -> "";
+        };
+        int completed = plan.execute ? plan.completed() : plan.completedBefore + Math.max(plan.appliedCount, plan.reportedProgress);
+        return phase + " · " + completed + "/" + plan.total() + waiting;
     }
 
     private static String reasonLabel(String reason) {
@@ -232,6 +283,13 @@ public final class PlanService {
             case "outside_authorized_operations" -> "机器人尝试了授权清单外的操作";
             case "server_final_state_changed" -> "现场目标格发生变化";
             case "protected_block_changed" -> "受保护格发生变化";
+            case "no_reachable_stand", "no_reachable_station", "placement_station_unreachable" ->
+                "没有可达的施工站位";
+            case "placement_rejected", "misplacement_retries_exhausted" -> "多次放置仍未达到指定状态";
+            case "supply_chest_unreachable" -> "无法走到材料箱";
+            case "supply_chest_changed" -> "材料箱已发生变化";
+            case "worksite_unreachable" -> "无法走到施工区域";
+            case "site_changed" -> "施工现场已发生变化";
             default -> reason;
         };
     }
@@ -283,6 +341,10 @@ public final class PlanService {
         plan.status = CONFIRMED;
         plan.reason = "";
         plan.lastDenial = "";
+        plan.phase = "";
+        plan.waiting = "";
+        plan.missing = new JsonObject();
+        plan.blockage = null;
         plan.heartbeatDeadline = System.nanoTime() + HEARTBEAT_NANOS;
         store.plans.put(plan.id, plan);
         store.markDirty();
@@ -365,6 +427,12 @@ public final class PlanService {
         plan.grantId = null;
         plan.status = next;
         plan.reason = reason;
+        plan.waiting = "";
+        plan.missing = new JsonObject();
+        if (plan.execute && !stopping) {
+            var owner = server.getPlayerManager().getPlayer(plan.ownerUuid);
+            if (owner != null) owner.sendMessage(Text.literal(describe(plan)), true);
+        }
         if (next.finished()) store.recordFinish(plan);
         if (oldGrant != null) {
             store.revocations.put(plan.id, new PlanStore.Revocation(plan, oldGrant, System.nanoTime() + REVOKE_NANOS));
@@ -377,6 +445,7 @@ public final class PlanService {
                 message.addProperty("type", "revoke");
                 message.addProperty("grantId", oldGrant.toString());
                 message.addProperty("reason", reason);
+                message.addProperty("status", next.name().toLowerCase(Locale.ROOT));
                 PlanChannel.send(bot, message);
             }
         }
@@ -395,6 +464,9 @@ public final class PlanService {
                 expirePreview(store, plan);
             } else if (hasGrant(plan) && System.nanoTime() >= plan.heartbeatDeadline) {
                 revoke(server, store, plan, PAUSED, "disconnected", true);
+            } else if (plan.status == RUNNING && plan.execute && server.getTicks() % 20 == 0) {
+                var owner = server.getPlayerManager().getPlayer(plan.ownerUuid);
+                if (owner != null) owner.sendMessage(Text.literal(progressLabel(plan)), true);
             }
         }
         store.trimHistory();
@@ -418,7 +490,7 @@ public final class PlanService {
                 && revocation.grantId().toString().equals(grantId));
             return;
         }
-        if (!type.equals("accept") && !type.equals("heartbeat") && !type.equals("progress")) return;
+        if (!CLIENT_MESSAGES.contains(type)) return;
         UUID id;
         try {
             id = UUID.fromString(string(message, "planId"));
@@ -460,26 +532,103 @@ public final class PlanService {
                 return;
             }
             plan.status = RUNNING;
+            plan.execute = truth(message.get("execute"));
             plan.heartbeatDeadline = System.nanoTime() + HEARTBEAT_NANOS;
             store.markDirty();
-            finishIfDone(world, store, plan);
-        } else if (type.equals("heartbeat")) {
-            plan.heartbeatDeadline = System.nanoTime() + HEARTBEAT_NANOS;
-        } else {
-            var completed = message.get("completed");
-            if (completed == null || !completed.isJsonPrimitive() || !completed.getAsJsonPrimitive().isNumber()
-                || !completed.getAsString().matches("0|[1-9][0-9]{0,6}")) return;
-            int count = completed.getAsInt();
-            if (count <= plan.document.getAsJsonArray("ops").size() && count != plan.reportedProgress) {
-                plan.reportedProgress = count;
-                store.markDirty();
+            var running = identity(plan);
+            running.addProperty("type", "running");
+            PlanChannel.send(player, running);
+            if (!plan.execute) finishIfDone(world, store, plan);
+            return;
+        }
+        switch (type) {
+            case "heartbeat" -> plan.heartbeatDeadline = System.nanoTime() + HEARTBEAT_NANOS;
+            case "progress" -> {
+                Integer count = integer(message.get("completed"));
+                if (count == null || count < 0 || count > plan.document.getAsJsonArray("ops").size()) return;
+                if (count != plan.reportedProgress) {
+                    plan.reportedProgress = count;
+                    store.markDirty();
+                }
+                if (plan.execute && truth(message.get("settled")) && count == plan.appliedCount) {
+                    finishIfDone(world, store, plan);
+                }
+            }
+            case "state" -> {
+                if (plan.execute) receiveState(store, plan, message);
+            }
+            case "blocked" -> {
+                if (plan.execute) receiveBlocked(server, store, plan, message);
             }
         }
     }
 
+    private static void receiveState(PlanStore store, SurveyPlan plan, JsonObject message) {
+        if (!isString(message.get("phase"))) return;
+        String phase = string(message, "phase");
+        if (!phase.isEmpty() && !plan.phases.contains(phase)) return;
+        var waitingValue = message.get("waiting");
+        if (waitingValue == null) return;
+        String waiting = waitingValue.isJsonNull() ? "" : string(message, "waiting");
+        if (!waitingValue.isJsonNull() && !WAITING_REASONS.contains(waiting)) return;
+        var missing = new JsonObject();
+        var requirements = message.get("missing");
+        if (waiting.equals("materials") && requirements != null) {
+            if (!requirements.isJsonObject() || requirements.getAsJsonObject().size() > 128) return;
+            for (var entry : requirements.getAsJsonObject().entrySet()) {
+                Integer quantity = integer(entry.getValue());
+                if (entry.getKey().length() > 128 || !entry.getKey().matches("[a-z0-9_.-]+:[a-z0-9_/.-]+")
+                    || quantity == null || quantity <= 0 || quantity > 100_000) return;
+                missing.addProperty(entry.getKey(), quantity);
+            }
+        }
+        if (plan.phase.equals(phase) && plan.waiting.equals(waiting) && plan.missing.equals(missing)) return;
+        plan.phase = phase;
+        plan.waiting = waiting;
+        plan.missing = missing;
+        store.markDirty();
+    }
+
+    private static void receiveBlocked(MinecraftServer server, PlanStore store, SurveyPlan plan, JsonObject message) {
+        String reason = string(message, "reason");
+        String detail = string(message, "detail");
+        if (reason.isBlank() || reason.length() > 96 || detail.length() > 300) return;
+        var blockage = new JsonObject();
+        blockage.addProperty("reason", reason);
+        if (message.has("pos") && !message.get("pos").isJsonNull()) {
+            if (!message.get("pos").isJsonObject()) return;
+            var pos = message.getAsJsonObject("pos");
+            Integer x = integer(pos.get("x"));
+            Integer y = integer(pos.get("y"));
+            Integer z = integer(pos.get("z"));
+            if (x == null || y == null || z == null) return;
+            var block = new BlockPos(x, y, z);
+            blockage.add("pos", position(block));
+        }
+        if (!detail.isBlank()) {
+            blockage.addProperty("detail", detail);
+        }
+        plan.blockage = blockage;
+        revoke(server, store, plan, PAUSED, reason, true);
+    }
+
+    private static boolean truth(JsonElement value) {
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean() && value.getAsBoolean();
+    }
+
+    private static Integer integer(JsonElement value) {
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()
+            || !value.getAsString().matches("-?(0|[1-9][0-9]{0,8})")) return null;
+        return value.getAsInt();
+    }
+
     private static String string(JsonObject json, String field) {
-        return json.has(field) && json.get(field).isJsonPrimitive() && json.getAsJsonPrimitive(field).isString()
-            ? json.get(field).getAsString() : "";
+        var value = json.get(field);
+        return isString(value) ? value.getAsString() : "";
+    }
+
+    private static boolean isString(JsonElement value) {
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString();
     }
 
     private static String deny(PlanStore store, SurveyPlan plan, UUID id, String action, String reason) {
@@ -545,7 +694,7 @@ public final class PlanService {
             if (timedOut) revoke(server, store, plan, PAUSED, "disconnected", true);
             if (plan.status == RUNNING) {
                 matching = plan;
-                if (!sameDimension) return rejectChange(store, plan, action, origin, "outside_authorized_operations", BlockDenial.VIOLATION);
+                if (!sameDimension) return rejectViolation(server, store, plan, action, origin, "outside_authorized_operations");
                 break;
             }
             if (sameDimension) {
@@ -557,12 +706,12 @@ public final class PlanService {
             }
         }
         if (matching == null) return true;
-        if (custom) return rejectChange(store, matching, action, origin, "custom_item_data", BlockDenial.VIOLATION);
+        if (custom) return rejectViolation(server, store, matching, action, origin, "custom_item_data");
         for (var target : targets.entrySet()) {
             var pos = target.getKey();
             var op = matching.next(pos);
             if (op == null) {
-                return rejectChange(store, matching, action, pos, "outside_authorized_operations", BlockDenial.VIOLATION);
+                return rejectViolation(server, store, matching, action, pos, "outside_authorized_operations");
             }
             var current = world.getBlockState(pos);
             if (!PlanCompiler.matchesExpect(world, pos, op.kind(), op.expect(), current)) {
@@ -570,7 +719,12 @@ public final class PlanService {
                 return rejectChange(store, matching, action, pos, "expected_block_changed", BlockDenial.SITE_CHANGE);
             }
             if (!PlanCompiler.matchesState(op.target(), target.getValue())) {
-                return rejectChange(store, matching, action, pos, "outside_authorized_operations", BlockDenial.VIOLATION);
+                // The placement mixin preflights the primary cell before a multi-block footprint
+                // (e.g. the head of a bed). A wrong primary orientation is rejected before writes.
+                if (action.equals("place") && !target.getValue().isAir() && sameBlock(op.target(), target.getValue())) {
+                    return rejectMisplacement(store, matching, player, pos, op.target(), target.getValue());
+                }
+                return rejectViolation(server, store, matching, action, pos, "outside_authorized_operations");
             }
             if (target.getValue().isAir() && !current.isAir()) {
                 String conflict = PlanCompiler.removalConflict(world, matching.document, pos, targets::containsKey);
@@ -591,28 +745,37 @@ public final class PlanService {
     }
 
     public static void observeInteraction(ServerWorld world, ServerPlayerEntity player, Map<BlockPos, BlockState> changes) {
-        changes.forEach((pos, before) -> observeChange(world, player, pos, before));
-    }
-
-    private static void observeChange(ServerWorld world, ServerPlayerEntity player, BlockPos pos, BlockState before) {
         if (!config.enabled() || !config.isBot(player)) return;
         var server = world.getServer();
         var store = PlanStore.get(server);
         for (var plan : store.plans.values()) {
             if (plan.status != RUNNING || !player.getUuid().equals(plan.botUuid) || !plan.dimension.equals(dimension(world))) continue;
-            var operation = plan.next(pos);
-            if (operation == null || !PlanCompiler.matchesState(operation.target(), world.getBlockState(pos))) continue;
-            // Authorization checked the original state before the write. At this point,
-            // the live world has already changed (including any connected tree blocks).
-            if (before.equals(world.getBlockState(pos))) continue;
-            plan.consumed.merge(pos.toImmutable(), 1, Integer::sum);
+            var positions = new JsonArray();
+            changes.forEach((pos, before) -> {
+                var operation = plan.next(pos);
+                BlockState actual = world.getBlockState(pos);
+                // The original state was checked before the write. The transaction records
+                // which authorized writes were actually applied, including both halves.
+                if (operation != null && before != actual && PlanCompiler.matchesState(operation.target(), actual)) {
+                    plan.consume(pos);
+                    positions.add(position(pos));
+                }
+            });
+            if (positions.isEmpty()) continue;
             store.markDirty();
-            finishIfDone(world, store, plan);
+            if (plan.execute) {
+                var applied = identity(plan);
+                applied.addProperty("type", "applied");
+                applied.add("positions", positions);
+                PlanChannel.send(player, applied);
+            } else {
+                finishIfDone(world, store, plan);
+            }
         }
     }
 
     private static void finishIfDone(ServerWorld world, PlanStore store, SurveyPlan plan) {
-        if (plan.operations.keySet().stream().anyMatch(block -> plan.next(block) != null)) return;
+        if (plan.completed() != plan.total()) return;
         var server = world.getServer();
         if (plan.violations > 0) {
             revoke(server, store, plan, FAILED, "outside_authorized_operations", true);
@@ -638,22 +801,55 @@ public final class PlanService {
         return "expected_block_changed at " + pos.toShortString() + " expected " + expected + " actual " + actual;
     }
 
+    static boolean sameBlock(String expected, BlockState state) {
+        int properties = expected.indexOf('[');
+        String id = properties < 0 ? expected : expected.substring(0, properties);
+        return Registries.BLOCK.getId(state.getBlock()).toString().equals(id);
+    }
+
+    private static boolean rejectViolation(MinecraftServer server, PlanStore store, SurveyPlan plan,
+                                           String action, BlockPos pos, String reason) {
+        rejectChange(store, plan, action, pos, reason, BlockDenial.VIOLATION);
+        if (plan.execute) revoke(server, store, plan, FAILED, "outside_authorized_operations", true);
+        return false;
+    }
+
+    private static boolean rejectMisplacement(PlanStore store, SurveyPlan plan, ServerPlayerEntity player, BlockPos pos,
+                                              String expected, BlockState state) {
+        rejectChange(store, plan, "place", pos, "wrong_block_state", BlockDenial.MISPLACEMENT);
+        if (plan.execute) {
+            var message = identity(plan);
+            message.addProperty("type", "misplacement");
+            message.add("pos", position(pos));
+            message.addProperty("expected", expected);
+            message.addProperty("actual", PlanCompiler.stateName(state));
+            message.addProperty("misplacements", plan.misplacements);
+            PlanChannel.send(player, message);
+        }
+        return false;
+    }
+
+    private static JsonObject position(BlockPos pos) {
+        var position = new JsonObject();
+        position.addProperty("x", pos.getX());
+        position.addProperty("y", pos.getY());
+        position.addProperty("z", pos.getZ());
+        return position;
+    }
+
     private static boolean rejectChange(PlanStore store, SurveyPlan plan, String action, BlockPos pos, String reason,
                                         BlockDenial denial) {
         switch (denial) {
             case VIOLATION -> plan.violations++;
             case SITE_CHANGE -> plan.siteChanges++;
             case LATE_ATTEMPT -> plan.lateAttempts++;
+            case MISPLACEMENT -> plan.misplacements++;
         }
         var event = new JsonObject();
         event.addProperty("planId", plan.id.toString());
-        event.addProperty("category", denial.name().toLowerCase(java.util.Locale.ROOT));
+        event.addProperty("category", denial.name().toLowerCase(Locale.ROOT));
         event.addProperty("action", action);
-        var position = new JsonObject();
-        position.addProperty("x", pos.getX());
-        position.addProperty("y", pos.getY());
-        position.addProperty("z", pos.getZ());
-        event.add("pos", position);
+        event.add("pos", position(pos));
         event.addProperty("reason", reason);
         store.audit(store.rejections, event);
         LOGGER.warn("Survey plan block change rejected: {}", event);

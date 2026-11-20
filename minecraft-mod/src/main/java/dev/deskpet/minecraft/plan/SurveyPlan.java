@@ -1,7 +1,9 @@
 package dev.deskpet.minecraft.plan;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import net.minecraft.util.math.BlockPos;
 
 import java.util.ArrayList;
@@ -9,7 +11,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 final class SurveyPlan {
     enum Status {
@@ -42,15 +46,24 @@ final class SurveyPlan {
     final Map<BlockPos, String> finalTargets = new LinkedHashMap<>();
     final Map<BlockPos, String> protectedBaseline = new LinkedHashMap<>();
     final Map<BlockPos, Integer> consumed = new LinkedHashMap<>();
+    final Set<String> phases;
     Status status = Status.DRAFT;
     String reason = "";
     String lastDenial = "";
     UUID grantId;
     long heartbeatDeadline;
     int violations;
+    int misplacements;
     int siteChanges;
     int lateAttempts;
     int reportedProgress;
+    int completedBefore;
+    int appliedCount;
+    boolean execute;
+    String phase = "";
+    String waiting = "";
+    JsonObject missing = new JsonObject();
+    JsonObject blockage;
     long finishOrder;
 
     SurveyPlan(JsonObject document) {
@@ -62,6 +75,8 @@ final class SurveyPlan {
         var selection = document.getAsJsonObject("selection");
         min = new BlockPos(selection.get("minX").getAsInt(), selection.get("minY").getAsInt(), selection.get("minZ").getAsInt());
         max = new BlockPos(selection.get("maxX").getAsInt(), selection.get("maxY").getAsInt(), selection.get("maxZ").getAsInt());
+        phases = document.getAsJsonArray("ops").asList().stream()
+            .map(op -> op.getAsJsonObject().get("phase").getAsString()).collect(Collectors.toUnmodifiableSet());
         for (var op : document.getAsJsonArray("ops")) {
             Operation operation = Operation.read(op.getAsJsonObject());
             operations.computeIfAbsent(operation.pos(), ignored -> new ArrayList<>()).add(operation);
@@ -83,6 +98,19 @@ final class SurveyPlan {
         var atPos = operations.get(pos);
         int index = consumed.getOrDefault(pos, 0);
         return atPos != null && index < atPos.size() ? atPos.get(index) : null;
+    }
+
+    int total() {
+        return completedBefore + document.getAsJsonArray("ops").size();
+    }
+
+    int completed() {
+        return completedBefore + appliedCount;
+    }
+
+    void consume(BlockPos pos) {
+        consumed.merge(pos.toImmutable(), 1, Integer::sum);
+        appliedCount++;
     }
 
     JsonArray remaining() {
@@ -109,9 +137,17 @@ final class SurveyPlan {
         if (grantId != null) json.addProperty("grantId", grantId.toString());
         json.add("plan", document);
         json.addProperty("violations", violations);
+        json.addProperty("misplacements", misplacements);
         json.addProperty("siteChanges", siteChanges);
         json.addProperty("lateAttempts", lateAttempts);
         json.addProperty("reportedProgress", reportedProgress);
+        json.addProperty("completedBefore", completedBefore);
+        json.addProperty("completed", completed());
+        json.addProperty("total", total());
+        json.addProperty("phase", phase);
+        json.add("waiting", waiting.isEmpty() ? JsonNull.INSTANCE : new JsonPrimitive(waiting));
+        json.add("missing", missing);
+        if (blockage != null) json.add("blocked", blockage);
         if (finishOrder > 0) json.addProperty("finishOrder", finishOrder);
         var counts = new JsonObject();
         consumed.forEach((pos, count) -> counts.addProperty(Long.toString(pos.asLong()), count));
@@ -143,12 +179,17 @@ final class SurveyPlan {
         // Legacy totals conflated violations, environmental changes and late packets.
         // Keep the legacy audit log, but do not treat its unclassified total as a violation.
         if (json.has("violations")) plan.violations = json.get("violations").getAsInt();
+        if (json.has("misplacements")) plan.misplacements = json.get("misplacements").getAsInt();
         if (json.has("siteChanges")) plan.siteChanges = json.get("siteChanges").getAsInt();
         if (json.has("lateAttempts")) plan.lateAttempts = json.get("lateAttempts").getAsInt();
         plan.reportedProgress = json.get("reportedProgress").getAsInt();
+        if (json.has("completedBefore")) plan.completedBefore = json.get("completedBefore").getAsInt();
+        if (json.has("phase")) plan.phase = json.get("phase").getAsString();
+        if (json.has("blocked")) plan.blockage = json.getAsJsonObject("blocked");
         if (json.has("finishOrder")) plan.finishOrder = json.get("finishOrder").getAsLong();
         json.getAsJsonObject("consumed").entrySet().forEach(entry ->
             plan.consumed.put(BlockPos.fromLong(Long.parseLong(entry.getKey())), entry.getValue().getAsInt()));
+        plan.appliedCount = plan.consumed.values().stream().mapToInt(Integer::intValue).sum();
         restoreStates(json.getAsJsonObject("targets"), plan.finalTargets);
         restoreStates(json.getAsJsonObject("protectedBaseline"), plan.protectedBaseline);
         if (plan.status == Status.RUNNING || plan.status == Status.CONFIRMED) {
