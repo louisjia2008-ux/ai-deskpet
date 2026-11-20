@@ -9,6 +9,7 @@
   "entrypoints": {
     "main": ["dev.deskpet.minecraft.DeskPetMod"]
   },
+  "mixins": ["deskpet-plan.mixins.json"],
   "depends": {
     "java": ">=21",
     "minecraft": "1.21.8",

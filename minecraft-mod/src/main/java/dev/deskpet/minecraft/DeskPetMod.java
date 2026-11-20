@@ -1,5 +1,6 @@
 package dev.deskpet.minecraft;
 
+import dev.deskpet.minecraft.plan.PlanService;
 import dev.deskpet.minecraft.wand.WandInteractions;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
@@ -32,6 +33,9 @@ public final class DeskPetMod implements ModInitializer {
         PlanChannel.register(FabricLoader.getInstance().getModContainer("deskpet").orElseThrow()
             .getMetadata().getVersion().getFriendlyString());
         SnapshotCommand.register();
-        if (!rawTestItem) WandInteractions.register();
+        if (!rawTestItem) {
+            WandInteractions.register();
+            PlanService.init();
+        }
     }
 }

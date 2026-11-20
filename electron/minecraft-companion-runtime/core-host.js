@@ -8,6 +8,7 @@ const { withMinecraftProtocolCompatibility, installMinecraftBedWakeCompatibility
 const { acknowledgePlayerLoaded, flattenReason } = require('./runtime');
 const { GOAL_SCHEMAS, TOOLS, validateTool } = require('./core-tools');
 const { perceive } = require('./core/perception');
+const { installSurveyPlanReceiver } = require('./core/survey-plan-receiver');
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 const problem = (code, message, retryable = false) => Object.assign(new Error(message), { code, retryable });
@@ -46,7 +47,7 @@ function worldKey(host, bot) {
 /** A single-bot, data-only tool host. Dispatch promises are NOT task completion. */
 function createCoreHost({ dataDir, emit = () => {}, createBot = require('mineflayer').createBot,
   createCompanion = require('./core/companion').createCompanion, now = Date.now,
-  historyLimit = 256, historyTtlMs = 10 * 60 * 1000, connectTimeoutMs = 60000, maxPending = 64 } = {}) {
+  surveyPlanDryRun = false, historyLimit = 256, historyTtlMs = 10 * 60 * 1000, connectTimeoutMs = 60000, maxPending = 64 } = {}) {
   if (!dataDir || !path.isAbsolute(dataDir)) throw new TypeError('An absolute dataDir is required');
   if (!Number.isInteger(historyLimit) || historyLimit < 2 || !Number.isFinite(historyTtlMs) || historyTtlMs < 1
       || !Number.isInteger(maxPending) || maxPending < 1 || !Number.isFinite(connectTimeoutMs) || connectTimeoutMs < 1) {
@@ -56,6 +57,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
   const homes = createHomeStore(path.join(dataDir, 'homes.json'));
   let bot = null;
   let companion = null;
+  let disposeSurveyPlan = null;
   let config = null;
   let generation = 0;
   let active = null;
@@ -126,6 +128,8 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     const oldBot = bot; const oldCompanion = companion;
     const detachedTask = active;
     bot = null; companion = null;
+    disposeSurveyPlan?.();
+    disposeSurveyPlan = null;
     if (detachedTask && failed) updateTask(detachedTask, 'failed', { error: reason });
     setConnection(dispose ? 'disposed' : failed ? 'error' : 'disconnected', failed ? reason : undefined);
     // Queue cleanup so reconnect cannot attach a new engine before the old one
@@ -182,6 +186,12 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
       if (!current()) return;
       void detach({ code, message, retryable: true }, { failed: true }).catch(() => {});
     };
+    if (surveyPlanDryRun) {
+      disposeSurveyPlan = installSurveyPlanReceiver(next, {
+        ledgerDir: path.join(dataDir, 'survey-plan-grants'),
+        onEvent: (payload) => { if (current()) event({ type: 'survey_plan_dry_run', payload }); },
+      });
+    }
     // These closures stay on their original bot and never affect a later one.
     next.on('error', (error) => lost('connection_error', String(error.message || error)));
     next.on('kicked', (reason) => lost('kicked', flattenReason(reason) || 'Server kicked the bot'));
