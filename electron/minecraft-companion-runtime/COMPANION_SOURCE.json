@@ -33,7 +33,10 @@
     "core/stance.js": "fac423b491ca39fc1e35bfe12a2e55ea3edf125e2df56b6c2ebba0a2cd9b2ee4",
     "core/survey-plan-receiver.js": "0f98aa297ba992d87d0f4c11de2c3f54dc5190f0820b40bfdaacc7fb0e7131ba",
     "core/survey-plan-actions.js": "779029ce767cb63c8a18b622b947d89e41fb9108c6eed8df3f25ad2af369198f",
-    "core/survey-plan-rules.js": "05e220f72fa09740ae59d9bfab1164636f1b29e75610e3d1be2a8998a7e8583f"
+    "core/survey-plan-rules.js": "05e220f72fa09740ae59d9bfab1164636f1b29e75610e3d1be2a8998a7e8583f",
+    "core/goals/surveyPlan.js": "a26143c319d17af8fb4086c28c4aec13f8540ae9384e58ca70afc61aa53a47fd",
+    "core/survey-placement.js": "71cd9bd9109e8b5c5ec5e21139a3058212f041c67bf8ad8da15c5ee55a8f82c0",
+    "core/survey-supplies.js": "9c136ad5a02720a81a14248bf39cd94fc5e50cdb25aa146168534fa76f329f44"
   },
   "files": {
     "protocol.js": "7fd9e43a0d429285217f318c59434734cce7a15fb56a5ddee14a5ba0fdcd0bae",
