@@ -92,7 +92,7 @@ test('survey receiver accepts a valid fragmented plan and never mutates the worl
   const grant = makeGrant();
   assert.equal(client.bot.dig, undefined);
   assert.equal(client.bot.placeBlock, undefined);
-  client.feed({ type: 'hello', protocol: 1, modVersion: '0.1.0', worldId });
+  client.feed({ type: 'hello', protocol: 2, modVersion: '0.1.0', worldId });
   deliver(client, grant);
   assert.deepEqual(client.advertisements, [['minecraft:register', ['deskpet:plan']]]);
   assert.deepEqual(client.messages.map((m) => m.type), ['hello_ack', 'accept', 'heartbeat', 'progress']);
@@ -100,18 +100,19 @@ test('survey receiver accepts a valid fragmented plan and never mutates the worl
   assert.equal(client.messages.at(-1).completed, 0);
   client.feed({ type: 'revoke', grantId: grant.grantId, reason: 'owner_cancelled' });
   assert.equal(client.events.at(-1).type, 'revoked');
+  assert.deepEqual(client.messages.at(-1), { type: 'revoke_ack', grantId: grant.grantId });
 });
 
 test('survey receiver rejects wrong plan hash, world, dimension, identity and old grants after reconnect', (t) => {
   const dir = ledger(t);
   const client = fakeBot(t, dir);
   const accepted = makeGrant();
-  client.feed({ type: 'hello', protocol: 1, worldId });
+  client.feed({ type: 'hello', protocol: 2, worldId });
   deliver(client, accepted);
   client.close();
 
   const reconnected = fakeBot(t, dir);
-  reconnected.feed({ type: 'hello', protocol: 1, worldId });
+  reconnected.feed({ type: 'hello', protocol: 2, worldId });
   assert.deepEqual(reconnected.messages.map((m) => m.type), ['hello_ack']);
   deliver(reconnected, accepted);
   assert.match(reconnected.events.at(-1).reason, /already used/);

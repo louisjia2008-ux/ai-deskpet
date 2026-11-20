@@ -22,7 +22,9 @@ final class PlanStore extends PersistentState {
         "deskpet_survey_plans", PlanStore::new, CODEC, null);
 
     final Map<UUID, SurveyPlan> plans = new LinkedHashMap<>();
-    final Map<UUID, UUID> revokedBots = new LinkedHashMap<>();
+    record Revocation(SurveyPlan plan, UUID grantId, long deadline) {}
+
+    final Map<UUID, Revocation> revocations = new LinkedHashMap<>();
     final JsonArray rejections = new JsonArray();
     final JsonArray protocolRejections = new JsonArray();
     private long lastProtocolWarning = System.nanoTime() - Duration.ofSeconds(1).toNanos();
@@ -49,9 +51,6 @@ final class PlanStore extends PersistentState {
         var entities = new JsonArray();
         plans.values().forEach(plan -> entities.add(plan.export()));
         result.add("plans", entities);
-        var revoked = new JsonObject();
-        revokedBots.forEach((bot, plan) -> revoked.addProperty(bot.toString(), plan.toString()));
-        result.add("revokedBots", revoked);
         result.add("rejections", rejections);
         result.add("protocolRejections", protocolRejections);
         return result;
@@ -70,8 +69,6 @@ final class PlanStore extends PersistentState {
             var plan = SurveyPlan.restore(entry.getAsJsonObject());
             store.plans.put(plan.id, plan);
         }
-        source.getAsJsonObject("revokedBots").entrySet().forEach(entry ->
-            store.revokedBots.put(UUID.fromString(entry.getKey()), UUID.fromString(entry.getValue().getAsString())));
         store.rejections.addAll(source.getAsJsonArray("rejections"));
         store.protocolRejections.addAll(source.getAsJsonArray("protocolRejections"));
         store.markDirty();

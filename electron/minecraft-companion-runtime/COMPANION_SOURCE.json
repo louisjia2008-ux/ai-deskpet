@@ -30,7 +30,7 @@
     "core/goals/followOwner.js": "d62bb649f5482d8c5f37c8ef611d891cf5209824c53bafda277f872ae42f64ad",
     "core/logWaterRecovery.js": "1bceaa9db9e63ddcae6c0701b1b1e5e75afd0127baf68b0a50b7f581f8e95e70",
     "core/stance.js": "fac423b491ca39fc1e35bfe12a2e55ea3edf125e2df56b6c2ebba0a2cd9b2ee4",
-    "core/survey-plan-receiver.js": "a73b9d980be3f984152988d747acd7f59be0757f68681bdc924baf7c4e53359c"
+    "core/survey-plan-receiver.js": "0f98aa297ba992d87d0f4c11de2c3f54dc5190f0820b40bfdaacc7fb0e7131ba"
   },
   "files": {
     "protocol.js": "7fd9e43a0d429285217f318c59434734cce7a15fb56a5ddee14a5ba0fdcd0bae",

@@ -6,6 +6,7 @@ const { createHash } = require('node:crypto');
 const { TextDecoder } = require('node:util');
 
 const CHANNEL = 'deskpet:plan';
+const PROTOCOL = 2;
 const WIRE_LIMIT = 32 * 1024;
 const CHUNK_LIMIT = 512;
 const CHUNK_BYTES = 23 * 1024;
@@ -166,7 +167,7 @@ function installSurveyPlanReceiver(bot, { ledgerDir, onEvent = () => {} }) {
   function onMessage(raw) {
     try {
       const message = decodeMessage(raw);
-      if (message.type === 'hello' && message.protocol === 1 && UUID.test(message.worldId)) {
+      if (message.type === 'hello' && message.protocol === PROTOCOL && UUID.test(message.worldId)) {
         if (!advertised) {
           client.writeChannel('minecraft:register', [CHANNEL]);
           advertised = true;
@@ -176,14 +177,15 @@ function installSurveyPlanReceiver(bot, { ledgerDir, onEvent = () => {} }) {
           transfer = null;
         }
         worldId = message.worldId;
-        sendPlanMessage(client, { type: 'hello_ack', protocol: 1, worldId });
+        sendPlanMessage(client, { type: 'hello_ack', protocol: PROTOCOL, worldId });
         report({ type: 'hello', worldId, modVersion: message.modVersion });
       } else if (message.type === 'grant_chunk') {
         onChunk(message);
-      } else if (message.type === 'revoke') {
+      } else if (message.type === 'revoke' && worldId && UUID.test(message.grantId)) {
         endGrant(message.grantId);
         if (transfer?.grantId === message.grantId) transfer = null;
         report({ type: 'revoked', grantId: message.grantId, reason: message.reason });
+        sendPlanMessage(client, { type: 'revoke_ack', grantId: message.grantId });
       }
     } catch (error) {
       transfer = null;

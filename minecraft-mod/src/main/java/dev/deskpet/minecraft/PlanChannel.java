@@ -18,7 +18,7 @@ import net.minecraft.network.packet.CustomPayload;
 import net.minecraft.server.network.ServerPlayerEntity;
 
 public final class PlanChannel {
-    public static final int PROTOCOL = 1;
+    public static final int PROTOCOL = 2;
     private static final int MAX_PACKET_BYTES = 32 * 1024;
     private static final Set<ServerPlayerEntity> READY = Collections.newSetFromMap(new IdentityHashMap<>());
     private static final List<BiConsumer<ServerPlayerEntity, JsonObject>> HANDLERS = new ArrayList<>();

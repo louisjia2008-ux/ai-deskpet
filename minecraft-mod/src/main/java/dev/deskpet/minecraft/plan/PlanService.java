@@ -36,6 +36,7 @@ import static dev.deskpet.minecraft.plan.SurveyPlan.Status.*;
 public final class PlanService {
     private static final Logger LOGGER = LoggerFactory.getLogger("deskpet.plan");
     private static final long HEARTBEAT_NANOS = Duration.ofSeconds(10).toNanos();
+    private static final long REVOKE_NANOS = Duration.ofSeconds(15).toNanos();
     private static final long PREVIEW_MILLIS = Duration.ofMinutes(10).toMillis();
     private static final int CHUNK_BYTES = 23 * 1024;
     private static final int MAX_CHUNKS = 512;
@@ -199,11 +200,6 @@ public final class PlanService {
         if (!plan.status.holdsSelection() && plan.status != PREVIEWED) {
             return deny(store, plan, id, "cancel", "not_cancellable");
         }
-        if (plan.status.holdsSelection()) {
-            // A revoked lease is an explicit deny state. A fresh owner grant is the only
-            // way to clear it, even if a delayed break packet arrives after a reconnect.
-            store.revokedBots.put(plan.botUuid, plan.id);
-        }
         revoke(world.getServer(), store, plan, CANCELLED, "owner_cancelled", true);
         return describe(plan);
     }
@@ -246,6 +242,7 @@ public final class PlanService {
             case "server_restart" -> "服务器重启";
             case "owner_paused" -> "主人暂停";
             case "owner_cancelled" -> "主人取消";
+            case "authorization_revoked" -> "选区正在等待机器人确认撤销";
             default -> reason;
         };
     }
@@ -270,6 +267,11 @@ public final class PlanService {
         if (store.plans.values().stream().anyMatch(other -> !other.id.equals(plan.id)
             && other.status.holdsSelection() && overlaps(other, plan))) {
             return deny(store, store.plans.get(plan.id), plan.id, method, "overlapping_plan");
+        }
+        pruneRevocations(store, System.nanoTime());
+        if (store.revocations.values().stream().anyMatch(revocation ->
+            !revocation.plan().status.holdsSelection() && overlaps(revocation.plan(), plan))) {
+            return deny(store, store.plans.get(plan.id), plan.id, method, "authorization_revoked");
         }
         var bot = config.findBot(server);
         if (bot == null || !bot.getUuid().equals(plan.botUuid) || !PlanChannel.isReady(bot)) {
@@ -374,6 +376,9 @@ public final class PlanService {
         plan.grantId = null;
         plan.status = next;
         plan.reason = reason;
+        if (oldGrant != null) {
+            store.revocations.put(plan.id, new PlanStore.Revocation(plan, oldGrant, System.nanoTime() + REVOKE_NANOS));
+        }
         store.markDirty();
         if (notify && oldGrant != null) {
             var bot = config.findBot(server);
@@ -387,9 +392,14 @@ public final class PlanService {
         }
     }
 
+    private static void pruneRevocations(PlanStore store, long now) {
+        store.revocations.values().removeIf(revocation -> now - revocation.deadline() >= 0);
+    }
+
     private static void tick(MinecraftServer server) {
         if (!config.enabled()) return;
         var store = PlanStore.get(server);
+        pruneRevocations(store, System.nanoTime());
         for (var plan : store.plans.values()) {
             if (plan.status == PREVIEWED && expired(plan)) {
                 plan.status = EXPIRED;
@@ -404,10 +414,16 @@ public final class PlanService {
     private static void receive(ServerPlayerEntity player, JsonObject message) {
         if (!config.enabled() || !config.isBot(player) || !PlanChannel.isReady(player)) return;
         String type = string(message, "type");
-        if (!type.equals("accept") && !type.equals("heartbeat") && !type.equals("progress")) return;
         var world = player.getWorld();
         var server = world.getServer();
         var store = PlanStore.get(server);
+        if (type.equals("revoke_ack")) {
+            String grantId = string(message, "grantId");
+            store.revocations.values().removeIf(revocation -> revocation.plan().botUuid.equals(player.getUuid())
+                && revocation.grantId().toString().equals(grantId));
+            return;
+        }
+        if (!type.equals("accept") && !type.equals("heartbeat") && !type.equals("progress")) return;
         UUID id;
         try {
             id = UUID.fromString(string(message, "planId"));
@@ -448,7 +464,6 @@ public final class PlanService {
                 return;
             }
             plan.status = RUNNING;
-            store.revokedBots.remove(player.getUuid());
             plan.heartbeatDeadline = System.nanoTime() + HEARTBEAT_NANOS;
             store.markDirty();
         } else if (type.equals("heartbeat")) {
@@ -519,29 +534,39 @@ public final class PlanService {
         if (!config.enabled() || !config.isBot(player)) return true;
         var server = world.getServer();
         var store = PlanStore.get(server);
-        SurveyPlan matching = null;
-        SurveyPlan controlling = null;
-        for (var plan : store.plans.values()) {
-            if (!plan.status.holdsSelection() || !player.getUuid().equals(plan.botUuid)) continue;
-            controlling = plan;
-            if (plan.status == RUNNING && plan.dimension.equals(dimension(world)) && plan.next(origin) != null) {
-                matching = plan;
-                break;
+        long now = System.nanoTime();
+        String dimension = dimension(world);
+        UUID botId = player.getUuid();
+        pruneRevocations(store, now);
+        for (var revocation : store.revocations.values()) {
+            var plan = revocation.plan();
+            if (!plan.status.holdsSelection() && botId.equals(plan.botUuid) && plan.dimension.equals(dimension)) {
+                var blocked = insideSelection(plan, targets);
+                if (blocked != null) return rejectChange(store, plan, action, blocked, "authorization_revoked");
             }
         }
-        UUID revoked = store.revokedBots.get(player.getUuid());
-        if (revoked != null) {
-            return rejectChange(store, store.plans.get(revoked), action, origin, "authorization_revoked");
+
+        SurveyPlan matching = null;
+        for (var plan : store.plans.values()) {
+            if (!plan.status.holdsSelection() || !botId.equals(plan.botUuid)) continue;
+            boolean sameDimension = plan.dimension.equals(dimension);
+            boolean timedOut = hasGrant(plan) && now - plan.heartbeatDeadline >= 0;
+            if (timedOut) revoke(server, store, plan, PAUSED, "disconnected", true);
+            if (plan.status == RUNNING) {
+                matching = plan;
+                if (!sameDimension) return rejectChange(store, plan, action, origin, "outside_authorized_operations");
+                break;
+            }
+            if (sameDimension) {
+                var blocked = insideSelection(plan, targets);
+                if (blocked != null) {
+                    return rejectChange(store, plan, action, blocked,
+                        timedOut ? "authorization_expired" : "authorization_inactive");
+                }
+            }
         }
-        if (controlling == null) return true;
-        if (custom) return rejectChange(store, controlling, action, origin, "custom_item_data");
-        if (matching == null) {
-            return rejectChange(store, controlling, action, origin, "outside_authorized_operations");
-        }
-        if (System.nanoTime() >= matching.heartbeatDeadline) {
-            revoke(server, store, matching, PAUSED, "disconnected", true);
-            return rejectChange(store, matching, action, origin, "authorization_expired");
-        }
+        if (matching == null) return true;
+        if (custom) return rejectChange(store, matching, action, origin, "custom_item_data");
         for (var target : targets.entrySet()) {
             var pos = target.getKey();
             var op = matching.next(pos);
@@ -555,6 +580,13 @@ public final class PlanService {
             }
         }
         return true;
+    }
+
+    private static BlockPos insideSelection(SurveyPlan plan, Map<BlockPos, String> targets) {
+        for (var pos : targets.keySet()) {
+            if (plan.contains(pos)) return pos;
+        }
+        return null;
     }
 
     public static void observePlacement(ServerWorld world, ServerPlayerEntity player, Map<BlockPos, String> changes) {

@@ -32,6 +32,8 @@ final class SurveyPlan {
     final UUID ownerUuid;
     final UUID botUuid;
     final String dimension;
+    private final BlockPos min;
+    private final BlockPos max;
     final Map<BlockPos, List<Operation>> operations = new LinkedHashMap<>();
     final Map<BlockPos, String> finalTargets = new LinkedHashMap<>();
     final Map<BlockPos, String> protectedBaseline = new LinkedHashMap<>();
@@ -50,6 +52,9 @@ final class SurveyPlan {
         ownerUuid = UUID.fromString(document.get("ownerUuid").getAsString());
         botUuid = document.get("botUuid").isJsonNull() ? null : UUID.fromString(document.get("botUuid").getAsString());
         dimension = document.get("dimension").getAsString();
+        var selection = document.getAsJsonObject("selection");
+        min = new BlockPos(selection.get("minX").getAsInt(), selection.get("minY").getAsInt(), selection.get("minZ").getAsInt());
+        max = new BlockPos(selection.get("maxX").getAsInt(), selection.get("maxY").getAsInt(), selection.get("maxZ").getAsInt());
         for (var op : document.getAsJsonArray("ops")) {
             Operation operation = Operation.read(op.getAsJsonObject());
             operations.computeIfAbsent(operation.pos(), ignored -> new ArrayList<>()).add(operation);
@@ -59,6 +64,12 @@ final class SurveyPlan {
 
     static BlockPos readPosition(JsonObject pos) {
         return new BlockPos(pos.get("x").getAsInt(), pos.get("y").getAsInt(), pos.get("z").getAsInt());
+    }
+
+    boolean contains(BlockPos pos) {
+        return pos.getX() >= min.getX() && pos.getX() <= max.getX()
+            && pos.getY() >= min.getY() && pos.getY() <= max.getY()
+            && pos.getZ() >= min.getZ() && pos.getZ() <= max.getZ();
     }
 
     Operation next(BlockPos pos) {
