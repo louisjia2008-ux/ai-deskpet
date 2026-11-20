@@ -50,10 +50,13 @@ function missingMaterials(bot, needed) {
   }));
 }
 
-function createSurveySupplies(bot, plan) {
+function createSurveyInventory(bot) {
   const baseline = new Map();
-  const borrowed = new Set();
   for (const stack of bot.inventory.items()) baseline.set(stack.name, (baseline.get(stack.name) || 0) + stack.count);
+  return { baseline, borrowed: new Set() };
+}
+
+function createSurveySupplies(bot, plan, { baseline, borrowed } = createSurveyInventory(bot)) {
   const chestPos = plan.supplyChest ? vec(plan.supplyChest) : null;
 
   async function chestTransaction(ctx, use) {
@@ -94,8 +97,10 @@ function createSurveySupplies(bot, plan) {
       if (!isMaterial(name, item) || left <= 0) continue;
       const n = Math.min(left, item.count, room(window, item, window.inventoryStart, window.inventoryEnd));
       if (n <= 0) break;
-      await window.withdraw(item.type, item.metadata, n, item.nbt);
+      // Revocation can interrupt after the server transfers a stack but before
+      // Mineflayer resolves the window operation.
       borrowed.add(item.name);
+      await window.withdraw(item.type, item.metadata, n, item.nbt);
       left -= n;
     }
     return quantity - left;
@@ -180,4 +185,4 @@ function createSurveySupplies(bot, plan) {
   return { ensure, putBack, collect, item: (op) => bot.inventory.items().find((item) => isMaterial(materialFor(op), item)) };
 }
 
-module.exports = { createSurveySupplies, materialFor };
+module.exports = { createSurveyInventory, createSurveySupplies, materialFor };

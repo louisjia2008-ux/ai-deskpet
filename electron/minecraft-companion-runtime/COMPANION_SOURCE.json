@@ -5,7 +5,7 @@
   "selection": "Production runtime extracted from frozen13; test/scenario/CLI and source archive excluded; legacy runtime in DeskPet left intact",
   "local_change": "DeskPet gatherLogs explores new dry terrain for surface logs, follows observed canopy hints, and recovers to shore after immersion; in-game owner chat and replies, followOwner (come, follow and guard the configured owner), climbing out of pits before log scouting, and no sweep attacks beside a player; planner wood gathering skips cave logs, and drops left to mobs in a cave are not fetched (time-boxed fetch otherwise); one shared combat stance (retreat/fight/alert/calm, weighed against weapon, armour and health, retreats held) drives escape, defend, hunting and drop fetching; house sites under rock rejected; an overworld task stops at its second death; homestead carries a spare crafting table and crafts where it stands; bare hands take on one zombie; setPolicy control (risk, guard order) and death causes in death_loop failures gatherMaterials places its crafting table or furnace beside the bot when no station spot is given and searches around the chest when asked from chat; a new farm takes over wheat already growing and a crafting table already standing nearby, and a station goes down on grass or leaf litter but never on crops; night rest digs in for any task but building, pearl hunting and guarding the owner. The house is remembered per world (server host and world spawn) across connections in the host data directory and reported as observation.home; unbury never fires while asleep in bed. Guarding the owner, self-defence also fights what is within 8 of the owner and takes the one closest to them first unless one is on the bot. Following hurt (10 or less) with hostiles within 16, the bot waits to heal instead of walking back or guarding, unless guarding the owner first. Melee closes in on a target within 4.5 on level, safe ground by walking straight at it, and defence waits for drops only from mobs that drop something kept. Guarding at health above 10, a fight is broken off for a mob within 3 of the owner while the one fought is 3 farther from them; a mob seen dying is no longer a threat. Holding ground for the owner, the round of hits that sends the bot back counts melee mobs within 4.5, not 3.",
   "local_files": {
-    "core-host.js": "7cba8e299cf50c9155b07f74fd7924b7963d7c9fcd40191cba44d0f2329fae28",
+    "core-host.js": "7ed9f2c0a90eb8a68adf8288e6374a59ccec933213440b41132d2726950e878e",
     "core-tools.js": "bfa35385b42ab58de2f65eaad39e15fb3d74f0f410fafd65396c7c5d11a5fcdc",
     "core/README.md": "e453e9c84bdc43057d4c38c23044c02e36b9e8283976af9eacfd83b409e0cdeb",
     "core/actions.js": "b6189a15e4dac37933f4d3a8439a4111fc227400faa4eace1575dd483abc0e52",
@@ -34,9 +34,9 @@
     "core/survey-plan-receiver.js": "d34d7c9cb73882f0d9745e7bcd1277fcbdaa33d10f5a59f5db118b073bdff736",
     "core/survey-plan-actions.js": "779029ce767cb63c8a18b622b947d89e41fb9108c6eed8df3f25ad2af369198f",
     "core/survey-plan-rules.js": "135d9e7ed6095782dbf06d464b3c4a0da088fadc408cafdf245276c886240f50",
-    "core/goals/surveyPlan.js": "cb5440b8ec106b1145e5d8a1e83c71c7ce207137be2f4d63e5a7c37565493ce6",
+    "core/goals/surveyPlan.js": "a2605a0c2f7def2945560ebaa3d172b23919d9389d362a3c6ea9858e5f3b4cd5",
     "core/survey-placement.js": "f82866a06ab9254285a356d2c3ea6eb75bf70a292a9a563e502bdb640bd04b1b",
-    "core/survey-supplies.js": "314204a88b9390520f7e032f8c81273c79527de637e4fa190b3facea2de4b060"
+    "core/survey-supplies.js": "99c740ac2184474e955965a73547be7ce913b56ca6b65d056d68a4a0bc4126da"
   },
   "files": {
     "protocol.js": "7fd9e43a0d429285217f318c59434734cce7a15fb56a5ddee14a5ba0fdcd0bae",

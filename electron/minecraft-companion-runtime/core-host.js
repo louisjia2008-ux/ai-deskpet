@@ -73,6 +73,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
   let cleanup = Promise.resolve();
   const tasks = new Map();
   const requests = new Map();
+  const surveyInventories = new Map();
   // Observer failures must not leave a task half-transitioned.
   const send = (message) => { try { emit(clone(message)); } catch { /* transport owns delivery */ } };
   const event = (payload) => send({ version: 1, type: 'event', event: { at: now(), ...payload } });
@@ -217,7 +218,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
         async onPrepare(plan, grant) {
           if (!current() || connection.state !== 'ready' || !companion || survey) throw problem('not_ready', 'The body is unavailable for a survey authorization');
           const previous = active;
-          reservation = { grant, engine: companion, task: null };
+          reservation = { grant, engine: companion, task: null, inventoryKey: `${plan.worldId}:${plan.planId}` };
           survey = reservation;
           await reservation.engine.prepareSurveyPlan(plan, grant);
           if (previous) updateTask(previous, 'cancelled', { reason: 'survey_plan' });
@@ -230,12 +231,16 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
           tasks.set(task.taskId, task); active = task;
           event({ type: 'task', taskId: task.taskId, task });
           const { createSurveyPlanGoal } = require('./core/goals/surveyPlan');
-          const goal = createSurveyPlanGoal({ bot: next, plan, grant, ownerName: nextConfig.ownerName || null });
+          const { createSurveyInventory } = require('./core/survey-supplies');
+          const supplyInventory = surveyInventories.get(reservation.inventoryKey) ?? createSurveyInventory(next);
+          surveyInventories.set(reservation.inventoryKey, supplyInventory);
+          const goal = createSurveyPlanGoal({ bot: next, plan, grant, supplyInventory, ownerName: nextConfig.ownerName || null });
           await reservation.engine.startSurveyPlan(grant, goal, { taskId: task.taskId });
         },
         async onStop(grant, { status, reason }) {
           const record = reservation;
           if (!record || record.grant !== grant) return;
+          if (['completed', 'failed', 'cancelled', 'expired'].includes(status)) surveyInventories.delete(record.inventoryKey);
           await record.engine.stopSurveyPlan(grant, reason || status);
           reservation = null;
           if (!current() || survey !== record) return;
@@ -441,6 +446,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
   function close() {
     if (closePromise) return closePromise;
     closed = true;
+    surveyInventories.clear();
     closePromise = detach({ code: 'disposed', message: 'Host disposed' }, { dispose: true });
     return closePromise;
   }

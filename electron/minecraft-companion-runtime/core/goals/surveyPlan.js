@@ -60,13 +60,13 @@ function stepGroups(plan) {
   return groups;
 }
 
-function createSurveyPlanGoal({ bot, plan, grant, ownerName }) {
+function createSurveyPlanGoal({ bot, plan, grant, ownerName, supplyInventory }) {
   let completed = 0;
   let stationFailures = 0;
   let phase = '';
   const attempted = new Map();
   const accounted = new Set();
-  const supplies = createSurveySupplies(bot, plan);
+  const supplies = createSurveySupplies(bot, plan, supplyInventory);
   const night = () => actions.isSurveyNight(bot);
 
   function wrongSite(step) {
