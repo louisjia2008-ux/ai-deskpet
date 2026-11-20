@@ -78,7 +78,7 @@ public final class PlanCompiler {
         int minY();
         int maxY();
         Map<String, Integer> materials(BlockPos pos);
-        default boolean grassCanSpread() { return false; }
+        default boolean randomTicksEnabled() { return false; }
     }
 
     record Area(int minX, int maxX, int minZ, int maxZ) {
@@ -198,7 +198,7 @@ public final class PlanCompiler {
             }
 
             @Override
-            public boolean grassCanSpread() {
+            public boolean randomTicksEnabled() {
                 return world.getGameRules().getInt(GameRules.RANDOM_TICK_SPEED) > 0;
             }
 
@@ -491,7 +491,7 @@ public final class PlanCompiler {
             BlockPos pos = target.getKey();
             if (!next.containsKey(pos)) {
                 BlockState actual = world.state(pos);
-                if (!matchesFinalTarget(document, pos, target.getValue(), actual, world.grassCanSpread())) {
+                if (!matchesFinalTarget(document, pos, target.getValue(), actual, world.randomTicksEnabled())) {
                     return mismatch(pos, target.getValue(), actual);
                 }
             }
@@ -566,12 +566,17 @@ public final class PlanCompiler {
     }
 
     public static boolean matchesFinalTarget(JsonObject plan, BlockPos pos, String expected, BlockState current,
-                                             boolean grassCanSpread) {
+                                             boolean randomTicksEnabled) {
         if (matchesState(expected, current)) return true;
-        // Only the final check accepts normal grass growth on already placed
-        // soil below grade. The authorized write itself must still place dirt.
-        return grassCanSpread && expected.equals("minecraft:dirt") && current.isOf(Blocks.GRASS_BLOCK)
-            && plan.has("groundY") && pos.getY() < plan.get("groundY").getAsInt();
+        if (!randomTicksEnabled) return false;
+        // The action itself still must place the exact authorized target.
+        return switch (expected) {
+            case "minecraft:dirt" -> current.isOf(Blocks.GRASS_BLOCK) && plan.has("groundY")
+                && pos.getY() < plan.get("groundY").getAsInt();
+            case "minecraft:farmland[moisture=0]" -> current.isOf(Blocks.FARMLAND);
+            case "minecraft:wheat[age=0]" -> current.isOf(Blocks.WHEAT);
+            default -> false;
+        };
     }
 
     public static boolean matchesState(String expected, String current) {
@@ -741,9 +746,9 @@ public final class PlanCompiler {
         if (template.type() == HouseTemplates.Type.PORCH_CABIN && cell.local().getY() == 2) {
             return "upper_walls";
         }
-        if (template.type() == HouseTemplates.Type.TWO_STOREY_HOUSE &&
-            (cell.local().getY() >= 3 || id.equals("oak_stairs"))) {
-            return "floor";
+        if (template.type() == HouseTemplates.Type.TWO_STOREY_HOUSE) {
+            if (cell.local().getY() >= 4) return "upper_walls";
+            if (cell.local().getY() == 3 || id.equals("oak_stairs")) return "floor";
         }
         return "walls";
     }

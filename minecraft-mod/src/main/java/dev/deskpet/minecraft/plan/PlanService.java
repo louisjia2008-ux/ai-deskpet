@@ -783,10 +783,10 @@ public final class PlanService {
             revoke(server, store, plan, FAILED, "outside_authorized_operations", true);
         } else {
             boolean protectedMatches = matches(world, plan.protectedBaseline);
-            boolean grassCanSpread = world.getGameRules().getInt(GameRules.RANDOM_TICK_SPEED) > 0;
+            boolean randomTicksEnabled = world.getGameRules().getInt(GameRules.RANDOM_TICK_SPEED) > 0;
             boolean targetsMatch = plan.finalTargets.entrySet().stream().allMatch(target ->
                 PlanCompiler.matchesFinalTarget(plan.document, target.getKey(), target.getValue(),
-                    world.getBlockState(target.getKey()), grassCanSpread));
+                    world.getBlockState(target.getKey()), randomTicksEnabled));
             if (protectedMatches && targetsMatch) {
                 revoke(server, store, plan, COMPLETED, "", true);
                 return;

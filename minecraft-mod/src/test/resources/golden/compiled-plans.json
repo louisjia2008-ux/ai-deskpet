@@ -200,12 +200,12 @@
     }
   },
   "two_storey_house/0": {
-    "planHash": "be5744d4c0947515b939edaa9dd029463421bff195067b0651ae315e628d35ea",
+    "planHash": "586bb7bea1179ca0886872562dabbe5aed9b50066313e1b6854438bb1924015b",
     "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
-    "operations": 331,
+    "operations": 373,
     "template": {
       "id": "two_storey_house",
-      "version": 1,
+      "version": 3,
       "rotation": 0,
       "anchor": {
         "x": 2,
@@ -225,12 +225,12 @@
     }
   },
   "two_storey_house/90": {
-    "planHash": "83c41881569b7eb16aa5de1cff6bd757c1a20dcd74d2ac9fd2ce9c6d53b8eaa1",
+    "planHash": "96f106b5317a28a850ca5a16a977a541e026d0ab7b66098203eda0a673e8cb12",
     "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
-    "operations": 331,
+    "operations": 373,
     "template": {
       "id": "two_storey_house",
-      "version": 1,
+      "version": 3,
       "rotation": 90,
       "anchor": {
         "x": 2,
@@ -250,12 +250,12 @@
     }
   },
   "two_storey_house/180": {
-    "planHash": "d91704b7162e6c52266377358704067515a1b74156435d01a1c93f39885f008c",
+    "planHash": "e30bb3b94b6c2dec982da7b2f4908f617c20c5888bbd5eda388a647c1ff6199d",
     "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
-    "operations": 331,
+    "operations": 373,
     "template": {
       "id": "two_storey_house",
-      "version": 1,
+      "version": 3,
       "rotation": 180,
       "anchor": {
         "x": 2,
@@ -275,12 +275,12 @@
     }
   },
   "two_storey_house/270": {
-    "planHash": "b0d6a2dc9372ef8d084b21a229f4f60410433992358017624cbde79781d1dc24",
+    "planHash": "aec10ae3aab9fbc62ddc9718f09de2c4ddc297f86de1f77051e0d443158b30b1",
     "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
-    "operations": 331,
+    "operations": 373,
     "template": {
       "id": "two_storey_house",
-      "version": 1,
+      "version": 3,
       "rotation": 270,
       "anchor": {
         "x": 2,

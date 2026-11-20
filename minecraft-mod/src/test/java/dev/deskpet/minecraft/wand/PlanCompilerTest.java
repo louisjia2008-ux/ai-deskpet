@@ -21,7 +21,10 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -108,6 +111,37 @@ class PlanCompilerTest {
             && op.target().isOf(Blocks.COBBLESTONE)));
         assertEquals(1, result.plan().getAsJsonObject("materials").getAsJsonObject("excavated")
             .get("minecraft:cobblestone").getAsInt());
+    }
+
+    @Test
+    void farmlandHydrationAndWheatGrowthDoNotUndoAppliedOperationsUnderNormalRules() {
+        var plan = new JsonObject();
+        var hydrated = Blocks.FARMLAND.getDefaultState().with(Properties.MOISTURE, 7);
+        var grown = Blocks.WHEAT.getDefaultState().with(Properties.AGE_7, 3);
+        assertTrue(PlanCompiler.matchesFinalTarget(plan, PIT, "minecraft:farmland[moisture=0]", hydrated, true));
+        assertTrue(PlanCompiler.matchesFinalTarget(plan, PIT.up(), "minecraft:wheat[age=0]", grown, true));
+        assertFalse(PlanCompiler.matchesFinalTarget(plan, PIT, "minecraft:farmland[moisture=0]", hydrated, false));
+        assertFalse(PlanCompiler.matchesFinalTarget(plan, PIT.up(), "minecraft:wheat[age=0]", grown, false));
+        assertFalse(PlanCompiler.matchesFinalTarget(plan, PIT, "minecraft:farmland[moisture=0]",
+            Blocks.DIRT.getDefaultState(), true));
+    }
+
+    @Test
+    void multiStoreyScaffoldAndFloorOrderFitTheMinimumSelectionInEveryRotation() {
+        var area = new PlanCompiler.Area(0, 10, 0, 10);
+        for (BlockRotation rotation : BlockRotation.values()) {
+            var result = compile(new Ground(), area, HouseTemplates.Type.TWO_STOREY_HOUSE, rotation,
+                PlanCompiler.Mode.FOUNDATION, false);
+            assertTrue(result.valid(), () -> result.conflicts().toString());
+            Map<String, List<PlanCompiler.Operation>> phases = new LinkedHashMap<>();
+            result.ops().forEach(op -> phases.computeIfAbsent(op.phase(), phase -> new ArrayList<>()).add(op));
+            assertEquals(List.of("scaffold", "walls", "floor", "upper_walls", "roof", "furnish", "remove_scaffold"),
+                List.copyOf(phases.keySet()));
+            assertEquals(21, phases.get("scaffold").size());
+            assertEquals(21, phases.get("remove_scaffold").size());
+            assertEquals(4, phases.get("floor").stream().filter(op -> op.target().isOf(Blocks.OAK_STAIRS)).count());
+            assertTrue(result.ops().stream().allMatch(op -> area.contains(op.pos())));
+        }
     }
 
     @Test

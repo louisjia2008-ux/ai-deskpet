@@ -293,9 +293,12 @@ function createSurveyPlanGoal({ bot, plan, grant, ownerName }) {
             }
             const materialReady = currentLayer.filter(({ step }) => !materialFor(step[0]) || supplies.item(step[0]));
             if (!materialReady.length) continue;
-            if ((phase === 'roof' || phase === 'upper_walls') && !scaffoldApproachChecked) {
+            const highWall = plan.template?.id === 'two_storey_house' && phase === 'walls' &&
+              currentLayer[0].level >= plan.groundY + 2;
+            if ((phase === 'roof' || phase === 'upper_walls' || highWall) && !scaffoldApproachChecked) {
               await duringDay(ctx, (stepCtx) => climbSurveyScaffold(bot, stepCtx, plan,
-                (reason, detail) => recordStation(ctx, pending[0].step[0], reason, detail)));
+                (reason, detail) => recordStation(ctx, pending[0].step[0], reason, detail),
+                highWall ? currentLayer[0].level : Infinity));
               scaffoldApproachChecked = true;
             }
             // Removal can consume the second half of a plant on the layer below.

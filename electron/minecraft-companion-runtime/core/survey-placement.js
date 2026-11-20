@@ -241,8 +241,9 @@ async function walkToStations(bot, ctx, plan, stations, usable, onFailure) {
   return null;
 }
 
-async function climbSurveyScaffold(bot, ctx, plan, onFailure) {
-  const steps = plan.ops.filter((op) => op.phase === 'remove_scaffold' && op.pos.y > plan.groundY)
+async function climbSurveyScaffold(bot, ctx, plan, onFailure, heightLimit = Infinity) {
+  const steps = plan.ops.filter((op) =>
+    op.phase === 'remove_scaffold' && op.pos.y > plan.groundY && op.pos.y + 1 <= heightLimit)
     .sort((a, b) => b.pos.y - a.pos.y);
   const latest = steps.find((op) => bot.blockAt(vec(op.pos))?.name === 'dirt');
   if (!latest) return;
