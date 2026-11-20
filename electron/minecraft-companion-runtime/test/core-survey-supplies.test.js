@@ -77,3 +77,17 @@ test('a recompiled goal recomputes its material wait from new operations and car
   await assert.rejects(goal.run({}), { code: 'aborted' });
   assert.deepEqual(waiting, { phase: 'walls', missing: { 'minecraft:cobblestone': 2 } });
 });
+
+test('a restock blockage identifies the authorized material chest for the owner marker', async (t) => {
+  const chest = new Vec3(9, 64, 9);
+  const bot = { entity: { position: new Vec3(9, 64, 8) }, inventory: { items: () => [] }, blockAt: () => ({ name: 'air' }) };
+  const supplies = createSurveySupplies(bot, { supplyChest: chest });
+  const required = [[{ target: 'minecraft:cobblestone' }]];
+  assert.deepEqual(await supplies.ensure({}, required), { ok: false, reason: 'supply_chest_changed', pos: chest });
+  bot.blockAt = () => ({ name: 'chest' });
+  t.mock.method(actions, 'openSurveyChest', async () => null);
+  assert.deepEqual(await supplies.ensure({}, required), { ok: false, reason: 'supply_chest_unreachable', pos: chest });
+  bot.entity.position = new Vec3(0, 64, 0);
+  t.mock.method(actions, 'goNear', async () => ({ ok: false, reason: 'NoPath' }));
+  assert.deepEqual(await supplies.ensure({}, required), { ok: false, reason: 'supply_chest_unreachable', pos: chest });
+});

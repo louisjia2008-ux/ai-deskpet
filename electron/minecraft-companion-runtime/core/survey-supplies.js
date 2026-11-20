@@ -58,6 +58,7 @@ function createSurveyInventory(bot) {
 
 function createSurveySupplies(bot, plan, { baseline, borrowed } = createSurveyInventory(bot)) {
   const chestPos = plan.supplyChest ? vec(plan.supplyChest) : null;
+  const chestFailure = (reason, detail) => ({ ok: false, reason, pos: chestPos, ...(detail ? { detail } : {}) });
 
   async function chestTransaction(ctx, use) {
     if (!chestPos) return { ok: false, reason: 'no_supply_chest' };
@@ -67,12 +68,12 @@ function createSurveySupplies(bot, plan, { baseline, borrowed } = createSurveyIn
       if (!travel.ok && await openDoorIfVisible(bot, ctx, plan)) {
         travel = await actions.goNear(bot, ctx, chestPos.offset(0.5, 0, 0.5), 2, { timeoutMs: PATH_TIMEOUT });
       }
-      if (!travel.ok || !actions.withinReach(bot, chestPos, 4.3)) return { ok: false, reason: 'supply_chest_unreachable' };
+      if (!travel.ok || !actions.withinReach(bot, chestPos, 4.3)) return chestFailure('supply_chest_unreachable');
     }
     const chest = bot.blockAt(chestPos);
-    if (chest?.name !== 'chest') return { ok: false, reason: 'supply_chest_changed' };
+    if (chest?.name !== 'chest') return chestFailure('supply_chest_changed');
     const window = await actions.openSurveyChest(bot, ctx, chest);
-    if (!window) return { ok: false, reason: 'supply_chest_unreachable' };
+    if (!window) return chestFailure('supply_chest_unreachable');
     // Mineflayer's transfers take multiple clicks. A cancelled grant may finish
     // the click already sent, but it must not start the next one.
     const click = bot.clickWindow;
@@ -85,7 +86,7 @@ function createSurveySupplies(bot, plan, { baseline, borrowed } = createSurveyIn
       return await use(window);
     } catch (error) {
       if (ctx.signal.aborted) throw abortError(ctx.signal);
-      return { ok: false, reason: 'supply_chest_transfer', detail: error.message };
+      return chestFailure('supply_chest_transfer', error.message);
     } finally {
       bot.clickWindow = click;
       if (bot.currentWindow === window) window.close();

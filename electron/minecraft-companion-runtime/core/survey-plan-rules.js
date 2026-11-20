@@ -31,7 +31,9 @@ const FALLING = new Set(['sand', 'red_sand', 'gravel', 'suspicious_sand', 'suspi
 const FLOOR = /(_sapling|_mushroom|_orchid|_fungus|_roots|_sign|_carpet|rail|_door|torch)$/;
 const FLOOR_SET = new Set(['redstone_wire', 'wheat', 'carrots', 'potatoes', 'beetroots', 'bamboo', 'bamboo_sapling',
   'sugar_cane', 'cactus', 'sweet_berry_bush', 'nether_wart', 'melon_stem', 'pumpkin_stem']);
-const contains = (area, { x, z }, band = 0) => x >= area.minX - band && x <= area.maxX + band && z >= area.minZ - band && z <= area.maxZ + band;
+const containsColumn = (area, { x, z }, band = 0) => x >= area.minX - band && x <= area.maxX + band
+  && z >= area.minZ - band && z <= area.maxZ + band;
+const contains = (bounds, pos) => containsColumn(bounds, pos) && pos.y >= bounds.minY && pos.y <= bounds.maxY;
 
 function stateName(block) {
   if (!block?.name) return null;
@@ -68,9 +70,10 @@ function matchesExpectState({ kind, expect: expected, target }, actual, hasNatur
   return false;
 }
 
-function leafAcrossBorder(bot, origin, area) {
-  if (!contains(area, origin)) return true;
-  if (origin.x - area.minX >= 6 && area.maxX - origin.x >= 6 && origin.z - area.minZ >= 6 && area.maxZ - origin.z >= 6) return false;
+function leafAcrossBorder(bot, origin, bounds) {
+  if (!contains(bounds, origin)) return true;
+  if (origin.x - bounds.minX >= 6 && bounds.maxX - origin.x >= 6 && origin.z - bounds.minZ >= 6 && bounds.maxZ - origin.z >= 6
+      && origin.y - bounds.minY >= 6 && bounds.maxY - origin.y >= 6) return false;
   const checked = new Set([positionKey(origin)]);
   let frontier = [origin];
   for (let step = 0; step < 6 && frontier.length; step += 1) {
@@ -82,7 +85,7 @@ function leafAcrossBorder(bot, origin, area) {
         if (checked.has(key)) continue;
         checked.add(key);
         if (!naturalLeaves(stateName(bot.blockAt(next)))) continue;
-        if (!contains(area, next)) return true;
+        if (!contains(bounds, next)) return true;
         nextFrontier.push(next);
       }
     }
@@ -106,7 +109,7 @@ function walkTree(bot, origin, area, found) {
           checked.add(key);
           const actual = stateName(bot.blockAt(next));
           if (naturalLeaves(actual) && found('leaf', next)) return true;
-          if (log(actual) && contains(area, next, 8)) queue.push(next);
+          if (log(actual) && containsColumn(area, next, 8)) queue.push(next);
         }
       }
     }

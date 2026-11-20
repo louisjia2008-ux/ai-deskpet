@@ -439,7 +439,7 @@ test('scope blocks digging, raw placement, wrong steps and night before the serv
 test('removal guard blocks attached blocks, outside trees, liquids and falling columns before digging', () => {
   const pos = new Vec3(0, 0, 0);
   const up = pos.offset(0, 1, 0);
-  const plan = { selection: { minX: 0, maxX: 12, minZ: 0, maxZ: 12 } };
+  const plan = { selection: { minX: 0, maxX: 12, minY: -8, maxY: 12, minZ: 0, maxZ: 12 } };
   const states = new Map([[pos.toString(), { name: 'dirt' }]]);
   const bot = { blockAt: (at) => states.get(at.toString()) ?? { name: 'air' } };
   const set = (at, name, props = {}) => states.set(at.toString(), { name, getProperties: () => props });
@@ -465,6 +465,20 @@ test('removal guard blocks attached blocks, outside trees, liquids and falling c
   set(pos.offset(-1, 2, 0), 'oak_leaves', { persistent: false });
   assert.equal(removalConflict(bot, plan, ops), 'survey_cross_boundary_tree');
   assert.equal(removalConflict(bot, { ...plan, clipTrees: true }, ops), null);
+});
+
+test('removal guard detects a tree crossing the unchanged vertical survey bounds', () => {
+  const top = new Vec3(10, 75, 10);
+  const bottom = new Vec3(10, 65, 10);
+  const plan = { selection: { minX: 0, maxX: 20, minY: 65, maxY: 75, minZ: 0, maxZ: 20 } };
+  const log = { name: 'oak_log', getProperties: () => ({ axis: 'y' }) };
+  const leaf = { name: 'oak_leaves', getProperties: () => ({ persistent: false }) };
+  const world = new Map([[top.toString(), leaf], [top.offset(0, 1, 0).toString(), leaf],
+    [bottom.toString(), log], [bottom.offset(0, -1, 0).toString(), log]]);
+  const bot = { blockAt: (pos) => world.get(pos.toString()) ?? { name: 'air' } };
+  assert.equal(removalConflict(bot, plan, [{ pos: top }]), 'survey_cross_boundary_tree');
+  assert.equal(removalConflict(bot, plan, [{ pos: bottom }]), 'survey_cross_boundary_tree');
+  assert.equal(removalConflict(bot, { ...plan, clipTrees: true }, [{ pos: top }, { pos: bottom }]), null);
 });
 
 test('survey ownership suppresses permanent world-editing reflexes and restores walk settings', async () => {
