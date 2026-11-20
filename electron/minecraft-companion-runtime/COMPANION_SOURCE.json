@@ -20,7 +20,7 @@
     "core/brain.js": "0eb18ddb08233a15bd7778356f029a0dab7e98a082906c3b2f681bcf867c0c1d",
     "core/farming.js": "8130f4f4976f8c775e9c0d75de0362ca591e6e4b2a2aedf79458775cf5747920",
     "core/goals/common.js": "3b717d84c737b83bd8d0a2f99f4ccf400a250b218b10ca938be7b1f9d9674b36",
-    "core/goals/gatherMaterials.js": "a76f9bb3b685ea96afa9a0f907e4025646248e9c2e7d5829100df0c031f7ce1f",
+    "core/goals/gatherMaterials.js": "cb56f3f3f7ff97bf0679f41a0e0be8dc40ca17a3cf3a7af1a9bf647127afd803",
     "index.js": "e22de785a801a6815313362eefc02fc9f13c3a563ded894f7c2df62316114411",
     "README.md": "06b48c26c362055ce745dbf3074827199e79ef8ba4f1ec9e1fba4cd952271047",
     "THIRD_PARTY_NOTICES.md": "20a95a0eba8d058245f8e7f6f6f80d85bc3d537b9d3768ff3bbcff671909ca41",

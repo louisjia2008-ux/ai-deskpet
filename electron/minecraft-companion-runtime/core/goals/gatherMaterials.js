@@ -201,7 +201,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         const away = candidates.find((p) => !bot.companionNearPlayerBuild?.(p));
         if (!away) {
           memory.barrenMines = (memory.barrenMines || 0) + 1;
-          return fail('mine_entrance_near_player_build');
+          return { ok: false, reason: 'mine_entrance_near_player_build' };
         }
         const moved = await actions.goNear(bot, ctx, away, 1, { timeoutMs: 30000 });
         if (!moved.ok) return moved;
