@@ -253,7 +253,7 @@ function shortBy(ingredients, have) {
  */
 const INTERACTIVE = /(_door|_trapdoor|_fence_gate|_bed|_button|chest|barrel|crafting_table|furnace|smoker|anvil|lever|hopper|dispenser|dropper|lectern|loom|_table|enchanting|shulker_box|stonecutter|grindstone|cartography|brewing|beacon|bell|_sign|note_block|jukebox|composter|cauldron)$/;
 
-async function placeAt(bot, ctx, position, itemMatch, { faces, stand, verify, sneak = false, alsoClear = [], passable = false } = {}) {
+async function placeAt(bot, ctx, position, itemMatch, { faces, stand, verify, sneak = false, alsoClear = [], passable = false, requireAir = false } = {}) {
   const target = v(position);
   const current = bot.blockAt(target);
   if (current && itemMatch(current.name)) return { ok: true, already: true };
@@ -261,6 +261,7 @@ async function placeAt(bot, ctx, position, itemMatch, { faces, stand, verify, sn
   // top half goes (a flower bed there makes the server refuse the bed).
   for (const cell of [target, ...alsoClear.map(v)]) {
     const block = bot.blockAt(cell);
+    if (requireAir && (!block || !AIR.has(block.name))) return fail('occupied');
     if (!block || AIR.has(block.name) || (cell !== target && itemMatch(block.name))) continue;
     if (block.boundingBox !== 'empty' || block.name === 'water' || block.name === 'lava') {
       if (cell === target) return fail('occupied');
@@ -311,6 +312,7 @@ async function placeAt(bot, ctx, position, itemMatch, { faces, stand, verify, sn
   }
   if (!ref || ref.boundingBox !== 'block') return fail('no_support');
   // Multi-block items (a bed's head) need their other cells free of creatures too.
+  if (requireAir && [target, ...alsoClear.map(v)].some((p) => !AIR.has(bot.blockAt(p)?.name))) return fail('occupied');
   if ((!passable && entityInside(bot, target)) || alsoClear.some((p) => entityInside(bot, v(p)))) return fail('cell_occupied_by_entity');
   try {
     await bot.equip(item, 'hand');

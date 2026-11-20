@@ -99,7 +99,7 @@ function planNext({ requirements, inventory, stations = {}, kb = KNOWLEDGE }) {
         if (stationStep) return stationStep;
         const fuelStep = ensureFuel(deficit, depth);
         if (fuelStep) return fuelStep;
-        return { kind: 'smelt', key, input: source.inputItem, count: deficit };
+        return { kind: 'smelt', key, input: typeof source.inputItem === 'function' ? source.inputItem(inventory) : source.inputItem, count: deficit };
       }
       if (source.kind === 'farm') {
         return { kind: 'farm', key, crop: source.crop, count: deficit };

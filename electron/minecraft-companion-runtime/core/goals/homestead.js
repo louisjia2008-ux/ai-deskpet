@@ -43,7 +43,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     explore: {},
     exploreStreak: 0,
     shortfall: {},
-    verified: { crafting_table: false, furnace: false, chest: false, bed: false },
+    verified: { crafting_table: false, furnace: false, chest: false, bed: false, guestBed: false },
     established: false,
     steps: 0,
   };
@@ -53,6 +53,13 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   const nameAt = (p) => blockAt(p)?.name || null;
   const matches = (family, name) => Boolean(name) && kb[family].match(name);
+
+  const bedKeys = ['bed', 'guestBed'];
+  const air = (name) => ['air', 'cave_air', 'void_air'].includes(name);
+  const upgradeBlocked = (position, match) => {
+    const name = nameAt(position);
+    return memory.established && name !== null && !air(name) && !match(name);
+  };
 
   function houseState() {
     const house = memory.house;
@@ -73,12 +80,21 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
       chest: check(f.chest.position, (n) => n === 'chest'),
       bed: both(check(f.bed.position, (n) => matches('bed', n)), check(f.bed.head, (n) => matches('bed', n))),
       door: both(check(f.door.position, (n) => matches('door', n)), check(f.door.upper, (n) => matches('door', n))),
-      torches: f.torches.filter((p) => nameAt(p) === 'torch').length,
+      guestBed: both(check(f.guestBed.position, (n) => matches('bed', n)),
+        check(f.guestBed.head, (n) => matches('bed', n))),
     };
+    const blocked = [];
+    if (!placed.guestBed && [f.guestBed.position, f.guestBed.head].some((p) => upgradeBlocked(p, () => false))) {
+      blocked.push({ item: 'guestBed', position: f.guestBed.position });
+    }
+    const torches = f.torches.filter((p) => check(p, (n) => n === 'torch') === false && !upgradeBlocked(p, (n) => n === 'torch'));
+    for (const p of f.torches) {
+      if (upgradeBlocked(p, (n) => n === 'torch')) blocked.push({ item: 'torch', position: p });
+    }
     // A replacement is a new station/bed: its predecessor's successful use
     // cannot verify it. An unloaded cell does not erase that observation.
     for (const key of Object.keys(memory.verified)) if (placed[key] === false) memory.verified[key] = false;
-    return { missing, placed, unknown, foundationMissing };
+    return { missing, placed, unknown, foundationMissing, blocked, torches };
   }
 
   function expectedAt(p) {
@@ -90,16 +106,17 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     if (posKey(f.crafting_table.position) === key) return (n) => n === 'crafting_table';
     if (posKey(f.furnace.position) === key) return (n) => n === 'furnace';
     if (posKey(f.chest.position) === key) return (n) => n === 'chest';
-    // A bed only counts when both halves stand where planned; otherwise it is dug up and re-placed.
-    if (posKey(f.bed.position) === key || posKey(f.bed.head) === key) {
-      return (n) => matches('bed', n) && matches('bed', nameAt(f.bed.position)) && matches('bed', nameAt(f.bed.head));
+    for (const bed of bedKeys.map((id) => f[id])) {
+      if (posKey(bed.position) === key || posKey(bed.head) === key) {
+        return (n) => matches('bed', n) || (bed === f.guestBed && memory.established);
+      }
     }
     // No door yet: at night the doorway is plugged with dirt or stone, dug out again by day.
     if (posKey(f.door.position) === key || posKey(f.door.upper) === key) {
       return (n) => (matches('door', n) && matches('door', nameAt(f.door.position)) && matches('door', nameAt(f.door.upper)))
         || (memory.doorPlug && FILLERS.has(n));
     }
-    if (f.torches.some((t) => posKey(t) === key)) return (n) => n === 'torch';
+    if (f.torches.some((t) => posKey(t) === key)) return (n) => n === 'torch' || memory.established;
     if (house.scaffold.some((p2) => posKey(p2) === key)) return (n) => memory.scaffoldActive && FILLERS.has(n);
     return () => false;
   }
@@ -138,7 +155,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     for (const [key, placed] of Object.entries(hs.placed)) {
       if (placed === false) missing.push(key);
     }
-    return { missing, unknown: hs.unknown.map(posKey),
+    return { missing, unknown: hs.unknown.map(posKey), blocked: hs.blocked,
       gear: gear.filter((key) => countKey(key, state.inventory, kb) <= 0),
       unverified: Object.keys(memory.verified).filter((key) => !memory.verified[key] && hs.placed[key] === true) };
   }
@@ -156,9 +173,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     const remaining = {};
     for (const block of hs.missing) remaining[block.family] = (remaining[block.family] || 0) + 1;
     for (const [family, count] of Object.entries(remaining)) reqs.push({ key: family, count });
-    const torches = memory.house.furniture.torches.length - hs.placed.torches;
-    if (torches > 0 && !skipped.has('torch')) reqs.push({ key: 'torch', count: torches, optional: true });
-    for (const piece of ['bed', 'chest', 'door']) if (!hs.placed[piece]) reqs.push({ key: piece, count: 1 });
+    if (hs.torches.length) reqs.push({ key: 'torch', count: hs.torches.length });
+    const beds = bedKeys.filter((id) => hs.placed[id] === false && !hs.blocked.some(({ item }) => item === id));
+    if (beds.length) reqs.push({ key: 'bed', count: beds.length });
+    for (const piece of ['chest', 'door']) if (!hs.placed[piece]) reqs.push({ key: piece, count: 1 });
     if (!hs.placed.furnace) reqs.push({ key: 'furnace', count: 1 });
     if (!hs.placed.crafting_table) reqs.push({ key: 'crafting_table', count: 1 });
     return reqs;
@@ -179,7 +197,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     const hs = houseState();
     if (hs.unknown.length || hs.missing.length || hs.foundationMissing.length || !hs.placed.door || !hs.placed.bed || !hs.placed.chest
       || !hs.placed.crafting_table || !hs.placed.furnace) return false;
-    if (!Object.values(memory.verified).every(Boolean)) return false;
+    if (hs.torches.length || (!hs.placed.guestBed && !hs.blocked.some(({ item }) => item === 'guestBed'))) return false;
+    if (Object.entries(memory.verified).some(([id, used]) => !used && !hs.blocked.some(({ item }) => item === id))) return false;
     if (!gear.every((key) => countKey(key, state.inventory, kb) > 0)) return false;
     memory.established = true;
     return true;
@@ -385,11 +404,16 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     const walls = hs.missing.filter((b) => b.phase === 'walls');
     for (const b of walls) tasks.push({ what: 'wall', position: b.position, material: 'cobblestone',
       match: (n) => matches('cobblestone', n), batch: Math.min(walls.length, BATCH) });
-    for (const torch of f.torches) if (nameAt(torch) !== 'torch') piece('torch', torch, 'torch', (n) => n === 'torch');
+    if (!walls.length && !hs.placed.door) piece('door', f.door.position, 'door', (n) => matches('door', n),
+      { faces: DOWN, verify: () => matches('door', nameAt(f.door.upper)), alsoClear: [f.door.upper] });
+    for (const torch of hs.torches) piece('torch', torch, 'torch', (n) => n === 'torch', { faces: DOWN, requireAir: memory.established });
     if (!hs.placed.chest) piece('chest', f.chest.position, 'chest', (n) => n === 'chest');
-    if (!hs.placed.bed) {
-      piece('bed', f.bed.position, 'bed', (n) => matches('bed', n),
-        { stand: f.bed.stand, verify: () => matches('bed', nameAt(f.bed.head)), alsoClear: [f.bed.head] });
+    for (const id of bedKeys) {
+      if (hs.placed[id] !== false || hs.blocked.some(({ item }) => item === id)) continue;
+      const bed = f[id];
+      piece(id, bed.position, 'bed', (n) => matches('bed', n),
+        { stand: bed.stand, verify: () => matches('bed', nameAt(bed.head)), alsoClear: [bed.head],
+          requireAir: memory.established && id === 'guestBed' });
     }
     if (!hs.placed.furnace) piece('furnace', f.furnace.position, 'furnace', (n) => n === 'furnace');
     const roof = hs.missing.filter((b) => b.phase === 'roof');
@@ -397,8 +421,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
       for (const b of roof) tasks.push({ what: 'roof', position: b.position, material: 'planks',
         match: (n) => matches('planks', n), batch: Math.min(roof.length, BATCH) });
     }
-    if (!walls.length && !roof.length && !hs.placed.door) piece('door', f.door.position, 'door', (n) => matches('door', n),
-      { faces: DOWN, verify: () => matches('door', nameAt(f.door.upper)), alsoClear: [f.door.upper] });
     return tasks;
   }
 
@@ -572,21 +594,25 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     const homeDistance = bot.entity.position.distanceTo(new Vec3(house.interiorCenter.x + 0.5, house.interiorCenter.y, house.interiorCenter.z + 0.5));
     const strandedFar = state.timeOfDay >= 12542 && homeDistance > 64;
     if (hs.placed.bed && !memory.bedRefusedAt && !strandedFar) {
-      const bed = house.furniture.bed.position;
-      const centre = new Vec3(bed.x + 0.5, bed.y, bed.z + 0.5);
-      if (bot.entity.position.distanceTo(centre) > 4) {
-        ctx.record('night', { action: 'go_home' });
-        return actions.goNear(bot, ctx, centre, 2, { timeoutMs: 60000 });
+      const available = bedKeys.filter((id) => hs.placed[id] && ![house.furniture[id].position, house.furniture[id].head]
+        .some((p) => String(blockAt(p)?.getProperties?.().occupied) === 'true'));
+      for (const id of available) {
+        const bed = house.furniture[id].position;
+        const centre = new Vec3(bed.x + 0.5, bed.y, bed.z + 0.5);
+        if (bot.entity.position.distanceTo(centre) > 4) {
+          ctx.record('night', { action: 'go_home' });
+          return actions.goNear(bot, ctx, centre, 2, { timeoutMs: 60000 });
+        }
+        if (state.timeOfDay < 12542) {
+          await sleep(2000, ctx.signal);
+          return { ok: true, waited: true };
+        }
+        ctx.record('night', { action: 'sleep', bed: id });
+        const slept = await skills.useBed(bot, ctx, { position: bed });
+        if (slept.ok) { memory.verified[id] = true; return slept; }
       }
-      if (state.timeOfDay < 12542) {
-        await sleep(2000, ctx.signal); // sleeping becomes possible at dusk
-        return { ok: true, waited: true };
-      }
-      ctx.record('night', { action: 'sleep' });
-      const slept = await skills.useBed(bot, ctx, { position: bed });
-      if (slept.ok) { memory.verified.bed = true; return slept; }
       // Monsters too close to sleep: do not keep trying all night.
-      if (!shellDone) memory.bedRefusedAt = Date.now();
+      if (!shellDone && available.length) memory.bedRefusedAt = Date.now();
     }
     if (shellDone && !strandedFar) {
       const centre = new Vec3(house.interiorCenter.x + 0.5, house.interiorCenter.y, house.interiorCenter.z + 0.5);
@@ -624,7 +650,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     return dug;
   }
 
-  async function verifyStep(ctx) {
+  async function verifyStep(ctx, hs) {
     const f = memory.house.furniture;
     if (!memory.verified.chest) {
       const store = STORABLE.find((n) => (ctx.perceive().inventory[n] || 0) > 0);
@@ -634,11 +660,15 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
       if (result.ok) memory.verified.chest = true;
       return result;
     }
-    if (!memory.verified.bed) {
-      ctx.record('verify', { furniture: 'bed' });
-      const result = await skills.useBed(bot, ctx, { position: f.bed.position });
-      // Monsters nearby refuse sleep but the respawn point is set all the same.
-      if (result.ok || result.spawnSet) memory.verified.bed = true;
+    for (const id of ['guestBed', 'bed']) {
+      if (memory.verified[id] || !hs.placed[id]) continue;
+      ctx.record('verify', { furniture: id });
+      const result = await skills.useBed(bot, ctx, { position: f[id].position });
+      if (result.ok || result.spawnSet) {
+        memory.verified[id] = true;
+        // Set the bot's own bed as spawn again after testing the guest bed.
+        if (id === 'guestBed') memory.verified.bed = false;
+      }
       if (result.spawnSet && !result.ok) return { ok: true, spawnSet: true };
       return result;
     }
@@ -725,7 +755,14 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
         memory.protect = null;
         bot.companionChest = null;
         memory.siteDigs = 0;
-        memory.houseBuilt = 0;
+        for (const conflict of hs.blocked) {
+      const key = `upgrade:${posKey(conflict.position)}`;
+      if (!skipped.has(key)) {
+        ctx.record('home_upgrade_blocked', { item: conflict.item, position: posKey(conflict.position) });
+        skipped.add(key, 'occupied');
+      }
+    }
+    memory.houseBuilt = 0;
         memory.furnace = { item: null, input: 0, output: 0 }; // whatever is smelting stays behind
         return { ok: true, abandoned: true };
       }
@@ -801,6 +838,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     // once, it was "skipped" twice a second for good.
     if (hs.placed.crafting_table && !skipped.has('crafting_table')) early.unshift({ key: 'crafting_table', count: 1, optional: true });
     if (!skipped.has('food')) early.push({ key: 'food', count: 4, optional: true });
+    if (!hs.placed.door && hs.placed.crafting_table && !countKey('door', inventory, kb)) {
+      const door = planNext({ requirements: [{ key: 'door', count: 1 }], inventory, stations, kb });
+      if (door?.kind === 'craft' && door.key === 'door') return runPlannerStep(ctx, door, null);
+    }
     const earlyStep = planNext({ requirements: early, inventory, stations, kb });
     if (earlyStep) return runPlannerStep(ctx, earlyStep, early.find((r) => r.key === earlyStep.for));
     // Raw meat is worth two to three times as much cooked: once the furnace
@@ -863,7 +904,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     const late = gear.filter((key) => !EARLY_GEAR.has(key)).map((key) => ({ key, count: 1 }));
     const lateStep = planNext({ requirements: late, inventory, stations, kb });
     if (lateStep) return runPlannerStep(ctx, lateStep, null);
-    const verify = await verifyStep(ctx);
+    const verify = await verifyStep(ctx, hs);
     if (verify) return verify;
     return { ok: true, idle: true };
   }

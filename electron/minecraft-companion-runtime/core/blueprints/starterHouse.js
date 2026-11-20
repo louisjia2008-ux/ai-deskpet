@@ -1,7 +1,7 @@
 'use strict';
 // A small, fully self-gatherable starter house: 7x7 outside, 5x5 inside,
 // cobblestone walls two high (exactly a door, and the bot is 1.8 tall), a flat
-// plank roof, two torches, and a bed, chest, crafting table and furnace inside.
+// plank roof, four torches, and two beds, a chest, crafting table and furnace inside.
 // No glass or stairs, so no smelting of sand and no orientation-sensitive
 // blocks besides bed and door.
 //
@@ -53,7 +53,8 @@ function createStarterHouse(anchor) {
     chest: { position: at(4, 0, 5), family: 'chest' },
     // The bed is placed by standing south of the foot and facing north.
     bed: { position: at(5, 0, 2), head: at(5, 0, 1), stand: at(5, 0, 4), family: 'bed' },
-    torches: [at(1, 0, 1), at(5, 0, 5)],
+    guestBed: { position: at(4, 0, 2), head: at(4, 0, 1), stand: at(4, 0, 4), family: 'bed' },
+    torches: [at(1, 0, 1), at(5, 0, 5), at(2, 0, -1), at(4, 0, -1)],
     door: { position: at(door.dx, 0, door.dz), upper: at(door.dx, 1, door.dz), family: 'door' },
   };
 

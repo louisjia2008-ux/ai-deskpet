@@ -120,9 +120,13 @@ const KNOWLEDGE = {
     tool: true,
     sources: [{ kind: 'craft', yields: 1, needs: { iron_ingot: 1, planks: 6 }, table: true, pick: () => 'shield' }],
   },
+  torch_fuel: {
+    match: exact('coal', 'charcoal'),
+    sources: [{ kind: 'smelt', input: 'log', inputItem: (inv) => byMost(inv, Object.keys(inv).filter(KNOWLEDGE.log.match)) }],
+  },
   torch: {
     match: exact('torch'),
-    sources: [{ kind: 'craft', yields: 4, needs: { coal: 1, stick: 1 }, table: false, pick: () => 'torch' }],
+    sources: [{ kind: 'craft', yields: 4, needs: { torch_fuel: 1, stick: 1 }, table: false, pick: () => 'torch' }],
   },
   wool: {
     match: (n) => n.endsWith('_wool') && COLORS.some((c) => n === `${c}_wool`),
