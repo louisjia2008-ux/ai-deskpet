@@ -49,7 +49,9 @@ function stepGroups(plan) {
     for (const entry of step) consumed.add(entry);
     const phase = op.phase;
     const terrain = phase === 'terrain' ? (op.target === 'minecraft:air' ? 'cut' : 'fill') : phase;
-    const level = terrain === 'cut' || phase === 'remove_scaffold' ? -op.pos.y : terrain === 'fill' ? op.pos.y : 0;
+    let level = 0;
+    if (terrain === 'cut' || phase === 'remove_scaffold') level = -op.pos.y;
+    if (terrain === 'fill' || phase === 'walls' || phase === 'scaffold' || phase === 'upper_walls') level = op.pos.y;
     const active = groups.at(-1);
     if (!active || active.key !== terrain) groups.push({ key: terrain, phase, steps: [] });
     groups.at(-1).steps.push({ step, level });
@@ -309,6 +311,9 @@ function createSurveyPlanGoal({ bot, plan, grant, ownerName }) {
             completed += result.step.length;
             grant.progress(completed);
             if (op.target === 'minecraft:air') await duringDay(ctx, (stepCtx) => supplies.collect(stepCtx, op));
+            if (placementSpec(op.target).id.endsWith('_door')) {
+              await duringDay(ctx, (stepCtx) => actions.openSurveyDoor(bot, stepCtx, bot.blockAt(vec(op.pos))));
+            }
           }
         }
         for (;;) {

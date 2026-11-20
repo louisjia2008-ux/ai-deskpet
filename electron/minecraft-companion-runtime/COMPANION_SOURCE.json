@@ -34,8 +34,8 @@
     "core/survey-plan-receiver.js": "d34d7c9cb73882f0d9745e7bcd1277fcbdaa33d10f5a59f5db118b073bdff736",
     "core/survey-plan-actions.js": "779029ce767cb63c8a18b622b947d89e41fb9108c6eed8df3f25ad2af369198f",
     "core/survey-plan-rules.js": "05e220f72fa09740ae59d9bfab1164636f1b29e75610e3d1be2a8998a7e8583f",
-    "core/goals/surveyPlan.js": "a26143c319d17af8fb4086c28c4aec13f8540ae9384e58ca70afc61aa53a47fd",
-    "core/survey-placement.js": "71cd9bd9109e8b5c5ec5e21139a3058212f041c67bf8ad8da15c5ee55a8f82c0",
+    "core/goals/surveyPlan.js": "f7291bf96ffee8faa29edda5559087ce9341fc05a4f9dc3dab106c67dd00983f",
+    "core/survey-placement.js": "c3fc56f02348c6a652125ba8579ee4f040ab775f82f6e29b935fc581b2403317",
     "core/survey-supplies.js": "9c136ad5a02720a81a14248bf39cd94fc5e50cdb25aa146168534fa76f329f44"
   },
   "files": {

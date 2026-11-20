@@ -206,15 +206,21 @@ async function closePlanDoor(bot, ctx, plan, onFailure) {
 
 async function walkToStations(bot, ctx, plan, stations, usable, onFailure) {
   const remaining = [...stations];
-  for (let attempt = 0; attempt < 3 && remaining.length; attempt++) {
+  const deadline = Date.now() + 18000;
+  for (let attempt = 0; attempt < 8 && remaining.length && Date.now() < deadline; attempt++) {
     const goal = new goals.GoalCompositeAny(remaining.map((p) => new goals.GoalBlock(p.x, p.y, p.z)));
     const moved = await actions.goTo(bot, ctx, goal, {
-      timeoutMs: 12000, retryNoProgress: false,
+      timeoutMs: Math.min(12000, Math.max(1, deadline - Date.now())), retryNoProgress: false,
       arrived: (at) => goal.isEnd(at.floored()) || goal.isEnd(at.offset(0, 0.51, 0).floored()) || Boolean(usable()),
     });
     if (await waitUntil(() => bot.entity.onGround, { signal: ctx.signal, timeoutMs: 350 })) {
       const hit = usable();
       if (hit) return hit;
+      if (moved.ok) {
+        await actions.recentre(bot, ctx);
+        const centered = usable();
+        if (centered) return centered;
+      }
     }
     const here = bot.entity.position;
     onFailure(moved.ok ? 'station_unusable' : moved.reason, {
