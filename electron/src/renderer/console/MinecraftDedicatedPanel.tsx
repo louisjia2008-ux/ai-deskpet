@@ -175,7 +175,8 @@ function ReadState({ failed, refresh, t }: { failed: boolean; refresh(): Promise
     : <p role="status">{t(copy.loading)}</p>;
 }
 
-type Action = (submit: () => Promise<unknown>) => void;
+type ActionKind = 'launch' | 'stop' | 'change';
+type Action = (submit: () => Promise<unknown>, kind?: ActionKind) => void;
 
 function PlayerNames({ api, ownerName, botName, disabled, run, t }: {
   api: DedicatedAPI; ownerName: string; botName: string; disabled: boolean; run: Action; t: Translate;
@@ -215,27 +216,31 @@ function ModelLimit({ api, limit, disabled, run, t }: { api: DedicatedAPI; limit
 export function MinecraftDedicatedSettings({ api, locale }: { api: DedicatedAPI; locale: ResolvedLocale }): JSX.Element {
   const t = translate(locale);
   const { state, failed, refresh } = useDedicatedState(api);
-  const [busy, setBusy] = useState(false);
-  const pending = useRef(false);
+  const [busy, setBusy] = useState<ActionKind | null>(null);
+  const pending = useRef<{ kind: ActionKind | null; id: number }>({ kind: null, id: 0 });
   const [commandError, setCommandError] = useState<string | null>(null);
-  const run: Action = submit => {
-    if (pending.current) return;
-    pending.current = true;
-    setBusy(true);
+  const run: Action = (submit, kind = 'change') => {
+    if (pending.current.kind && !(pending.current.kind === 'launch' && kind === 'stop')) return;
+    const id = pending.current.id + 1;
+    pending.current = { kind, id };
+    setBusy(kind);
     setCommandError(null);
     void submit().catch(error => {
+      if (pending.current.id !== id) return;
       const reason = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/u, '') : '';
       setCommandError(reason || t(copy.commandError));
     }).finally(() => {
-      pending.current = false;
-      setBusy(false);
+      if (pending.current.id !== id) return;
+      pending.current.kind = null;
+      setBusy(null);
       void refresh();
     });
   };
   if (!state) return <div><h2>Minecraft</h2><ReadState failed={failed} refresh={refresh} t={t} /></div>;
   const { status, settings, ownerName, botName, versions, error, eulaAcceptedAt } = state;
   const unpackaged = status === 'unpackaged';
-  const disabled = busy || unpackaged;
+  const disabled = busy !== null || unpackaged;
+  const stopDisabled = unpackaged || (busy !== null && busy !== 'launch');
   const live = status === 'running' || status === 'starting' || status === 'restarting';
   const ready = settings.enabled && eulaAcceptedAt !== null;
   return <section className="dedicated-settings" aria-labelledby="dedicated-settings-title">
@@ -246,18 +251,21 @@ export function MinecraftDedicatedSettings({ api, locale }: { api: DedicatedAPI;
     <section className="dedicated-settings-group">
       <label className="dedicated-toggle switch-row"><span>{t(copy.world)}<small id="dedicated-world-help">{t(copy.autoStart)}</small></span>
         <input type="checkbox" role="switch" aria-label={t(copy.world)} aria-describedby="dedicated-world-help"
-          checked={settings.enabled} disabled={disabled} onChange={event => run(() => api.updateSettings({ enabled: event.target.checked }))} />
+          checked={settings.enabled} disabled={settings.enabled ? stopDisabled : disabled} onChange={event => {
+            const enabled = event.target.checked;
+            run(() => api.updateSettings({ enabled }), enabled ? 'launch' : 'stop');
+          }} />
       </label>
       <div className="button-row dedicated-actions">
-        <button disabled={disabled || !ready || live || status === 'stopping'} onClick={() => run(() => api.start())}>{t(copy.start)}</button>
-        <button className="secondary" disabled={disabled || !live} onClick={() => run(() => api.stop())}>{t(copy.stop)}</button>
-        <button className="secondary" disabled={disabled || !ready || status !== 'running'} onClick={() => run(() => api.restart())}>{t(copy.restart)}</button>
+        <button type="button" disabled={disabled || !ready || live || status === 'stopping'} onClick={() => run(() => api.start(), 'launch')}>{t(copy.start)}</button>
+        <button type="button" className="secondary" disabled={stopDisabled || !live} onClick={() => run(() => api.stop(), 'stop')}>{t(copy.stop)}</button>
+        <button type="button" className="secondary" disabled={disabled || !ready || status !== 'running'} onClick={() => run(() => api.restart(), 'launch')}>{t(copy.restart)}</button>
       </div>
       <div className="dedicated-eula">
         <a href="https://www.minecraft.net/en-us/eula" target="_blank" rel="noreferrer">{t(copy.eula)}</a>
         {eulaAcceptedAt ? <p className="dedicated-note">{t(copy.agreedAt)} · {dateLabel(eulaAcceptedAt, locale)}</p> : <>
           <p className="dedicated-note">{t(copy.eulaPending)}</p>
-          <button className="secondary" disabled={disabled} onClick={() => run(() => api.acceptEula())}>{t(copy.agree)}</button>
+          <button type="button" className="secondary" disabled={disabled} onClick={() => run(() => api.acceptEula(), 'launch')}>{t(copy.agree)}</button>
         </>}
       </div>
       <div className="dedicated-address">
@@ -286,8 +294,8 @@ export function MinecraftDedicatedSettings({ api, locale }: { api: DedicatedAPI;
       <h3>{t(copy.backups)}</h3>
       <p className="dedicated-note">{t(copy.backupHint)} {t(copy.lastBackup)} · {dateLabel(state.lastBackupAt, locale)}</p>
       <div className="button-row dedicated-actions">
-        <button className="secondary" disabled={disabled || !eulaAcceptedAt || status === 'starting' || status === 'restarting' || status === 'stopping'} onClick={() => run(() => api.backup())}>{t(copy.backupNow)}</button>
-        <button className="secondary" disabled={disabled} onClick={() => run(() => api.openBackups())}>{t(copy.openBackups)}</button>
+        <button type="button" className="secondary" disabled={disabled || !eulaAcceptedAt || status === 'starting' || status === 'restarting' || status === 'stopping'} onClick={() => run(() => api.backup())}>{t(copy.backupNow)}</button>
+        <button type="button" className="secondary" disabled={disabled} onClick={() => run(() => api.openBackups())}>{t(copy.openBackups)}</button>
       </div>
     </section>
     <details className="dedicated-files">

@@ -80,6 +80,31 @@ describe('Minecraft dedicated world controls', () => {
     expect(screen.getByRole('button', { name: '同意 EULA' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '启动' })).toBeDisabled();
   });
+
+  it('can stop during startup without exposing a stale startup error', async () => {
+    const { api, publish } = fixture({ status: 'stopped', eulaAcceptedAt: acceptedAt });
+    let failStartup: (error: Error) => void = () => undefined;
+    const startup = new Promise<MinecraftDedicatedSnapshot>((_resolve, reject) => { failStartup = reject; });
+    api.start.mockImplementation(async () => {
+      publish({ status: 'starting' });
+      return startup;
+    });
+    api.stop.mockImplementation(async () => {
+      failStartup(new Error('The start operation was interrupted'));
+      return publish({ status: 'stopped' });
+    });
+    render(<MinecraftDedicatedSettings api={api} locale="en" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }));
+    expect(await screen.findByText('Starting')).toBeVisible();
+    const stop = screen.getByRole('button', { name: 'Stop' });
+    expect(stop).toBeEnabled();
+    expect(screen.getByRole('switch', { name: 'Local Minecraft world' })).toBeEnabled();
+    fireEvent.click(stop);
+    expect(await screen.findByText('Stopped')).toBeVisible();
+    expect(api.stop).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });
 
 describe('Minecraft dedicated world status', () => {
