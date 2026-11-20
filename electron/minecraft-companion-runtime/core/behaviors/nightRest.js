@@ -84,6 +84,13 @@ function createNightRest({ bot, home, actions = defaultActions, skills = default
         ctx.record('night_rest', { action: 'sleep' });
         const slept = await skills.useBed(bot, ctx, { position: spot.bed });
         if (slept.ok) return slept;
+        // The owner may have occupied the preferred bed while we approached.
+        const otherBed = where()?.bed;
+        if (otherBed && !bed.equals(new Vec3(otherBed.x + 0.5, otherBed.y, otherBed.z + 0.5))) {
+          ctx.record('night_rest', { action: 'sleep', fallback: true });
+          const other = await skills.useBed(bot, ctx, { position: otherBed });
+          if (other.ok) return other;
+        }
         // Monsters nearby: wait indoors for a while, then try the bed again.
         bedRefusedUntil = now() + retryBedMs;
       }

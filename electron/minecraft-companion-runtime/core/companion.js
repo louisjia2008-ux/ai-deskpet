@@ -83,13 +83,14 @@ function nightShelter(bot, { house, goal, hunt, now = Date.now() }) {
   // of a house it never built, an idle bot was blown up by a creeper, then
   // killed by a phantom.
   if (!house) return { bed: null, centre: null };
-  const primary = house.furniture.bed;
-  const occupied = (p) => String(bot.blockAt(new Vec3(p.x, p.y, p.z))?.getProperties?.().occupied) === 'true';
-  const bed = [primary, house.furniture.guestBed].find((candidate) => candidate && !occupied(candidate.head || candidate.position))?.position;
-  if (!bed) return { bed: null, centre: house.interiorCenter };
-  const block = bot.blockAt(new Vec3(bed.x, bed.y, bed.z));
-  // Out of sight means far away (it digs in there); seen and gone means sleep without it.
-  return { bed: !block || block.name.endsWith('_bed') ? bed : null, centre: house.interiorCenter };
+  const available = (p) => {
+    const block = bot.blockAt(new Vec3(p.x, p.y, p.z));
+    // Out of sight means far away; a loaded cell must contain a free bed.
+    return !block || (block.name.endsWith('_bed') && String(block.getProperties?.().occupied) !== 'true');
+  };
+  const bed = [house.furniture.bed, house.furniture.guestBed].find((candidate) =>
+    candidate && available(candidate.position) && (!candidate.head || available(candidate.head)))?.position;
+  return { bed: bed ?? null, centre: house.interiorCenter };
 }
 
 // Never build scaffolding, pillar up or parkour on the surface: the bot must not leave
@@ -219,6 +220,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     activeGoal: () => brain?.status().goal?.name });
   const behaviors = [...createSurvivalBehaviors({ bot, spare: (entity) => spare(entity),
     feeding: () => FEEDING_GOALS.has(brain?.status().goal?.name),
+    // The departure gate is 18; the ordinary survival threshold is 14.
+    // Otherwise a healthy bot with food in hand can wait forever at 15–17.
+    thresholds: autonomy ? { eatFood: 17, provisionInjured: 18 } : {},
     activeGoal: () => brain?.status().goal?.name,
     surveyArea: () => survey?.area ?? null,
     suppressDeathDrops: () => surveyDeathEpoch === bodyLifeEpoch,

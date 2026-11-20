@@ -49,6 +49,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
   };
   const blacklist = createBlacklist({ ttlMs: 120000 });
   const skipped = createBlacklist({ ttlMs: 300000 });
+  const reportedUpgradeBlocks = new Map();
 
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   const nameAt = (p) => blockAt(p)?.name || null;
@@ -202,12 +203,18 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
   function complete(state) {
     if (!memory.house) return false;
     const hs = houseState();
-    if (hs.unknown.length || hs.missing.length || hs.foundationMissing.length || !hs.placed.door || !hs.placed.bed || !hs.placed.chest
+    if (!gear.every((key) => countKey(key, state.inventory, kb) > 0)) return false;
+    // An expedition can unload home without damaging it. Only trust this
+    // connection's verification: a loaded legacy home still needs its upgrade.
+    if (hs.unknown.length) return memory.validated === true && !hs.missing.length && !hs.foundationMissing.length
+      && !Object.values(hs.placed).includes(false) && !hs.torches.length;
+    if (hs.missing.length || hs.foundationMissing.length || !hs.placed.door || !hs.placed.bed || !hs.placed.chest
       || !hs.placed.crafting_table || !hs.placed.furnace) return false;
     if (hs.torches.length || (!hs.placed.guestBed && !hs.blocked.some(({ item }) => item === 'guestBed'))) return false;
+    if (hs.blocked.some(({ position, reason }) => reportedUpgradeBlocks.get(posKey(position)) !== reason)) return false;
     if (Object.entries(memory.verified).some(([id, used]) => !used && !hs.blocked.some(({ item }) => item === id))) return false;
-    if (!gear.every((key) => countKey(key, state.inventory, kb) > 0)) return false;
     memory.established = true;
+    memory.validated = true;
     return true;
   }
 
@@ -762,14 +769,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
         memory.protect = null;
         bot.companionChest = null;
         memory.siteDigs = 0;
-        for (const conflict of hs.blocked) {
-      const key = `upgrade:${posKey(conflict.position)}`;
-      if (!skipped.has(key)) {
-        ctx.record('home_upgrade_blocked', { ...conflict, position: posKey(conflict.position) });
-        skipped.add(key, 'occupied');
-      }
-    }
-    memory.houseBuilt = 0;
+        memory.houseBuilt = 0;
         memory.furnace = { item: null, input: 0, output: 0 }; // whatever is smelting stays behind
         return { ok: true, abandoned: true };
       }
@@ -795,6 +795,14 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     if (site) return site;
 
     const hs = houseState();
+    const blockedNow = new Set();
+    for (const conflict of hs.blocked) {
+      const position = posKey(conflict.position);
+      blockedNow.add(position);
+      if (reportedUpgradeBlocks.get(position) !== conflict.reason) ctx.record('home_upgrade_blocked', { ...conflict, position });
+      reportedUpgradeBlocks.set(position, conflict.reason);
+    }
+    for (const position of reportedUpgradeBlocks.keys()) if (!blockedNow.has(position)) reportedUpgradeBlocks.delete(position);
     memory.houseBuilt = memory.house.blocks.length - hs.missing.length;
     memory.houseBed = hs.placed.bed;
     // A full bag is emptied into the house chest rather than onto the ground.

@@ -35,7 +35,7 @@ const HUNT_HEALTH = 15;
 const HUNT_DY_WITHER = 12;
 
 function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trades = 10, roam = 400, skullTries = 0,
-  skills = defaultSkills, actions = defaultActions, canEnter = () => true } = {}) {
+  skills = defaultSkills, actions = defaultActions, returnOnRespawn = false, canEnter = () => true } = {}) {
   for (const [name, value] of Object.entries({ blazeRods, witherSkulls, trades, skullTries })) {
     if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${name} must be a non-negative integer`);
   }
@@ -77,6 +77,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
   // there is the same, and a bot died five times running heading for one.
   const deadly = (bot.companionDeadlyLookouts = bot.companionDeadlyLookouts || new Set());
   const markDeadly = () => {
+    if (returnOnRespawn && nether.inNether(bot)) memory.retreatAfterDeath = true;
     if (memory.heading) deadly.add(memory.heading);
     memory.heading = null;
   };
@@ -1013,7 +1014,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
     noProgressLimit: 30,
     maxRecoveries: 4,
     memory,
-    isDone: (state) => allDone(state) && !nether.inNether(bot),
+    isDone: (state) => (allDone(state) || memory.retreatAfterDeath) && !nether.inNether(bot),
     // Portal (0-15), in the nether (+5), each structure found (+20) and
     // entered (+10), then every rod, skull and trade.
     progress(state) {
@@ -1034,12 +1035,12 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
       await wearArmour(ctx);
       const state = ctx.perceive();
       if (nether.inNether(bot)) {
-        const result = await netherStep(ctx, state);
+        const result = await (memory.retreatAfterDeath ? headHome(ctx) : netherStep(ctx, state));
         noteStep(result);
         return result;
       }
       trip.leaveNetherMode();
-      if (allDone(state)) return { ok: true };
+      if (allDone(state) || memory.retreatAfterDeath) return { ok: true };
       // Respawned without it: going back through to the fortress only dies again.
       const lost = lostKit(state);
       if (lost) return fail(lost);

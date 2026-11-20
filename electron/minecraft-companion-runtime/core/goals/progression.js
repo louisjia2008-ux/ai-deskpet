@@ -173,6 +173,7 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
       (m) => outfit(m, netherKit()), { maintenance: true }),
     card('nether_fortress', 4, (s, m) => inOverworld() && range(m) >= 4 && blaze(s, m) < 14 && ready(s, m, netherKit()),
       (m) => createNetherExpeditionGoal({ bot, blazeRods: Math.max(1, Math.ceil((14 - (chestCounts(m).blaze_powder || 0)) / 2) - (chestCounts(m).blaze_rod || 0)), witherSkulls: 0, trades: 0,
+        returnOnRespawn: true,
         canEnter: (s) => fit(s) && holds(s, [...IRON, ...DIAMOND, key('food', 12), key('cobblestone', 48)]) }),
       { expedition: true, budgetStage: 4 }),
     card('nether_return', 0, () => here() === 'the_nether', () => createNetherExpeditionGoal({ bot, blazeRods: 0, witherSkulls: 0, trades: 0 }),
@@ -193,8 +194,8 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
         return createEnterEndGoal({ bot, canEnter: canEnterEnd });
       }, { expedition: true, budgetStage: 5 }),
     card('dragon_return', 6, () => here() === 'the_end',
-      () => createEndJourneyGoal({ bot, withCity: false, home: true }), { score: 100, expedition: true, safeReturn: true, budgetStage: 6 }),
-    card('diamond_armor', 7, (s, m) => inOverworld() && range(m) === 6 && !holds(s, ARMOR.map((piece) => key(`diamond_${piece}`))),
+      () => createEndJourneyGoal({ bot, withCity: false, home: true, alreadyInside: true }), { score: 100, expedition: true, safeReturn: true, budgetStage: 6 }),
+    card('diamond_armor', 6, (s, m) => inOverworld() && milestones(m).dragon && !holds(s, ARMOR.map((piece) => key(`diamond_${piece}`))),
       (m) => outfit(m, ARMOR.map((piece) => key(`diamond_${piece}`))), { score: 45, expedition: true }),
   ];
   return { cards, stageOf, range, litEnd };

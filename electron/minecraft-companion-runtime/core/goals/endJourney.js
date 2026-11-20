@@ -56,9 +56,11 @@ async function exitStep(bot, ctx, actions) {
   return end.inEnd(bot) ? { ok: false, reason: 'exit_portal_missed' } : { ok: true };
 }
 
-function createEndJourneyGoal({ bot, chests = 2, withCity = true, home = false, actions = defaultActions } = {}) {
+function createEndJourneyGoal({ bot, chests = 2, withCity = true, home = false, alreadyInside = false, actions = defaultActions } = {}) {
   const stages = {
-    portal: createEnterEndGoal({ bot }),
+    // Autonomous entry (including re-entry after death) belongs to the
+    // director's gated stronghold card, not to the fight/return goal.
+    portal: alreadyInside ? null : createEnterEndGoal({ bot }),
     dragon: createEndDragonGoal({ bot }),
     city: withCity ? createEndCityGoal({ bot, chests }) : null,
   };
@@ -67,6 +69,7 @@ function createEndJourneyGoal({ bot, chests = 2, withCity = true, home = false, 
   const cityDone = (state) => !stages.city || stages.city.isDone(state);
   // The dragon's kill is remembered once seen: back home its portal is out of sight.
   const allDone = (state) => {
+    if (alreadyInside && !end.inEnd(bot)) return true;
     if (dragonDone() && cityDone(state)) memory.finished = true;
     return memory.finished && (!home || !end.inEnd(bot));
   };
@@ -91,7 +94,7 @@ function createEndJourneyGoal({ bot, chests = 2, withCity = true, home = false, 
       // Once through, the portal stage stays counted: a death sends the bot
       // back to the overworld but undoes nothing out there.
       if (end.inEnd(bot)) memory.reachedEnd = true;
-      const portal = memory.reachedEnd || memory.finished ? 100000 : stages.portal.progress(state);
+      const portal = memory.reachedEnd || memory.finished || alreadyInside ? 100000 : stages.portal.progress(state);
       const dragon = memory.finished || dragonDone() ? 2000 : stages.dragon.progress(state);
       const city = stages.city ? stages.city.progress(state) : 0;
       return portal + dragon * 10 + city * 100 + (memory.finished && !end.inEnd(bot) ? 1 : 0);
