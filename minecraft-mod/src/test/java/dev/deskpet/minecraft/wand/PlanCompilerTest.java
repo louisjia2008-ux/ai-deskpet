@@ -79,6 +79,19 @@ class PlanCompilerTest {
     }
 
     @Test
+    void onlyNaturalGrassGrowthOnPlacedSoilBelowGradeIsAnAcceptedFinalTarget() {
+        var plan = new JsonObject();
+        plan.addProperty("groundY", 64);
+        var fill = new BlockPos(3, 63, 3);
+        var grass = Blocks.GRASS_BLOCK.getDefaultState();
+        assertTrue(PlanCompiler.matchesFinalTarget(plan, fill, "minecraft:dirt", grass, true));
+        assertFalse(PlanCompiler.matchesFinalTarget(plan, fill, "minecraft:dirt", grass, false));
+        assertFalse(PlanCompiler.matchesFinalTarget(plan, fill.up(), "minecraft:dirt", grass, true));
+        assertFalse(PlanCompiler.matchesFinalTarget(plan, fill, "minecraft:oak_planks", grass, true));
+        assertFalse(PlanCompiler.matchesFinalTarget(plan, fill, "minecraft:dirt", Blocks.AIR.getDefaultState(), true));
+    }
+
+    @Test
     void protectedPlacementConflictsAndIsNeverScheduled() {
         BlockPos chest = new BlockPos(6, 64, 6);
         var world = new Ground().put(chest, Blocks.CHEST.getDefaultState())

@@ -24,6 +24,7 @@ import net.minecraft.util.BlockRotation;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
+import net.minecraft.world.GameRules;
 import net.minecraft.world.Heightmap;
 
 import java.nio.charset.StandardCharsets;
@@ -74,6 +75,7 @@ public final class PlanCompiler {
         int minY();
         int maxY();
         Map<String, Integer> materials(BlockPos pos);
+        default boolean grassCanSpread() { return false; }
     }
 
     record Area(int minX, int maxX, int minZ, int maxZ) {
@@ -190,6 +192,11 @@ public final class PlanCompiler {
             @Override
             public int maxY() {
                 return world.getTopYInclusive();
+            }
+
+            @Override
+            public boolean grassCanSpread() {
+                return world.getGameRules().getInt(GameRules.RANDOM_TICK_SPEED) > 0;
             }
 
             @Override
@@ -480,7 +487,9 @@ public final class PlanCompiler {
             BlockPos pos = target.getKey();
             if (!next.containsKey(pos)) {
                 BlockState actual = world.state(pos);
-                if (!matchesState(target.getValue(), actual)) return mismatch(pos, target.getValue(), actual);
+                if (!matchesFinalTarget(document, pos, target.getValue(), actual, world.grassCanSpread())) {
+                    return mismatch(pos, target.getValue(), actual);
+                }
             }
         }
         for (var entry : protectedBaseline.entrySet()) {
@@ -550,6 +559,15 @@ public final class PlanCompiler {
 
     public static boolean matchesState(String expected, BlockState current) {
         return matchesState(expected, stateName(current));
+    }
+
+    public static boolean matchesFinalTarget(JsonObject plan, BlockPos pos, String expected, BlockState current,
+                                             boolean grassCanSpread) {
+        if (matchesState(expected, current)) return true;
+        // Only the final check accepts normal grass growth on already placed
+        // soil below grade. The authorized write itself must still place dirt.
+        return grassCanSpread && expected.equals("minecraft:dirt") && current.isOf(Blocks.GRASS_BLOCK)
+            && plan.has("groundY") && pos.getY() < plan.get("groundY").getAsInt();
     }
 
     public static boolean matchesState(String expected, String current) {
@@ -663,7 +681,7 @@ public final class PlanCompiler {
         build.sort(Comparator.comparingInt((Operation op) -> {
             int index = phases.indexOf(op.phase());
             return index == -1 ? phases.size() : index;
-        }).thenComparingInt(op -> op.pos().getY())
+        }).thenComparingInt(op -> op.phase().equals("remove_scaffold") ? -op.pos().getY() : op.pos().getY())
             .thenComparingInt(op -> template.buildOrder().equals("roof_outside_in") && op.phase().equals("roof")
                 ? ring(placement.footprint(), op.pos()) : 0));
         ops.addAll(build);
@@ -755,7 +773,6 @@ public final class PlanCompiler {
     private static JsonObject materials(List<Operation> ops, Map<String, Integer> supply, Placement placement) {
         Map<String, Integer> required = new TreeMap<>();
         Map<String, Integer> excavated = new TreeMap<>();
-        boolean scaffold = false;
         for (Operation op : ops) {
             if (op.kind().equals("cut") || op.kind().equals("clear")) {
                 // Guaranteed simple drops only. Fortune, Silk Touch, tools and loot remain relevant at execution.
@@ -771,7 +788,7 @@ public final class PlanCompiler {
                 continue;
             }
             if (op.kind().equals("scaffold")) {
-                scaffold |= !op.target().isAir();
+                if (!op.target().isAir()) increment(required, "minecraft:dirt");
                 continue;
             }
             String id = TerrainRules.id(op.target());
@@ -788,9 +805,6 @@ public final class PlanCompiler {
             } else {
                 increment(required, Registries.ITEM.getId(op.target().getBlock().asItem()).toString());
             }
-        }
-        if (scaffold) {
-            increment(required, "minecraft:dirt");
         }
         if (placement.template().farm() && !ops.isEmpty()) {
             increment(required, "minecraft:wooden_hoe");

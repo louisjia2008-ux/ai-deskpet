@@ -19,6 +19,7 @@ import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.GameRules;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -781,7 +782,10 @@ public final class PlanService {
             revoke(server, store, plan, FAILED, "outside_authorized_operations", true);
         } else {
             boolean protectedMatches = matches(world, plan.protectedBaseline);
-            boolean targetsMatch = matches(world, plan.finalTargets);
+            boolean grassCanSpread = world.getGameRules().getInt(GameRules.RANDOM_TICK_SPEED) > 0;
+            boolean targetsMatch = plan.finalTargets.entrySet().stream().allMatch(target ->
+                PlanCompiler.matchesFinalTarget(plan.document, target.getKey(), target.getValue(),
+                    world.getBlockState(target.getKey()), grassCanSpread));
             if (protectedMatches && targetsMatch) {
                 revoke(server, store, plan, COMPLETED, "", true);
                 return;
