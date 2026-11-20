@@ -10,12 +10,13 @@ const { runtimeRequire, serverDir, VERSION, CHANNEL, Vec3, record, until, server
 const { BUTTON, P, Y, coords, move, equip, setupArena, snapshot, blockClick, openMenu, click,
   readPlans, commandAssert, describeSlot } = require('./wand-session.cjs');
 const { inventories, verifyBlocks, verifyMaterials } = require('./m3-verification.cjs');
+const { SURVIVAL_SCENARIOS, prepareSurvival, exerciseSurvival } = require('./m3-survival.cjs');
 
 const TEMPLATES = ['starter_house', 'porch_cabin', 'two_storey_house', 'wheat_field'];
 const TEMPLATE = { starter: 'starter_house', wheat: 'wheat_field', porch: 'porch_cabin', two: 'two_storey_house' };
 const DIRECTIONS = ['north', 'east', 'south', 'west'];
 const SCENARIOS = ['foundation', 'selection', 'materials', 'night', 'blocked', 'cancel', 'disconnect', 'disconnect_stock',
-  'natural', 'chest_full', 'stone_fill'];
+  'natural', 'chest_full', 'stone_fill', ...SURVIVAL_SCENARIOS];
 const MAX_RUN_MS = 15 * 60_000;
 const MISSING_ID = 'minecraft:oak_door';
 const STONE_HOE = 'minecraft:stone_hoe';
@@ -205,6 +206,9 @@ async function verifyWaiting(env, kind, label) {
 
 async function exerciseScenario(env) {
   const { scenario, id, rcon, owner, robot, connect, started, take, chest, evidence } = env;
+  if (SURVIVAL_SCENARIOS.includes(scenario)) {
+    return exerciseSurvival(env, { waitPlan, verifyWaiting, planState, progress });
+  }
   const replenished = {};
   if (['night', 'disconnect'].includes(scenario)) {
     await waitPlan(rcon, id, (state) => state.status === 'running' && progress(state) >= 2, 'real server-side progress');
@@ -324,13 +328,25 @@ async function main() {
   const settings = await serverSettings();
   const rcon = await createRcon(settings);
   const owner = newBot(settings, 'Owner');
-  const evidence = { coreEvents: [], revokeAcks: [], digStatuses: [], standFailures: 0 };
+  const evidence = { coreEvents: [], revokeAcks: [], digStatuses: [], deaths: [], standFailures: 0 };
   let robot;
   const host = runtimeRequire('./core-host').createCoreHost({
     dataDir: await fs.mkdtemp(path.join(serverDir, 'm3-core-')),
     surveyPlanMode: 'execute',
     createBot(options) {
       const bot = runtimeRequire('mineflayer').createBot(options);
+      if (SURVIVAL_SCENARIOS.includes(scenario)) {
+        bot.on('death', () => {
+          const death = { position: bot.entity.position.clone() };
+          evidence.deaths.push(death);
+          record('m3-survival-player-death', death);
+        });
+        bot.on('messagestr', (message) => {
+          if (message.startsWith('DeskPetBot ') && /died|slain|shot|fell|burn|kill|blow/i.test(message)) {
+            record('m3-survival-death-message', { message });
+          }
+        });
+      }
       const client = bot._client;
       const write = client.write.bind(client);
       client.write = (name, payload) => {
@@ -389,6 +405,7 @@ async function main() {
     const bounds = snapshotBounds(plan.selection);
     const take = (stage) => readSnapshot(rcon, settings, prefix, stage, bounds);
     const before = await take('before');
+    const foodBefore = await prepareSurvival(rcon, scenario);
     const inventoryBefore = await inventories(rcon, scenarioSite.chest);
     const confirmedAt = performance.now();
     await click(owner.bot, BUTTON.confirm);
@@ -397,7 +414,7 @@ async function main() {
         await waitPlan(rcon, id, (entry) => ['running', 'completed'].includes(entry.status), 'Mod accepted a real Core grant', 15_000);
       }
       const scenarioResult = await exerciseScenario({ scenario, id, plan, before, rcon, owner: owner.bot, robot,
-        connect, started: confirmedAt, take, chest: scenarioSite.chest, evidence });
+        connect, started: confirmedAt, take, chest: scenarioSite.chest, evidence, foodBefore });
       if (scenarioResult.done) return;
       const state = await waitPlan(rcon, id, (entry) => entry.status === 'completed', 'Mod authoritative COMPLETED', MAX_RUN_MS);
       const elapsedSeconds = (performance.now() - confirmedAt) / 1000;
