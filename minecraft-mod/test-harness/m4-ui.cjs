@@ -171,6 +171,20 @@ async function markers(env) {
   assert.equal((await take(env, 'trapped_no_block_change')).hash, cage.hash);
   await markerAt(env, trapped, false, 1);
   await cancel(env);
+
+  await startPlan(env, { holdAccept: true });
+  await env.rcon.command('time set night');
+  await env.transport.release('accept');
+  await planWhere(env, (row) => row.status === 'running' && row.waiting === 'night', 'worker waits at night before initial supply pickup');
+  await cageWorker(env);
+  await env.rcon.command('time set day');
+  const supply = await planWhere(env, (row) => row.status === 'paused' && row.reason === 'supply_chest_unreachable',
+    'real Core pauses while trying to reach the configured supply chest', 150000);
+  assert.equal(coords(supply.blocked.pos), coords(P.chest));
+  assert.equal(supply.violations, 0);
+  await markerAt(env, supply, false, 2);
+  await cancel(env, 2);
+
   await startPlan(env);
   await planWhere(env, (row) => row.status === 'running' && row.phase === 'walls' && row.completed >= 16,
     'active real Core is building before direct server death fixture', 120000);
@@ -186,27 +200,14 @@ async function markers(env) {
     return false;
   }, 'read actual server death location through vanilla NBT', 12000);
   assert.deepEqual(died.blocked.pos, death);
-  await markerAt(env, died, true, 2);
+  await markerAt(env, died, true, 3);
   await dashboard(env.owner);
   await until(() => env.ownerWire.displays.size === 1, 'reopened Owner status shows exactly one death marker', 7000);
   requireButton(env.owner, SLOT.cancel, /取消施工/);
   await click(env.owner, SLOT.cancel);
   await planWhere(env, (row) => row.status === 'cancelled', 'Owner cancels death-paused construction');
   await until(() => !env.ownerWire.bars.size && !env.ownerWire.displays.size, 'terminal cancellation removes Owner Boss bar and marker', 6000);
-  chatCount(env, '取消', 2);
-
-  await startPlan(env, { holdAccept: true });
-  await env.rcon.command('time set night');
-  await env.transport.release('accept');
-  await planWhere(env, (row) => row.status === 'running' && row.waiting === 'night', 'worker waits at night before initial supply pickup');
-  await cageWorker(env);
-  await env.rcon.command('time set day');
-  const supply = await planWhere(env, (row) => row.status === 'paused' && row.reason === 'supply_chest_unreachable',
-    'real Core pauses while trying to reach the configured supply chest', 150000);
-  assert.equal(coords(supply.blocked.pos), coords(P.chest));
-  assert.equal(supply.violations, 0);
-  await markerAt(env, supply, false, 3);
-  await cancel(env, 3);
+  chatCount(env, '取消', 3);
 }
 
 async function history(env) {
