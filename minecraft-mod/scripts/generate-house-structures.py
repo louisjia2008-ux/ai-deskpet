@@ -26,7 +26,7 @@ def nbt_list(kind, entries):
     return bytes([kind]) + integer(len(entries)) + b"".join(entries)
 
 
-def write_template(name, width, height, length, cells, *, entrance, door=None,
+def write_template(name, width, height, length, cells, *, version, entrance, door=None,
                    scaffold=(), phases=(), kind="house", floor_step_order="bottom_up"):
     states = sorted(set(cells.values()))
     palette = []
@@ -53,7 +53,7 @@ def write_template(name, width, height, length, cells, *, entrance, door=None,
     ])
     (DATA / "structure" / (name + ".nbt")).write_bytes(gzip.compress(raw, mtime=0))
     (DATA / "house" / (name + ".json")).write_text(json.dumps({
-        "version": 1,
+        "version": version,
         "kind": kind,
         "entrance": entrance,
         "door": door,
@@ -94,8 +94,9 @@ def starter():
             add(cells, x, 2, z, "oak_planks")
     door(cells, 3, 0)
     furnishings(cells, 5)
-    write_template("starter_house", 7, 4, 7, cells, entrance=(3, 0, -1), door=(3, 0, 0),
-                   scaffold=((3, 0, 3),), phases=("walls", "scaffold", "roof", "furnish"),
+    scaffold = [(-1, y, z) for z in range(2, 4) for y in range(z - 1)]
+    write_template("starter_house", 7, 4, 7, cells, version=2, entrance=(3, 0, -1), door=(3, 0, 0),
+                   scaffold=scaffold, phases=("walls", "scaffold", "roof", "furnish"),
                    floor_step_order="roof_outside_in")
 
 
@@ -125,8 +126,10 @@ def porch():
     add(cells, 6, 0, 6, "torch")
     add(cells, 3, 0, 7, "crafting_table")
     add(cells, 5, 0, 7, "furnace", facing="north")
-    write_template("porch_cabin", 9, 5, 9, cells, entrance=(4, 0, -1), door=(4, 0, 2),
-                   phases=("walls", "roof", "furnish"), floor_step_order="roof_outside_in")
+    scaffold = [(x, y, z) for x in (0, 8) for z in range(5, 8) for y in range(z - 4)]
+    write_template("porch_cabin", 9, 5, 9, cells, version=4, entrance=(4, 0, -1), door=(4, 0, 2),
+                   scaffold=scaffold, phases=("walls", "scaffold", "upper_walls", "roof", "furnish"),
+                   floor_step_order="roof_outside_in")
 
 
 def two_storey():
@@ -148,8 +151,10 @@ def two_storey():
     furnishings(cells, 7)
     add(cells, 2, 4, 2, "torch")
     add(cells, 6, 4, 6, "torch")
-    write_template("two_storey_house", 9, 8, 9, cells, entrance=(4, 0, -1), door=(4, 0, 0),
-                   phases=("walls", "floor", "roof", "furnish"), floor_step_order="roof_outside_in")
+    scaffold = [(-1, y, z) for z in range(1, 7) for y in range(z)]
+    write_template("two_storey_house", 9, 8, 9, cells, version=4, entrance=(4, 0, -1), door=(4, 0, 0),
+                   scaffold=scaffold, phases=("scaffold", "stair_base", "walls", "floor", "upper_walls", "roof", "furnish"),
+                   floor_step_order="roof_outside_in")
 
 
 def wheat():
@@ -161,8 +166,8 @@ def wheat():
             else:
                 add(cells, x, 0, z, "farmland", moisture="0")
                 add(cells, x, 1, z, "wheat", age="0")
-    write_template("wheat_field", 9, 3, 9, cells, entrance=(4, 0, -1),
-                   phases=("irrigate", "till", "sow"), kind="farm", floor_step_order="tile")
+    write_template("wheat_field", 9, 3, 9, cells, version=2, entrance=(4, 0, -1),
+                   phases=("foundation", "irrigate", "till", "sow"), kind="farm", floor_step_order="tile")
 
 
 if __name__ == "__main__":
