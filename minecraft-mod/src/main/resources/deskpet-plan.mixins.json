@@ -2,7 +2,13 @@
   "required": true,
   "package": "dev.deskpet.minecraft.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": ["BlockItemPlanGuard"],
+  "mixins": [
+    "BlockItemPlanGuard",
+    "BucketItemPlanGuard",
+    "ServerInteractionPlanGuard",
+    "ServerWorldPlanGuard",
+    "WorldPlanGuard"
+  ],
   "injectors": {
     "defaultRequire": 1
   }

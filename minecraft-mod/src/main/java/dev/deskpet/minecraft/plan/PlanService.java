@@ -10,12 +10,8 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
-import net.minecraft.block.BedBlock;
 import net.minecraft.block.BlockState;
-import net.minecraft.block.DoorBlock;
-import net.minecraft.block.TallPlantBlock;
-import net.minecraft.block.enums.BedPart;
-import net.minecraft.block.enums.DoubleBlockHalf;
+import net.minecraft.block.Blocks;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -72,7 +68,7 @@ public final class PlanService {
         PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {
             if (world instanceof ServerWorld serverWorld && player instanceof ServerPlayerEntity serverPlayer
                 && config.enabled() && config.isBot(serverPlayer)) {
-                footprint(pos, state).forEach((block, before) -> observeChange(serverWorld, serverPlayer, block, before));
+                PlanInteraction.footprint(pos, state, null).forEach((block, before) -> observeChange(serverWorld, serverPlayer, block, before));
             }
         });
         WandInteractions.authorization(new WandInteractions.Authorization() {
@@ -502,42 +498,30 @@ public final class PlanService {
     }
 
     private static boolean allowBreak(ServerWorld world, ServerPlayerEntity player, BlockPos pos, BlockState state) {
-        if (!config.enabled() || !config.isBot(player)) return true;
-        var targets = new LinkedHashMap<BlockPos, String>();
-        footprint(pos, state).keySet().forEach(block -> targets.put(block, "minecraft:air"));
-        return allowed(world, player, "break", pos, targets, false);
+        if (!guardsInteractions(player)) return true;
+        return allowed(world, player, "break", pos, PlanInteraction.footprint(pos, state, Blocks.AIR.getDefaultState()), false);
     }
 
-    public static Map<BlockPos, BlockState> checkPlacement(ServerWorld world, ServerPlayerEntity player, BlockPos pos,
-                                                          BlockState state, boolean custom) {
-        if (!config.enabled() || !config.isBot(player)) return Map.of();
-        var targets = new LinkedHashMap<BlockPos, String>();
-        var before = new LinkedHashMap<BlockPos, BlockState>();
-        footprint(pos, state).forEach((block, target) -> {
-            targets.put(block, PlanCompiler.stateName(target));
-            before.put(block, world.getBlockState(block));
-        });
-        return allowed(world, player, "place", pos, targets, custom) ? before : null;
-    }
-
-    private static Map<BlockPos, BlockState> footprint(BlockPos pos, BlockState state) {
-        var targets = new LinkedHashMap<BlockPos, BlockState>();
-        targets.put(pos, state);
-        if (state.getBlock() instanceof DoorBlock || state.getBlock() instanceof TallPlantBlock) {
-            var half = state.get(DoorBlock.HALF);
-            var other = half == DoubleBlockHalf.LOWER ? DoubleBlockHalf.UPPER : DoubleBlockHalf.LOWER;
-            targets.put(half == DoubleBlockHalf.LOWER ? pos.up() : pos.down(), state.with(DoorBlock.HALF, other));
-        } else if (state.getBlock() instanceof BedBlock) {
-            var part = state.get(BedBlock.PART);
-            var other = part == BedPart.FOOT ? BedPart.HEAD : BedPart.FOOT;
-            var facing = state.get(BedBlock.FACING);
-            targets.put(pos.offset(part == BedPart.FOOT ? facing : facing.getOpposite()), state.with(BedBlock.PART, other));
+    public static boolean guardsInteractions(ServerPlayerEntity player) {
+        if (!config.enabled() || !config.isBot(player)) return false;
+        var store = PlanStore.get(player.getWorld().getServer());
+        var botId = player.getUuid();
+        for (var plan : store.plans.values()) {
+            if (plan.status.holdsSelection() && botId.equals(plan.botUuid)) return true;
         }
-        return targets;
+        for (var revocation : store.revocations.values()) {
+            if (botId.equals(revocation.plan().botUuid)) return true;
+        }
+        return false;
+    }
+
+    public static boolean allowInteraction(ServerWorld world, ServerPlayerEntity player, String action, BlockPos origin,
+                                           Map<BlockPos, BlockState> targets, boolean custom) {
+        return allowed(world, player, action, origin, targets, custom);
     }
 
     private static boolean allowed(ServerWorld world, ServerPlayerEntity player, String action, BlockPos origin,
-                                   Map<BlockPos, String> targets, boolean custom) {
+                                   Map<BlockPos, BlockState> targets, boolean custom) {
         if (!config.enabled() || !config.isBot(player)) return true;
         var server = world.getServer();
         var store = PlanStore.get(server);
@@ -588,7 +572,7 @@ public final class PlanService {
             if (!PlanCompiler.matchesState(op.target(), target.getValue())) {
                 return rejectChange(store, matching, action, pos, "outside_authorized_operations", BlockDenial.VIOLATION);
             }
-            if (target.getValue().equals("minecraft:air") && !current.isAir()) {
+            if (target.getValue().isAir() && !current.isAir()) {
                 String conflict = PlanCompiler.removalConflict(world, matching.document, pos, targets::containsKey);
                 if (conflict != null) {
                     revoke(server, store, matching, PAUSED, conflict, true);
@@ -599,14 +583,14 @@ public final class PlanService {
         return true;
     }
 
-    private static BlockPos insideSelection(SurveyPlan plan, Map<BlockPos, String> targets) {
+    private static BlockPos insideSelection(SurveyPlan plan, Map<BlockPos, BlockState> targets) {
         for (var pos : targets.keySet()) {
             if (plan.contains(pos)) return pos;
         }
         return null;
     }
 
-    public static void observePlacement(ServerWorld world, ServerPlayerEntity player, Map<BlockPos, BlockState> changes) {
+    public static void observeInteraction(ServerWorld world, ServerPlayerEntity player, Map<BlockPos, BlockState> changes) {
         changes.forEach((pos, before) -> observeChange(world, player, pos, before));
     }
 
