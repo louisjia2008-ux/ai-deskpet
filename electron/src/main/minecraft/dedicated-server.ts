@@ -9,7 +9,7 @@ import type { MinecraftDedicatedIdentity, MinecraftDedicatedServerSnapshot, Mine
 import { atomicWriteFile, removeAbandonedTemporaryFiles } from '../persistence/atomic-file';
 import { assertChecksum, dedicatedEnvironment, dedicatedJavaVersion, DEDICATED_DATA_DIRECTORY, DEDICATED_HOST, DEDICATED_MINECRAFT_VERSION,
   inspectPackagedMod, prepareDedicatedRuntime } from './dedicated-artifacts';
-import type { DedicatedPackagedMod } from './dedicated-artifacts';
+import type { ArtifactFetch, DedicatedPackagedMod } from './dedicated-artifacts';
 import { DEDICATED_READY, MinecraftDedicatedConsole } from './dedicated-console';
 import { DEDICATED_LOG_CONFIG, maintainBackups, snapshotWorld, trimServerLogs } from './dedicated-world-storage';
 
@@ -33,6 +33,8 @@ export interface MinecraftDedicatedServerOptions {
   userDataPath: string;
   /** Parent of the generated minecraft-dedicated resources directory. */
   resourcesPath: string;
+  /** Downloads the pinned runtime files; defaults to Node's fetch. */
+  fetch?: ArtifactFetch;
   onChanged(snapshot: MinecraftDedicatedServerSnapshot): void;
 }
 
@@ -344,7 +346,7 @@ export class MinecraftDedicatedServer {
         throw new Error(`Packaged Minecraft Mod verification failed. ${message(error)}`);
       });
       await mkdir(this.#directory, { recursive: true, mode: 0o700 });
-      const runtime = await prepareDedicatedRuntime(this.#root, this.#directory, signal);
+      const runtime = await prepareDedicatedRuntime(this.#root, this.#directory, signal, this.#options.fetch);
       const unexpected = (await readdir(join(this.#directory, 'mods'))).filter(file => !runtime.modArtifacts.includes(file));
       if (unexpected.length) throw new Error('The dedicated Minecraft mods directory contains unverified files.');
       await trimServerLogs(this.#directory);

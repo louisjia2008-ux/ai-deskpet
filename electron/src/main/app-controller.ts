@@ -681,6 +681,8 @@ export class AppController {
     this.#minecraftDedicatedCompanion = new MinecraftDedicatedCompanion(this.#minecraftCompanion, join(dedicatedPath, 'core'), () => this.#emitMinecraftDedicated());
     this.#minecraftDedicated = new MinecraftDedicatedServer({ userDataPath: this.#dataRoot,
       resourcesPath: app.isPackaged ? process.resourcesPath : join(app.getAppPath(), '.minecraft-package'),
+      // Chromium's network stack honours the system proxy; Node's fetch does not.
+      fetch: (url, { signal }) => net.fetch(url, { signal, redirect: 'follow', credentials: 'omit' }),
       onChanged: state => { this.#minecraftDedicatedCompanion.update(state); this.#emitMinecraftDedicated(); },
     });
     const helperPath = app.isPackaged

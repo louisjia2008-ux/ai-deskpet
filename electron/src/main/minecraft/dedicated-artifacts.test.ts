@@ -50,3 +50,25 @@ test.each([
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('downloads through an injected fetch and refuses a followed redirect that ends on HTTP', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deskpet-download-test-'));
+  const global = vi.fn();
+  vi.stubGlobal('fetch', global);
+  const followed = (url: string, body: string) => Object.defineProperty(new Response(body), 'url', { value: url });
+  try {
+    const injected = vi.fn().mockResolvedValue(followed('https://cdn.example.invalid/fixture.jar', contents));
+    await ensureDownload(join(directory, 'fixture.jar'), URL, 'sha256', checksum, new AbortController().signal, contents.length, injected);
+    expect(injected).toHaveBeenCalledTimes(1);
+    expect(global).not.toHaveBeenCalled();
+    expect(await readFile(join(directory, 'fixture.jar'), 'utf8')).toBe(contents);
+
+    const insecure = vi.fn().mockResolvedValue(followed('http://cdn.example.invalid/other.jar', contents));
+    await expect(ensureDownload(join(directory, 'other.jar'), URL, 'sha256', checksum, new AbortController().signal, contents.length, insecure))
+      .rejects.toThrow(/requires HTTPS/u);
+    expect(await readdir(directory)).toEqual(['fixture.jar']);
+  } finally {
+    vi.unstubAllGlobals();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -79,17 +79,25 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 class RetryableDownloadError extends Error {}
 
-async function openArtifactBody(url: string, signal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
+/** The app passes Electron's net.fetch so downloads follow the system proxy; tests and scripts use Node's fetch. */
+export type ArtifactFetch = (url: string, init: { signal: AbortSignal; redirect: 'manual' }) => Promise<Response>;
+const nodeFetch: ArtifactFetch = (url, init) => fetch(url, init);
+
+async function openArtifactBody(url: string, signal: AbortSignal, fetchArtifact: ArtifactFetch): Promise<ReadableStream<Uint8Array>> {
   let target = new URL(url);
   for (let hops = 0; hops <= 5; hops++) {
     if (target.protocol !== 'https:' || target.username || target.password) throw new Error('Minecraft artifact download requires HTTPS without credentials.');
     let response: Response;
     try {
-      response = await fetch(target.href, { signal, redirect: 'manual' });
+      response = await fetchArtifact(target.href, { signal, redirect: 'manual' });
     } catch (error) {
       throw new RetryableDownloadError('Minecraft artifact connection failed.', { cause: error });
     }
-    if (response.ok && response.body) return response.body;
+    if (response.ok && response.body) {
+      // A fetch that follows redirects itself must still end on HTTPS.
+      if (response.url && new URL(response.url).protocol !== 'https:') throw new Error('Minecraft artifact download requires HTTPS without credentials.');
+      return response.body;
+    }
     // Release the unused response before following a redirect or retrying.
     await response.body?.cancel().catch(() => undefined);
     const status = response.status;
@@ -123,7 +131,8 @@ async function* limitedBody(body: ReadableStream<Uint8Array>, limit: number) {
   }
 }
 
-export async function ensureDownload(file: string, url: string, algorithm: 'sha1' | 'sha256', expected: string, signal: AbortSignal, size?: number): Promise<void> {
+export async function ensureDownload(file: string, url: string, algorithm: 'sha1' | 'sha256', expected: string, signal: AbortSignal, size?: number,
+  fetchArtifact: ArtifactFetch = nodeFetch): Promise<void> {
   const directory = dirname(file);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const prefix = `${basename(file)}.download-`;
@@ -148,7 +157,7 @@ export async function ensureDownload(file: string, url: string, algorithm: 'sha1
       // Open before piping so an early body failure cannot create a file after cleanup.
       const output = await open(temporary, 'wx', 0o600);
       try {
-        const body = await openArtifactBody(url, requestSignal);
+        const body = await openArtifactBody(url, requestSignal, fetchArtifact);
         await pipeline(limitedBody(body, size ?? MAX_JAR_BYTES), output.createWriteStream(), { signal: requestSignal });
       } finally { await output.close(); }
       await assertChecksum(temporary, algorithm, expected, signal, size);
@@ -201,7 +210,7 @@ async function extractJava(root: string, archive: string, signal: AbortSignal): 
   } finally { await rm(temporary, { recursive: true, force: true }); }
 }
 
-export async function prepareDedicatedRuntime(root: string, directory: string, signal: AbortSignal) {
+export async function prepareDedicatedRuntime(root: string, directory: string, signal: AbortSignal, fetchArtifact: ArtifactFetch = nodeFetch) {
   const pkg = javaPackage();
   if (!pkg) throw new Error(`Local Minecraft does not support ${process.platform}/${process.arch}.`);
   const archive = join(root, 'downloads', pkg.file);
@@ -211,10 +220,10 @@ export async function prepareDedicatedRuntime(root: string, directory: string, s
   const group = new AbortController();
   const operation = AbortSignal.any([group.signal, signal]);
   const tasks = [
-    () => ensureDownload(archive, pkg.url, 'sha256', pkg.sha256, operation, pkg.size),
-    () => ensureDownload(join(directory, 'server.jar'), mojang.url, 'sha1', MOJANG_SERVER_SHA1, operation, MOJANG_SERVER_BYTES),
+    () => ensureDownload(archive, pkg.url, 'sha256', pkg.sha256, operation, pkg.size, fetchArtifact),
+    () => ensureDownload(join(directory, 'server.jar'), mojang.url, 'sha1', MOJANG_SERVER_SHA1, operation, MOJANG_SERVER_BYTES, fetchArtifact),
     ...serverArtifacts.filter(artifact => artifact !== mojang)
-      .map(artifact => () => ensureDownload(join(directory, artifact.path), artifact.url, 'sha256', artifact.sha256, operation)),
+      .map(artifact => () => ensureDownload(join(directory, artifact.path), artifact.url, 'sha256', artifact.sha256, operation, undefined, fetchArtifact)),
   ];
   let next = 0;
   const workers = Array.from({ length: Math.min(DOWNLOAD_CONCURRENCY, tasks.length) }, async () => {
