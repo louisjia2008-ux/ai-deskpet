@@ -121,6 +121,91 @@ test('survey receiver accepts a valid fragmented plan and never mutates the worl
   assert.deepEqual(client.messages.at(-1), { type: 'revoke_ack', grantId: grant.grantId });
 });
 
+test('read-only Core queries the current Mod plan on every connection and never consumes a grant', async (t) => {
+  const first = fakeBot(t, null);
+  const second = fakeBot(t, null);
+  const dir = ledger(t);
+  const events = [];
+  const clients = [first, second];
+  const host = createCoreHost({
+    dataDir: dir,
+    createBot: () => clients.shift().bot,
+    observeSurveyPlans: true,
+    emit: (message) => { if (message.type === 'event') events.push(message.event); },
+    createCompanion: () => ({ status: () => ({}), dispose: async () => {} }),
+  });
+  t.after(() => host.close());
+  const grant = makeGrant(executionFields);
+  const plan = {
+    planId: grant.planId, revision: 1, status: 'paused', template: 'starter_house', reason: 'bot_died',
+    blocked: { reason: 'bot_died', pos: { x: 1, y: 65, z: 2 }, dimension: 'minecraft:overworld' },
+    completed: 0, total: 1, violations: 0, misplacements: 0, siteChanges: 0, lateAttempts: 0, started: true,
+  };
+  for (const [index, client] of [first, second].entries()) {
+    await host.handle({
+      version: 1, id: `connect-${index}`, type: index === 0 ? 'connect' : 'reconnect',
+      config: { host: '127.0.0.1', port: 25565, username: 'DeskPetCore', auth: 'offline' },
+    });
+    assert.equal(host.status().surveyPlan, undefined);
+    client.feed({ type: 'hello', protocol: 2, worldId });
+    client.feed({ type: 'plan_status', worldId, initial: true, plan });
+    assert.equal(host.status().surveyPlan, undefined);
+    client.feed({ type: 'hello_ok', protocol: 2, worldId });
+    client.feed({ type: 'plan_status', worldId: randomUUID(), initial: true, plan });
+    assert.equal(host.status().surveyPlan, undefined);
+    client.feed({ type: 'plan_status', worldId, initial: true, plan });
+    assert.deepEqual(host.status().surveyPlan, { worldId, plan });
+    client.feed({ type: 'plan_status', worldId, initial: false, plan: { ...plan, completed: 2 } });
+    assert.deepEqual(host.status().surveyPlan, { worldId, plan });
+    client.feed({ type: 'plan_status', worldId, initial: false, current: false,
+      plan: { ...plan, planId: randomUUID(), status: 'cancelled' } });
+    assert.deepEqual(host.status().surveyPlan, { worldId, plan });
+    deliver(client, grant);
+    assert.deepEqual(client.messages, [
+      { type: 'hello_ack', protocol: 2, worldId, observeOnly: true }, { type: 'status_query' },
+    ]);
+  }
+  const statuses = events.filter((event) => event.type === 'survey_plan_status');
+  assert.equal(statuses.filter((event) => event.initial).length, 2);
+  assert.equal(statuses.filter((event) => event.current === false).length, 2);
+  assert.equal(fs.existsSync(path.join(dir, 'survey-plan-grants')), false);
+});
+
+test('managed world forwards one review per death and per autonomous task failure', async (t) => {
+  const client = fakeBot(t, null);
+  const reviews = [];
+  let coreEvent;
+  const host = createCoreHost({
+    dataDir: ledger(t),
+    createBot: () => client.bot,
+    managedWorldAutonomy: true,
+    emit(message) { if (message.event?.type === 'managed_world_review') reviews.push(message.event); },
+    createCompanion({ autonomy, onEvent }) {
+      assert.equal(autonomy, true);
+      coreEvent = onEvent;
+      return { status: () => ({}), dispose: async () => {} };
+    },
+  });
+  t.after(() => host.close());
+  await host.handle({
+    version: 1, id: 'connect', type: 'connect',
+    config: { host: '127.0.0.1', port: 25565, username: 'DeskPetCore', auth: 'offline' },
+  });
+  client.bot.emit('spawn');
+  await turn();
+  client.bot.emit('death');
+  client.bot.emit('death');
+  coreEvent({ type: 'autonomy_cooldown', card: 'homestead', reasons: ['death_loop: unsafe shelter'] });
+  coreEvent({ type: 'goal_failed', goal: 'homestead', reasons: ['ordinary task has its own App review'] });
+  coreEvent({ type: 'autonomy_cooldown', card: 'gather', reasons: ['missing materials'] });
+  client.bot.emit('spawn');
+  await turn();
+  client.bot.emit('death');
+  assert.deepEqual(reviews.map(({ reason, detail }) => [reason, detail]), [
+    ['death', '机器人死亡'], ['task_failure', 'gather · missing materials'], ['death', '机器人死亡'],
+  ]);
+});
+
 test('survey receiver rejects wrong plan hash, world, dimension, identity and old grants after reconnect', (t) => {
   const dir = ledger(t);
   const client = fakeBot(t, dir);

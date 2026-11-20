@@ -21,6 +21,7 @@ public final class PlanChannel {
     public static final int PROTOCOL = 2;
     private static final int MAX_PACKET_BYTES = 32 * 1024;
     private static final Set<ServerPlayerEntity> READY = Collections.newSetFromMap(new IdentityHashMap<>());
+    private static final Set<ServerPlayerEntity> OBSERVE_ONLY = Collections.newSetFromMap(new IdentityHashMap<>());
     private static final List<BiConsumer<ServerPlayerEntity, JsonObject>> HANDLERS = new ArrayList<>();
 
     record Payload(String json) implements CustomPayload {
@@ -51,6 +52,9 @@ public final class PlanChannel {
                     var worldId = WorldIdentity.get(context.server()).toString();
                     if (message.get("protocol").getAsInt() == PROTOCOL
                         && message.get("worldId").getAsString().equals(worldId) && READY.add(player)) {
+                        var flag = message.get("observeOnly");
+                        if (flag != null && flag.isJsonPrimitive() && flag.getAsJsonPrimitive().isBoolean()
+                            && flag.getAsBoolean()) OBSERVE_ONLY.add(player);
                         send(player, handshake("hello_ok", worldId));
                         DeskPetMod.LOGGER.info("Plan channel acknowledged by {}", player.getGameProfile().getId());
                     }
@@ -68,11 +72,18 @@ public final class PlanChannel {
             hello.addProperty("modVersion", version);
             send(handler.player, hello);
         });
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> READY.remove(handler.player));
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            READY.remove(handler.player);
+            OBSERVE_ONLY.remove(handler.player);
+        });
     }
 
     public static boolean isReady(ServerPlayerEntity player) {
         return READY.contains(player);
+    }
+
+    public static boolean canReceiveGrant(ServerPlayerEntity player) {
+        return isReady(player) && !OBSERVE_ONLY.contains(player);
     }
 
     public static void onMessage(BiConsumer<ServerPlayerEntity, JsonObject> handler) {

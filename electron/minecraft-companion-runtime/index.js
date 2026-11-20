@@ -36,9 +36,15 @@ try {
   if (!['legacy', 'core'].includes(engine)) throw new Error('--engine must be legacy or core');
   const execute = process.argv.includes('--survey-plan-execute');
   const dryRun = process.argv.includes('--survey-plan-dry-run');
+  const observe = process.argv.includes('--survey-plan-observe');
+  const managedWorld = process.argv.includes('--managed-world-autonomy');
   if (execute && (dryRun || engine !== 'core')) throw new Error('--survey-plan-execute requires the Core engine and cannot be combined with dry run');
+  if ((observe || managedWorld) && engine !== 'core') throw new Error('Managed world features require the Core engine');
   runtime = engine === 'core'
-    ? require('./core-host').createCoreHost({ dataDir, emit, surveyPlanMode: execute ? 'execute' : dryRun ? 'dry_run' : 'off' })
+    ? require('./core-host').createCoreHost({
+      dataDir, emit, surveyPlanMode: execute ? 'execute' : dryRun ? 'dry_run' : 'off',
+      observeSurveyPlans: observe, managedWorldAutonomy: managedWorld,
+    })
     : require('./runtime').createRuntime({ dataDir, emit });
 } catch (error) {
   emit({ version: 1, type: 'reply', ok: false, error: `Minecraft 运行时启动失败：${error.message}` });

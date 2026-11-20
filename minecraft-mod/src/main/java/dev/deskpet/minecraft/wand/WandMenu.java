@@ -24,6 +24,7 @@ final class WandMenu extends SimpleGui {
     private int ticks;
     private WandInteractions.Progress lastStatus;
     private boolean expired;
+    private boolean approvalEnabled;
 
     WandMenu(WandInteractions.Selection selection) {
         super(ScreenHandlerType.GENERIC_9X6, selection.owner, false);
@@ -52,13 +53,15 @@ final class WandMenu extends SimpleGui {
                 } else if (!selection.historyPage && !Objects.equals(selection.progress(), lastStatus)) {
                     render();
                 }
-            } else if (selection.result != null && !expired && isExpired(selection.result.plan())) {
+            } else if (selection.result != null && (approvalEnabled != WandInteractions.authorization().enabled()
+                    || !expired && isExpired(selection.result.plan()))) {
                 render();
             }
         }
     }
 
     private void render() {
+        approvalEnabled = WandInteractions.authorization().enabled();
         if (selection.isManagement()) {
             for (int slot = 0; slot < 54; slot++) clearSlot(slot);
             if (selection.historyPage) {
@@ -136,10 +139,10 @@ final class WandMenu extends SimpleGui {
                     .map(conflict -> Text.literal(conflict.kind().label + " " + WandInteractions.label(conflict.pos())))
                     .map(Text.class::cast).toList();
                 item(45, Items.BARRIER, "有冲突，不能开工", conflicts, null);
-            } else if (WandInteractions.authorization().enabled()) {
+            } else if (approvalEnabled) {
                 item(45, Items.EMERALD_BLOCK, "确认开工", List.of(), this::confirm);
             } else {
-                item(45, Items.BARRIER, "确认开工尚未启用", List.of(), null);
+                item(45, Items.BARRIER, "游戏内授权未启用", List.of(), () -> action("游戏内授权未启用"));
             }
         }
         var auth = WandInteractions.authorization();

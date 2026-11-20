@@ -48,6 +48,7 @@ function worldKey(host, bot) {
 function createCoreHost({ dataDir, emit = () => {}, createBot = require('mineflayer').createBot,
   createCompanion = require('./core/companion').createCompanion, now = Date.now,
   surveyPlanDryRun = false, surveyPlanMode = surveyPlanDryRun ? 'dry_run' : 'off',
+  observeSurveyPlans = false, managedWorldAutonomy = false,
   historyLimit = 256, historyTtlMs = 10 * 60 * 1000, connectTimeoutMs = 60000, maxPending = 64 } = {}) {
   if (!dataDir || !path.isAbsolute(dataDir)) throw new TypeError('An absolute dataDir is required');
   if (!['off', 'dry_run', 'execute'].includes(surveyPlanMode)) throw new TypeError('Invalid survey plan mode');
@@ -64,6 +65,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
   let generation = 0;
   let active = null;
   let survey = null;
+  let surveyStatus = null;
   let closed = false;
   let closePromise = null;
   let connection = { state: 'disconnected', generation, automaticReconnect: false };
@@ -74,6 +76,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
   const tasks = new Map();
   const requests = new Map();
   const surveyInventories = new Map();
+  const isLocalOffline = (candidate) => candidate?.host === '127.0.0.1' && candidate?.auth === 'offline';
   // Observer failures must not leave a task half-transitioned.
   const send = (message) => { try { emit(clone(message)); } catch { /* transport owns delivery */ } };
   const event = (payload) => send({ version: 1, type: 'event', event: { at: now(), ...payload } });
@@ -143,6 +146,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     disposeSurveyPlan?.();
     disposeSurveyPlan = null;
     survey = null;
+    surveyStatus = null;
     if (detachedTask && (failed || interruptedSurvey)) updateTask(detachedTask, 'failed', { error: reason });
     if (interruptedSurvey) {
       const { taskId, name, planId, revision } = detachedTask;
@@ -201,17 +205,28 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     }
     bot = next;
     const current = () => !closed && epoch === generation && bot === next;
+    const managed = managedWorldAutonomy && isLocalOffline(nextConfig);
+    const observe = observeSurveyPlans && isLocalOffline(nextConfig);
+    let deathReported = false;
+    const review = (reason, detail) => event({ type: 'managed_world_review', connectionGeneration: epoch, reason, detail });
     const lost = (code, message) => {
       if (!current()) return;
       void detach({ code, message, retryable: true }, { failed: true }).catch(() => {});
     };
-    if (surveyPlanMode !== 'off') {
+    if (surveyPlanMode !== 'off' || observe) {
       let reservation = null;
       disposeSurveyPlan = installSurveyPlanReceiver(next, {
         mode: surveyPlanMode,
+        observe,
         ledgerDir: path.join(dataDir, 'survey-plan-grants'),
         onEvent(payload) {
           if (!current()) return;
+          if (payload.type === 'status') {
+            const { worldId, initial, current: selected, plan } = payload;
+            if (selected !== false) surveyStatus = clone({ worldId, plan });
+            event({ type: 'survey_plan_status', connectionGeneration: epoch, worldId, initial, current: selected, plan });
+            return;
+          }
           event({ type: surveyPlanMode === 'dry_run' ? 'survey_plan_dry_run' : 'survey_plan', payload });
           if (payload.type === 'stop_failed') lost('survey_stop_failed', payload.reason);
         },
@@ -245,6 +260,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
           reservation = null;
           if (!current() || survey !== record) return;
           survey = null;
+          if (managed) await record.engine.setAutonomy(true);
           if (!record.task) return;
           const task = record.task;
           const done = status === 'completed';
@@ -258,6 +274,16 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     next.on('error', (error) => lost('connection_error', String(error.message || error)));
     next.on('kicked', (reason) => lost('kicked', flattenReason(reason) || 'Server kicked the bot'));
     next.on('end', (reason) => lost('disconnected', String(reason || 'Connection ended')));
+    if (managed) {
+      next.on('death', () => {
+        if (!current() || deathReported || connection.state !== 'ready') return;
+        deathReported = true;
+        const pos = next.entity?.position;
+        const where = pos && [pos.x, pos.y, pos.z].every(Number.isFinite)
+          ? ` ${Math.floor(pos.x)}, ${Math.floor(pos.y)}, ${Math.floor(pos.z)}` : '';
+        review('death', `机器人死亡${where}`);
+      });
+    }
     // Player chat is data for the parent to judge; the host never acts on it.
     next.on('chat', (username, message) => {
       if (!current() || connection.state !== 'ready' || username === next.username) return;
@@ -266,6 +292,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     let spawnEpoch = 0;
     next.on('spawn', async () => {
       if (!current()) return;
+      deathReported = false;
       const spawn = ++spawnEpoch;
       const valid = () => current() && spawn === spawnEpoch;
       try {
@@ -273,8 +300,22 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
         await acknowledgePlayerLoaded(next, valid);
         if (!valid()) return;
         installMinecraftBedWakeCompatibility(next);
-        if (!companion) companion = createCompanion({ bot: next, autonomy: false, ownerName: nextConfig.ownerName || null, onEvent: (payload) => coreEvent(payload, epoch),
-          home: homes(worldKey(nextConfig.host, next)) || null });
+        if (!companion) companion = createCompanion({
+          bot: next,
+          autonomy: managed,
+          ownerName: nextConfig.ownerName || null,
+          onEvent(payload) {
+            if (!current()) return;
+            if (managed && payload.type === 'autonomy_cooldown') {
+              const reasons = Array.isArray(payload.reasons) ? payload.reasons.map(String) : [];
+              if (!reasons.some((reason) => reason === 'death' || reason.startsWith('death_loop:'))) {
+                review('task_failure', [payload.card, ...reasons].join(' · ').slice(0, 600));
+              }
+            }
+            coreEvent(payload, epoch);
+          },
+          home: homes(worldKey(nextConfig.host, next)) || null,
+        });
         clearTimeout(timer); timer = null;
         setConnection('ready');
       } catch (error) {
@@ -302,6 +343,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     return { connection: clone(connection), task: active ? clone(active) : null,
       engine,
       observation: observation(),
+      ...(surveyStatus ? { surveyPlan: clone(surveyStatus) } : {}),
       policy: companion?.policy?.() ?? null,
       safetyActive: connection.state === 'ready' && Boolean(companion) && !engine?.blocked && !engine?.disposed,
       recovery: 'explicit_reconnect_then_new_request',
@@ -334,7 +376,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
       if (active && !message.replaceCurrent) throw problem('busy', 'A task already owns the body; cancel it or explicitly replaceCurrent', true);
       if (active) {
         const previous = active;
-        try { await companion.cancelTask('replaced'); } catch (error) {
+        try { await companion.cancelTask('replaced', { keepAutonomy: managedWorldAutonomy && isLocalOffline(config) }); } catch (error) {
           updateTask(previous, 'failed', { error: errorData(error) });
           throw Object.assign(error, { task: previous });
         }
@@ -363,7 +405,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     if (survey) throw problem('survey_owns_body', 'The Minecraft owner controls the active survey from the wand menu', true);
     try {
       if (name === 'cancel') {
-        await companion.cancelTask('host_cancel');
+        await companion.cancelTask('host_cancel', { keepAutonomy: managedWorldAutonomy && isLocalOffline(config) });
         updateTask(task, 'cancelled', { reason: 'host_cancel' });
       } else if (name === 'pause') {
         await companion.pauseTask('host_pause');

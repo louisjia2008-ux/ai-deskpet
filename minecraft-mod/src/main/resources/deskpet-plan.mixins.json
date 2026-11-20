@@ -5,6 +5,7 @@
   "mixins": [
     "BlockItemPlanGuard",
     "BucketItemPlanGuard",
+    "DedicatedConsolePlanReload",
     "ServerInteractionPlanGuard",
     "ServerWorldPlanGuard",
     "WorldPlanGuard"

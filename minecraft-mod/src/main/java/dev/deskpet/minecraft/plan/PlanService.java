@@ -24,6 +24,7 @@ import net.minecraft.world.GameRules;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -56,7 +57,11 @@ public final class PlanService {
     private PlanService() {}
 
     public static void init() {
-        config = PlanConfig.load();
+        try {
+            config = PlanConfig.read();
+        } catch (IOException | RuntimeException error) {
+            LOGGER.error("Survey plan authorization disabled because configuration could not be loaded", error);
+        }
         PlanDebugCommands.register();
         PlanChannel.onMessage(PlanService::receive);
         ServerTickEvents.END_SERVER_TICK.register(PlanService::tick);
@@ -64,6 +69,7 @@ public final class PlanService {
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             stopping = true;
             PlanPresentation.clear();
+            PlanStatusFeed.clear();
         });
         ServerLivingEntityEvents.AFTER_DEATH.register((entity, damage) -> {
             if (config.enabled() && entity instanceof ServerPlayerEntity bot && config.isBot(bot)) {
@@ -71,6 +77,7 @@ public final class PlanService {
             }
         });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            PlanStatusFeed.disconnect(handler.player);
             if (!stopping && config.enabled() && config.isBot(handler.player)) {
                 var store = PlanStore.get(server);
                 for (var plan : store.plans.values()) {
@@ -110,6 +117,33 @@ public final class PlanService {
         });
     }
 
+    /** Called on the dedicated server thread from its stdin queue. */
+    public static void reloadFromConsole(MinecraftServer server) {
+        PlanConfig next;
+        boolean valid = true;
+        try {
+            next = PlanConfig.read();
+        } catch (IOException | RuntimeException error) {
+            next = new PlanConfig(false, config.ownerUuid(), config.botUuid(), config.botName());
+            valid = false;
+            LOGGER.error("DeskPet plan configuration rejected; game confirmation disabled", error);
+        }
+        var store = PlanStore.get(server);
+        var nextBot = next.resolveBotUuid(server);
+        for (var plan : store.plans.values()) {
+            if (!plan.status.holdsSelection() && plan.status != PREVIEWED) continue;
+            if (!plan.ownerUuid.equals(next.ownerUuid()) || (plan.botUuid != null && !plan.botUuid.equals(nextBot))) {
+                revoke(server, store, plan, CANCELLED, "authorization_changed", true);
+            } else if (!next.enabled() && hasGrant(plan)) {
+                revoke(server, store, plan, PAUSED, "authorization_disabled", true);
+            }
+        }
+        if (!next.equals(config)) PlanPresentation.clear();
+        config = next;
+        PlanStatusFeed.publish(server, store, config, false);
+        if (valid) LOGGER.info("DeskPet plan configuration reloaded");
+    }
+
     private static void pauseOnDeath(ServerPlayerEntity bot) {
         var world = bot.getWorld();
         var server = world.getServer();
@@ -126,11 +160,7 @@ public final class PlanService {
     }
 
     static UUID botUuid(ServerPlayerEntity player) {
-        var bot = config.findBot(player.getWorld().getServer());
-        if (bot != null) return bot.getUuid();
-        if (config.botUuid() != null) return config.botUuid();
-        if (config.botName().isEmpty()) return null;
-        return UUID.nameUUIDFromBytes(("OfflinePlayer:" + config.botName()).getBytes(StandardCharsets.UTF_8));
+        return config.resolveBotUuid(player.getWorld().getServer());
     }
 
     private static boolean isOwner(ServerPlayerEntity player) {
@@ -148,8 +178,9 @@ public final class PlanService {
     }
 
     static void preview(ServerPlayerEntity player, JsonObject planJson) {
-        if (!config.enabled()) return;
-        var store = PlanStore.get(player.getWorld().getServer());
+        if (!config.enabled() && !player.getUuid().equals(config.ownerUuid())) return;
+        var server = player.getWorld().getServer();
+        var store = PlanStore.get(server);
         var plan = new SurveyPlan(planJson);
         if (!plan.ownerUuid.equals(player.getUuid()) || store.plans.containsKey(plan.id)) return;
         // Active plans are retained. Retire obsolete drafts and previous menu previews.
@@ -162,6 +193,7 @@ public final class PlanService {
         plan.status = PREVIEWED;
         store.plans.put(plan.id, plan);
         store.markDirty();
+        PlanStatusFeed.transition(server, store, config, plan);
     }
 
     static String confirm(ServerPlayerEntity player, UUID id) {
@@ -177,7 +209,7 @@ public final class PlanService {
         String error = ownerCheck(player, plan);
         if (error == null) error = contextCheck(world, plan);
         if (error != null) return deny(store, plan, id, "confirm", error);
-        if (plan.status == PREVIEWED && expired(plan)) expirePreview(store, plan);
+        if (plan.status == PREVIEWED && expired(plan)) expirePreview(server, store, plan);
         if (plan.status == EXPIRED) return deny(store, plan, id, "confirm", "preview_expired");
         if (plan.status != PREVIEWED) return deny(store, plan, id, "confirm", "not_previewed");
         if (plan.document.getAsJsonArray("conflicts").size() > 0) {
@@ -363,6 +395,8 @@ public final class PlanService {
     static String reasonLabel(String reason) {
         return switch (reason) {
             case "disabled" -> "游戏内授权未启用";
+            case "authorization_disabled" -> "游戏内授权已关闭";
+            case "authorization_changed" -> "主人或机器人配置已更改";
             case "wrong_owner" -> "只有配置的主人可以操作";
             case "missing_plan" -> "找不到计划";
             case "wrong_world" -> "计划属于另一个世界";
@@ -428,7 +462,7 @@ public final class PlanService {
             return deny(store, store.plans.get(plan.id), plan.id, method, "authorization_revoked");
         }
         var bot = config.findBot(server);
-        if (bot == null || !bot.isAlive() || !bot.getUuid().equals(plan.botUuid) || !PlanChannel.isReady(bot)) {
+        if (bot == null || !bot.isAlive() || !bot.getUuid().equals(plan.botUuid) || !PlanChannel.canReceiveGrant(bot)) {
             return deny(store, store.plans.get(plan.id), plan.id, method, "bot_unavailable");
         }
         if (store.plans.values().stream().anyMatch(other -> !other.id.equals(plan.id)
@@ -468,6 +502,7 @@ public final class PlanService {
                 java.util.Arrays.copyOfRange(bytes, offset, Math.min(offset + CHUNK_BYTES, bytes.length))));
             PlanChannel.send(bot, chunk);
         }
+        PlanStatusFeed.transition(server, store, config, plan);
         return describe(plan);
     }
 
@@ -552,8 +587,8 @@ public final class PlanService {
         }
         store.markDirty();
         if (notify && oldGrant != null) {
-            var bot = config.findBot(server);
-            if (bot != null && bot.getUuid().equals(plan.botUuid) && PlanChannel.isReady(bot)) {
+            var bot = server.getPlayerManager().getPlayer(plan.botUuid);
+            if (bot != null && PlanChannel.isReady(bot)) {
                 var message = new JsonObject();
                 message.addProperty("type", "revoke");
                 message.addProperty("grantId", oldGrant.toString());
@@ -562,6 +597,7 @@ public final class PlanService {
                 PlanChannel.send(bot, message);
             }
         }
+        PlanStatusFeed.transition(server, store, config, plan);
     }
 
     private static void pruneRevocations(PlanStore store, long now) {
@@ -569,12 +605,15 @@ public final class PlanService {
     }
 
     private static void tick(MinecraftServer server) {
-        if (!config.enabled()) return;
         var store = PlanStore.get(server);
         pruneRevocations(store, System.nanoTime());
+        if (!config.enabled()) {
+            PlanStatusFeed.publish(server, store, config, false);
+            return;
+        }
         for (var plan : store.plans.values()) {
             if (plan.status == PREVIEWED && expired(plan)) {
-                expirePreview(store, plan);
+                expirePreview(server, store, plan);
             } else if (hasGrant(plan) && System.nanoTime() >= plan.heartbeatDeadline) {
                 revoke(server, store, plan, PAUSED, "disconnected", true);
             } else if (plan.status == RUNNING && plan.execute && server.getTicks() % 20 == 0) {
@@ -590,19 +629,26 @@ public final class PlanService {
         elapsed.forEach(id -> store.retireComparison(id, "preview_expired"));
         store.trimHistory();
         PlanPresentation.tick(server, store, config.ownerUuid());
+        PlanStatusFeed.publish(server, store, config, false);
     }
 
-    private static void expirePreview(PlanStore store, SurveyPlan plan) {
+    private static void expirePreview(MinecraftServer server, PlanStore store, SurveyPlan plan) {
         plan.status = EXPIRED;
         plan.reason = "preview_expired";
         store.recordFinish(plan);
+        PlanStatusFeed.transition(server, store, config, plan);
     }
 
     private static void receive(ServerPlayerEntity player, JsonObject message) {
-        if (!config.enabled() || !config.isBot(player) || !PlanChannel.isReady(player)) return;
         String type = string(message, "type");
         var world = player.getWorld();
         var server = world.getServer();
+        if (!PlanChannel.isReady(player)) return;
+        if (type.equals("status_query")) {
+            PlanStatusFeed.subscribe(server, PlanStore.get(server), config, player);
+            return;
+        }
+        if (!type.equals("revoke_ack") && (!config.enabled() || !config.isBot(player) || !PlanChannel.canReceiveGrant(player))) return;
         var store = PlanStore.get(server);
         if (type.equals("revoke_ack")) {
             String grantId = string(message, "grantId");
@@ -660,6 +706,7 @@ public final class PlanService {
             var running = identity(plan);
             running.addProperty("type", "running");
             PlanChannel.send(player, running);
+            PlanStatusFeed.transition(server, store, config, plan);
             if (!plan.execute) finishIfDone(world, store, plan);
             return;
         }
@@ -782,7 +829,6 @@ public final class PlanService {
     }
 
     public static boolean guardsInteractions(ServerPlayerEntity player) {
-        if (!config.enabled() || !config.isBot(player)) return false;
         var store = PlanStore.get(player.getWorld().getServer());
         var botId = player.getUuid();
         for (var plan : store.plans.values()) {
@@ -801,7 +847,6 @@ public final class PlanService {
 
     private static boolean allowed(ServerWorld world, ServerPlayerEntity player, String action, BlockPos origin,
                                    Map<BlockPos, BlockState> targets, boolean custom) {
-        if (!config.enabled() || !config.isBot(player)) return true;
         var server = world.getServer();
         var store = PlanStore.get(server);
         long now = System.nanoTime();

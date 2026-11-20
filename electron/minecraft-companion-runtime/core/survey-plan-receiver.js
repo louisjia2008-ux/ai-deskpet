@@ -13,6 +13,7 @@ const CHUNK_LIMIT = 512;
 const CHUNK_BYTES = 23 * 1024;
 const HEARTBEAT_MS = 5000;
 const REVOKE_STATUS = new Set(['completed', 'failed', 'paused', 'cancelled', 'expired']);
+const PLAN_STATUS = new Set(['previewed', 'confirmed', 'running', ...REVOKE_STATUS]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
 const STATE = /^[a-z0-9_.-]+:[a-z0-9_/.-]+(?:\[[a-z0-9_,=.-]+\])?$/;
@@ -88,6 +89,36 @@ function consumeGrant(ledgerDir, worldId, grantId) {
 
 const position = (pos) => pos && [pos.x, pos.y, pos.z].every(Number.isSafeInteger);
 
+function decodeStatus(plan) {
+  if (plan === null) return null;
+  const boundedText = (value, max) => typeof value === 'string' && value.length <= max;
+  const {
+    planId, revision, template, status, reason, phase, waiting, blocked, completed, total,
+    violations, misplacements, siteChanges, lateAttempts, started, finishedAt,
+  } = plan;
+  if (!UUID.test(planId) || !Number.isSafeInteger(revision) || revision < 1
+      || !boundedText(template, 64) || !PLAN_STATUS.has(status) || typeof started !== 'boolean'
+      || ![completed, total, violations, misplacements, siteChanges, lateAttempts]
+        .every((count) => Number.isSafeInteger(count) && count >= 0)
+      || completed > total || finishedAt !== undefined && (!Number.isSafeInteger(finishedAt) || finishedAt < 0)
+      || reason !== undefined && !boundedText(reason, 1024)
+      || phase !== undefined && !boundedText(phase, 48)
+      || waiting !== undefined && !boundedText(waiting, 48)) throw new Error('Invalid survey plan status');
+
+  const snapshot = {
+    planId, revision, template, status, reason, phase, waiting, completed, total,
+    violations, misplacements, siteChanges, lateAttempts, started, finishedAt,
+  };
+  if (blocked !== undefined) {
+    const { reason: blockedReason, pos, detail, dimension } = blocked;
+    if (!boundedText(blockedReason, 96) || pos !== undefined && !position(pos)
+        || detail !== undefined && !boundedText(detail, 300)
+        || dimension !== undefined && !boundedText(dimension, 96)) throw new Error('Invalid survey blockage');
+    snapshot.blocked = { reason: blockedReason, pos: pos && { x: pos.x, y: pos.y, z: pos.z }, detail, dimension };
+  }
+  return snapshot;
+}
+
 function validateExecutionDocument(plan) {
   const bounds = plan.selection;
   if (!bounds || !['minX', 'maxX', 'minY', 'maxY', 'minZ', 'maxZ'].every((key) => Number.isSafeInteger(bounds[key]))
@@ -118,15 +149,16 @@ function freezeDocument(node) {
 }
 
 /** Never dispatch executable work before the current Mod confirms RUNNING. */
-function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent = () => {}, onPrepare, onRun, onStop }) {
+function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', observe = false, onEvent = () => {}, onPrepare, onRun, onStop }) {
   if (!path.isAbsolute(ledgerDir)) throw new TypeError('An absolute survey plan ledger directory is required');
-  if (!['dry_run', 'execute'].includes(mode) || mode === 'execute' && ![onPrepare, onRun, onStop].every((fn) => typeof fn === 'function')) {
+  if (!['off', 'dry_run', 'execute'].includes(mode) || mode === 'execute' && ![onPrepare, onRun, onStop].every((fn) => typeof fn === 'function')) {
     throw new TypeError('Invalid survey plan receiver mode or executor');
   }
   const client = bot._client;
   if (!client || typeof client.registerChannel !== 'function') return () => {};
   client.registerChannel(CHANNEL, 'restBuffer');
   let worldId = null;
+  let observing = false;
   let advertised = false;
   let transfer = null;
   let deferred = null;
@@ -328,16 +360,25 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent =
           advertised = true;
         }
         if (worldId !== message.worldId) {
+          observing = false;
           deferred = null;
           for (const grantId of active.keys()) endGrant(grantId, { status: 'paused', reason: 'world_changed' });
           transfer = null;
         }
         worldId = message.worldId;
-        sendPlanMessage(client, { type: 'hello_ack', protocol: PROTOCOL, worldId });
+        sendPlanMessage(client, { type: 'hello_ack', protocol: PROTOCOL, worldId, ...(mode === 'off' ? { observeOnly: true } : {}) });
         report({ type: 'hello', worldId, modVersion: message.modVersion });
-      } else if (message.type === 'grant_chunk') {
+      } else if (message.type === 'hello_ok' && observe && !observing && worldId
+          && message.protocol === PROTOCOL && message.worldId === worldId) {
+        sendPlanMessage(client, { type: 'status_query' });
+        observing = true;
+      } else if (message.type === 'plan_status' && observing && worldId === message.worldId) {
+        if (typeof message.initial !== 'boolean' || message.current !== undefined
+            && (message.current !== false || message.initial || message.plan === null)) throw new Error('Invalid survey status message');
+        report({ type: 'status', worldId, initial: message.initial, current: message.current, plan: decodeStatus(message.plan) });
+      } else if (message.type === 'grant_chunk' && mode !== 'off') {
         onChunk(message);
-      } else if (message.type === 'revoke' && worldId && UUID.test(message.grantId)) {
+      } else if (message.type === 'revoke' && mode !== 'off' && worldId && UUID.test(message.grantId)) {
         if (transfer?.grantId === message.grantId) transfer = null;
         if (deferred?.identity.grantId === message.grantId) deferred = null;
         let status = REVOKE_STATUS.has(message.status) ? message.status : 'paused';

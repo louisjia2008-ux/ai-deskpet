@@ -560,11 +560,11 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       return Promise.resolve();
     },
     /** Cancel task/autonomy only; survival and maintenance remain active. */
-    async cancelTask(reason = 'task_cancelled') {
+    async cancelTask(reason = 'task_cancelled', { keepAutonomy = false } = {}) {
       assertActive();
       taskEpoch += 1;
       paused = false;
-      await Promise.all([director.disable(reason), brain.clearGoal(reason)]);
+      await Promise.all([keepAutonomy ? undefined : director.disable(reason), brain.clearGoal(reason)]);
       await joinRetirement();
     },
     /** Suspend task selection and goal work, without suspending safety. */
