@@ -2,6 +2,7 @@ package dev.deskpet.minecraft.plan;
 
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
+import dev.deskpet.minecraft.wand.PlanCompiler;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.text.Text;
@@ -42,10 +43,11 @@ final class PlanDebugCommands {
                         var store = PlanStore.get(context.getSource().getServer());
                         var plan = store.plans.get(id(StringArgumentType.getString(context, "plan")));
                         if (plan == null || plan.status != SurveyPlan.Status.PREVIEWED) throw UNKNOWN_PLAN.create();
-                        plan.status = SurveyPlan.Status.EXPIRED;
-                        plan.reason = "preview_expired";
+                        plan.document.addProperty("expiresAt", System.currentTimeMillis() - 1);
+                        plan.document.remove("planHash");
+                        plan.document.addProperty("planHash", PlanCompiler.sha256(plan.document));
                         store.markDirty();
-                        context.getSource().sendFeedback(() -> Text.literal("survey plan preview expired"), false);
+                        context.getSource().sendFeedback(() -> Text.literal("survey plan preview deadline elapsed"), false);
                         return 1;
                     })));
                 debug.then(CommandManager.literal("confirm").then(CommandManager.argument("plan", StringArgumentType.word())

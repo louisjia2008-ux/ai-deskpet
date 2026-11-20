@@ -17,7 +17,7 @@ import java.util.UUID;
 
 final class PlanStore extends PersistentState {
     private static final Codec<PlanStore> CODEC = Codec.BYTE_BUFFER.fieldOf("plans").codec().xmap(
-        PlanStore::decode, value -> StandardCharsets.UTF_8.encode(value.export().toString()));
+        PlanStore::decode, value -> ByteBuffer.wrap(value.export().toString().getBytes(StandardCharsets.UTF_8)));
     private static final PersistentStateType<PlanStore> TYPE = new PersistentStateType<>(
         "deskpet_survey_plans", PlanStore::new, CODEC, null);
 
@@ -58,7 +58,13 @@ final class PlanStore extends PersistentState {
     }
 
     private static PlanStore decode(ByteBuffer data) {
-        var source = JsonParser.parseString(StandardCharsets.UTF_8.decode(data).toString()).getAsJsonObject();
+        // NbtOps writes a byte buffer's entire backing array. Earlier saves may
+        // therefore contain zero padding from the UTF-8 encoder's spare capacity.
+        var bytes = data.slice();
+        int size = bytes.limit();
+        while (size > 0 && bytes.get(size - 1) == 0) size--;
+        bytes.limit(size);
+        var source = JsonParser.parseString(StandardCharsets.UTF_8.decode(bytes).toString()).getAsJsonObject();
         var store = new PlanStore();
         for (var entry : source.getAsJsonArray("plans")) {
             var plan = SurveyPlan.restore(entry.getAsJsonObject());
