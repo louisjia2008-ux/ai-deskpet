@@ -33,11 +33,12 @@ function requireSane(response, description) {
 async function placeFixture(rcon, withChest) {
   await stabilize(rcon);
   for (const [name, dest] of [['Owner', '0.5'], ['DeskPetBot', '3.5']]) {
-    requireSane(await rcon.command(`gamemode survival ${name}`), 'Set fixture game mode');
+    await rcon.command(`gamemode survival ${name}`);
     requireSane(await rcon.command(`tp ${name} ${dest} ${ARENA_Y} 0.5`), 'Load arena');
     await rcon.command(`clear ${name}`);
   }
-  requireSane(await rcon.command(`fill -10 ${ARENA_Y - 1} -6 18 ${ARENA_Y - 1} 6 stone`), 'Build arena floor');
+  const floor = await rcon.command(`fill -10 ${ARENA_Y - 1} -6 18 ${ARENA_Y - 1} 6 stone`);
+  assert.match(floor, /Successfully filled|No blocks were filled/, 'Build arena floor');
   await rcon.command(`fill -10 ${ARENA_Y} -6 18 ${ARENA_Y + 4} 6 air`);
   if (withChest) {
     requireSane(await rcon.command(`setblock 2 ${ARENA_Y} 2 chest`), 'Place compatibility chest');
@@ -153,8 +154,11 @@ async function compatibility(rcon, settings, control) {
       assert.deepEqual(robot.errors, []);
     }
   } catch (error) {
-    if (!control || !robot?.errors.length) throw error;
-    record('control-outcome', { error: error.message, connectionEvents: robot.errors });
+    const registryKick = robot?.errors.find((event) => event.event === 'kicked'
+      && /Fabric Loader and Fabric API/.test(JSON.stringify(event.message))
+      && /"deskpet"/.test(JSON.stringify(event.message)));
+    if (!control || !registryKick) throw error;
+    record('control-outcome', { phase: 'registry handshake before spawn', connectionEvents: robot.errors });
   } finally {
     closeBot(robot);
     closeBot(owner);

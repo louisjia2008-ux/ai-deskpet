@@ -32,6 +32,8 @@ async function until(fn, description, timeoutMs = 10_000, intervalMs = 50) {
 }
 
 async function serverSettings() {
+  const marker = await fs.readFile(path.join(serverDir, '.deskpet-test-server'), 'utf8');
+  assert.ok(['polymer', 'raw'].includes(marker.trim()), 'Harness only accepts its dedicated test server');
   const properties = new Map((await fs.readFile(path.join(serverDir, 'server.properties'), 'utf8'))
     .split(/\r?\n/)
     .filter((line) => /^[a-z][a-z.-]*=/.test(line))
@@ -181,15 +183,15 @@ function newBot(settings, username, { compatible = true, install } = {}) {
   }
   bot.on('spawn', () => states.push('spawn'));
   if (install) install(bot);
-  return { bot, errors, states };
+  return { bot, errors, states, username };
 }
 
 async function ready(client) {
-  const { bot, errors, states } = client;
+  const { bot, errors, states, username } = client;
   await until(() => {
-    assert.deepEqual(errors, [], `Failed to connect ${bot.username}`);
+    assert.deepEqual(errors, [], `Failed to connect ${username}`);
     return states.includes('spawn');
-  }, `${bot.username} spawn`, 60_000);
+  }, `${username} spawn`, 60_000);
   await Promise.race([
     acknowledgePlayerLoaded(bot),
     delay(30_000, null, { ref: false }).then(() => {

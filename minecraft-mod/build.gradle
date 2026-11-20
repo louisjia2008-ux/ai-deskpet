@@ -29,6 +29,7 @@ dependencies {
     modImplementation "eu.pb4:polymer-virtual-entity:${polymer_version}"
     modImplementation "eu.pb4:sgui:${sgui_version}"
 
+    testImplementation "net.fabricmc:fabric-loader-junit:${loader_version}"
     testImplementation 'org.junit.jupiter:junit-jupiter:5.13.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.13.4'
 }
