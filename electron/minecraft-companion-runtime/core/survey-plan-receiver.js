@@ -164,6 +164,7 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent =
     if (record.stopping) return;
     clearInterval(record.timer);
     clearTimeout(record.startDeadline);
+    clearTimeout(record.deathFallback);
     record.result = Object.freeze(result);
     if (mode === 'dry_run') {
       active.delete(grantId);
@@ -397,7 +398,14 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent =
 
   function onDeath() {
     for (const record of active.values()) {
-      try { record.capability?.blocked('bot_died'); } catch { /* connection may be ending */ }
+      if (!record.capability || record.stopping || record.controller.signal.aborted) continue;
+      record.controller.abort('bot_died');
+      // The current Mod records server-side death coordinates and revokes first.
+      // Older servers still receive the Core's existing blocked notification.
+      record.deathFallback = setTimeout(() => {
+        try { if (!record.stopping) record.capability.blocked('bot_died'); } catch { /* connection may be ending */ }
+      }, 1000);
+      record.deathFallback.unref?.();
     }
   }
 

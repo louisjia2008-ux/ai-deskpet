@@ -7,6 +7,7 @@ import dev.deskpet.minecraft.PlanChannel;
 import dev.deskpet.minecraft.WorldIdentity;
 import dev.deskpet.minecraft.wand.PlanCompiler;
 import dev.deskpet.minecraft.wand.WandInteractions;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
@@ -61,6 +62,11 @@ public final class PlanService {
         ServerTickEvents.END_SERVER_TICK.register(PlanService::tick);
         ServerLifecycleEvents.SERVER_STARTING.register(server -> stopping = false);
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> stopping = true);
+        ServerLivingEntityEvents.AFTER_DEATH.register((entity, damage) -> {
+            if (config.enabled() && entity instanceof ServerPlayerEntity bot && config.isBot(bot)) {
+                pauseOnDeath(bot);
+            }
+        });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             if (!stopping && config.enabled() && config.isBot(handler.player)) {
                 var store = PlanStore.get(server);
@@ -91,6 +97,21 @@ public final class PlanService {
             @Override public String status(ServerPlayerEntity p, UUID id) { return PlanService.status(p, id); }
             @Override public boolean enabled() { return config.enabled(); }
         });
+    }
+
+    private static void pauseOnDeath(ServerPlayerEntity bot) {
+        var world = bot.getWorld();
+        var server = world.getServer();
+        var store = PlanStore.get(server);
+        for (var plan : store.plans.values()) {
+            if (!hasGrant(plan) || !bot.getUuid().equals(plan.botUuid)) continue;
+            var blockage = new JsonObject();
+            blockage.addProperty("reason", "bot_died");
+            blockage.add("pos", position(bot.getBlockPos()));
+            blockage.addProperty("dimension", dimension(world));
+            plan.blockage = blockage;
+            revoke(server, store, plan, PAUSED, "bot_died", true);
+        }
     }
 
     static UUID botUuid(ServerPlayerEntity player) {
@@ -277,6 +298,7 @@ public final class PlanService {
             case "overlapping_plan" -> "已有进行中的计划和此选区重叠";
             case "bot_busy" -> "机器人正在处理另一份计划";
             case "bot_unavailable" -> "机器人尚未连接计划频道";
+            case "bot_died" -> "机器人死亡";
             case "bot_wrong_dimension" -> "机器人不在计划所在维度";
             case "disconnected" -> "断线";
             case "server_restart" -> "服务器重启";
@@ -324,7 +346,7 @@ public final class PlanService {
             return deny(store, store.plans.get(plan.id), plan.id, method, "authorization_revoked");
         }
         var bot = config.findBot(server);
-        if (bot == null || !bot.getUuid().equals(plan.botUuid) || !PlanChannel.isReady(bot)) {
+        if (bot == null || !bot.isAlive() || !bot.getUuid().equals(plan.botUuid) || !PlanChannel.isReady(bot)) {
             return deny(store, store.plans.get(plan.id), plan.id, method, "bot_unavailable");
         }
         if (store.plans.values().stream().anyMatch(other -> !other.id.equals(plan.id)
