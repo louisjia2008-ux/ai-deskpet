@@ -95,11 +95,16 @@ describe('Minecraft dedicated world controls', () => {
     });
     render(<MinecraftDedicatedSettings api={api} locale="en" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Start' }));
-    expect(await screen.findByText('Starting')).toBeVisible();
+    const start = await screen.findByRole('button', { name: 'Start' });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(start);
     const stop = screen.getByRole('button', { name: 'Stop' });
-    expect(stop).toBeEnabled();
-    expect(screen.getByRole('switch', { name: 'Local Minecraft world' })).toBeEnabled();
+    await waitFor(() => {
+      expect(api.start).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Starting')).toBeVisible();
+      expect(stop).toBeEnabled();
+      expect(screen.getByRole('switch', { name: 'Local Minecraft world' })).toBeEnabled();
+    });
     fireEvent.click(stop);
     expect(await screen.findByText('Stopped')).toBeVisible();
     expect(api.stop).toHaveBeenCalledTimes(1);
