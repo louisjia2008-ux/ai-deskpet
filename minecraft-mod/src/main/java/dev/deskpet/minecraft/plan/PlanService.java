@@ -43,6 +43,10 @@ public final class PlanService {
     private static boolean stopping;
     private static PlanConfig config = new PlanConfig(false, null, null, "");
 
+    private enum BlockDenial {
+        VIOLATION, SITE_CHANGE, LATE_ATTEMPT
+    }
+
     private PlanService() {}
 
     public static void init() {
@@ -84,7 +88,7 @@ public final class PlanService {
         });
     }
 
-    private static UUID botUuid(ServerPlayerEntity player) {
+    static UUID botUuid(ServerPlayerEntity player) {
         var bot = config.findBot(player.getWorld().getServer());
         if (bot != null) return bot.getUuid();
         if (config.botUuid() != null) return config.botUuid();
@@ -102,7 +106,7 @@ public final class PlanService {
         return id;
     }
 
-    private static void preview(ServerPlayerEntity player, JsonObject planJson) {
+    static void preview(ServerPlayerEntity player, JsonObject planJson) {
         if (!config.enabled()) return;
         var store = PlanStore.get(player.getWorld().getServer());
         var plan = new SurveyPlan(planJson);
@@ -186,7 +190,9 @@ public final class PlanService {
         var renewed = new SurveyPlan(revised);
         renewed.finalTargets.putAll(plan.finalTargets);
         renewed.protectedBaseline.putAll(plan.protectedBaseline);
-        renewed.rejectedChanges = plan.rejectedChanges;
+        renewed.violations = plan.violations;
+        renewed.siteChanges = plan.siteChanges;
+        renewed.lateAttempts = plan.lateAttempts;
         renewed.status = PAUSED;
         return issue(server, store, renewed, "resume");
     }
@@ -222,7 +228,8 @@ public final class PlanService {
             case EXPIRED -> "已过期";
         };
         return label + (plan.reason.isEmpty() ? "" : " · " + reasonLabel(plan.reason))
-            + (plan.status == RUNNING ? " · " + plan.reportedProgress + "/" + plan.document.getAsJsonArray("ops").size() : "");
+            + (plan.status == RUNNING ? " · " + plan.reportedProgress + "/" + plan.document.getAsJsonArray("ops").size() : "")
+            + " · 越界 " + plan.violations + " · 现场变化 " + plan.siteChanges + " · 迟到操作 " + plan.lateAttempts;
     }
 
     private static String reasonLabel(String reason) {
@@ -243,6 +250,9 @@ public final class PlanService {
             case "owner_paused" -> "主人暂停";
             case "owner_cancelled" -> "主人取消";
             case "authorization_revoked" -> "选区正在等待机器人确认撤销";
+            case "outside_authorized_operations" -> "机器人尝试了授权清单外的操作";
+            case "server_final_state_changed" -> "现场目标格发生变化";
+            case "protected_block_changed" -> "受保护格发生变化";
             default -> reason;
         };
     }
@@ -460,12 +470,14 @@ public final class PlanService {
         if (type.equals("accept")) {
             String snapshot = PlanCompiler.snapshotHash(world, plan.document.getAsJsonObject("selection"));
             if (!snapshot.equals(plan.document.get("snapshotHash").getAsString())) {
+                plan.siteChanges++;
                 revoke(server, store, plan, PAUSED, "snapshot_changed", true);
                 return;
             }
             plan.status = RUNNING;
             plan.heartbeatDeadline = System.nanoTime() + HEARTBEAT_NANOS;
             store.markDirty();
+            finishIfDone(world, store, plan);
         } else if (type.equals("heartbeat")) {
             plan.heartbeatDeadline = System.nanoTime() + HEARTBEAT_NANOS;
         } else {
@@ -542,7 +554,7 @@ public final class PlanService {
             var plan = revocation.plan();
             if (!plan.status.holdsSelection() && botId.equals(plan.botUuid) && plan.dimension.equals(dimension)) {
                 var blocked = insideSelection(plan, targets);
-                if (blocked != null) return rejectChange(store, plan, action, blocked, "authorization_revoked");
+                if (blocked != null) return rejectChange(store, plan, action, blocked, "authorization_revoked", BlockDenial.LATE_ATTEMPT);
             }
         }
 
@@ -554,29 +566,29 @@ public final class PlanService {
             if (timedOut) revoke(server, store, plan, PAUSED, "disconnected", true);
             if (plan.status == RUNNING) {
                 matching = plan;
-                if (!sameDimension) return rejectChange(store, plan, action, origin, "outside_authorized_operations");
+                if (!sameDimension) return rejectChange(store, plan, action, origin, "outside_authorized_operations", BlockDenial.VIOLATION);
                 break;
             }
             if (sameDimension) {
                 var blocked = insideSelection(plan, targets);
                 if (blocked != null) {
                     return rejectChange(store, plan, action, blocked,
-                        timedOut ? "authorization_expired" : "authorization_inactive");
+                        timedOut ? "authorization_expired" : "authorization_inactive", BlockDenial.LATE_ATTEMPT);
                 }
             }
         }
         if (matching == null) return true;
-        if (custom) return rejectChange(store, matching, action, origin, "custom_item_data");
+        if (custom) return rejectChange(store, matching, action, origin, "custom_item_data", BlockDenial.VIOLATION);
         for (var target : targets.entrySet()) {
             var pos = target.getKey();
             var op = matching.next(pos);
             if (op == null || !op.target().equals(target.getValue())) {
-                return rejectChange(store, matching, action, pos, "outside_authorized_operations");
+                return rejectChange(store, matching, action, pos, "outside_authorized_operations", BlockDenial.VIOLATION);
             }
             String actual = observed.containsKey(pos) ? observed.get(pos) : PlanCompiler.stateName(world.getBlockState(pos));
             if (!actual.equals(op.expect())) {
                 revoke(server, store, matching, PAUSED, mismatch(pos, op.expect(), actual), true);
-                return rejectChange(store, matching, action, pos, "expected_block_changed");
+                return rejectChange(store, matching, action, pos, "expected_block_changed", BlockDenial.SITE_CHANGE);
             }
         }
         return true;
@@ -604,11 +616,21 @@ public final class PlanService {
                 || !operation.target().equals(PlanCompiler.stateName(world.getBlockState(pos)))) continue;
             plan.consumed.merge(pos.toImmutable(), 1, Integer::sum);
             store.markDirty();
-            if (plan.operations.keySet().stream().allMatch(block -> plan.next(block) == null)) {
-                boolean complete = plan.rejectedChanges == 0 && matches(world, plan.finalTargets)
-                    && matches(world, plan.protectedBaseline);
-                revoke(server, store, plan, complete ? COMPLETED : FAILED, complete ? "" : "server_final_verification_failed", true);
-            }
+            finishIfDone(world, store, plan);
+        }
+    }
+
+    private static void finishIfDone(ServerWorld world, PlanStore store, SurveyPlan plan) {
+        if (plan.operations.keySet().stream().anyMatch(block -> plan.next(block) != null)) return;
+        var server = world.getServer();
+        if (plan.violations > 0) {
+            revoke(server, store, plan, FAILED, "outside_authorized_operations", true);
+        } else if (!matches(world, plan.protectedBaseline) || !matches(world, plan.finalTargets)) {
+            plan.siteChanges++;
+            String reason = matches(world, plan.protectedBaseline) ? "server_final_state_changed" : "protected_block_changed";
+            revoke(server, store, plan, PAUSED, reason, true);
+        } else {
+            revoke(server, store, plan, COMPLETED, "", true);
         }
     }
 
@@ -621,12 +643,16 @@ public final class PlanService {
         return "expected_block_changed at " + pos.toShortString() + " expected " + expected + " actual " + actual;
     }
 
-    private static boolean rejectChange(PlanStore store, SurveyPlan plan, String action, BlockPos pos, String reason) {
-        var event = new JsonObject();
-        if (plan != null) {
-            event.addProperty("planId", plan.id.toString());
-            plan.rejectedChanges++;
+    private static boolean rejectChange(PlanStore store, SurveyPlan plan, String action, BlockPos pos, String reason,
+                                        BlockDenial denial) {
+        switch (denial) {
+            case VIOLATION -> plan.violations++;
+            case SITE_CHANGE -> plan.siteChanges++;
+            case LATE_ATTEMPT -> plan.lateAttempts++;
         }
+        var event = new JsonObject();
+        event.addProperty("planId", plan.id.toString());
+        event.addProperty("category", denial.name().toLowerCase(java.util.Locale.ROOT));
         event.addProperty("action", action);
         var position = new JsonObject();
         position.addProperty("x", pos.getX());

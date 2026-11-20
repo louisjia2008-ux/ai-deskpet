@@ -43,7 +43,9 @@ final class SurveyPlan {
     String lastDenial = "";
     UUID grantId;
     long heartbeatDeadline;
-    int rejectedChanges;
+    int violations;
+    int siteChanges;
+    int lateAttempts;
     int reportedProgress;
 
     SurveyPlan(JsonObject document) {
@@ -101,7 +103,9 @@ final class SurveyPlan {
         json.addProperty("lastDenial", lastDenial);
         if (grantId != null) json.addProperty("grantId", grantId.toString());
         json.add("plan", document);
-        json.addProperty("rejections", rejectedChanges);
+        json.addProperty("violations", violations);
+        json.addProperty("siteChanges", siteChanges);
+        json.addProperty("lateAttempts", lateAttempts);
         json.addProperty("reportedProgress", reportedProgress);
         var counts = new JsonObject();
         consumed.forEach((pos, count) -> counts.addProperty(Long.toString(pos.asLong()), count));
@@ -130,7 +134,11 @@ final class SurveyPlan {
         plan.reason = json.get("reason").getAsString();
         plan.lastDenial = json.get("lastDenial").getAsString();
         plan.grantId = json.has("grantId") ? UUID.fromString(json.get("grantId").getAsString()) : null;
-        plan.rejectedChanges = json.get("rejections").getAsInt();
+        // Legacy totals conflated violations, environmental changes and late packets.
+        // Keep the legacy audit log, but do not treat its unclassified total as a violation.
+        if (json.has("violations")) plan.violations = json.get("violations").getAsInt();
+        if (json.has("siteChanges")) plan.siteChanges = json.get("siteChanges").getAsInt();
+        if (json.has("lateAttempts")) plan.lateAttempts = json.get("lateAttempts").getAsInt();
         plan.reportedProgress = json.get("reportedProgress").getAsInt();
         json.getAsJsonObject("consumed").entrySet().forEach(entry ->
             plan.consumed.put(BlockPos.fromLong(Long.parseLong(entry.getKey())), entry.getValue().getAsInt()));
