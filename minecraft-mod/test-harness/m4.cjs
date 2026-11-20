@@ -84,7 +84,9 @@ async function cancel(env, expectedNotifications = 1) {
   requireButton(env.owner, SLOT.cancel, /取消施工/);
   await click(env.owner, SLOT.cancel);
   const row = await planWhere(env, (plan) => plan.status === 'cancelled', 'real Owner cancels the active plan');
+  await until(() => env.owner.currentWindow === null, 'successful cancellation closes the Owner menu', 5000);
   await until(() => env.ownerWire.bars.size === 0, 'Owner sees terminal Boss removal', 5000);
+  record('m4-cancel-menu-closed', { id: row.id, status: row.status, reason: row.reason });
   assert.equal(env.ownerWire.chat.filter((s) => s.includes('【施工】 取消')).length, expectedNotifications);
   return row;
 }

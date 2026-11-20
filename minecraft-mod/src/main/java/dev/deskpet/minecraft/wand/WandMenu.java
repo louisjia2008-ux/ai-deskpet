@@ -222,7 +222,16 @@ final class WandMenu extends SimpleGui {
             selection.clearDisplay();
             render();
         });
-        control(53, Items.RED_CONCRETE, "取消施工", working || paused, () -> action(auth.cancel(selection.owner, id)));
+        control(53, Items.RED_CONCRETE, "取消施工", working || paused, () -> {
+            String message = auth.cancel(selection.owner, id);
+            if (id.equals(auth.active(selection.owner))) {
+                action(message);
+            } else {
+                WandInteractions.message(selection.owner, message);
+                selection.invalidate();
+                selection.close();
+            }
+        });
     }
 
     private void renderHistory() {

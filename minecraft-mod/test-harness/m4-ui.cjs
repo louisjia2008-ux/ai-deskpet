@@ -205,8 +205,10 @@ async function markers(env) {
   await until(() => env.ownerWire.displays.size === 1, 'reopened Owner status shows exactly one death marker', 7000);
   requireButton(env.owner, SLOT.cancel, /取消施工/);
   await click(env.owner, SLOT.cancel);
-  await planWhere(env, (row) => row.status === 'cancelled', 'Owner cancels death-paused construction');
+  const cancelled = await planWhere(env, (row) => row.status === 'cancelled', 'Owner cancels death-paused construction');
+  await until(() => env.owner.currentWindow === null, 'cancelling a death-paused plan closes the Owner menu', 5000);
   await until(() => !env.ownerWire.bars.size && !env.ownerWire.displays.size, 'terminal cancellation removes Owner Boss bar and marker', 6000);
+  record('m4-cancel-menu-closed', { id: cancelled.id, status: cancelled.status, reason: cancelled.reason, prior: 'bot_died' });
   chatCount(env, '取消', 3);
 }
 
