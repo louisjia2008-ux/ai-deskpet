@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "kind": "farm",
   "entrance": [
     4,
@@ -8,6 +8,7 @@
   ],
   "door": null,
   "phases": [
+    "foundation",
     "irrigate",
     "till",
     "sow"

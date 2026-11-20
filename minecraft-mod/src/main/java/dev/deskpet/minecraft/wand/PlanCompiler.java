@@ -16,6 +16,7 @@ import net.minecraft.block.FenceGateBlock;
 import net.minecraft.block.TrapdoorBlock;
 import net.minecraft.block.entity.ChestBlockEntity;
 import net.minecraft.block.enums.ChestType;
+import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.state.property.Properties;
@@ -665,6 +666,11 @@ public final class PlanCompiler {
                     if (!protectedCells.contains(pos)) {
                         BlockState old = cleared.contains(pos) ? AIR : world.state(pos);
                         String phase = phase(template, cell);
+                        if (template.farm() && target.isOf(Blocks.FARMLAND)) {
+                            // The raised soil encloses the center before water is added.
+                            build.add(new Operation(pos, old, DIRT, "build", "foundation"));
+                            old = DIRT;
+                        }
                         build.add(new Operation(pos, old, target, phase.equals("furnish") ? "furnish" : "build", phase));
                     }
                 }
@@ -773,6 +779,7 @@ public final class PlanCompiler {
     private static JsonObject materials(List<Operation> ops, Map<String, Integer> supply, Placement placement) {
         Map<String, Integer> required = new TreeMap<>();
         Map<String, Integer> excavated = new TreeMap<>();
+        int hoeUses = 0;
         for (Operation op : ops) {
             if (op.kind().equals("cut") || op.kind().equals("clear")) {
                 // Guaranteed simple drops only. Fortune, Silk Touch, tools and loot remain relevant at execution.
@@ -797,7 +804,7 @@ public final class PlanCompiler {
                 continue;
             }
             if (placement.template().farm() && id.equals("farmland")) {
-                increment(required, "minecraft:dirt");
+                hoeUses++;
             } else if (placement.template().farm() && id.equals("water")) {
                 increment(required, "minecraft:water_bucket");
             } else if (placement.template().farm() && id.equals("wheat")) {
@@ -806,15 +813,19 @@ public final class PlanCompiler {
                 increment(required, Registries.ITEM.getId(op.target().getBlock().asItem()).toString());
             }
         }
-        if (placement.template().farm() && !ops.isEmpty()) {
-            increment(required, "minecraft:wooden_hoe");
-        }
+        int woodenHoeUses = Items.WOODEN_HOE.getDefaultStack().getMaxDamage();
+        if (hoeUses > 0) required.put("minecraft:wooden_hoe", Math.ceilDiv(hoeUses, woodenHoeUses));
+        int tilling = hoeUses;
         TreeMap<String, Integer> deficit = new TreeMap<>();
         required.forEach((id, count) -> {
             int supplied = supply.getOrDefault(id, 0);
             if (id.equals("minecraft:wooden_hoe")) {
-                supplied = supply.entrySet().stream().filter(item -> item.getKey().endsWith("_hoe"))
-                    .mapToInt(Map.Entry::getValue).sum();
+                int uses = supply.entrySet().stream().filter(item -> item.getKey().endsWith("_hoe"))
+                    .mapToInt(item -> Registries.ITEM.get(Identifier.of(item.getKey())).getDefaultStack().getMaxDamage()
+                        * item.getValue()).sum();
+                int shortage = Math.ceilDiv(Math.max(0, tilling - uses), woodenHoeUses);
+                if (shortage > 0) deficit.put(id, shortage);
+                return;
             }
             int missing = count - excavated.getOrDefault(id, 0) - supplied;
             if (missing > 0) {

@@ -300,12 +300,12 @@
     }
   },
   "wheat_field/0": {
-    "planHash": "b383a5aa8023788bde3e9242f886bdcf41ad20094cc1dba26ffc2e2cfe7d56bd",
+    "planHash": "9b26d33576b90e98f485f82b94615aca2eb7a0963b9223e238d913aec7020caf",
     "snapshotHash": "f3f24c491bdfa622be0cc6b8987b7a58eb1f0f9beef89a879227eb3af209daaf",
-    "operations": 161,
+    "operations": 241,
     "template": {
       "id": "wheat_field",
-      "version": 1,
+      "version": 2,
       "rotation": 0,
       "anchor": {
         "x": 2,
@@ -321,12 +321,12 @@
     }
   },
   "wheat_field/90": {
-    "planHash": "3c9500ebef4532cae22a2fecd95ec611c639e272389eeff90653689de9a97ea4",
+    "planHash": "ba7058f7f798e78902a77e8608b7b6ec0d2078999056e2152d1292541f084afb",
     "snapshotHash": "f3f24c491bdfa622be0cc6b8987b7a58eb1f0f9beef89a879227eb3af209daaf",
-    "operations": 161,
+    "operations": 241,
     "template": {
       "id": "wheat_field",
-      "version": 1,
+      "version": 2,
       "rotation": 90,
       "anchor": {
         "x": 2,
@@ -342,12 +342,12 @@
     }
   },
   "wheat_field/180": {
-    "planHash": "607171711a3d6182d1b4dabc98712364ed5bc37f976c16d1fdd37687355fd131",
+    "planHash": "aacbcb12b71e73e5ec24a2acba2032a76a456a3f79954f770e192028cf1bec6f",
     "snapshotHash": "f3f24c491bdfa622be0cc6b8987b7a58eb1f0f9beef89a879227eb3af209daaf",
-    "operations": 161,
+    "operations": 241,
     "template": {
       "id": "wheat_field",
-      "version": 1,
+      "version": 2,
       "rotation": 180,
       "anchor": {
         "x": 2,
@@ -363,12 +363,12 @@
     }
   },
   "wheat_field/270": {
-    "planHash": "b5790c96b4d2aa674827428b563bdc991df8233a7a862fc7c2c747ad97ff15c7",
+    "planHash": "00b36eb68731df819b75728bbc7e0e7a760fdd8b1f7fb38d09dc53defb1c7368",
     "snapshotHash": "f3f24c491bdfa622be0cc6b8987b7a58eb1f0f9beef89a879227eb3af209daaf",
-    "operations": 161,
+    "operations": 241,
     "template": {
       "id": "wheat_field",
-      "version": 1,
+      "version": 2,
       "rotation": 270,
       "anchor": {
         "x": 2,

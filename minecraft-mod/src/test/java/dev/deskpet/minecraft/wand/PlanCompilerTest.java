@@ -54,6 +54,13 @@ class PlanCompilerTest {
                 if (type == HouseTemplates.Type.WHEAT_FIELD) {
                     assertEquals(1, result.ops().stream().filter(op -> op.target().isOf(Blocks.WATER)).count());
                     assertEquals(80, result.ops().stream().filter(op -> op.target().isOf(Blocks.WHEAT)).count());
+                    assertTrue(result.ops().subList(0, 80).stream()
+                        .allMatch(op -> op.phase().equals("foundation") && op.target().isOf(Blocks.DIRT)));
+                    assertTrue(result.ops().get(80).target().isOf(Blocks.WATER));
+                    assertTrue(result.ops().stream().filter(op -> op.phase().equals("till"))
+                        .allMatch(op -> op.expect().isOf(Blocks.DIRT) && op.target().isOf(Blocks.FARMLAND)));
+                    assertEquals(2, result.plan().getAsJsonObject("materials").getAsJsonObject("required")
+                        .get("minecraft:wooden_hoe").getAsInt());
                 } else {
                     assertEquals(rotation.rotate(Direction.NORTH), result.doorFacing());
                     assertEquals(2, result.ops().stream().filter(op -> op.target().isOf(Blocks.OAK_DOOR) &&
