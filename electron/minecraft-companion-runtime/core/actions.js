@@ -344,18 +344,30 @@ async function collectDrops(bot, ctx, origin, matchName, { radius = 6, timeoutMs
 // Foods worth eating at any hunger; risky foods only when starving.
 const RISKY_FOODS = new Set(['rotten_flesh', 'spider_eye', 'poisonous_potato', 'pufferfish', 'chicken', 'suspicious_stew']);
 
-function pickFood(bot) {
+function pickFood(bot, accepts = () => true) {
   const foods = bot.registry.foodsByName || {};
-  const candidates = bot.inventory.items().filter((item) => foods[item.name]);
+  const candidates = bot.inventory.items().filter((item) => foods[item.name] && accepts(item));
   const safe = candidates.filter((item) => !RISKY_FOODS.has(item.name));
   const pool = safe.length ? safe : (bot.food <= 6 || bot.health <= 8 ? candidates : []);
   pool.sort((a, b) => (foods[b.name].foodPoints || 0) - (foods[a.name].foodPoints || 0));
   return pool[0] || null;
 }
 
-async function eat(bot, ctx, { timeoutMs = 5000 } = {}) {
+// Mineflayer's consume() can await its private timer after releasing the item.
+// Survey survival must release the body as soon as the authorization is revoked.
+async function consumeHeldUntil(bot, ctx, confirmed, timeoutMs) {
+  if (ctx.signal?.aborted) throw abortError(ctx.signal);
+  try {
+    bot.activateItem();
+    return await waitUntil(confirmed, { timeoutMs, signal: ctx.signal });
+  } finally {
+    bot.deactivateItem();
+  }
+}
+
+async function eat(bot, ctx, { timeoutMs = 5000, accepts, survey = false } = {}) {
   if (bot.food >= 20) return fail('not_hungry');
-  const food = pickFood(bot);
+  const food = pickFood(bot, accepts);
   if (!food) return fail('no_food');
   const name = food.name;
   const countBefore = countItems(bot, (n) => n === name);
@@ -365,6 +377,8 @@ async function eat(bot, ctx, { timeoutMs = 5000 } = {}) {
   } catch {
     return fail('equip_failed');
   }
+  const eaten = () => countItems(bot, (n) => n === name) < countBefore && (bot.food > foodBefore || bot.food >= 20);
+  if (survey) return await consumeHeldUntil(bot, ctx, eaten, timeoutMs) ? { ok: true, ate: name } : fail('eat_unconfirmed', { ate: name });
   try {
     await runCancellable(() => bot.consume(), {
       signal: ctx.signal, timeoutMs, timeoutCode: 'eat_timeout', cancel: () => bot.deactivateItem(),
@@ -374,9 +388,7 @@ async function eat(bot, ctx, { timeoutMs = 5000 } = {}) {
     // consume() can reject although the server applied the meal; check below.
   }
   // Both facts must hold together: the item left the inventory AND hunger went up.
-  const confirmed = await waitUntil(
-    () => countItems(bot, (n) => n === name) < countBefore && (bot.food > foodBefore || bot.food >= 20),
-    { timeoutMs: 2000, signal: ctx.signal });
+  const confirmed = await waitUntil(eaten, { timeoutMs: 2000, signal: ctx.signal });
   return confirmed ? { ok: true, ate: name } : fail('eat_unconfirmed', { ate: name });
 }
 
@@ -417,7 +429,7 @@ const bystanderBeside = (bot, target) => Object.values(bot.entities).some((e) =>
  * `yieldTo()` returning true ends the fight early (ok, `yielded`): something
  * else needs the bot more.
  */
-async function attack(bot, ctx, entityId, { timeoutMs = 15000, reach = 3, yieldTo = null } = {}) {
+async function attack(bot, ctx, entityId, { timeoutMs = 15000, reach = 3, yieldTo = null, canPursue = null } = {}) {
   const deadline = Date.now() + timeoutMs;
   try {
     if (ctx.signal?.aborted) throw abortError(ctx.signal);
@@ -428,9 +440,9 @@ async function attack(bot, ctx, entityId, { timeoutMs = 15000, reach = 3, yieldT
     // Chasing something up on the surface from a pit needs the same climbing allowance.
     const first = bot.entities[entityId];
     if (first && first.position.y - bot.entity.position.y >= 1.5 && underground(bot)) {
-      return await withClimbing(bot, first.position.y + 4, () => attackLoop(bot, ctx, entityId, deadline, reach, weaponSelectedAt, yieldTo));
+      return await withClimbing(bot, first.position.y + 4, () => attackLoop(bot, ctx, entityId, deadline, reach, weaponSelectedAt, yieldTo, canPursue));
     }
-    return await attackLoop(bot, ctx, entityId, deadline, reach, weaponSelectedAt, yieldTo);
+    return await attackLoop(bot, ctx, entityId, deadline, reach, weaponSelectedAt, yieldTo, canPursue);
   } finally {
     haltBody(bot);
   }
@@ -456,7 +468,7 @@ function directStep(bot, target) {
   return ![floor, feet, head].some((b) => STEP_HAZARD.test(b.name));
 }
 
-async function attackLoop(bot, ctx, entityId, deadline, reach, weaponSelectedAt, yieldTo = null) {
+async function attackLoop(bot, ctx, entityId, deadline, reach, weaponSelectedAt, yieldTo = null, canPursue = null) {
   // A chase that has not closed in for 8 s is not going to (cliff, water, canopy).
   let closest = Infinity;
   let closestAt = Date.now();
@@ -485,6 +497,7 @@ async function attackLoop(bot, ctx, entityId, deadline, reach, weaponSelectedAt,
       const distance = geometry.distance;
       const sight = distance <= reach ? meleeSight(bot, geometry) : 'out_of_reach';
       const canStrike = distance <= reach && sight === 'clear';
+      if (!canStrike && canPursue && !canPursue(target.position)) return fail('combat_leash');
       lastDistance = distance;
       if (distance < closest - 0.5) { closest = distance; closestAt = Date.now(); }
       const key = `${geometry.size},${canStrike},${sight}`;
@@ -501,6 +514,8 @@ async function attackLoop(bot, ctx, entityId, deadline, reach, weaponSelectedAt,
       if (!canStrike && distance > reach && directStep(bot, target)) {
         if (bot.pathfinder.goal) bot.pathfinder.setGoal(null);
         await bot.lookAt(target.position.offset(0, target.height ?? 1.6, 0), true);
+        if (ctx.signal?.aborted) throw abortError(ctx.signal);
+        if (canPursue && !canPursue(target.position)) return fail('combat_leash');
         bot.setControlState('forward', true);
       } else if (!canStrike) {
         bot.setControlState?.('forward', false);
@@ -1110,5 +1125,5 @@ module.exports = {
   withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight,
   drainPocket,
   recentre, surface, underground, openSky, localSurfaceY, unstick, nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, gatherClimbBlocks, digStairsUp, digStairsDown, goTo, goNear, goToDig, withinReach, digBlock, collectDrops, countItems, eat, pickFood, attack, directStep, fleeFrom,
-  equipBestWeapon, haltBody, weaponScore, droppedItemName, RISKY_FOODS,
+  equipBestWeapon, haltBody, weaponScore, droppedItemName, RISKY_FOODS, consumeHeldUntil,
 };

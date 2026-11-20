@@ -10,10 +10,31 @@ const STEP = Symbol('surveyStep');
 const AIR = 'minecraft:air';
 const CHESTS = new Set(['chest', 'trapped_chest']);
 const CUSTOM_COMPONENTS = new Set(['block_state', 'block_entity_data', 'custom_data']);
+const SURVIVAL_ITEM_DETAILS = new Set([
+  'damage', 'unbreakable', 'custom_name', 'item_name', 'item_model', 'lore', 'rarity',
+  'enchantments', 'custom_model_data', 'tooltip_display', 'repair_cost', 'enchantment_glint_override',
+  'tooltip_style', 'banner_patterns', 'base_color',
+]);
+// In the 1.21.8 vanilla registry, water through long slow falling are the
+// first 42 potions. Wind charged, weaving, oozing and infested follow.
+const LAST_NON_MUTATING_POTION = 41;
 const faceOffsets = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
 const fail = (reason) => ({ ok: false, reason });
 const asVec = ({ x, y, z }) => new Vec3(x, y, z);
 const isSurveyNight = (bot) => bot.time?.timeOfDay >= 12542 && bot.time.timeOfDay <= 23460;
+
+function isSurveySurvivalItem(bot, item) {
+  if (!item || item.name === 'chorus_fruit' || item.removedComponents?.length) return false;
+  const potion = item.name === 'potion';
+  if (!potion && item.name !== 'shield' && !Object.hasOwn(bot.registry?.foodsByName ?? {}, item.name)) return false;
+  return (item.components ?? []).every(({ type, data }) => {
+    if (SURVIVAL_ITEM_DETAILS.has(type)) return true;
+    if (!potion || type !== 'potion_contents' || !data || !Array.isArray(data.customEffects) || data.customEffects.length) return false;
+    if (data.potionId == null) return true;
+    return bot.version === '1.21.8' && Number.isInteger(data.potionId) &&
+      data.potionId >= 0 && data.potionId <= LAST_NON_MUTATING_POTION;
+  });
+}
 
 function checkStep(scope, step, pos, remove) {
   if (!scope || scope.step !== step || !step || scope.grant.signal.aborted || step.signal?.aborted) return 'survey_unauthorized';
@@ -100,7 +121,12 @@ function installSurveyActions(bot, plan, grant) {
       }
     } else if (packet === 'block_place' || packet === 'use_item') {
       const permit = scope.use;
-      if (!permit || permit.sent || permit.signal?.aborted || grant.signal.aborted || data.hand === 1) return undefined;
+      if (grant.signal.aborted) return undefined;
+      if (!permit && packet === 'use_item' && data?.location == null) {
+        const item = data?.hand === 0 ? bot.heldItem : data?.hand === 1 ? bot.inventory?.slots?.[45] : null;
+        if (isSurveySurvivalItem(bot, item)) return originalWrite.call(this, packet, data);
+      }
+      if (!permit || permit.sent || permit.signal?.aborted || data.hand === 1) return undefined;
       if (permit.step) {
         const reason = checkStep(scope, permit.step, permit.pos, false);
         if (reason) { permit.denial = reason; return undefined; }
@@ -110,7 +136,7 @@ function installSurveyActions(bot, plan, grant) {
         }
         if (packet === 'block_place') {
           if (!safeHit(bot, permit, data)) return undefined;
-        } else if (permit.reference || bot.heldItem?.name !== 'water_bucket' || permit.step.ops[0].target !== 'minecraft:water[level=0]') {
+        } else if (data.hand !== 0 || permit.reference || bot.heldItem?.name !== 'water_bucket' || permit.step.ops[0].target !== 'minecraft:water[level=0]') {
           return undefined;
         }
         rememberAttempt(scope, permit.step);
@@ -248,4 +274,4 @@ const openSurveyDoor = (bot, ctx, block) => setSurveyDoor(bot, ctx, block, true)
 const closeSurveyDoor = (bot, ctx, block) => setSurveyDoor(bot, ctx, block, false);
 
 module.exports = { installSurveyActions, withSurveyStep, surveyDigPermit, surveyPlace,
-  openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight };
+  openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight, isSurveySurvivalItem };

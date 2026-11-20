@@ -78,7 +78,7 @@ function createBrain({
   }
 
   function candidates() {
-    const list = permanentEnabled() ? [...permanent] : [];
+    const list = permanent.filter(permanentEnabled);
     const g = goalBehavior();
     if (g) list.push(g);
     return list;

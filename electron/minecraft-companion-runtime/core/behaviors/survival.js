@@ -13,6 +13,49 @@ const { createBlacklist } = require('../blacklist');
 const { isHostile } = require('../perception');
 const { createStance } = require('../stance');
 const { goals } = require('mineflayer-pathfinder');
+const { isSurveySurvivalItem } = require('../survey-plan-actions');
+
+const SURVEY_REFLEXES = new Set(['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block']);
+const enabledDuringSurvey = ({ name }) => SURVEY_REFLEXES.has(name);
+const SURVEY_LEASH = 16;
+// Leave room for the body and braking at the edge of a planned route.
+const SURVEY_ROUTE_RADIUS = SURVEY_LEASH - 1;
+const surveyDistance = (area, position) => Math.hypot(position.x - area.x, position.z - area.z);
+
+/** Short reflex-only route, bounded even when A* would prefer a detour. */
+async function withSurveyLeash(bot, area, run) {
+  const movement = bot.pathfinder?.movements;
+  if (!movement?.companionWalkOnly || typeof movement.getNeighbors !== 'function') {
+    return { ok: false, reason: 'survey_movement_unavailable' };
+  }
+  const original = movement.getNeighbors;
+  function getNeighbors(node, ...rest) {
+    const distance = surveyDistance(area, { x: node.x + 0.5, z: node.z + 0.5 });
+    return original.call(this, node, ...rest).filter((move) => {
+      const next = surveyDistance(area, { x: move.x + 0.5, z: move.z + 0.5 });
+      // A bot knocked outside the leash can walk back inward, but not farther out.
+      return next <= SURVEY_ROUTE_RADIUS || next < distance;
+    });
+  }
+  movement.getNeighbors = getNeighbors;
+  try {
+    return await run();
+  } finally {
+    if (movement.getNeighbors === getNeighbors) movement.getNeighbors = original;
+  }
+}
+
+function incomingArrow(bot) {
+  const head = bot.entity.position.offset(0, 1.25, 0);
+  return Object.values(bot.entities || {}).find((entity) => {
+    if (!['arrow', 'spectral_arrow'].includes(entity.name) || !entity.position || !entity.velocity) return false;
+    const delta = head.minus(entity.position);
+    const speedSquared = entity.velocity.dot(entity.velocity);
+    if (delta.norm() > 10 || speedSquared < 0.01) return false;
+    const ticks = delta.dot(entity.velocity) / speedSquared;
+    return ticks > 0 && delta.minus(entity.velocity.scaled(ticks)).norm() < 1.25;
+  });
+}
 
 // Entity flag bit 0 is "on fire".
 const burning = (bot) => (Number(bot.entity?.metadata?.[0]) & 1) === 1 || bot.entity?.isInLava === true;
@@ -266,7 +309,7 @@ const FOOD_ANIMALS = ['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom'];
 const FEEDING_RANGE = 32;
 
 function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defaultSkills, isFood, spare = () => false,
-  feeding = () => false, home = () => null, activeGoal = () => null, thresholds = {} } = {}) {
+  feeding = () => false, home = () => null, activeGoal = () => null, surveyArea = () => null, thresholds = {} } = {}) {
   // At night an archer is not chased far: out there more of them spawn, and
   // the way home to bed is the better defence.
   const t = { ghastRange: 48, escapeHealth: 6, healHealth: 10, escapeRange: 6, defendRange: 5, rangedRange: 14, nightRangedRange: 6, rangedHealth: 14, eatFood: 14,
@@ -281,6 +324,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   const hasSafeFood = (state, desperate) => Object.entries(state.inventory)
     .some(([name, count]) => count > 0 && foodCheck(name) && (desperate || !RISKY_FOODS.has(name)));
   const desperateForFood = (state) => state.food <= 6 || state.health <= 8;
+  const safeSurveyItem = (item) => isSurveySurvivalItem(bot, item);
   // Zombified piglins (and piglins, while the bot wears gold) leave the bot
   // alone unless provoked, and hitting one turns the whole group. Only a mob
   // of a pack that has hurt the bot counts as a threat.
@@ -375,9 +419,12 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   const target = (state) => {
     // In shelter only something that got right next to the bot is fought.
     if (state.sheltered) return threats(state).find((h) => h.distance <= 2) || null;
-    const fights = threats(state).filter((h) => h.name !== 'creeper' && !((avoided(state, h) && h.distance > 2.5) || (CHARGERS.has(h.name) && h.distance > BRUTE_FIGHT && !standing(state, h)))
+    const area = surveyArea();
+    const localRangedRange = area ? t.rangedRange : state.isDay === false ? t.nightRangedRange : t.rangedRange;
+    const fights = threats(state).filter((h) => (!area || h.distance <= 3 || surveyDistance(area, h.position) <= SURVEY_ROUTE_RADIUS)
+      && h.name !== 'creeper' && !((avoided(state, h) && h.distance > 2.5) || (CHARGERS.has(h.name) && h.distance > BRUTE_FIGHT && !standing(state, h)))
       && (h.distance <= (NEUTRAL.has(h.name) ? 2.5 : t.defendRange)
-        || ((RANGED.has(h.name) || (h.name === 'pillager' && !avoided(state, h))) && h.distance <= (state.isDay === false ? t.nightRangedRange : t.rangedRange)
+        || ((RANGED.has(h.name) || (h.name === 'pillager' && !avoided(state, h))) && h.distance <= localRangedRange
           && state.health > t.rangedHealth && armed(state)
           && Math.abs(h.position.y - state.position.y) <= 4)));
     // Guarding the owner, what goes for them is fought too, the one closest to
@@ -419,7 +466,22 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       if (threat.name === 'enderman' && dimensionOf(bot) === 'the_end') return 0;
       return reading(state).stance === 'retreat' ? 1 : 0;
     },
-    run: (ctx) => actions.fleeFrom(bot, ctx, nearest(ctx.perceive())?.position || bot.entity.position),
+    async run(ctx) {
+      const threat = nearest(ctx.perceive());
+      const area = surveyArea();
+      if (!area) return actions.fleeFrom(bot, ctx, threat?.position || bot.entity.position);
+      if (!threat) return { ok: true };
+      const { x, y, z } = threat.position;
+      const goal = new goals.GoalCompositeAll([
+        new goals.GoalInvert(new goals.GoalNear(x, y, z, 8)),
+        new goals.GoalNearXZ(area.x, area.z, SURVEY_ROUTE_RADIUS - 1),
+      ]);
+      ctx.record('survey_escape_start', { mob: threat.name, siteDistance: surveyDistance(area, bot.entity.position) });
+      const result = await withSurveyLeash(bot, area, () => actions.goTo(bot, ctx, goal,
+        { timeoutMs: 5000, retryNoProgress: false }));
+      ctx.record('survey_escape_result', { ok: result.ok, reason: result.reason, siteDistance: surveyDistance(area, bot.entity.position) });
+      return result;
+    },
   };
 
   // Guarding, a fight is broken off for a mob that has reached the owner
@@ -459,12 +521,19 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     async run(ctx) {
       const threat = target(ctx.perceive());
       if (!threat) return { ok: true };
+      const area = surveyArea();
       ctx.record('defend_target', { mob: threat.name, distance: Math.round(threat.distance) });
       let last = threat.position.clone();
       const tracker = setInterval(() => { const e = bot.entities?.[threat.id]; if (e) last = e.position.clone(); }, 100);
       let result;
       try {
-        result = await actions.attack(bot, ctx, threat.id, guarded() ? { yieldTo: guardSwitch(ctx, threat) } : undefined);
+        if (area) {
+          const canPursue = (position) => surveyDistance(area, position) <= SURVEY_ROUTE_RADIUS &&
+            surveyDistance(area, bot.entity.position) <= SURVEY_LEASH - 0.5;
+          result = await withSurveyLeash(bot, area, () => actions.attack(bot, ctx, threat.id, { canPursue }));
+        } else {
+          result = await actions.attack(bot, ctx, threat.id, guarded() ? { yieldTo: guardSwitch(ctx, threat) } : undefined);
+        }
       } finally {
         clearInterval(tracker);
       }
@@ -478,7 +547,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       // skeletons fought off in a fortress drop what the expedition is there for.
       // Nothing else drops anything kept: waiting on a zombie's drops cost 2.5 s
       // a kill while the next one went for the owner.
-      if (result.ok && KEEPERS.has(threat.name) && typeof actions.collectDrops === 'function') {
+      if (!area && result.ok && KEEPERS.has(threat.name) && typeof actions.collectDrops === 'function') {
         await actions.collectDrops(bot, ctx, last, (n) => KEPT_DROPS.has(n), { radius: 6, timeoutMs: 4000 });
       }
       return result;
@@ -494,25 +563,34 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       if ((bot.companionNoEatUntil || 0) > Date.now() && state.health > 6) return 0;
       const hungry = state.food <= t.eatFood || (state.health < 16 && state.food < 20);
       // Risky food (rotten flesh, raw chicken) only when starving or nearly dead.
-      return hungry && hasSafeFood(state, desperateForFood(state)) ? 1 : 0;
+      if (!hungry) return 0;
+      return (surveyArea() ? actions.pickFood(bot, safeSurveyItem) : hasSafeFood(state, desperateForFood(state))) ? 1 : 0;
     },
-    run: (ctx) => actions.eat(bot, ctx),
+    async run(ctx) {
+      if (!surveyArea()) return actions.eat(bot, ctx);
+      const before = bot.food;
+      const result = await actions.eat(bot, ctx, { survey: true, accepts: safeSurveyItem });
+      if (result.ok) ctx.record('survey_ate', { item: result.ate, before, after: bot.food });
+      return result;
+    },
   };
 
+  const quenchPotion = (item) => isFireResistancePotion(item) && (!surveyArea() || safeSurveyItem(item));
   // Burning (lava, a blaze's fireball): drink fire resistance if there is any.
   // Rides along with any other escape: it takes under two seconds.
   const quench = {
     name: 'quench',
     band: BAND.ESCAPE,
-    want: () => (burning(bot) && !hasEffect(bot, 'FireResistance') && bot.inventory?.items?.().some(isFireResistancePotion) ? 3 : 0),
+    want: () => (burning(bot) && !hasEffect(bot, 'FireResistance') && bot.inventory?.items?.().some(quenchPotion) ? 3 : 0),
     async run(ctx) {
-      const potion = bot.inventory.items().find(isFireResistancePotion);
+      const potion = bot.inventory.items().find(quenchPotion);
       if (!potion) return { ok: false, reason: 'no_potion' };
       ctx.record('quench', { inLava: bot.entity.isInLava === true });
       try {
         await bot.equip(potion, 'hand');
-        await bot.consume();
-      } catch { /* confirmed by the effect below */ }
+        if (surveyArea()) await actions.consumeHeldUntil(bot, ctx, () => hasEffect(bot, 'FireResistance'), 2500);
+        else await bot.consume();
+      } catch (error) { if (ctx.signal?.aborted) throw error; /* confirmed by the effect below */ }
       const ok = await waitUntil(() => hasEffect(bot, 'FireResistance'), { timeoutMs: 2000, signal: ctx.signal });
       return ok ? { ok: true } : { ok: false, reason: 'drink_unconfirmed' };
     },
@@ -520,20 +598,22 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
 
   // Badly hurt mid-fight (wither skeletons, brutes): a golden apple's absorption
   // and regeneration buy the time running away does not.
+  const healingItem = (item) => GOLDEN_APPLES.has(item.name) && (!surveyArea() || safeSurveyItem(item));
   const heal = {
     name: 'heal',
     band: BAND.ESCAPE,
     want: (state) => (state.health <= t.healHealth && !hasEffect(bot, 'Regeneration')
-      && bot.inventory?.items?.().some((i) => GOLDEN_APPLES.has(i.name)) ? 1.2 : 0),
+      && bot.inventory?.items?.().some(healingItem) ? 1.2 : 0),
     async run(ctx) {
-      const apple = bot.inventory.items().find((i) => i.name === 'enchanted_golden_apple')
-        || bot.inventory.items().find((i) => i.name === 'golden_apple');
+      const apples = bot.inventory.items().filter(healingItem);
+      const apple = apples.find((item) => item.name === 'enchanted_golden_apple') || apples[0];
       if (!apple) return { ok: false, reason: 'no_golden_apple' };
       ctx.record('heal', { item: apple.name, health: Math.round(bot.health) });
       try {
         await bot.equip(apple, 'hand');
-        await bot.consume();
-      } catch { /* confirmed by the effect below */ }
+        if (surveyArea()) await actions.consumeHeldUntil(bot, ctx, () => hasEffect(bot, 'Regeneration'), 2500);
+        else await bot.consume();
+      } catch (error) { if (ctx.signal?.aborted) throw error; /* confirmed by the effect below */ }
       const ok = await waitUntil(() => hasEffect(bot, 'Regeneration'), { timeoutMs: 2000, signal: ctx.signal });
       return ok ? { ok: true } : { ok: false, reason: 'eat_unconfirmed' };
     },
@@ -1086,6 +1166,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   // Items dropped on death stay for five minutes: go back for them once it is safe.
   let lastDeath = null;
   const onDeathDrops = () => {
+    if (surveyArea()) { lastDeath = null; return; }
     // Died in lava: whatever dropped burnt up, and going back is the same swim.
     const feet = bot.blockAt?.(bot.entity.position.floored());
     const burnt = /lava/.test(feet?.name || '');
@@ -1231,26 +1312,33 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   // hits for a heart and a half through fire resistance. A raised shield
   // takes them all: it was golden apples, then a death, without one.
   const hasShield = () => bot.inventory?.slots?.[45]?.name === 'shield' || bot.inventory?.items?.().some((i) => i.name === 'shield');
+  const incomingShieldThreat = (range) => (surveyArea() && incomingArrow(bot))
+    || (!hasEffect(bot, 'FireResistance') && incomingBlazeShot(bot, range));
   const block = {
     name: 'block',
     band: BAND.ESCAPE,
     // Fire resistance makes a blaze's fireball harmless (it is fire damage):
     // then raising the shield only cuts a tower up to a deck short, again and again.
-    want: () => (hasShield() && !hasEffect(bot, 'FireResistance') && incomingBlazeShot(bot) ? 1 : 0),
+    want: () => (hasShield() && incomingShieldThreat() ? 1 : 0),
     async run(ctx) {
       const shield = bot.inventory.items().find((i) => i.name === 'shield');
       if (bot.inventory.slots?.[45]?.name !== 'shield' && shield) {
         try { await bot.equip(shield, 'off-hand'); } catch { return { ok: false, reason: 'no_shield' }; }
       }
-      const first = incomingBlazeShot(bot);
+      const first = incomingShieldThreat();
       if (!first) return { ok: true };
+      if (ctx.signal?.aborted) throw abortError(ctx.signal);
       ctx.record('block', { distance: Math.round(first.position.distanceTo(bot.entity.position) * 10) / 10 });
       bot.pathfinder?.setGoal?.(null);
       try {
+        if (surveyArea()) {
+          await bot.lookAt(first.position, true);
+          if (ctx.signal?.aborted) throw abortError(ctx.signal);
+        }
         bot.activateItem(true);
         // A volley is three shots: hold the shield until none is coming.
         for (let quiet = 0, i = 0; i < 40 && quiet < 6; i += 1) {
-          const ball = incomingBlazeShot(bot, 16);
+          const ball = surveyArea() ? incomingShieldThreat(16) : incomingBlazeShot(bot, 16);
           if (ball) {
             quiet = 0;
             await bot.lookAt(ball.position, true);
@@ -1310,4 +1398,4 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   return [quench, leaveLava, leaveFire, unbury, heal, escape, breathe, deflect, block, hide, defend, cover, avoid, eat, provision, recover, recoverDrops];
 }
 
-module.exports = { createSurvivalBehaviors };
+module.exports = { createSurvivalBehaviors, enabledDuringSurvey };

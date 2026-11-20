@@ -6,7 +6,7 @@ const { Vec3 } = require('vec3');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { createBrain } = require('./brain');
 const { perceive } = require('./perception');
-const { createSurvivalBehaviors } = require('./behaviors/survival');
+const { createSurvivalBehaviors, enabledDuringSurvey } = require('./behaviors/survival');
 const { createRecovery } = require('./behaviors/recovery');
 const { createNightRest } = require('./behaviors/nightRest');
 const { createEndHazards } = require('./behaviors/endHazards');
@@ -212,6 +212,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   const behaviors = [...createSurvivalBehaviors({ bot, spare: (entity) => spare(entity),
     feeding: () => FEEDING_GOALS.has(brain?.status().goal?.name),
     activeGoal: () => brain?.status().goal?.name,
+    surveyArea: () => survey?.area ?? null,
     home: () => (director ? homeOf(director.memory)?.centre || null : null) }), ...recovery.behaviors,
     nightRest, homeMaintenance, ...createEndHazards({ bot, onEvent: (event) => onEvent(event) })];
   const usedGoals = new Set();
@@ -263,7 +264,8 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     abandonMs: retirementTimeoutMs,
     perceive: () => perceive(bot),
     behaviors,
-    permanentEnabled: () => !survey,
+    permanentEnabled: (behavior) => !survey ||
+      Boolean(survey.restoreMovements && !survey.grant.signal.aborted && !survey.closing && enabledDuringSurvey(behavior)),
     onEvent: (event) => {
       if (event.type === 'behavior_abandoned') haltBody(bot);
       if (event.type === 'goal_set' && goalOwner) goalOwner.generation = event.generation;
@@ -366,7 +368,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   function prepareSurveyPlan(plan, grant) {
     assertBodyAvailable();
     if (survey || grant.signal.aborted) throw new Error('Survey authorization cannot reserve the body');
-    const record = { grant, restoreActions: installSurveyActions(bot, plan, grant) };
+    const { minX, maxX, minZ, maxZ } = plan.selection;
+    const area = { x: (minX + maxX + 1) / 2, z: (minZ + maxZ + 1) / 2 };
+    const record = { grant, area, restoreActions: installSurveyActions(bot, plan, grant) };
     survey = record;
     grant.signal.addEventListener('abort', stopSurveyBody, { once: true });
     stopSurveyBody();
@@ -530,6 +534,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     async stopSurveyPlan(grant, reason) {
       const record = survey;
       if (record?.grant !== grant) return;
+      record.closing = true;
       stopSurveyBody();
       if (disposed) { await dispose(); return; }
       await Promise.all([record.prepared, brain.stop(reason)]);
