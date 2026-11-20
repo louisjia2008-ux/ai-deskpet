@@ -1,6 +1,7 @@
 package dev.deskpet.minecraft.wand;
 
 import eu.pb4.polymer.virtualentity.api.ElementHolder;
+import eu.pb4.polymer.virtualentity.api.attachment.ManualAttachment;
 import eu.pb4.polymer.virtualentity.api.elements.AbstractElement;
 import eu.pb4.polymer.virtualentity.api.elements.BlockDisplayElement;
 import eu.pb4.polymer.virtualentity.api.elements.TextDisplayElement;
@@ -47,7 +48,8 @@ final class WandPreview extends ElementHolder {
     }
 
     static WandPreview show(ServerPlayerEntity owner, PlanCompiler.Result result, EnumSet<Layer> enabled) {
-        WandPreview view = new WandPreview(Vec3d.of(owner.getBlockPos()));
+        Vec3d origin = Vec3d.of(owner.getBlockPos());
+        WandPreview view = new WandPreview(origin);
         Map<BlockPos, Marker> markers = new LinkedHashMap<>();
         for (var op : result.ops()) {
             Layer layer = switch (op.kind()) {
@@ -98,7 +100,9 @@ final class WandPreview extends ElementHolder {
                 result.doorFacing().getOffsetZ() * 0.7);
             view.addAt(door, at);
         }
-        view.startWatching(owner);
+        // An unattached holder is removed on the next network tick. Manual tracking
+        // keeps this holder private instead of enrolling nearby players via the chunk.
+        new ManualAttachment(view, owner.getWorld(), () -> origin).startWatching(owner);
         return view;
     }
 

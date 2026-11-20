@@ -34,7 +34,12 @@ final class WandMenu extends SimpleGui {
 
     @Override
     public void onClose() {
-        selection.clearDisplay();
+        var server = selection.world.getServer();
+        server.execute(() -> {
+            if (selection.menu == this) {
+                selection.clearDisplay();
+            }
+        });
     }
 
     @Override
