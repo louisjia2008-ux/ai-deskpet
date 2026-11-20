@@ -2,6 +2,7 @@
 // Wires the brain to a live Mineflayer bot: perception, survival behaviors,
 // conservative movement settings and the decision tick.
 
+const { dimension } = require('./nether');
 const { Vec3 } = require('vec3');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { createBrain } = require('./brain');
@@ -82,7 +83,10 @@ function nightShelter(bot, { house, goal, hunt, now = Date.now() }) {
   // of a house it never built, an idle bot was blown up by a creeper, then
   // killed by a phantom.
   if (!house) return { bed: null, centre: null };
-  const bed = house.furniture.bed.position;
+  const primary = house.furniture.bed;
+  const occupied = (p) => String(bot.blockAt(new Vec3(p.x, p.y, p.z))?.getProperties?.().occupied) === 'true';
+  const bed = [primary, house.furniture.guestBed].find((candidate) => candidate && !occupied(candidate.head || candidate.position))?.position;
+  if (!bed) return { bed: null, centre: house.interiorCenter };
   const block = bot.blockAt(new Vec3(bed.x, bed.y, bed.z));
   // Out of sight means far away (it digs in there); seen and gone means sleep without it.
   return { bed: !block || block.name.endsWith('_bed') ? bed : null, centre: house.interiorCenter };
@@ -145,7 +149,7 @@ function configureMovements(bot) {
  * `home`: { load(), save(value) } for this world's house across connections
  * (core-host keeps one per world), or null to remember it only while connected.
  */
-function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = false, retirementTimeoutMs = 20000, ownerName = null, home = null } = {}) {
+function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = false, retirementTimeoutMs = 20000, ownerName = null, home = null, autonomyRange = 'end' } = {}) {
   if (!bot) throw new TypeError('bot is required');
   if (!Number.isFinite(retirementTimeoutMs) || retirementTimeoutMs <= 0 || retirementTimeoutMs > 2147483647) {
     throw new TypeError('retirementTimeoutMs must be a positive timer duration');
@@ -251,7 +255,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   function rememberHome() {
     const memory = director?.memory.homestead?.memory;
     if (!home || !memory?.house) return;
-    const value = { anchor: memory.house.anchor, established: memory.established === true, pinned: memory.pinned === true, verified: { ...memory.verified } };
+    const value = { anchor: memory.house.anchor, established: memory.established === true, pinned: memory.pinned === true, verified: { ...memory.verified },
+      ...(autonomy ? { progression: Object.fromEntries(progressionFields.filter((key) => director.memory[key] !== undefined)
+        .map((key) => [key, director.memory[key]])) } : {}) };
     const text = JSON.stringify(value);
     if (text === homeSaved) return;
     homeSaved = text;
@@ -288,10 +294,48 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   });
   recovery.attach(brain);
   // With no player task the director picks the next goal itself; off unless asked for.
-  const { cards, stageOf } = createDefaultCards({ bot });
+  const { cards, stageOf, range, litEnd } = createDefaultCards({ bot, progression: autonomy });
+  const progressionFields = ['milestones', 'announced', 'announcementTimes', 'routeDeaths', 'stagePauses', 'extraChests', 'wheatFarmDone', 'endPortal'];
+  const announcement = {
+    diamond_pickaxe: '做出钻石镐了', nether: '第一次进了下界', blaze_rod: '拿到了烈焰棒',
+    end: '找到了要塞并进了末地', dragon: '打败了末影龙',
+  };
+  function observeProgress() {
+    if (!autonomy || !bot.entity) return;
+    const memory = director.memory;
+    const state = perceive(bot);
+    const { inventory, alive } = state;
+    if (!alive) return;
+    const at = Date.now();
+    if (bot.companionEndPortal) memory.endPortal = bot.companionEndPortal;
+    const facts = {
+      diamond_pickaxe: inventory.diamond_pickaxe,
+      nether: dimension(bot) === 'the_nether',
+      blaze_rod: inventory.blaze_rod,
+      end: dimension(bot) === 'the_end',
+      dragon: litEnd(),
+    };
+    memory.milestones ||= {};
+    for (const [id, reached] of Object.entries(facts)) {
+      if (reached && !memory.milestones[id]) {
+        memory.milestones[id] = at;
+        onEvent({ type: 'autonomy_milestone', milestone: id, at });
+      }
+    }
+    if (!ownerName || !bot.players?.[ownerName]) return;
+    memory.announced ||= [];
+    const window = (memory.announcementTimes ||= []).filter((time) => at - time < 60 * 60_000);
+    if (window.length >= 3) return;
+    const pending = Object.keys(memory.milestones).filter((id) => announcement[id] && !memory.announced.includes(id));
+    if (!pending.length) return;
+    const away = pending.length > 1 || at - memory.milestones[pending[0]] > 5000;
+    bot.chat(`${away ? '你不在的时候我' : '我'}${pending.map((id) => announcement[id]).join('，')}。`);
+    memory.announced.push(...pending);
+    memory.announcementTimes = [...window, at];
+  }
   // Its goals go through useGoal too, so an autonomous ranch also spares its herd.
   const directorBrain = { status: () => brain.status(), setGoal: useGoal, clearGoal: (reason) => brain.clearGoal(reason) };
-  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, stageOf, onEvent });
+  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, stageOf, scope: range, onEvent });
   // The house built on an earlier connection: its plan follows from the corner.
   let savedHome = null;
   try { savedHome = home?.load() ?? null; } catch { /* a home store that cannot be read is no home */ }
@@ -306,10 +350,26 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   }
   // Where home is, for a bot lost at sea (actions.swimAshore).
   bot.companionHomeAt = () => homeOf(director.memory)?.centre || null;
-  if (autonomy) director.enable();
+  if (autonomy) {
+    director.memory.range = autonomyRange;
+    for (const key of progressionFields) if (savedHome?.progression?.[key] !== undefined) {
+      director.memory[key] = savedHome.progression[key];
+    }
+    director.memory.homePending = Boolean(corner);
+    if (director.memory.endPortal) bot.companionEndPortal = director.memory.endPortal;
+    director.enable();
+  }
+  let nextProgressObservation = 0;
   const timer = setInterval(() => {
     if (disposed) return;
-    try { if (!survey && !paused && !dispatching && !retiring && !retirementFailed && !brain.status().blocked) director.tick(); } catch (error) { onEvent({ type: 'autonomy_error', at: Date.now(), reason: String(error?.message || error) }); }
+    try {
+      if (autonomy && Date.now() >= nextProgressObservation) {
+        nextProgressObservation = Date.now() + 1000;
+        observeProgress();
+        rememberHome();
+      }
+      if (!survey && !paused && !dispatching && !retiring && !retirementFailed && !brain.status().blocked) director.tick();
+    } catch (error) { onEvent({ type: 'autonomy_error', at: Date.now(), reason: String(error?.message || error) }); }
     brain.tick().catch(() => {});
   }, tickMs);
   timer.unref?.();
@@ -320,9 +380,23 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   // Effects die with the body too, but the server sends no removal for them:
   // a fire resistance kept on the client after a death meant the bot never
   // drank again, and burned to death at the next blaze.
+  let routeDeathAt = null;
+  const onDeathMessage = (message) => {
+    if (routeDeathAt === null || Date.now() - routeDeathAt > 3000 || typeof message !== 'string'
+        || !message.startsWith(`${bot.username} `)) return;
+    director.noteDeath(message.slice(bot.username.length + 1, 161), { at: routeDeathAt });
+  };
+  if (autonomy) bot.on('messagestr', onDeathMessage);
   const onDeath = () => {
     if (disposed) return;
     // Survival's death listener has already checked which life just ended.
+    if (autonomy) {
+      routeDeathAt = Date.now();
+      const cause = recovery.lastDeathCause();
+      if (director.noteDeath(cause, { at: routeDeathAt, dimension: dimension(bot) })) {
+        brain.failGoal('death_loop: autonomy stage paused').catch(() => {});
+      }
+    }
     bodyLifeEpoch += 1;
     surveyDeathEpoch = null;
     if (bot.entity?.effects) bot.entity.effects = {};
@@ -467,6 +541,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       paused = false;
       clearInterval(timer);
       bot.removeListener('death', onDeath);
+      bot.removeListener('messagestr', onDeathMessage);
       bot.removeListener('respawn', onRespawn);
       removeEdgeNudge();
       removePlacedMemory();
@@ -553,6 +628,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       releaseSurvey(record);
     },
     /** Lets the bot choose its own goals while no player task is set. */
+    setAutonomyRange: (range) => director.setRange(range),
     setAutonomy(on) {
       assertActive();
       if (on) assertBodyAvailable();

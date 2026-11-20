@@ -39,7 +39,9 @@ function validateConfig(input) {
   if (ownerName && !/^[a-zA-Z0-9_]{1,16}$/.test(ownerName)) throw new Error('玩家名格式不正确');
   const executorMode = input.executorMode ?? 'strict';
   if (!['strict', 'hybrid'].includes(executorMode)) throw new Error('不支持的执行模式');
-  return { host, port, username, auth, version, ownerName, executorMode };
+  const autonomyRange = input.autonomyRange;
+  if (autonomyRange !== undefined && !['overworld', 'nether', 'end'].includes(autonomyRange)) throw new Error('不支持的自主发育范围');
+  return { host, port, username, auth, version, ownerName, executorMode, ...(autonomyRange ? { autonomyRange } : {}) };
 }
 
 function validateEnvelope(value) {

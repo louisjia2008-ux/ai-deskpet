@@ -728,7 +728,7 @@ async function storeItems(bot, ctx, { position, items }) {
 }
 
 /** Takes every matching stack out of a chest; ok once the inventory holds more of it. */
-async function takeItems(bot, ctx, { position, itemMatch }) {
+async function takeItems(bot, ctx, { position, itemMatch, count: requested = Infinity }) {
   const moved = await goToBlock(bot, ctx, position);
   if (!moved.ok) return moved;
   const block = bot.blockAt(v(position));
@@ -740,9 +740,13 @@ async function takeItems(bot, ctx, { position, itemMatch }) {
     chest = await runCancellable(() => bot.openContainer(block), { signal: ctx.signal, timeoutMs: 5000, timeoutCode: 'open_timeout' });
     const stacks = chest.containerItems().filter((i) => itemMatch(i.name));
     if (stacks.length === 0) return fail('chest_empty');
+    let remaining = requested;
     for (const stack of stacks) {
+      const amount = Math.min(stack.count, remaining);
+      if (amount <= 0) break;
       try {
-        await chest.withdraw(stack.type, null, stack.count);
+        await chest.withdraw(stack.type, null, amount);
+        remaining -= amount;
       } catch (error) {
         if (isAbort(error)) throw error;
         break; // inventory full: keep what earlier stacks already moved

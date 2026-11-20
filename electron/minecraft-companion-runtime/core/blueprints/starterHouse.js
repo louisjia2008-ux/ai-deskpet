@@ -76,6 +76,7 @@ function createStarterHouse(anchor) {
   // And under the doorstep: a pit there (a creeper crater, a cave) leaves the
   // bot shut in the house with no path out.
   foundation.push(at(door.dx, -1, -1));
+  const torchSupports = furniture.torches.filter((p) => p.z < anchor.z).map((p) => ({ ...p, y: p.y - 1 }));
 
   return {
     anchor: { ...anchor },
@@ -85,6 +86,7 @@ function createStarterHouse(anchor) {
     scaffold,
     clearance,
     foundation,
+    torchSupports,
     // Doorstep outside the door; the bot must be able to reach it.
     entrance: at(door.dx, 0, -1),
     interiorCenter: at(3, 0, 3),

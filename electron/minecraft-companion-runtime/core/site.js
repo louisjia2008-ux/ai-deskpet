@@ -85,10 +85,11 @@ function evaluateSite(blockAt, corner, around) {
     }
   }
   if (roofed >= 3) return null;
-  const doorstep = blockAt(house.entrance.x, house.entrance.y - 1, house.entrance.z);
-  if (!isSolid(doorstep) && !isSoft(blockAt(house.entrance.x, house.entrance.y - 2, house.entrance.z))) {
-    // A missing doorstep is fine only if there is something to stand on below.
-    return null;
+  for (const p of [house.entrance, ...house.torchSupports.map((p) => ({ ...p, y: p.y + 1 }))]) {
+    const below = blockAt(p.x, p.y - 1, p.z);
+    if (isSolid(below)) continue;
+    if (!isSoft(below) || !isSolid(blockAt(p.x, p.y - 2, p.z))) return null;
+    fills += 1;
   }
   const distance = Math.hypot(corner.x + SIZE / 2 - around.x, corner.z + SIZE / 2 - around.z);
   return { anchor, fills, digs, cost: digs + fills * 2 + distance * 0.1 };

@@ -141,7 +141,7 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
   }
 
   /** One overworld step towards the nether: walk back, build, light or enter the portal. */
-  async function toNether(ctx, state) {
+  async function toNether(ctx, state, { canEnter = () => true } = {}) {
     leaveNetherMode();
     const remembered = memory.overworldPortal && bot.blockAt(memory.overworldPortal)?.name === 'nether_portal'
       ? memory.overworldPortal : null;
@@ -152,6 +152,7 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     const portal = remembered || nether.findPortal(bot, 48);
     if (portal) {
       memory.overworldPortal = portal;
+      if (!canEnter(ctx.perceive())) return fail('nether_departure_requirements');
       return goThrough(ctx, portal);
     }
     // A frame begun by an earlier goal (the task asked again) is finished, not

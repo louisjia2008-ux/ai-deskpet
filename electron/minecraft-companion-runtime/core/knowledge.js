@@ -120,9 +120,13 @@ const KNOWLEDGE = {
     tool: true,
     sources: [{ kind: 'craft', yields: 1, needs: { iron_ingot: 1, planks: 6 }, table: true, pick: () => 'shield' }],
   },
+  charcoal: {
+    match: exact('charcoal'),
+    sources: [{ kind: 'smelt', input: 'log', inputItem: (inv) => byMost(inv, Object.keys(inv).filter(KNOWLEDGE.log.match)) }],
+  },
   torch_fuel: {
     match: exact('coal', 'charcoal'),
-    sources: [{ kind: 'smelt', input: 'log', inputItem: (inv) => byMost(inv, Object.keys(inv).filter(KNOWLEDGE.log.match)) }],
+    sources: [{ kind: 'alias', key: 'charcoal' }],
   },
   torch: {
     match: exact('torch'),
@@ -174,6 +178,16 @@ const KNOWLEDGE = {
     tool: true,
     sources: [{ kind: 'craft', yields: 1, needs: { diamond: 3, stick: 2 }, table: true, pick: () => 'diamond_pickaxe' }],
   },
+  diamond_sword: {
+    match: exact('diamond_sword', 'netherite_sword'),
+    tool: true,
+    sources: [{ kind: 'craft', yields: 1, needs: { diamond: 2, stick: 1 }, table: true, pick: () => 'diamond_sword' }],
+  },
+  ...Object.fromEntries([['helmet', 5], ['chestplate', 8], ['leggings', 7], ['boots', 4]].map(([piece, diamonds]) => [`diamond_${piece}`, {
+    match: exact(`diamond_${piece}`, `netherite_${piece}`),
+    tool: true,
+    sources: [{ kind: 'craft', yields: 1, needs: { diamond: diamonds }, table: true, pick: () => `diamond_${piece}` }],
+  }])),
   obsidian: {
     match: exact('obsidian'),
     sources: [{ kind: 'cast', tool: 'diamond_pickaxe', water: 'water_bucket', lava: 'lava_bucket' }],

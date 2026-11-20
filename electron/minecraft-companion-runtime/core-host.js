@@ -284,9 +284,20 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
         review('death', `机器人死亡${where}`);
       });
     }
-    // Player chat is data for the parent to judge; the host never acts on it.
+    // The managed owner can summon the bot while it is busy with autonomous work.
+    // Other chat is passed to the parent for its normal handling.
     next.on('chat', (username, message) => {
       if (!current() || connection.state !== 'ready' || username === next.username) return;
+      const directCome = managed && username === nextConfig.ownerName && typeof message === 'string' &&
+        message.trim().match(/^@?([A-Za-z0-9_]{1,16})[\s,，:：、]+(?:请)?过来[。！!]?$/u)?.[1] === next.username;
+      if (directCome && !active && !survey && companion) {
+        const engine = companion;
+        coreEvent({ type: 'owner_command', command: 'come_to_owner', at: now() }, epoch);
+        void engine.submitTask('followOwner', { stay: false }).catch(error => {
+          coreEvent({ type: 'owner_command_failed', reason: errorData(error).message, at: now() }, epoch);
+        });
+        return;
+      }
       event({ type: 'player_chat', connectionGeneration: epoch, username: String(username).slice(0, 64), message: String(message).slice(0, 256) });
     });
     let spawnEpoch = 0;
@@ -303,6 +314,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
         if (!companion) companion = createCompanion({
           bot: next,
           autonomy: managed,
+          autonomyRange: nextConfig.autonomyRange,
           ownerName: nextConfig.ownerName || null,
           onEvent(payload) {
             if (!current()) return;
@@ -362,6 +374,14 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     if (name === 'listTools') return { tools: TOOLS };
     if (name === 'getStatus') return status();
     if (name === 'getTask') return { task: clone(currentTask(args.taskId)) };
+    if (name === 'setAutonomyRange') {
+      if (!managedWorldAutonomy || !config || !isLocalOffline(config) || connection.state !== 'ready' || !companion) {
+        throw problem('not_ready', 'The managed world must be ready before setting its autonomy range', true);
+      }
+      await companion.setAutonomyRange(args.range);
+      config.autonomyRange = args.range;
+      return { range: args.range };
+    }
     if (name === 'setPolicy') {
       if (connection.state !== 'ready' || !companion) throw problem('not_ready', 'Connect and wait for connection.ready before setting a policy', true);
       return { policy: companion.setPolicy(args) };

@@ -13,6 +13,7 @@ const { createStockFoodGoal } = require('./stockFood');
 const { createCobbleGeneratorGoal } = require('./cobbleGenerator');
 const { createAutoSmelterGoal } = require('./autoSmelter');
 const { createDeviceProjectGoal } = require('./deviceProject');
+const { createProgression } = require('./progression');
 const { KNOWLEDGE, countKey } = require('../knowledge');
 
 const FOOD_TARGET = 16;
@@ -44,7 +45,7 @@ function avoidFor(memory, home, self) {
   };
 }
 
-function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = FOOD_TARGET } = {}) {
+function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = FOOD_TARGET, progression = false } = {}) {
   // One homestead for the whole run: it holds the chosen site and which
   // furniture has been used, so every later pick continues the same house.
   const home = (memory) => (memory.homestead ||= createHomesteadGoal({ bot, ...homestead }));
@@ -95,10 +96,26 @@ function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = 
       risk: 'low',
       requires: (state, memory) => Boolean(homeOf(memory)) && built(memory, 'cobbleGenerator', state),
       need: (state, memory) => (built(memory, 'autoSmelter', state) ? 0 : 55),
-      create: machine('autoSmelter', (avoid) => createAutoSmelterGoal({ bot, count: SMELT_COUNT, avoid }), Math.PI),
+      create: machine('autoSmelter', (avoid) => createAutoSmelterGoal({ bot, count: SMELT_COUNT, ...(progression ? { fuel: 'charcoal' } : {}), avoid }), Math.PI),
     },
   );
 
+  if (progression) {
+    const route = createProgression({ bot, kb, homeOf, avoidFor, built });
+    const overworld = () => !['the_nether', 'the_end'].includes(String(bot.game?.dimension).replace('minecraft:', ''));
+    cards[0].requires = overworld;
+    cards[1].requires = overworld;
+    cards[1].maintenance = true;
+    cards[1].need = (state) => {
+      const food = countKey('food', state.inventory, kb);
+      return food < 4 ? 95 : food < FOOD_TARGET ? 35 : 0;
+    };
+    for (const device of cards.slice(2)) {
+      const requires = device.requires;
+      device.requires = (state, memory) => overworld() && requires(state, memory);
+    }
+    return { ...route, cards: [...route.cards, ...cards] };
+  }
   const stageOf = (state, memory) => (memory.homestead?.isDone(state) ? 1 : 0);
   return { cards, stageOf };
 }

@@ -53,6 +53,7 @@ function createDirector({
   perceive,
   cards = [],
   stageOf = () => 0,
+  scope = () => Infinity,
   memory = {},
   now = Date.now,
   onEvent = () => {},
@@ -76,9 +77,11 @@ function createDirector({
   };
 
   function settle(type, event) {
-    const id = own.id;
+    const { id, expedition } = own;
     own = null;
+    if (expedition) memory.homePending = true;
     if (type === 'goal_done') {
+      if (id === 'wheat_farm') memory.wheatFarmDone = true;
       cooldowns.delete(id);
       return;
     }
@@ -119,7 +122,15 @@ function createDirector({
       const state = perceive();
       if (!state || state.alive === false) return null;
       const stage = stageOf(state, memory);
-      const choice = chooseNext(state, memory, cards, { stage, cooldowns, now: now() });
+      const maxStage = scope(memory);
+      const paused = memory.stagePauses || {};
+      const available = cards.filter((card) => {
+        if (card.stage > maxStage && !card.safeReturn) return false;
+        if (card.safeReturn || card.maintenance) return true;
+        const budgetStage = card.budgetStage ?? (card.expedition ? stage : card.stage);
+        return !paused[budgetStage] || paused[budgetStage] <= now();
+      });
+      const choice = chooseNext(state, memory, available, { stage, cooldowns, now: now() });
       if (!choice.card) {
         idleSince = now();
         if (!lastIdle) emit('autonomy_idle', { stage, scores: choice.scores });
@@ -130,7 +141,8 @@ function createDirector({
       const goal = choice.card.create(memory);
       emit('autonomy_choice', { card: choice.card.id, goal: goal.name, stage, scores: choice.scores });
       brain.setGoal(goal);
-      own = { id: choice.card.id, goal: goal.name };
+      own = { id: choice.card.id, goal: goal.name, expedition: choice.card.expedition, stage: choice.card.budgetStage ?? stage, cardStage: choice.card.stage,
+        safeReturn: choice.card.safeReturn };
       idleSince = null;
       return choice.card.id;
     },
@@ -144,12 +156,41 @@ function createDirector({
       if (!enabled) return;
       enabled = false;
       const mine = own;
+      if (mine?.expedition) memory.homePending = true;
       own = null;
       if (mine && brain.status().goal?.name === mine.goal) await brain.clearGoal(reason);
       emit('autonomy_disabled', { reason });
     },
+    async setRange(range) {
+      memory.range = range;
+      if (own && !own.safeReturn && own.cardStage > scope(memory)) await brain.clearGoal('autonomy_range_changed');
+    },
+    noteDeath(cause, { at = now(), dimension = null, stage = own?.stage, card = own?.id } = {}) {
+      const cutoff = at - 24 * 60 * 60_000;
+      const deaths = (memory.routeDeaths || []).filter((death) => death.at >= cutoff);
+      const latest = deaths.at(-1);
+      if (latest?.at === at) {
+        if (cause) latest.cause = cause;
+        return false;
+      }
+      deaths.push({ at, cause: cause || null, dimension, stage: stage ?? null, card: card ?? null });
+      memory.routeDeaths = deaths.slice(-128);
+      if (!card || card === 'nether_return' || card === 'return_home' || deaths.filter((death) => death.stage === stage && death.card).length < 2) return false;
+      const pauses = (memory.stagePauses ||= {});
+      if (pauses[stage] > now()) return false;
+      pauses[stage] = at + 2 * 60 * 60_000;
+      emit('autonomy_stage_paused', { stage, until: pauses[stage] });
+      return true;
+    },
     status() {
+      const state = enabled ? perceive() : null;
       return {
+        stage: state ? stageOf(state, memory) : null,
+        range: memory.range ?? 'end',
+        goal: own?.goal ?? null,
+        milestones: { ...memory.milestones },
+        deaths: (memory.routeDeaths || []).slice(-10),
+        stagePauses: Object.entries(memory.stagePauses || {}).filter(([, until]) => until > now()).map(([stage, until]) => ({ stage: Number(stage), until })),
         enabled,
         current: own?.id || null,
         playerActive,

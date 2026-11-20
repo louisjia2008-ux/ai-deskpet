@@ -57,7 +57,7 @@ const STONE_PICK_USES = 131;
 // Planner steps spent on spare pickaxes before going down with what there is.
 const TOOL_STEPS = 60;
 
-function createEnterEndGoal({ bot, actions = defaultActions, skills = defaultSkills, kb = KNOWLEDGE, rethrowEvery = 96 } = {}) {
+function createEnterEndGoal({ bot, actions = defaultActions, skills = defaultSkills, kb = KNOWLEDGE, rethrowEvery = 96, canEnter = () => true } = {}) {
   const memory = { sightings: [], estimate: null, ring: null, thrown: 0, broken: 0, walked: 0, entered: false, closest: Infinity,
     toolSteps: 0, toolsReady: false, toolUses: 0 };
   const toolMemory = { shortfall: {} };
@@ -198,6 +198,7 @@ function createEnterEndGoal({ bot, actions = defaultActions, skills = defaultSki
       const frame = [...ring.frames].sort((a, b) => a.position.distanceTo(here0()) - b.position.distanceTo(here0()))[0];
       const down = await descendToRoom(ctx, frame?.position || ring.center);
       if (down) return down;
+      if (!canEnter(ctx.perceive())) return fail('end_departure_requirements');
       ctx.record('portal_enter', { center: at(ring.center) });
       rememberPortal(bot, ring.center);
       const result = await stronghold.enterPortal(bot, ctx, ring);

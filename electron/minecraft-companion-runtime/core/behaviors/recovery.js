@@ -406,6 +406,7 @@ function createRecovery({
     behaviors: [unstick, tidy, wear, leaveDanger, nightBunker],
     observe,
     attach(target) { brain = target; },
+    lastDeathCause: () => deaths.at(-1)?.cause ?? null,
     status: () => ({ goal: { ...goalTrack }, deaths: deaths.length, danger: dangerActive() ? { ...danger } : null,
       bunker: Boolean(bunker) }),
     dispose() {

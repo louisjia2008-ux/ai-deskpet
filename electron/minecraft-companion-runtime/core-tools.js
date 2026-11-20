@@ -35,6 +35,7 @@ const GOAL_SCHEMAS = Object.freeze({
   endJourney: schema({ chests: integer(1, 64), withCity: { type: 'boolean' }, home: { type: 'boolean' } }),
 });
 const CONTROL_SCHEMAS = Object.freeze({
+  setAutonomyRange: schema({ range: { type: 'string', enum: ['overworld', 'nether', 'end'] } }, ['range']),
   getStatus: schema(), listTools: schema(), getTask: schema({ taskId }, ['taskId']),
   cancel: schema({ taskId }, ['taskId']), pause: schema({ taskId }, ['taskId']),
   resume: schema({ taskId }, ['taskId']), stopAll: schema(),

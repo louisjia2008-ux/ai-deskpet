@@ -35,7 +35,7 @@ const HUNT_HEALTH = 15;
 const HUNT_DY_WITHER = 12;
 
 function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trades = 10, roam = 400, skullTries = 0,
-  skills = defaultSkills, actions = defaultActions } = {}) {
+  skills = defaultSkills, actions = defaultActions, canEnter = () => true } = {}) {
   for (const [name, value] of Object.entries({ blazeRods, witherSkulls, trades, skullTries })) {
     if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${name} must be a non-negative integer`);
   }
@@ -1043,7 +1043,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
       // Respawned without it: going back through to the fortress only dies again.
       const lost = lostKit(state);
       if (lost) return fail(lost);
-      return trip.toNether(ctx, state);
+      return trip.toNether(ctx, state, { canEnter });
     },
     dispose() {
       bot.removeListener?.('entityDead', onEntityDead);

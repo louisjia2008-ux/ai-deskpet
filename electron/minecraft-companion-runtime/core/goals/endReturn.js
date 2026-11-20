@@ -29,10 +29,11 @@ function rememberPortal(bot, center) {
   if (center) bot.companionEndPortal = { x: center.x, y: center.y, z: center.z };
 }
 
-async function returnToEnd(bot, ctx, { actions = defaultActions } = {}) {
+async function returnToEnd(bot, ctx, { actions = defaultActions, canEnter = () => true } = {}) {
   if (dimension(bot) !== 'overworld') return fail('not_in_overworld');
   const seen = portalInSight(bot);
   if (seen) {
+    if (!canEnter(ctx.perceive())) return fail('end_departure_requirements');
     rememberPortal(bot, seen);
     ctx.record('end_return', { portal: `${seen.x},${seen.y},${seen.z}` });
     return stronghold.enterPortal(bot, ctx, { center: seen });
