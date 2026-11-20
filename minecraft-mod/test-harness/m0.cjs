@@ -165,6 +165,68 @@ async function compatibility(rcon, settings, control) {
   }
 }
 
+async function craftWand(rcon, settings) {
+  const client = newBot(settings, 'Crafter');
+  const { bot } = client;
+  const table = new Vec3(24, ARENA_Y, 0);
+  try {
+    await ready(client);
+    await rcon.command('gamemode survival Crafter');
+    await rcon.command('clear Crafter');
+    await rcon.command('forceload add 24 0');
+    try {
+      requireSane(await rcon.command(`tp Crafter 24.5 ${ARENA_Y} 2.5`), 'Place Crafter in isolated recipe fixture');
+      await rcon.command(`fill 22 ${ARENA_Y - 1} -2 27 ${ARENA_Y - 1} 4 stone`);
+      await rcon.command(`fill 22 ${ARENA_Y} -2 27 ${ARENA_Y + 4} 4 air`);
+      requireSane(await rcon.command(`setblock 24 ${ARENA_Y} 0 crafting_table`), 'Place native crafting table');
+      await rcon.command(`tp Crafter 24.5 ${ARENA_Y} 2.5`);
+      await rcon.command('give Crafter minecraft:stick 2');
+      await rcon.command('give Crafter minecraft:amethyst_shard');
+      await rcon.command('give Crafter minecraft:diamond');
+      await until(() => bot.inventory.items().filter((item) => ['stick', 'amethyst_shard', 'diamond'].includes(item.name)).length === 3,
+        'crafting ingredients in the client inventory');
+      const block = await until(() => {
+        const found = bot.blockAt(table);
+        return found?.name === 'crafting_table' && found;
+      }, 'crafting table visible');
+      await bot.activateBlock(block);
+      const grid = await until(() => bot.currentWindow?.type === 'minecraft:crafting' && bot.currentWindow,
+        'native crafting table screen');
+
+      async function press(slot, mouseButton) {
+        await Promise.race([bot.clickWindow(slot, mouseButton, 0),
+          delay(5000, null, { ref: false }).then(() => { throw new Error(`No server response for crafting slot ${slot}`); })]);
+      }
+
+      const ingredients = [
+        ['amethyst_shard', [2]],
+        ['diamond', [3]],
+        ['stick', [5, 7]],
+      ];
+      for (const [name, slots] of ingredients) {
+        const item = grid.findInventoryItem(bot.registry.itemsByName[name].id);
+        assert.ok(item, `Missing ${name} in crafting inventory`);
+        await press(item.slot, 0);
+        for (const slot of slots) await press(slot, 1);
+      }
+      const result = await until(() => isMappedWand(grid.slots[0]) && grid.slots[0],
+        'server-produced survey wand in native crafting output');
+      record('recipe-output', { pattern: [' AD', ' S ', 'S  '],
+        output: itemEvidence(result) });
+      const free = grid.firstEmptyInventorySlot();
+      assert.ok(free !== null && free >= grid.inventoryStart);
+      await press(0, 0);
+      await press(free, 0);
+      bot.closeWindow(grid);
+      const inventory = await rcon.command('data get entity Crafter Inventory');
+      assert.match(inventory, /deskpet:survey_wand/);
+      assert.doesNotMatch(inventory, /minecraft:(diamond|amethyst_shard|stick)/, 'Ingredients were consumed exactly once');
+      record('recipe-server-inventory', { inventory });
+      assert.deepEqual(client.errors, []);
+    } finally { await rcon.command('forceload remove 24 0'); }
+  } finally { closeBot(client); }
+}
+
 async function coreRun(rcon, settings) {
   const { createCoreHost } = runtimeRequire('./core-host');
   const owner = newBot(settings, 'Owner');
@@ -244,12 +306,14 @@ async function coreRun(rcon, settings) {
 
 async function main() {
   const mode = process.argv[2] || 'compat';
-  assert.ok(['compat', 'control', 'core'].includes(mode), 'Use compat, control, or core');
+  assert.ok(['compat', 'control', 'core', 'recipe'].includes(mode), 'Use compat, control, core, or recipe');
   const settings = await serverSettings();
   const rcon = await createRcon(settings);
   try {
     if (mode === 'core') {
       await coreRun(rcon, settings);
+    } else if (mode === 'recipe') {
+      await craftWand(rcon, settings);
     } else {
       await compatibility(rcon, settings, mode === 'control');
     }

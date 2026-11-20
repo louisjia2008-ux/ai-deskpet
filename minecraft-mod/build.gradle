@@ -46,6 +46,11 @@ tasks.withType(JavaCompile).configureEach {
 
 test {
     useJUnitPlatform()
+    def testRunDir = layout.buildDirectory.dir('test-run')
+    workingDir = testRunDir.get().asFile
+    doFirst {
+        workingDir.mkdirs()
+    }
 }
 
 processResources {
