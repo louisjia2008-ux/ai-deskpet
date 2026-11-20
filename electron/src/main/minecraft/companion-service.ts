@@ -6,6 +6,8 @@ import { dirname, isAbsolute } from 'node:path';
 
 import { initialMinecraftCompanionSnapshot, minecraftCompanionConfigSchema, minecraftCompanionPolicySchema, minecraftCompanionTaskSchema } from '../../shared/minecraft-companion';
 import type { MinecraftCompanionConfig, MinecraftCompanionEngine, MinecraftCompanionObservation, MinecraftCompanionPolicy, MinecraftCompanionSnapshot, MinecraftCompanionTask, MinecraftCompanionTaskInput } from '../../shared/minecraft-companion';
+import { minecraftSurveyPlanStatusSchema } from '../../shared/minecraft-dedicated';
+import type { MinecraftSurveyPlanStatus } from '../../shared/minecraft-dedicated';
 
 const MAX_LINE_BYTES = 1024 * 1024;
 const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'unknown']);
@@ -14,6 +16,7 @@ const text = (value: unknown, max = 2000): string | null => typeof value === 'st
 const finite = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const errorMessage = (error: unknown): string => error instanceof Error ? error.message.slice(0, 2000) : 'Minecraft Companion request failed.';
 const errorText = (value: unknown): string => text(value) ?? text(record(value)?.message) ?? 'Minecraft Companion request failed.';
+class SurveyOwnsBody extends Error {}
 
 /** Keep engine counters data-only and bounded, including unusually deep/malformed plugin output. */
 function boundedData(value: unknown, depth = 0): unknown {
@@ -39,6 +42,8 @@ export interface MinecraftCompanionServiceOptions {
   onPlayerChat?(chat: { username: string; message: string }): void;
   /** A task reached completed, failed or cancelled (once per task). */
   onTaskFinished?(task: MinecraftCompanionTask): void;
+  onSurveyPlan?(event: { worldId: string; initial: boolean; plan: MinecraftSurveyPlanStatus | null }): void;
+  onManagedReview?(event: { reason: 'death' | 'task_failure'; detail: string }): void;
   requestTimeoutMs?: number;
   readyTimeoutMs?: number;
   shutdownTimeoutMs?: number;
@@ -98,20 +103,23 @@ export class MinecraftCompanionService {
 
   getState(): MinecraftCompanionSnapshot { return structuredClone(this.#state); }
 
-  async connect(input: MinecraftCompanionConfig, guard?: () => void): Promise<MinecraftCompanionSnapshot> {
+  async connect(input: MinecraftCompanionConfig, guard?: () => void, managed?: { dataDirectory: string; execute: boolean }): Promise<MinecraftCompanionSnapshot> {
     guard?.();
     if (this.#disposed) throw new Error('Minecraft Companion service is disposed.');
     if (this.#worker || this.#connecting || this.#closing) throw new Error('Disconnect the current Companion connection before connecting again.');
     const config = minecraftCompanionConfigSchema.parse(input);
+    if (managed && (!isAbsolute(managed.dataDirectory) || config.host !== '127.0.0.1' || config.auth !== 'offline')) {
+      throw new Error('The managed Minecraft helper requires the local dedicated world.');
+    }
     this.#connecting = true;
     const generation = ++this.#generation;
     this.#stalled = false; this.#statusMisses = 0;
     this.#state = { ...initialMinecraftCompanionSnapshot(), runtimeState: 'starting', config };
     this.#publish();
     try {
-      await mkdir(this.#options.dataDirectory, { recursive: true, mode: 0o700 });
+      await mkdir(managed?.dataDirectory ?? this.#options.dataDirectory, { recursive: true, mode: 0o700 });
       this.#assertCurrent(generation); guard?.();
-      await this.#launch(generation);
+      await this.#launch(generation, managed);
       this.#assertCurrent(generation); guard?.();
       // An empty owner name means in-game commands are off; the core takes the same field.
       await this.#request({ type: 'connect', config: { ...config, ownerName: config.ownerName || undefined } }, guard);
@@ -132,6 +140,9 @@ export class MinecraftCompanionService {
     guard?.();
     const task = minecraftCompanionTaskSchema.parse(input);
     if (this.#disposed || this.#state.connectionState !== 'ready' || this.#closing) throw new Error('Minecraft Companion 尚未进入世界。');
+    if (['confirmed', 'running', 'paused'].some(status => this.#state.plan?.status === status)) {
+      throw new SurveyOwnsBody('The Minecraft owner controls the active survey from the wand menu.');
+    }
     if (this.#starting || this.#state.controlPending || (this.#state.task && !TERMINAL.has(this.#state.task.status))) throw new Error('Minecraft Companion already has an active task.');
     this.#starting = true;
     const generation = this.#generation;
@@ -153,7 +164,7 @@ export class MinecraftCompanionService {
       this.#publish();
       return this.getState();
     } catch (error) {
-      if (dispatch.sent) {
+      if (dispatch.sent && !(error instanceof SurveyOwnsBody)) {
         try { await this.cancel(); } catch { await this.disconnect(); }
       }
       this.#state.lastError = errorMessage(error); this.#publish(); throw error;
@@ -266,6 +277,7 @@ export class MinecraftCompanionService {
 
   #unavailable(): void {
     this.#state.observation = null; this.#state.engine = null; this.#state.auth = null; this.#state.safetyActive = false;
+    if (this.#state.plan !== undefined) this.#state.plan = null;
   }
 
   #rejectPending(error: Error): void {
@@ -274,7 +286,7 @@ export class MinecraftCompanionService {
     if (this.#ready) { clearTimeout(this.#ready.timer); this.#ready.reject(error); this.#ready = null; }
   }
 
-  #launch(generation: number): Promise<void> {
+  #launch(generation: number, managed?: { dataDirectory: string; execute: boolean }): Promise<void> {
     this.#buffer = Buffer.alloc(0);
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -283,8 +295,10 @@ export class MinecraftCompanionService {
       this.#ready = { resolve, reject, timer };
     });
     try {
-      const worker = (this.#options.spawnRuntime ?? spawn)(this.#options.executablePath ?? process.execPath,
-        [this.#options.runtimePath, '--engine', 'core', '--data-dir', this.#options.dataDirectory],
+      const args = [this.#options.runtimePath, '--engine', 'core', '--data-dir', managed?.dataDirectory ?? this.#options.dataDirectory];
+      if (managed) args.push('--managed-world-autonomy', '--survey-plan-observe');
+      if (managed?.execute) args.push('--survey-plan-execute');
+      const worker = (this.#options.spawnRuntime ?? spawn)(this.#options.executablePath ?? process.execPath, args,
         { cwd: dirname(this.#options.runtimePath), env: minecraftCompanionEnvironment(this.#options.environment ?? process.env), stdio: 'pipe', windowsHide: true });
       this.#worker = worker;
       this.#exit = new Promise<void>((resolve) => {
@@ -311,7 +325,7 @@ export class MinecraftCompanionService {
       worker.stdin.on('error', (error) => { if (generation === this.#generation && this.#worker === worker) this.#transportError(errorMessage(error)); });
       worker.stdout.on('data', (chunk: Buffer | string) => {
         if (generation !== this.#generation || this.#worker !== worker) return;
-        this.#read(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        this.#read(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk), managed !== undefined);
       });
       // Drain stderr without retaining an unbounded or potentially credential-bearing log.
       worker.stderr.on('data', () => {});
@@ -325,7 +339,7 @@ export class MinecraftCompanionService {
     if (this.#worker && !this.#closing) void this.disconnect().catch(() => {});
   }
 
-  #read(chunk: Buffer): void {
+  #read(chunk: Buffer, managed: boolean): void {
     this.#buffer = Buffer.concat([this.#buffer, chunk]);
     let newline = this.#buffer.indexOf(10);
     while (newline >= 0) {
@@ -336,7 +350,7 @@ export class MinecraftCompanionService {
         try {
           const message = record(JSON.parse(line));
           if (!message || message.version !== 1) throw new Error('Invalid Companion JSONL frame.');
-          this.#message(message);
+          this.#message(message, managed);
         } catch { this.#transportError('Invalid Companion JSONL frame.'); return; }
       }
       newline = this.#buffer.indexOf(10);
@@ -344,7 +358,7 @@ export class MinecraftCompanionService {
     if (this.#buffer.length > MAX_LINE_BYTES) this.#transportError('Companion JSONL buffer exceeded its size limit.');
   }
 
-  #message(message: Record<string, unknown>): void {
+  #message(message: Record<string, unknown>, managed: boolean): void {
     if (message.type === 'ready') {
       if (message.engine !== 'core' || record(message.capabilities)?.taskLifecycle !== true) throw new Error('A core task host is required.');
       if (this.#ready) { clearTimeout(this.#ready.timer); this.#ready.resolve(); this.#ready = null; }
@@ -355,7 +369,12 @@ export class MinecraftCompanionService {
       if (!pending) return;
       this.#pending.delete(message.id as string); clearTimeout(pending.timer);
       if (message.ok === true) pending.resolve(record(message.result) ?? {});
-      else { this.#acceptTask(message.task); pending.reject(new Error(errorText(message.error))); this.#publish(); }
+      else {
+        this.#acceptTask(message.task);
+        const ErrorType = record(message.error)?.code === 'survey_owns_body' ? SurveyOwnsBody : Error;
+        pending.reject(new ErrorType(errorText(message.error)));
+        this.#publish();
+      }
       return;
     }
     const event = message.type === 'event' ? record(message.event) : null;
@@ -384,6 +403,23 @@ export class MinecraftCompanionService {
     } else if (event.type === 'core' && event.connectionGeneration === this.#state.connectionGeneration) {
       const payload = record(event.payload); const kind = text(payload?.type, 80);
       if (kind) this.#event(kind, text(payload?.reason, 500) ?? kind, text(event.taskId, 128));
+    } else if (managed && ['connecting', 'ready'].includes(this.#state.connectionState) && event.connectionGeneration === this.#state.connectionGeneration) {
+      if (event.type === 'survey_plan_status') {
+        const worldId = text(event.worldId, 128);
+        const plan = minecraftSurveyPlanStatusSchema.nullable().safeParse(event.plan);
+        if (!worldId || !plan.success) return;
+        const previous = this.#state.plan;
+        if (event.current !== false) {
+          if (plan.data && previous?.planId === plan.data.planId && plan.data.revision < previous.revision) return;
+          this.#state.plan = plan.data;
+        }
+        try { this.#options.onSurveyPlan?.({ worldId, initial: event.initial === true, plan: plan.data }); } catch { /* Observer only. */ }
+      } else if (event.type === 'managed_world_review' && this.#state.connectionState === 'ready' && (event.reason === 'death' || event.reason === 'task_failure')) {
+        const detail = text(event.detail, 600);
+        if (detail) {
+          try { this.#options.onManagedReview?.({ reason: event.reason, detail }); } catch { /* Observer only. */ }
+        }
+      }
     }
     this.#publish();
   }

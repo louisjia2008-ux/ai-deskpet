@@ -28,6 +28,7 @@ import type { BackgroundJob, BackgroundJobInput } from './background-jobs';
 import type { ProactiveConfig, ProactiveState } from './proactive';
 import type { MinecraftConnectionConfig, MinecraftControlAction, MinecraftSnapshot } from './minecraft';
 import type { MinecraftCompanionConfig, MinecraftCompanionSnapshot, MinecraftCompanionTaskInput } from './minecraft-companion';
+import type { MinecraftDedicatedIdentity, MinecraftDedicatedSettings, MinecraftDedicatedSnapshot } from './minecraft-dedicated';
 import type { CharacterReaction, CompanionPointer } from './character-reactions';
 import type { VoiceChunk, VoiceStatus } from './voice';
 import type { SpeechInputAPI } from './speech-input';
@@ -643,6 +644,18 @@ export interface DeskPetApi {
     cancel(): Promise<MinecraftCompanionSnapshot>;
     disconnect(): Promise<MinecraftCompanionSnapshot>;
     onChanged(listener: (state: MinecraftCompanionSnapshot) => void): Unsubscribe;
+  };
+  minecraftDedicated?: {
+    getState(): Promise<MinecraftDedicatedSnapshot>;
+    updateSettings(patch: Partial<MinecraftDedicatedSettings>): Promise<MinecraftDedicatedSnapshot>;
+    updateIdentity(identity: MinecraftDedicatedIdentity): Promise<MinecraftDedicatedSnapshot>;
+    acceptEula(): Promise<MinecraftDedicatedSnapshot>;
+    start(): Promise<MinecraftDedicatedSnapshot>;
+    stop(): Promise<MinecraftDedicatedSnapshot>;
+    restart(): Promise<MinecraftDedicatedSnapshot>;
+    backup(): Promise<MinecraftDedicatedSnapshot>;
+    openBackups(): Promise<void>;
+    onChanged(listener: (state: MinecraftDedicatedSnapshot) => void): Unsubscribe;
   };
   app: {
     getState(): Promise<AppState>;

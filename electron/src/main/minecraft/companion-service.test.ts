@@ -59,7 +59,7 @@ const config: MinecraftCompanionConfig = { host: '127.0.0.1', port: 25565, usern
 const directories: string[] = [];
 const services: MinecraftCompanionService[] = [];
 async function fixture(options: { ready?: boolean; requestTimeoutMs?: number; statusTimeoutMs?: number; shutdownTimeoutMs?: number; onChanged?: () => void;
-  onTaskFinished?: (task: unknown) => void } = {}) {
+  onTaskFinished?: (task: unknown) => void; onSurveyPlan?: (event: unknown) => void; onManagedReview?: (event: unknown) => void } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'deskpet-companion-')); directories.push(root);
   const workers: Worker[] = []; const captured: Array<{ executable: string; args: string[]; options: SpawnOptionsWithoutStdio }> = [];
   const service = new MinecraftCompanionService({
@@ -68,13 +68,15 @@ async function fixture(options: { ready?: boolean; requestTimeoutMs?: number; st
     requestTimeoutMs: options.requestTimeoutMs ?? 1000, ...(options.statusTimeoutMs ? { statusTimeoutMs: options.statusTimeoutMs } : {}), shutdownTimeoutMs: options.shutdownTimeoutMs ?? 30, readyTimeoutMs: 50, pollIntervalMs: 10,
     ...(options.onChanged ? { onChanged: options.onChanged } : {}),
     ...(options.onTaskFinished ? { onTaskFinished: options.onTaskFinished } : {}),
+    ...(options.onSurveyPlan ? { onSurveyPlan: options.onSurveyPlan } : {}),
+    ...(options.onManagedReview ? { onManagedReview: options.onManagedReview } : {}),
     spawnRuntime(executable, args, spawnOptions) {
       captured.push({ executable, args, options: spawnOptions }); const worker = new Worker(); workers.push(worker);
       if (options.ready !== false) enqueue(() => worker.send({ version: 1, type: 'ready', engine: 'core', capabilities: { taskLifecycle: true } }));
       return worker.asProcess();
     },
   }); services.push(service);
-  return { service, workers, captured };
+  return { service, workers, captured, root };
 }
 async function connected() {
   const result = await fixture(); await result.service.connect(config); const worker = result.workers[0] as Worker;
@@ -87,6 +89,43 @@ afterEach(async () => {
 });
 
 describe('independent core Companion service', () => {
+  it('reads a managed survey snapshot before world readiness and excludes stale and non-current status from the panel', async () => {
+    const onSurveyPlan = vi.fn(); const onManagedReview = vi.fn();
+    const { service, workers, captured, root } = await fixture({ onSurveyPlan, onManagedReview });
+    await service.connect(config, undefined, { dataDirectory: join(root, 'managed-core'), execute: false });
+    const worker = workers[0]!;
+    expect(captured[0]!.args).toContain('--managed-world-autonomy');
+    expect(captured[0]!.args).toContain('--survey-plan-observe');
+    expect(captured[0]!.args).not.toContain('--survey-plan-execute');
+    const plan = { planId: '595dd8e7-c301-4afb-8c02-111111111111', revision: 4, template: 'starter_house', status: 'running',
+      completed: 8, total: 110, violations: 0, misplacements: 0, siteChanges: 0, lateAttempts: 0, started: true };
+    const event = { type: 'survey_plan_status', connectionGeneration: 1, worldId: 'world-fixture', initial: true, plan };
+    worker.event(event);
+    expect(service.getState().plan).toEqual(plan);
+    worker.world();
+    worker.event({ ...event, initial: false, plan: { ...plan, revision: 3 } });
+    worker.event({ ...event, initial: false, connectionGeneration: 0, plan: null });
+    worker.event({ ...event, initial: false, current: false, plan: { ...plan, planId: '595dd8e7-c301-4afb-8c02-222222222222', status: 'cancelled' } });
+    expect(service.getState().plan).toEqual(plan);
+    expect(onSurveyPlan).toHaveBeenCalledTimes(2);
+    worker.event({ type: 'managed_world_review', connectionGeneration: 1, reason: 'death', detail: 'fixture' });
+    expect(onManagedReview).toHaveBeenCalledExactlyOnceWith({ reason: 'death', detail: 'fixture' });
+    await service.disconnect();
+    expect(service.getState().plan).toBeNull();
+  });
+
+  it('keeps Core attached when a survey takes the body during a basic task request', async () => {
+    const { service, worker } = await connected();
+    worker.handler = message => {
+      if (message.name !== 'gatherLogs') return false;
+      worker.send({ version: 1, type: 'reply', id: message.id, ok: false, error: { code: 'survey_owns_body', message: 'Wand owner controls this survey' } });
+      return true;
+    };
+    await expect(service.start({ name: 'gatherLogs', parameters: { count: 1 } })).rejects.toThrow('Wand owner controls this survey');
+    expect(service.getState().connectionState).toBe('ready');
+    expect(worker.writes.some(message => message.type === 'shutdown')).toBe(false);
+  });
+
   it('spawns only on connect with explicit core, isolated paths and a secret-free environment', async () => {
     const { service, workers, captured } = await fixture();
     expect(captured).toHaveLength(0);

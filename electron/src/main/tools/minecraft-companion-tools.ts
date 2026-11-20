@@ -76,7 +76,7 @@ export function registerMinecraftCompanionTools(registry: ToolRegistry, dependen
   });
   registry.register({
     id: 'minecraft.status', title: 'Read Minecraft task status', capabilityId: 'minecraft.read', risk: 'low', sideEffect: false,
-    description: 'Read the current host snapshot with connection, task ID, actual task status, engine progress and observed world state. Interactive desktop only. Engine counters are not proof of delivery or a guessed completion percentage. An unknown state is not success. observation.home is the bot\'s house in this world (its corner; finished once built and furnished), remembered across connections.',
+    description: 'Read the current host snapshot with connection, task ID, actual task status, engine progress and observed world state. The plan field reports the dedicated-world wand construction status directly from the Mod, including progress, waiting reason and blocked position. Report wand construction as complete only when plan.status is completed. Interactive desktop and authorized in-game chat. observation.home is the bot\'s autonomous house, remembered across connections.',
     inputSchema: empty,
     execute: execute(empty, () => dependencies.service.getState()),
   });

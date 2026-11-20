@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { MinecraftSurveyPlanStatus } from './minecraft-dedicated';
 
 const coordinate = z.object({
   x: z.number().int().min(-30_000_000).max(30_000_000),
@@ -87,6 +88,7 @@ export interface MinecraftCompanionSnapshot {
   observation: MinecraftCompanionObservation | null;
   engine: MinecraftCompanionEngine | null;
   safetyActive: boolean;
+  plan?: MinecraftSurveyPlanStatus | null;
   controlPending: 'cancel' | 'disconnect' | null;
   events: Array<{ at: number; type: string; taskId: string | null; summary: string }>;
   auth: { userCode: string; verificationURI: string; expiresIn: number | null } | null;

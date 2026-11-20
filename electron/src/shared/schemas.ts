@@ -4,6 +4,7 @@ import { memoryRecallInputs } from './memory-recall';
 import { researchTaskInputSchema, researchTaskResumeSchema } from './research-tasks';
 import { extensionInputs } from './desktop-extensions';
 import { minecraftCompanionConfigSchema, minecraftCompanionTaskSchema } from './minecraft-companion';
+import { minecraftDedicatedIdentitySchema, minecraftDedicatedSettingsSchema } from './minecraft-dedicated';
 import { CHAT_CRON_CAPABILITIES } from './chat-cron';
 import { calendarRuleSchema, persistentScheduleInputSchema, proactivePolicyInputSchema, timezoneSchema, usageRateInputSchema, usageRateTargetSchema } from './automation-schemas';
 import { consolidationCandidateSchema } from './consolidation';
@@ -278,6 +279,15 @@ export const invokePayloadSchemas = {
   'minecraft-companion:start': minecraftCompanionTaskSchema,
   'minecraft-companion:cancel': emptySchema,
   'minecraft-companion:disconnect': emptySchema,
+  'minecraft-dedicated:get-state': emptySchema,
+  'minecraft-dedicated:update-settings': minecraftDedicatedSettingsSchema.partial(),
+  'minecraft-dedicated:update-identity': minecraftDedicatedIdentitySchema,
+  'minecraft-dedicated:accept-eula': emptySchema,
+  'minecraft-dedicated:start': emptySchema,
+  'minecraft-dedicated:stop': emptySchema,
+  'minecraft-dedicated:restart': emptySchema,
+  'minecraft-dedicated:backup': emptySchema,
+  'minecraft-dedicated:open-backups': emptySchema,
   'minecraft:connect': minecraftConnectionSchema,
   'minecraft:disconnect': emptySchema,
   'minecraft:submit': z.object({ command: z.string().trim().min(1).max(2000) }).strict(),
@@ -459,6 +469,7 @@ export const eventChannels = [
   'chat:open-requested',
   'minecraft:changed',
   'minecraft-companion:changed',
+  'minecraft-dedicated:changed',
   'app:changed',
   'character:changed',
   'character:pointer',

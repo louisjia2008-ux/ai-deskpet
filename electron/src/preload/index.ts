@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { ProactiveState } from '../shared/proactive';
 import type { VmSandboxStatus } from '../shared/vm-sandbox';
 import type { MinecraftCompanionSnapshot } from '../shared/minecraft-companion';
+import type { MinecraftDedicatedSnapshot } from '../shared/minecraft-dedicated';
 import type { VoiceChunk } from '../shared/voice';
 
 import { API_VERSION } from '../shared';
@@ -277,6 +278,18 @@ const api: DeskPetApi = {
     cancel: () => invoke('minecraft-companion:cancel', {}),
     disconnect: () => invoke('minecraft-companion:disconnect', {}),
     onChanged: listener => on<MinecraftCompanionSnapshot>('minecraft-companion:changed', listener),
+  },
+  minecraftDedicated: {
+    getState: () => invoke('minecraft-dedicated:get-state', {}),
+    updateSettings: patch => invoke('minecraft-dedicated:update-settings', patch),
+    updateIdentity: identity => invoke('minecraft-dedicated:update-identity', identity),
+    acceptEula: () => invoke('minecraft-dedicated:accept-eula', {}),
+    start: () => invoke('minecraft-dedicated:start', {}),
+    stop: () => invoke('minecraft-dedicated:stop', {}),
+    restart: () => invoke('minecraft-dedicated:restart', {}),
+    backup: () => invoke('minecraft-dedicated:backup', {}),
+    openBackups: () => invoke('minecraft-dedicated:open-backups', {}),
+    onChanged: listener => on<MinecraftDedicatedSnapshot>('minecraft-dedicated:changed', listener),
   },
   app: {
     getState: () => invoke('app:get-state', {}),
