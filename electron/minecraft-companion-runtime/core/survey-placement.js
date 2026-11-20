@@ -186,6 +186,7 @@ async function openDoorIfVisible(bot, ctx, plan) {
   const block = bot.blockAt(vec(door));
   if (!block?.name.endsWith('_door') || block.getProperties().open) return false;
   const eye = eyeAt(bot, bot.entity.position);
+  if (eye.distanceTo(block.position.offset(0.5, 0.5, 0.5)) > 4.4) return false;
   if (!cast(bot, eye, block.position.offset(0.5, 0.5, 0.5), block)) return false;
   return (await actions.openSurveyDoor(bot, ctx, block)).ok;
 }
@@ -198,9 +199,13 @@ async function closePlanDoor(bot, ctx, plan, onFailure) {
   if (!open) return { ok: true };
   const step = [{ pos, target: 'minecraft:air' }];
   const used = new Set();
-  const usable = () => hitFor(bot, step, bot.entity.position, used);
-  const hit = usable() || await walkToStations(bot, ctx, plan, stationChoices(bot, step, used), usable, onFailure);
+  const center = pos.offset(0.5, 0.5, 0.5);
+  const canClick = (feet) => feet && eyeAt(bot, feet).distanceTo(center) <= 4.05;
+  const usable = () => canClick(bot.entity.position) && hitFor(bot, step, bot.entity.position, used);
+  const stations = () => stationChoices(bot, step, used).filter((cell) => canClick(standingPoint(bot, cell)));
+  const hit = usable() || await walkToStations(bot, ctx, plan, stations(), usable, onFailure);
   if (!hit) return { ok: false, reason: 'door_station_unreachable', pos: door };
+  if (bot.blockAt(pos)?.getProperties().open === false) return { ok: true };
   return actions.closeSurveyDoor(bot, ctx, hit.block);
 }
 
