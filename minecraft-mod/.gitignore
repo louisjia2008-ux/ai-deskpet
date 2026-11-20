@@ -1,0 +1,7 @@
+/.gradle/
+/gradle-home/
+/build/
+/run/
+/run-server/
+/run-server-raw/
+/test-harness/evidence/

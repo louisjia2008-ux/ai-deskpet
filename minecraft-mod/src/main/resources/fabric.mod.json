@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "deskpet",
+  "version": "${version}",
+  "name": "DeskPet Survey Wand",
+  "description": "A server-side survey wand for owner-directed plans.",
+  "license": "AGPL-3.0-only",
+  "environment": "server",
+  "entrypoints": {
+    "main": ["dev.deskpet.minecraft.DeskPetMod"]
+  },
+  "depends": {
+    "java": ">=21",
+    "minecraft": "1.21.8",
+    "fabricloader": "0.19.3",
+    "fabric-api": "0.136.1+1.21.8",
+    "polymer-core": "0.13.8+1.21.8",
+    "polymer-virtual-entity": "0.13.8+1.21.8",
+    "sgui": "1.10.2+1.21.8"
+  }
+}

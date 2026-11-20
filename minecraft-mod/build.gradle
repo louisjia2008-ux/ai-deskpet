@@ -1,0 +1,69 @@
+plugins {
+    id 'fabric-loom' version '1.17.16'
+}
+
+group = 'dev.deskpet'
+version = mod_version
+base {
+    archivesName = 'deskpet'
+}
+
+repositories {
+    maven {
+        name = 'Nucleoid'
+        url = 'https://maven.nucleoid.xyz/'
+        content {
+            includeGroup 'eu.pb4'
+            includeGroup 'xyz.nucleoid'
+        }
+    }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings "net.fabricmc:yarn:${yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+    modImplementation "eu.pb4:polymer-core:${polymer_version}"
+    modImplementation "eu.pb4:polymer-virtual-entity:${polymer_version}"
+    modImplementation "eu.pb4:sgui:${sgui_version}"
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.13.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.13.4'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+    options.encoding = 'UTF-8'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+processResources {
+    inputs.property 'version', version
+    def control = providers.gradleProperty('rawSurveyWand').isPresent()
+    inputs.property 'rawSurveyWand', control
+    doLast {
+        def marker = new File(destinationDir, 'deskpet-raw-survey-wand')
+        if (control) {
+            marker.text = 'Test control only'
+        } else {
+            marker.delete()
+        }
+    }
+    filesMatching('fabric.mod.json') {
+        expand version: project.version
+    }
+}
+
+jar {
+    from 'LICENSE', 'THIRD_PARTY_NOTICES.md'
+}
