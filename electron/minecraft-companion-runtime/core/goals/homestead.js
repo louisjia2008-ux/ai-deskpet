@@ -736,7 +736,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
   async function runOnce(ctx) {
     const state = ctx.perceive();
     if (!memory.house) {
-      const site = chooseSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), near || state.position, { avoid: nearDanger });
+      const site = chooseSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), near || state.position, { avoid: (p) => nearDanger(p) || bot.companionNearPlayerBuild?.(p) });
       if (!site) return explore(ctx, 'site');
       memory.house = createStarterHouse(site.anchor);
       ctx.record('site_chosen', { anchor: site.anchor, fills: site.fills, digs: site.digs });

@@ -48,6 +48,7 @@ public final class PlanService {
     private static final Set<String> CLIENT_MESSAGES = Set.of("accept", "heartbeat", "progress", "state", "blocked");
     private static final Set<String> WAITING_REASONS = Set.of("night", "materials", "chest_full");
     private static boolean stopping;
+    private static PlayerBlocks.Sync playerBlockSync;
     private static PlanConfig config = new PlanConfig(false, null, null, "");
 
     private enum BlockDenial {
@@ -65,6 +66,12 @@ public final class PlanService {
         PlanDebugCommands.register();
         PlanChannel.onMessage(PlanService::receive);
         ServerTickEvents.END_SERVER_TICK.register(PlanService::tick);
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (server.getTicks() % 20 != 0) return;
+            var bot = config.findBot(server);
+            if (bot == null || !PlanChannel.isReady(bot)) playerBlockSync = null;
+            else playerBlockSync = PlayerBlocks.get(bot.getWorld()).sync(bot, playerBlockSync);
+        });
         ServerLifecycleEvents.SERVER_STARTING.register(server -> stopping = false);
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             stopping = true;
@@ -78,6 +85,7 @@ public final class PlanService {
         });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             PlanStatusFeed.disconnect(handler.player);
+            if (config.isBot(handler.player)) playerBlockSync = null;
             if (!stopping && config.enabled() && config.isBot(handler.player)) {
                 var store = PlanStore.get(server);
                 for (var plan : store.plans.values()) {
@@ -91,9 +99,15 @@ public final class PlanService {
             !(world instanceof ServerWorld serverWorld && player instanceof ServerPlayerEntity serverPlayer)
                 || allowBreak(serverWorld, serverPlayer, pos, state));
         PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {
-            if (world instanceof ServerWorld serverWorld && player instanceof ServerPlayerEntity serverPlayer
-                && config.enabled() && config.isBot(serverPlayer)) {
-                observeInteraction(serverWorld, serverPlayer, PlanInteraction.footprint(pos, state, null));
+            if (world instanceof ServerWorld serverWorld && player instanceof ServerPlayerEntity serverPlayer) {
+                var footprint = PlanInteraction.footprint(pos, state, null);
+                if (!config.isBot(serverPlayer)) {
+                    footprint.forEach((cell, previous) -> {
+                        if (!world.getBlockState(cell).isOf(previous.getBlock())) PlayerBlocks.get(serverWorld).remove(cell);
+                    });
+                } else if (config.enabled()) {
+                    observeInteraction(serverWorld, serverPlayer, footprint);
+                }
             }
         });
         WandInteractions.authorization(new WandInteractions.Authorization() {
@@ -824,8 +838,16 @@ public final class PlanService {
     }
 
     private static boolean allowBreak(ServerWorld world, ServerPlayerEntity player, BlockPos pos, BlockState state) {
+        var targets = PlanInteraction.footprint(pos, state, Blocks.AIR.getDefaultState());
+        if (config.isBot(player) && targets.keySet().stream().anyMatch(cell -> PlayerBlocks.get(world).deny(cell, "break"))) {
+            return false;
+        }
         if (!guardsInteractions(player)) return true;
-        return allowed(world, player, "break", pos, PlanInteraction.footprint(pos, state, Blocks.AIR.getDefaultState()), false);
+        return allowed(world, player, "break", pos, targets, false);
+    }
+
+    public static boolean isBot(ServerPlayerEntity player) {
+        return config.isBot(player);
     }
 
     public static boolean guardsInteractions(ServerPlayerEntity player) {

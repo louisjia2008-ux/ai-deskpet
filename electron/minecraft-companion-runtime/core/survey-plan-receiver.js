@@ -351,6 +351,31 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', observe =
     }
   }
 
+  const playerBlocks = new Map();
+  let protectedDimension = null;
+  let protectionOverflow = false;
+  bot.companionPlayerBlock = (p) => {
+    if (!p || protectedDimension !== dimension()) return false;
+    const x = Math.floor(p.x);
+    const z = Math.floor(p.z);
+    return protectionOverflow || playerBlocks.get(`${x >> 4},${z >> 4}`)?.has(
+      Math.floor(p.y) * 256 + (z & 15) * 16 + (x & 15)) === true;
+  };
+  const distance = Number(process.env.DESKPET_PLAYER_BUILD_DISTANCE ?? 16);
+  const clearance = Number.isFinite(distance) && distance >= 0 && distance <= 32 ? distance : 16;
+  bot.companionNearPlayerBuild = (p) => {
+    if (!p || protectedDimension !== dimension()) return false;
+    if (protectionOverflow) return true;
+    for (let x = Math.floor((p.x - clearance) / 16); x <= Math.floor((p.x + clearance) / 16); x += 1) {
+      for (let z = Math.floor((p.z - clearance) / 16); z <= Math.floor((p.z + clearance) / 16); z += 1) {
+        for (const cell of playerBlocks.get(`${x},${z}`) || []) {
+          if (Math.hypot(x * 16 + (cell & 15) - p.x, z * 16 + ((cell >> 4) & 15) - p.z) <= clearance) return true;
+        }
+      }
+    }
+    return false;
+  };
+
   function onMessage(raw) {
     try {
       const message = decodeMessage(raw);
@@ -360,6 +385,8 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', observe =
           advertised = true;
         }
         if (worldId !== message.worldId) {
+          playerBlocks.clear();
+          protectedDimension = null;
           observing = false;
           deferred = null;
           for (const grantId of active.keys()) endGrant(grantId, { status: 'paused', reason: 'world_changed' });
@@ -368,6 +395,14 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', observe =
         worldId = message.worldId;
         sendPlanMessage(client, { type: 'hello_ack', protocol: PROTOCOL, worldId, ...(mode === 'off' ? { observeOnly: true } : {}) });
         report({ type: 'hello', worldId, modVersion: message.modVersion });
+      } else if (message.type === 'player_blocks_reset' && worldId && typeof message.dimension === 'string') {
+        playerBlocks.clear();
+        protectedDimension = message.dimension;
+        protectionOverflow = message.overflow === true;
+      } else if (message.type === 'player_blocks_chunk' && worldId && message.dimension === protectedDimension
+          && Number.isSafeInteger(message.x) && Number.isSafeInteger(message.z) && Array.isArray(message.cells)
+          && message.cells.length <= 2048 && message.cells.every(Number.isSafeInteger) && playerBlocks.size < 49) {
+        playerBlocks.set(`${message.x},${message.z}`, new Set(message.cells));
       } else if (message.type === 'hello_ok' && observe && !observing && worldId
           && message.protocol === PROTOCOL && message.worldId === worldId) {
         sendPlanMessage(client, { type: 'status_query' });

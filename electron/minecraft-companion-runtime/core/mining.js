@@ -154,6 +154,7 @@ function visibleOre(bot, blocks, at, radius = 4) {
   const ids = Object.values(bot.registry.blocksByName).filter((b) => blocks(b.name)).map((b) => b.id);
   if (!ids.length) return [];
   return bot.findBlocks({ matching: ids, maxDistance: radius, count: 16, point: at })
+    .filter((p) => !bot.companionPlayerBlock?.(p))
     .map((p) => bot.blockAt(p))
     .filter((b) => b && exposed(bot, b.position) && !FACES.some(([x, y, z]) => LIQUID.test(bot.blockAt(b.position.offset(x, y, z))?.name || '')));
 }
@@ -212,6 +213,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
   }
   if (!memory.mine) {
     const from = start || { x: feet.x, y: feet.y, z: feet.z };
+    if (bot.companionNearPlayerBuild?.(from)) return fail('mine_entrance_near_player_build');
     memory.mine = { entrance: from, front: from, surfaceY: from.y, y, dir: memory.mineDir ?? 0, phase: 'descend',
       mainSteps: 0, steps: 0, turns: 0, branch: null, cells: { [posKey(from)]: null }, walkFailures: 0 };
     ctx.record('mine_start', { at: posKey(from), y });
@@ -288,6 +290,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
   if (step.reason === 'unloaded') return fail('mine_chunk_unloaded');
   if (!step.ok) return blocked(step.reason);
 
+  if (step.dig.some((cell) => bot.companionPlayerBlock?.(cell))) return blocked('protected_player_block');
   for (const cell of step.dig) {
     const block = bot.blockAt(new Vec3(cell.x, cell.y, cell.z));
     if (!block || block.boundingBox === 'empty') continue;

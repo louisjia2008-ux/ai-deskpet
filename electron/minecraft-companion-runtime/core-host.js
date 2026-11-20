@@ -213,7 +213,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
       if (!current()) return;
       void detach({ code, message, retryable: true }, { failed: true }).catch(() => {});
     };
-    if (surveyPlanMode !== 'off' || observe) {
+    if (surveyPlanMode !== 'off' || observe || managed) {
       let reservation = null;
       disposeSurveyPlan = installSurveyPlanReceiver(next, {
         mode: surveyPlanMode,

@@ -222,6 +222,7 @@ async function goNear(bot, ctx, position, range = 2, options = {}) {
 
 /** Moves to any spot from which `block` can be seen and dug. */
 function goToDig(bot, ctx, block, options = {}) {
+  if (bot.companionPlayerBlock?.(block.position)) return Promise.resolve(fail('protected_player_block'));
   // Plants have no collision shape, so a line-of-sight goal can never be met.
   if (block.boundingBox === 'empty') {
     return goTo(bot, ctx, new goals.GoalNear(block.position.x, block.position.y, block.position.z, 2), {
@@ -244,6 +245,7 @@ function withinReach(bot, position, reach = 4.5) {
 async function digBlock(bot, ctx, block, { timeoutMs = 12000, tool: chosen = null, point = null, face = null } = {}) {
   if (bot.companionProtectBlock?.(block)) return fail('protected_home');
   const position = block.position;
+  if (bot.companionPlayerBlock?.(position)) return fail('protected_player_block');
   const initialPermit = surveyDigPermit(bot, ctx, position);
   if (initialPermit?.reason) return fail(initialPermit.reason);
   const originalName = block.name;

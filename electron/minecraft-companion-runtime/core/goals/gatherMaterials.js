@@ -191,13 +191,18 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     let start = null;
     if (!memory.mine) {
       const at = bot.entity.position.floored();
-      if (Math.hypot(at.x - chest.x, at.z - chest.z) < MINE_FROM_HOME) {
+      if (Math.hypot(at.x - chest.x, at.z - chest.z) < MINE_FROM_HOME || bot.companionNearPlayerBuild?.(at)) {
         // Each new mine on another side of the house, and farther out after
         // one that came to nothing: always the same spot, on sand, every
         // staircase was blocked by gravel and sand and the goal failed.
-        const [sx, sz] = SIDES[(memory.mineDir ?? 0) % 4];
         const reach = MINE_FROM_HOME + 2 + 8 * (memory.barrenMines || 0);
-        const away = new Vec3(chest.x + sx * reach, chest.y, chest.z + sz * reach);
+        const candidates = SIDES.map((_, i) => SIDES[((memory.mineDir ?? 0) + i) % 4])
+          .map(([sx, sz]) => new Vec3(chest.x + sx * reach, chest.y, chest.z + sz * reach));
+        const away = candidates.find((p) => !bot.companionNearPlayerBuild?.(p));
+        if (!away) {
+          memory.barrenMines = (memory.barrenMines || 0) + 1;
+          return fail('mine_entrance_near_player_build');
+        }
         const moved = await actions.goNear(bot, ctx, away, 1, { timeoutMs: 30000 });
         if (!moved.ok) return moved;
       }
@@ -360,7 +365,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         return result;
       }
       case 'cast':
-        return obsidian.castStep(bot, ctx, memory, { skills, actions, avoid: nearHome });
+        return obsidian.castStep(bot, ctx, memory, { skills, actions, avoid: (p) => nearHome(p) || bot.companionNearPlayerBuild?.(p) });
       case 'gather': {
         if (step.dimension === 'the_nether' && step.key === 'quartz') return netherTrip(ctx, step.count);
         if (step.dimension && step.dimension !== nether.dimension(bot)) return { ok: false, reason: `needs_dimension:${step.dimension}` };
@@ -509,7 +514,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       return store(ctx, []);
     }
     // Lava in the mold, or the water still out: finish the cast before anything else.
-    if (obsidian.pending(bot, memory.cast)) return obsidian.castStep(bot, ctx, memory, { skills, actions, avoid: nearHome });
+    if (obsidian.pending(bot, memory.cast)) return obsidian.castStep(bot, ctx, memory, { skills, actions, avoid: (p) => nearHome(p) || bot.companionNearPlayerBuild?.(p) });
     const state = ctx.perceive();
     const debts = owed(state.inventory);
     // Everything owed that is already carried, up to what the chest lacks.

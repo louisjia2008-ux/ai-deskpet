@@ -30,7 +30,7 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () 
   if (ids.length === 0) return fail('unknown_block');
   const here = bot.entity.position;
   const candidates = bot.findBlocks({ matching: ids, maxDistance: radius, count: 64 })
-    .filter((p) => !blacklist.has(posKey(p)) && !exclude(p))
+    .filter((p) => !blacklist.has(posKey(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p))
     .map((p) => bot.blockAt(p))
     // Digging next to water or lava floods the pit the bot is standing in.
     .filter((b) => b && !bot.companionProtectBlock?.(b) && !bot.companionPlacedRecently?.(b.position) && !touchesLiquid(bot, b.position))

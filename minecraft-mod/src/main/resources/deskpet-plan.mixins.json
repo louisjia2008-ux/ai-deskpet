@@ -6,6 +6,7 @@
     "BlockItemPlanGuard",
     "BucketItemPlanGuard",
     "DedicatedConsolePlanReload",
+    "ExplosionPlayerBlockGuard",
     "ServerInteractionPlanGuard",
     "ServerWorldPlanGuard",
     "WorldPlanGuard"

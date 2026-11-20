@@ -72,7 +72,7 @@ public final class PlanInteraction {
 
     public static ActionResult run(World world, ServerPlayerEntity player, ItemStack stack, String action,
                                    Supplier<ActionResult> interaction) {
-        if (!(world instanceof ServerWorld serverWorld) || !PlanService.guardsInteractions(player)) {
+        if (!(world instanceof ServerWorld serverWorld) || (!PlanService.isBot(player) && !PlanService.guardsInteractions(player))) {
             return interaction.get();
         }
         var parent = CURRENT.get();
@@ -179,7 +179,10 @@ public final class PlanInteraction {
     }
 
     private void check(BlockPos origin, Map<BlockPos, BlockState> targets) {
-        if (denied || !PlanService.allowInteraction(world, player, action, origin, targets, custom)) {
+        boolean playerBlock = PlanService.isBot(player) && targets.entrySet().stream().anyMatch(entry ->
+            !world.getBlockState(entry.getKey()).isOf(entry.getValue().getBlock())
+                && PlayerBlocks.get(world).deny(entry.getKey(), action));
+        if (denied || playerBlock || !PlanService.allowInteraction(world, player, action, origin, targets, custom)) {
             denied = true;
             throw new Denied();
         }

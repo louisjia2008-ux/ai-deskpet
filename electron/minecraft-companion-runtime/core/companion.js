@@ -132,6 +132,9 @@ function configureMovements(bot) {
   });
   trackReturnPositions(bot, movements);
   installOpenDoorPassage(bot, movements);
+  const protection = (block) => bot.companionPlayerBlock?.(block?.position) ? 100 : 0;
+  movements.exclusionAreasBreak.push(protection);
+  movements.exclusionAreasPlace.push(protection);
   bot.pathfinder.setMovements(movements);
   // Mining paths through stone need more search time than surface walks.
   bot.pathfinder.thinkTimeout = 10000;

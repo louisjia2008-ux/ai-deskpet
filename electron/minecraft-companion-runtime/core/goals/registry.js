@@ -73,7 +73,8 @@ function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = 
   const machine = (id, makeDevice, headingOffset) => (memory) => {
     if (memory[id]) return memory[id];
     const home = homeOf(memory);
-    const device = makeDevice(avoidFor(memory, home, id));
+    const avoid = avoidFor(memory, home, id);
+    const device = makeDevice((p) => avoid(p) || bot.companionNearPlayerBuild?.(p));
     memory[id] = createDeviceProjectGoal({ bot, name: id === 'cobbleGenerator' ? 'build_cobble_generator' : 'build_auto_smelter',
       device, home: { ...home, headingOffset }, kb });
     return memory[id];
