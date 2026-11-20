@@ -51,7 +51,7 @@ function stepGroups(plan) {
     const terrain = phase === 'terrain' ? (op.target === 'minecraft:air' ? 'cut' : 'fill') : phase;
     let level = 0;
     if (terrain === 'cut' || phase === 'remove_scaffold') level = -op.pos.y;
-    if (terrain === 'fill' || phase === 'walls' || phase === 'scaffold' || phase === 'upper_walls') level = op.pos.y;
+    if (terrain === 'fill' || ['walls', 'scaffold', 'floor', 'upper_walls'].includes(phase)) level = op.pos.y;
     const active = groups.at(-1);
     if (!active || active.key !== terrain) groups.push({ key: terrain, phase, steps: [] });
     groups.at(-1).steps.push({ step, level });
@@ -268,7 +268,8 @@ function createSurveyPlanGoal({ bot, plan, grant, ownerName, supplyInventory }) 
     async run(runCtx) {
       const ctx = { ...runCtx, signal: AbortSignal.any([runCtx.signal, grant.signal].filter(Boolean)) };
       try {
-        for (const group of stepGroups(plan)) {
+        const groups = stepGroups(plan);
+        for (const [groupIndex, group] of groups.entries()) {
           phase = group.phase;
           const pending = [...group.steps];
           grant.state(phase, null);
@@ -276,6 +277,13 @@ function createSurveyPlanGoal({ bot, plan, grant, ownerName, supplyInventory }) 
           if (!bot.blockAt(first)) {
             const travel = await duringDay(ctx, (stepCtx) => actions.goNear(bot, stepCtx, first, 4, { timeoutMs: 30000 }));
             if (!travel.ok) return block(ctx, { reason: 'worksite_unreachable', pos: first, detail: travel.reason });
+          }
+          // Load the upper floors from the ground while a safe route to the
+          // supply chest is available. Shortages are handled at their own phase.
+          if (plan.template?.id === 'two_storey_house' && phase === 'scaffold') {
+            const later = groups.slice(groupIndex).flatMap((entry) => entry.steps.map(({ step }) => step));
+            const loaded = await duringDay(ctx, (stepCtx) => supplies.ensure(stepCtx, later, 256));
+            if (!loaded.ok) return block(ctx, loaded);
           }
           let restock = true;
           let scaffoldApproachChecked = false;
@@ -295,10 +303,11 @@ function createSurveyPlanGoal({ bot, plan, grant, ownerName, supplyInventory }) 
             if (!materialReady.length) continue;
             const highWall = plan.template?.id === 'two_storey_house' && phase === 'walls' &&
               currentLayer[0].level >= plan.groundY + 2;
-            if ((phase === 'roof' || phase === 'upper_walls' || highWall) && !scaffoldApproachChecked) {
+            const deck = phase === 'floor' && currentLayer[0].level >= plan.groundY + 3;
+            if ((phase === 'roof' || phase === 'upper_walls' || highWall || deck) && !scaffoldApproachChecked) {
               await duringDay(ctx, (stepCtx) => climbSurveyScaffold(bot, stepCtx, plan,
                 (reason, detail) => recordStation(ctx, pending[0].step[0], reason, detail),
-                highWall ? currentLayer[0].level : Infinity));
+                highWall || deck ? currentLayer[0].level : Infinity));
               scaffoldApproachChecked = true;
             }
             // Removal can consume the second half of a plant on the layer below.

@@ -3,7 +3,7 @@
 const actions = require('./actions');
 const skills = require('./skills');
 const { abortError, waitUntil } = require('./confirm');
-const { vec, placementSpec, openDoorIfVisible } = require('./survey-placement');
+const { vec, placementSpec, openDoorIfVisible, descendSurveyScaffold } = require('./survey-placement');
 
 const HOE = 'wooden_hoe';
 const SALVAGE = /^(grass_block|dirt|coarse_dirt|rooted_dirt|mud|cobblestone|cobbled_deepslate|stone|andesite|diorite|granite|tuff|calcite|dripstone_block|sand|red_sand|sandstone|red_sandstone|gravel|.+_log|.+_stem)$/;
@@ -23,12 +23,12 @@ function count(stacks, name) {
   return stacks.filter((item) => isMaterial(name, item)).reduce((total, item) => total + item.count, 0);
 }
 
-function batchFor(steps) {
+function batchFor(steps, stackLimit) {
   const needed = new Map();
   for (const step of steps) {
     const item = materialFor(step[0]);
     if (!item) continue;
-    needed.set(item, Math.min(item === HOE ? 1 : 128, (needed.get(item) || 0) + 1));
+    needed.set(item, Math.min(item === HOE ? 1 : stackLimit, (needed.get(item) || 0) + 1));
   }
   return needed;
 }
@@ -62,6 +62,7 @@ function createSurveySupplies(bot, plan, { baseline, borrowed } = createSurveyIn
   async function chestTransaction(ctx, use) {
     if (!chestPos) return { ok: false, reason: 'no_supply_chest' };
     if (!actions.withinReach(bot, chestPos, 3.8)) {
+      await descendSurveyScaffold(bot, ctx, plan);
       let travel = await actions.goNear(bot, ctx, chestPos.offset(0.5, 0, 0.5), 2, { timeoutMs: PATH_TIMEOUT });
       if (!travel.ok && await openDoorIfVisible(bot, ctx, plan)) {
         travel = await actions.goNear(bot, ctx, chestPos.offset(0.5, 0, 0.5), 2, { timeoutMs: PATH_TIMEOUT });
@@ -114,8 +115,8 @@ function createSurveySupplies(bot, plan, { baseline, borrowed } = createSurveyIn
     }
   }
 
-  async function ensure(ctx, steps) {
-    const needed = batchFor(steps);
+  async function ensure(ctx, steps, stackLimit = 128) {
+    const needed = batchFor(steps, stackLimit);
     if (!Object.keys(missingMaterials(bot, needed)).length) return { ok: true };
     await craftFromInventory(ctx, needed);
     if (!Object.keys(missingMaterials(bot, needed)).length) return { ok: true };

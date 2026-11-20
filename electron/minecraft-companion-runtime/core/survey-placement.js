@@ -260,6 +260,23 @@ async function climbSurveyScaffold(bot, ctx, plan, onFailure, heightLimit = Infi
   });
 }
 
+async function descendSurveyScaffold(bot, ctx, plan) {
+  const height = bot.entity.position.y;
+  if (plan.template?.id !== 'two_storey_house' || height < plan.groundY + 3) return;
+  const stands = plan.ops.filter((op) => op.phase === 'remove_scaffold').map((op) => vec(op.pos).offset(0, 1, 0))
+    .filter((cell) => bot.blockAt(cell.offset(0, -1, 0))?.name === 'dirt' && standingPoint(bot, cell));
+  const closestElevation = stands.filter((cell) => Math.abs(cell.y - height) <= 1.1);
+  const lowSteps = stands.filter((cell) => cell.y <= plan.groundY + 2);
+  if (!closestElevation.length || !lowSteps.length) return;
+  const destinations = (cells) => new goals.GoalCompositeAny(cells.map((p) => new goals.GoalBlock(p.x, p.y, p.z)));
+  const reachStairs = await actions.goTo(bot, ctx, destinations(closestElevation), {
+    timeoutMs: 7000, retryNoProgress: false,
+  });
+  if (reachStairs.ok) {
+    await actions.goTo(bot, ctx, destinations(lowSteps), { timeoutMs: 7000, retryNoProgress: false });
+  }
+}
+
 async function aimAndPlace(bot, ctx, target, hit, item) {
   if (!item) return { ok: false, reason: 'no_material' };
   const sneak = INTERACTIVE.test(hit.block.name);
@@ -301,4 +318,4 @@ async function aimAndPlace(bot, ctx, target, hit, item) {
 }
 
 module.exports = { vec, placementSpec, hitFor, stationChoices, walkToStations, aimAndPlace,
-  openDoorIfVisible, closePlanDoor, climbSurveyScaffold };
+  openDoorIfVisible, closePlanDoor, climbSurveyScaffold, descendSurveyScaffold };
