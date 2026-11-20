@@ -216,7 +216,83 @@ test('execute receiver requires Mod running, correlates placement feedback and j
   assert.deepEqual(client.messages.at(-1), { type: 'revoke_ack', grantId: grant.grantId });
 });
 
-test('execute host replaces the old task and emits completion only from the Mod revoke', async (t) => {
+test('execute receiver waits for old-body teardown before admitting a queued continuation', async (t) => {
+  const grants = [];
+  const runs = [];
+  let finishStop;
+  const client = fakeBot(t, ledger(t), 'overworld', {
+    mode: 'execute',
+    onPrepare(plan, grant) { grants.push({ plan, grant }); },
+    onRun(plan) { runs.push(plan.revision); },
+    onStop(grant) {
+      if (grant === grants[0].grant) return new Promise((resolve) => { finishStop = resolve; });
+    },
+  });
+  const first = makeGrant(executionFields);
+  const second = makeGrant({ ...executionFields, planId: first.planId, revision: 2 });
+  client.feed({ type: 'hello', protocol: 2, worldId });
+  deliver(client, first);
+  await turn();
+  client.feed({ type: 'running', ...identityOf(first) });
+  await turn();
+  assert.deepEqual(runs, [1]);
+
+  deliver(client, second);
+  assert.match(client.events.at(-1).reason, /still owns this connection/);
+  client.feed({ type: 'revoke', grantId: first.grantId, status: 'paused', reason: 'owner_paused' });
+  assert.equal(grants[0].grant.signal.aborted, true);
+  const corrupt = makeGrant({ ...executionFields, planId: first.planId, revision: 2 });
+  corrupt.plan.ops[0][0]++;
+  deliver(client, corrupt);
+  assert.match(client.events.at(-1).reason, /hash verification failed/);
+  deliver(client, second);
+  client.feed({ type: 'running', ...identityOf(second) });
+  await turn();
+  assert.deepEqual(runs, [1]);
+  assert.equal(grants.length, 1);
+  assert.equal(client.messages.some((message) => message.type === 'revoke_ack'), false);
+  assert.equal(client.messages.some((message) => message.grantId === second.grantId), false);
+
+  finishStop();
+  await turn();
+  assert.deepEqual(client.messages.slice(-2), [
+    { type: 'revoke_ack', grantId: first.grantId },
+    { type: 'accept', ...identityOf(second), execute: true },
+  ]);
+  client.feed({ type: 'running', ...identityOf(second) });
+  await turn();
+  assert.deepEqual(runs, [1, 2]);
+});
+
+test('execute receiver discards a queued continuation revoked before old-body teardown', async (t) => {
+  const revisions = [];
+  let finishStop;
+  const client = fakeBot(t, ledger(t), 'overworld', {
+    mode: 'execute',
+    onPrepare(plan) { revisions.push(plan.revision); },
+    onRun() {},
+    onStop() { return new Promise((resolve) => { finishStop = resolve; }); },
+  });
+  const first = makeGrant(executionFields);
+  const second = makeGrant({ ...executionFields, planId: first.planId, revision: 2 });
+  client.feed({ type: 'hello', protocol: 2, worldId });
+  deliver(client, first);
+  await turn();
+  client.feed({ type: 'revoke', grantId: first.grantId, status: 'paused', reason: 'owner_paused' });
+  deliver(client, second);
+  client.feed({ type: 'revoke', grantId: second.grantId, status: 'paused', reason: 'disconnected' });
+  assert.deepEqual(client.messages.at(-1), { type: 'revoke_ack', grantId: second.grantId });
+  await turn();
+  finishStop();
+  await turn();
+  assert.deepEqual(client.messages.at(-1), { type: 'revoke_ack', grantId: first.grantId });
+  assert.deepEqual(revisions, [1]);
+  deliver(client, second);
+  assert.match(client.events.at(-1).reason, /already used/);
+  assert.deepEqual(revisions, [1]);
+});
+
+test('execute host replaces the old task, trusts Mod completion and reports interruption on disconnect', async (t) => {
   const client = fakeBot(t, null);
   const events = [];
   let goalSet;
@@ -265,6 +341,23 @@ test('execute host replaces the old task and emits completion only from the Mod 
   await turn();
   assert.equal(events.filter((event) => event.payload?.type === 'goal_done').length, 1);
   assert.equal(events.find((event) => event.payload?.type === 'goal_done').payload.modStatus, 'completed');
+
+  const interrupted = makeGrant(executionFields);
+  deliver(client, interrupted);
+  await turn();
+  client.feed({ type: 'running', ...identityOf(interrupted) });
+  await turn();
+  const { taskId, grant: interruptedCapability } = goalSet;
+  assert.equal(host.status().task.taskId, taskId);
+  client.bot.emit('end', 'connection lost');
+  await turn();
+  assert.equal(interruptedCapability.signal.aborted, true);
+  assert.equal(host.status().task, null);
+  const interruptedEvents = events.filter((event) => event.taskId === taskId);
+  assert.equal(interruptedEvents.filter((event) => event.payload?.type === 'goal_done').length, 0);
+  assert.equal(interruptedEvents.filter((event) => event.payload?.type === 'goal_failed').length, 1);
+  assert.equal(interruptedEvents.find((event) => event.payload?.type === 'goal_failed').payload.code, 'disconnected');
+  assert.equal(interruptedEvents.find((event) => event.task?.status === 'failed').task.error.message, 'connection lost');
 });
 
 test('Core expected-state rules agree with the Mod fixture', () => {

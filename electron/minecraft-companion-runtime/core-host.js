@@ -116,7 +116,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     const task = payload.taskId ? tasks.get(payload.taskId) : null;
     if (task && task === survey?.task && ['goal_done', 'goal_failed'].includes(payload.type)) {
       // A local failure can ask the Mod to pause. Only the paired Mod
-      // revocation may publish a construction task's terminal outcome.
+      // revocation may publish a completed construction task.
       try { survey.grant.blocked('survey_execution_error', undefined, (payload.reasons || ['local_goal_ended']).join(', ').slice(0, 240)); } catch { /* receiver owns the connection */ }
       return;
     }
@@ -132,15 +132,23 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     event({ type: 'core', taskId: payload.taskId || null, connectionGeneration: epoch, payload });
   }
   function detach(reason, { failed = false, dispose = false } = {}) {
+    const previousEpoch = generation;
     generation += 1; // invalidate old transport and core callbacks BEFORE cleanup
     clearTimeout(timer); timer = null;
     const oldBot = bot; const oldCompanion = companion;
     const detachedTask = active;
+    const interruptedSurvey = detachedTask && detachedTask === survey?.task;
     bot = null; companion = null;
     disposeSurveyPlan?.();
     disposeSurveyPlan = null;
     survey = null;
-    if (detachedTask && failed) updateTask(detachedTask, 'failed', { error: reason });
+    if (detachedTask && (failed || interruptedSurvey)) updateTask(detachedTask, 'failed', { error: reason });
+    if (interruptedSurvey) {
+      const { taskId, name, planId, revision } = detachedTask;
+      event({ type: 'core', taskId, connectionGeneration: previousEpoch, payload: {
+        type: 'goal_failed', goal: name, taskId, planId, revision, reasons: [reason.message], code: reason.code,
+      } });
+    }
     setConnection(dispose ? 'disposed' : failed ? 'error' : 'disconnected', failed ? reason : undefined);
     // Queue cleanup so reconnect cannot attach a new engine before the old one
     // has released its body/listeners. Tasks are never automatically replayed.

@@ -129,6 +129,7 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent =
   let worldId = null;
   let advertised = false;
   let transfer = null;
+  let deferred = null;
   let disposed = false;
   const active = new Map();
   const report = (data) => { try { onEvent(data); } catch { /* observer owns delivery */ } };
@@ -140,6 +141,17 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent =
   function sameContext(plan) { return plan.worldId === worldId && plan.dimension === dimension(); }
   function sameIdentity(message, identity) {
     return Object.keys(identity).every((key) => message[key] === identity[key]);
+  }
+
+  function startDeferred() {
+    const queued = deferred;
+    deferred = null;
+    if (!queued || disposed) return;
+    if (!sameContext(queued.plan) || queued.plan.expiresAt <= Date.now()) {
+      report({ type: 'rejected', ...queued.identity, reason: 'Deferred survey authorization lost its connection context or expired' });
+      return;
+    }
+    startGrant(queued.plan, queued.identity);
   }
 
   function endGrant(grantId, result, ack = false) {
@@ -163,6 +175,7 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent =
     void Promise.resolve().then(() => onStop(record.capability, result)).then(() => {
       active.delete(grantId);
       reply(record.ack);
+      startDeferred();
     }).catch((error) => report({ type: 'stop_failed', ...record.identity, reason: String(error?.message || error) }));
   }
 
@@ -234,10 +247,24 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent =
       throw new Error('Survey plan is for another world, dimension or bot');
     }
     if (mode === 'execute') {
-      if (active.size) throw new Error('Another survey authorization still owns this connection');
       validateExecutionDocument(plan);
+      if (active.size) {
+        const [previous] = active.values();
+        if (!previous.stopping || deferred || identity.planId !== previous.identity.planId
+          || identity.revision <= previous.identity.revision) {
+          throw new Error('Another survey authorization still owns this connection');
+        }
+        consumeGrant(ledgerDir, worldId, grantId);
+        deferred = { plan, identity };
+        return;
+      }
     }
     consumeGrant(ledgerDir, worldId, grantId);
+    startGrant(plan, identity);
+  }
+
+  function startGrant(plan, identity) {
+    const { grantId } = identity;
     const accepted = () => report({ type: 'accepted', ...identity, worldId, dimension: plan.dimension });
     if (mode === 'dry_run') {
       sendPlanMessage(client, { type: 'accept', ...identity });
@@ -300,6 +327,7 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent =
           advertised = true;
         }
         if (worldId !== message.worldId) {
+          deferred = null;
           for (const grantId of active.keys()) endGrant(grantId, { status: 'paused', reason: 'world_changed' });
           transfer = null;
         }
@@ -310,6 +338,7 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent =
         onChunk(message);
       } else if (message.type === 'revoke' && worldId && UUID.test(message.grantId)) {
         if (transfer?.grantId === message.grantId) transfer = null;
+        if (deferred?.identity.grantId === message.grantId) deferred = null;
         let status = REVOKE_STATUS.has(message.status) ? message.status : 'paused';
         if (mode === 'execute' && status === 'completed' && !active.get(message.grantId)?.settled) status = 'paused';
         const reason = typeof message.reason === 'string' ? message.reason : 'revoked';
@@ -355,10 +384,12 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent =
     bot.removeListener('death', onDeath);
     for (const grantId of active.keys()) endGrant(grantId, { status: 'paused', reason: 'disconnected' });
     transfer = null;
+    deferred = null;
     worldId = null;
   }
 
   function onGame() {
+    if (deferred && !sameContext(deferred.plan)) deferred = null;
     for (const [grantId, record] of active) {
       if (!sameContext(record.plan)) endGrant(grantId, { status: 'paused', reason: 'world_or_dimension_changed' });
     }
