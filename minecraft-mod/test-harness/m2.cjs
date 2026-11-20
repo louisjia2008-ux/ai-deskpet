@@ -8,7 +8,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { runtimeRequire, serverDir, CHANNEL, Vec3, record, until, serverSettings, createRcon, newBot, ready,
   closeBot, decodeMessage } = require('./common.cjs');
 const { BUTTON, Y, P, coords, move, equip, setupArena, snapshot, airClick, openMenu, click,
-  stageSelection, readPlans, commandAssert } = require('./wand-session.cjs');
+  stageSelection, readPlans, commandAssert, assertBlock } = require('./wand-session.cjs');
 
 const INTRUDER = 'Intruder';
 const NO_AUTH = new Vec3(-6, Y - 1, 4);
@@ -16,7 +16,7 @@ const BREAK = new Vec3(-4, Y - 1, 4);
 const PLACE_AGAINST = new Vec3(-4, Y - 1, 7);
 const PLACE = PLACE_AGAINST.offset(0, 1, 0);
 const CANCEL_BREAK = new Vec3(-4, Y - 1, 10);
-const CHANGED = new Vec3(0, Y, 0);
+const INSIDE = new Vec3(2, Y - 1, 6);
 const ID = `m2_${randomUUID().replaceAll('-', '').slice(0, 10)}`;
 
 function offlineUUID(username) {
@@ -74,7 +74,8 @@ async function preview(rcon, bot, options) {
 }
 
 async function expectDenial(rcon, id, expectedReason, description) {
-  const plan = await planWhere(rcon, id, (entry) => entry.lastDenial === expectedReason, description);
+  const plan = await planWhere(rcon, id, (entry) => typeof expectedReason === 'string'
+    ? entry.lastDenial === expectedReason : expectedReason.test(entry.lastDenial), description);
   assert.ok(['previewed', 'expired'].includes(plan.status), `Forbidden transition to ${plan.status}`);
   record('confirmation-denied', { id, description, status: plan.status, reason: plan.lastDenial });
 }
@@ -273,10 +274,13 @@ async function suite({ preparingRestart = false, fragmented = false } = {}) {
     record('expired-plan-denied', { id: stale.id });
 
     const changed = await preview(rcon, owner.bot);
-    await rcon.command(`setblock ${coords(CHANGED)} oak_planks`);
+    const workCell = changed.plan.ops.find((op) => op.expect === 'minecraft:air' && op.kind === 'build');
+    assert.ok(workCell, 'Find an actual pending build cell');
+    const changedPos = new Vec3(workCell.pos.x, workCell.pos.y, workCell.pos.z);
+    await rcon.command(`setblock ${coords(changedPos)} oak_planks`);
     await click(owner.bot, BUTTON.confirm);
-    await expectDenial(rcon, changed.id, 'snapshot_changed', 'Changed block since preview');
-    await rcon.command(`setblock ${coords(CHANGED)} air`);
+    await expectDenial(rcon, changed.id, /protected_block_changed/, 'Protected blocker on a pending operation');
+    await rcon.command(`setblock ${coords(changedPos)} air`);
 
     const active = await preview(rcon, owner.bot, { supply: true });
     const activeBefore = await snapshot(rcon, `${ID}_grant_before`);
@@ -325,6 +329,21 @@ async function suite({ preparingRestart = false, fragmented = false } = {}) {
       'server withdrew authorization after missing heartbeat', 13_000);
     assert.equal(timedOut.reason, 'disconnected');
     record('heartbeat-timeout', { id: active.id, reason: timedOut.reason });
+    const timeoutRejections = (await readPlans(rcon)).rejections.length;
+    await equip(rcon, robot.bot, 'minecraft:diamond_shovel');
+    await move(rcon, robot.bot, NO_AUTH.offset(0.5, 1, 2.5));
+    await attemptDig(robot.bot, await grass(robot.bot, NO_AUTH));
+    await delay(250);
+    await assertBlock(rcon, NO_AUTH, 'minecraft:air');
+    await rcon.command(`setblock ${coords(NO_AUTH)} grass_block`);
+    await move(rcon, robot.bot, INSIDE.offset(0.5, 1, 2.5));
+    await attemptDig(robot.bot, await grass(robot.bot, INSIDE));
+    await assertBlock(rcon, INSIDE, 'minecraft:grass_block');
+    await newRejections(rcon, timeoutRejections, [['break', INSIDE]]);
+    const scoped = currentPlan(await readPlans(rcon), active.id);
+    assert.equal(scoped.violations, 2);
+    assert.equal(scoped.lateAttempts, 1);
+    assert.equal(scoped.siteChanges, 0);
     // A new connection obtains the world ID from the server before continuing.
     closeBot(robot);
     await delay(250);
@@ -337,7 +356,6 @@ async function suite({ preparingRestart = false, fragmented = false } = {}) {
 
     await equip(rcon, robot.bot, 'minecraft:diamond_shovel');
     await move(rcon, robot.bot, CANCEL_BREAK.offset(0.5, 1, 2.5));
-    const cancelledSnapshot = await snapshot(rcon, `${ID}_cancel_before`);
     const beforeCancelCount = (await readPlans(rcon)).rejections.length;
     await reopenPlanMenu();
     const pressed = performance.now();
@@ -347,8 +365,10 @@ async function suite({ preparingRestart = false, fragmented = false } = {}) {
     assert.ok(attemptStarted <= 1000, `Cancel block attempt reached harness after ${attemptStarted}ms`);
     await attemptDig(robot.bot, worldPos);
     await planWhere(rcon, active.id, (entry) => entry.status === 'cancelled', 'Owner cancelled active plan');
-    await newRejections(rcon, beforeCancelCount, [['break', CANCEL_BREAK]]);
-    assert.equal(await snapshot(rcon, `${ID}_cancel_after`), cancelledSnapshot);
+    await delay(250);
+    await assertBlock(rcon, CANCEL_BREAK, 'minecraft:air');
+    assert.equal((await readPlans(rcon)).rejections.length, beforeCancelCount,
+      'Cancellation must immediately allow outside work');
     assert.deepEqual(owner.errors, []);
     assert.deepEqual(intruder.errors, []);
     assert.deepEqual(robot.errors, []);
@@ -376,7 +396,8 @@ async function verifyRestart() {
   try {
     await ready(robot);
     const hello = await until(() => messages.find((message) => message.type === 'hello'), 'world hello after restart');
-    const entry = currentPlan(await readPlans(rcon), previous.planId);
+    const restored = await readPlans(rcon);
+    const entry = currentPlan(restored, previous.planId);
     assert.ok(entry, 'Running plan was lost from the world save');
     assert.equal(entry.status, 'paused');
     assert.equal(entry.reason, 'server_restart');
@@ -386,6 +407,17 @@ async function verifyRestart() {
     assert.equal(hello.worldId, entry.plan.worldId);
     if (previous.worldId) assert.equal(hello.worldId, previous.worldId);
     assert.ok(messages.every((message) => message.type !== 'grant_chunk'));
+    const rejects = restored.rejections.length;
+    await equip(rcon, robot.bot, 'minecraft:diamond_shovel');
+    await move(rcon, robot.bot, NO_AUTH.offset(0.5, 1, 2.5));
+    await attemptDig(robot.bot, await grass(robot.bot, NO_AUTH));
+    await delay(250);
+    await assertBlock(rcon, NO_AUTH, 'minecraft:air');
+    await move(rcon, robot.bot, INSIDE.offset(0.5, 1, 2.5));
+    await attemptDig(robot.bot, await grass(robot.bot, INSIDE));
+    await assertBlock(rcon, INSIDE, 'minecraft:grass_block');
+    await newRejections(rcon, rejects, [['break', INSIDE]]);
+    assert.ok(!Object.hasOwn(restored, 'revokedBots'));
     record('m2-restart-pass', { id: previous.planId, status: entry.status, reason: entry.reason,
       revision: previous.revision, planHash: previous.planHash, worldId: hello.worldId });
   } finally {

@@ -4,6 +4,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import dev.deskpet.minecraft.wand.PlanCompiler;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.minecraft.command.argument.BlockPosArgumentType;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.text.Text;
 import net.minecraft.util.WorldSavePath;
@@ -57,6 +58,23 @@ final class PlanDebugCommands {
                         source.sendFeedback(() -> Text.literal(result), false);
                         return 1;
                     })));
+                debug.then(CommandManager.literal("cancel").then(CommandManager.argument("plan", StringArgumentType.word())
+                    .executes(context -> {
+                        var source = context.getSource();
+                        var result = PlanService.cancel(source.getPlayerOrThrow(), id(StringArgumentType.getString(context, "plan")));
+                        source.sendFeedback(() -> Text.literal(result), false);
+                        return 1;
+                    })));
+                debug.then(CommandManager.literal("fixture")
+                    .then(CommandManager.argument("profile", StringArgumentType.word())
+                        .then(CommandManager.argument("origin", BlockPosArgumentType.blockPos()).executes(context -> {
+                            var source = context.getSource();
+                            var planId = PlanTestFixtures.preview(source.getPlayerOrThrow(),
+                                StringArgumentType.getString(context, "profile"),
+                                BlockPosArgumentType.getBlockPos(context, "origin"));
+                            source.sendFeedback(() -> Text.literal("fixture plan " + planId), false);
+                            return 1;
+                        }))));
             }
             dispatcher.register(CommandManager.literal("deskpet").then(debug));
         });

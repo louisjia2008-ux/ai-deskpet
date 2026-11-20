@@ -77,11 +77,11 @@ async function compatibility(rcon, settings, control) {
             record('received-plan-message', { message });
             if (message.type === 'hello') {
               helloMessages.push(message);
-              assert.equal(message.protocol, 1);
+              assert.equal(message.protocol, 2);
               assert.match(message.worldId, /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/);
               assert.match(message.modVersion, /^\d+\.\d+\.\d+/);
               bot._client.writeChannel('minecraft:register', [CHANNEL]);
-              sendMessage(bot._client, { type: 'hello_ack', protocol: 1, worldId: message.worldId });
+              sendMessage(bot._client, { type: 'hello_ack', protocol: message.protocol, worldId: message.worldId });
             } else {
               helloReplies.push(message);
             }
@@ -104,6 +104,9 @@ async function compatibility(rcon, settings, control) {
     await placeFixture(rcon, true);
     const bot = robot.bot;
     const ownerEntity = await until(() => bot.players.Owner?.entity, 'Owner entity on DeskPetBot');
+    // Establish a distinct equipment state so clearing and re-equipping in one tick cannot coalesce.
+    requireSane(await rcon.command('item replace entity Owner weapon.mainhand with minecraft:dirt'), 'Set control equipment');
+    await until(() => bot.players.Owner?.entity?.heldItem?.name === 'dirt', 'control equipment on DeskPetBot');
     const equipIndex = equipPackets.length;
     requireSane(await rcon.command(`item replace entity Owner weapon.mainhand with ${ITEM}`), 'Equip wand');
     const frame = await until(() => equipPackets.slice(equipIndex).find((packet) => packet.entityId === ownerEntity.id)
@@ -137,6 +140,13 @@ async function compatibility(rcon, settings, control) {
       assert.match(inventoryEvidence, /deskpet:survey_wand/, 'Server must record the actual picked-up wand');
       record('pickup', { item: itemEvidence(pickedUp), pickupEvents: pickups, serverInventory: inventoryEvidence });
       requireSane(await rcon.command(`tp DeskPetBot 3.5 ${ARENA_Y} 0.5`), 'Move DeskPetBot to chest');
+      const chestApproach = new Vec3(3.5, ARENA_Y, 0.5);
+      await until(() => bot.entity.position.distanceTo(chestApproach) < 0.2, 'DeskPetBot client reached chest');
+      // The picked-up wand may occupy the selected hotbar slot and intercept the chest click.
+      const emptySlot = bot.inventory.firstEmptyHotbarSlot();
+      assert.ok(emptySlot >= bot.inventory.hotbarStart, 'Expected an empty hotbar slot for opening the chest');
+      bot.setQuickBarSlot(emptySlot - bot.inventory.hotbarStart);
+      bot._client.write('tick_end', {});
       const chestItem = await openWandChest(bot);
       record('chest', { item: itemEvidence(chestItem) });
       if (!control) assert.ok(isMappedWand(chestItem), 'Vanilla chest contents did not expose mapped wand');
@@ -217,9 +227,11 @@ async function craftWand(rcon, settings) {
       assert.ok(free !== null && free >= grid.inventoryStart);
       await press(0, 0);
       await press(free, 0);
+      const inventory = await until(async () => {
+        const state = await rcon.command('data get entity Crafter Inventory');
+        return /deskpet:survey_wand/.test(state) ? state : null;
+      }, 'crafted wand recorded in the server inventory');
       bot.closeWindow(grid);
-      const inventory = await rcon.command('data get entity Crafter Inventory');
-      assert.match(inventory, /deskpet:survey_wand/);
       assert.doesNotMatch(inventory, /minecraft:(diamond|amethyst_shard|stick)/, 'Ingredients were consumed exactly once');
       record('recipe-server-inventory', { inventory });
       assert.deepEqual(client.errors, []);

@@ -47,12 +47,23 @@ async function equip(rcon, bot, item = WAND) {
 async function setupArena(rcon, bots) {
   await stabilize(rcon);
   await move(rcon, bots[0], new Vec3(1.5, Y, 1.5));
+  await until(async () => {
+    for (const x of [LOWER.x, UPPER.x]) {
+      for (const z of [LOWER.z, UPPER.z]) {
+        if (!/Test passed/.test(await rcon.command(`execute if loaded ${x} ${Y} ${z}`))) return false;
+      }
+    }
+    return true;
+  }, 'server loaded all arena chunks', 30_000, 200);
   // Clear the entire fixture, including the eight-block perimeter sampled in snapshots.
-  await rcon.command(`fill -8 ${Y - 7} -8 25 ${Y + 12} 25 air`);
-  await rcon.command(`fill -8 ${Y - 8} -8 25 ${Y - 8} 25 stone`);
-  await rcon.command(`fill -8 ${Y - 7} -8 25 ${Y - 1} 25 dirt`);
+  const fill = async (low, high, block) =>
+    assert.match(await rcon.command(`fill -8 ${low} -8 25 ${high} 25 ${block}`),
+      /Successfully filled|No blocks were filled/);
+  await fill(Y - 7, Y + 12, 'air');
+  await fill(Y - 8, Y - 8, 'stone');
+  await fill(Y - 7, Y - 1, 'dirt');
   // Keep the visible surface uniform for deterministic 'most common ground height'.
-  await rcon.command(`fill -8 ${Y - 1} -8 25 ${Y - 1} 25 grass_block`);
+  await fill(Y - 1, Y - 1, 'grass_block');
   for (const bot of bots) {
     await rcon.command(`gamemode creative ${bot.username}`);
     await rcon.command(`clear ${bot.username}`);
@@ -79,8 +90,8 @@ async function snapshot(rcon, name, lower = LOWER, upper = UPPER) {
   return sha256;
 }
 
-async function blockClick(rcon, bot, target, { sneaking = false } = {}) {
-  await move(rcon, bot, target.offset(0.5, target.y === Y - 1 ? 1 : 0, 2.5));
+async function blockClick(rcon, bot, target, { sneaking = false, ground = target.y === Y - 1 } = {}) {
+  await move(rcon, bot, target.offset(0.5, ground ? 1 : 0, 2.5));
   const expected = await until(() => {
     const block = bot.blockAt(target);
     return block && block.name !== 'air' && block;
@@ -173,6 +184,11 @@ async function readPlans(rcon) {
   return JSON.parse(await fs.readFile(path.join(worldDir, 'deskpet-debug/plans.json'), 'utf8'));
 }
 
+async function assertBlock(rcon, pos, state) {
+  const result = await rcon.command(`execute if block ${coords(pos)} ${state}`);
+  assert.match(result, /Test passed/, `Server block at ${coords(pos)} is not ${state}`);
+}
+
 module.exports = { BUTTON, P: { first: FIRST, second: SECOND, chest: CHEST, lower: LOWER, upper: UPPER },
   Y, coords, move, equip, setupArena, snapshot, blockClick, airClick, openMenu, click, describeSlot,
-  observeDisplays, stageSelection, readPlans, commandAssert };
+  observeDisplays, stageSelection, readPlans, commandAssert, assertBlock };
