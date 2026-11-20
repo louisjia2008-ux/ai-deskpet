@@ -345,7 +345,7 @@ function applyNetherMovements(bot) {
 }
 
 /** Quartz walks own their excavation: native paths may only use existing ground. */
-function applyWalkOnlyMovements(bot) {
+function applyWalkOnlyMovements(bot, { maxDrop = 1 } = {}) {
   const m = bot.pathfinder?.movements;
   if (!m || m.companionWalkOnly) return () => {};
   const keys = ['canDig', 'allowParkour', 'allow1by1towers', 'scafoldingBlocks', 'maxDropDown', 'companionWalkOnly',
@@ -357,19 +357,19 @@ function applyWalkOnlyMovements(bot) {
   m.allow1by1towers = false;
   m.scafoldingBlocks = [];
   // The native limit compares feet to the supporting block, one below the
-  // landing feet. A one-block physical descent therefore needs depth two.
+  // landing feet. A physical descent therefore needs one more native block.
   // Enforce the physical delta separately, including any upstream moves
   // that did not consult the native dropdown limit.
-  m.maxDropDown = Math.min(m.maxDropDown ?? 2, 2);
+  m.maxDropDown = Math.min(m.maxDropDown ?? maxDrop + 1, maxDrop + 1);
   m.infiniteLiquidDropdownDistance = false;
   const neighbors = m.getNeighbors;
   if (typeof neighbors === 'function') {
     const guarded = function (node, ...args) {
       return neighbors.call(this, node, ...args).filter((move) => Number.isFinite(node.y) && Number.isFinite(move.y)
-        && move.y >= node.y - 1 && move.y <= node.y + 1 && !move.toBreak?.length && !move.toPlace?.length);
+        && move.y >= node.y - maxDrop && move.y <= node.y + 1 && !move.toBreak?.length && !move.toPlace?.length);
     };
     m.getNeighbors = guarded;
-    m.companionPhysicalDropLimit = 1;
+    m.companionPhysicalDropLimit = maxDrop;
     m.companionPhysicalDropGuard = guarded;
   }
   return () => {

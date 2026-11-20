@@ -45,6 +45,8 @@ const { installEdgeNudge } = require('./edgeNudge');
 const { installEntityGeometry } = require('./entityGeometry');
 const { trackReturnPositions } = require('./pathReturn');
 const { installOpenDoorPassage, uninstallOpenDoorPassage } = require('./openDoorPassage');
+const { installSurveyActions } = require('./survey-plan-actions');
+const { applyWalkOnlyMovements } = require('./nether');
 
 // How long a hunt for a night mob keeps night rest away after its last step.
 const NIGHT_HUNT_MS = 5 * 60 * 1000;
@@ -170,6 +172,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   let retirement = Promise.resolve();
   let retiring = 0;
   let retirementFailed = false;
+  let survey = null;
   const policy = { risk: 'normal', guard: 'self_first' };
   let goalOwner = null;
   // The connection owns this evidence even while a cached goal is retired.
@@ -260,6 +263,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     abandonMs: retirementTimeoutMs,
     perceive: () => perceive(bot),
     behaviors,
+    permanentEnabled: () => !survey,
     onEvent: (event) => {
       if (event.type === 'behavior_abandoned') haltBody(bot);
       if (event.type === 'goal_set' && goalOwner) goalOwner.generation = event.generation;
@@ -298,7 +302,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   if (autonomy) director.enable();
   const timer = setInterval(() => {
     if (disposed) return;
-    try { if (!paused && !dispatching && !retiring && !retirementFailed && !brain.status().blocked) director.tick(); } catch (error) { onEvent({ type: 'autonomy_error', at: Date.now(), reason: String(error?.message || error) }); }
+    try { if (!survey && !paused && !dispatching && !retiring && !retirementFailed && !brain.status().blocked) director.tick(); } catch (error) { onEvent({ type: 'autonomy_error', at: Date.now(), reason: String(error?.message || error) }); }
     brain.tick().catch(() => {});
   }, tickMs);
   timer.unref?.();
@@ -322,6 +326,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
 
   function startPlayerGoal(create, metadata, returnGoal = true) {
     assertBodyAvailable();
+    if (survey) throw Object.assign(new Error('A survey authorization owns the body'), { code: 'survey_owns_body' });
     const epoch = ++taskEpoch;
     dispatching += 1;
     const operation = dispatch.then(async () => {
@@ -342,6 +347,45 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     }).finally(() => { dispatching -= 1; });
     dispatch = operation.catch(() => {});
     return operation;
+  }
+
+  function stopSurveyBody() {
+    haltBody(bot);
+    try { bot.stopDigging?.(); } catch { /* may already be disconnected */ }
+    try { bot.currentWindow?.close?.(); } catch { /* may already be disconnected */ }
+  }
+
+  function releaseSurvey(record) {
+    if (survey !== record) return;
+    record.grant.signal.removeEventListener('abort', stopSurveyBody);
+    record.restoreMovements?.();
+    record.restoreActions();
+    survey = null;
+  }
+
+  function prepareSurveyPlan(plan, grant) {
+    assertBodyAvailable();
+    if (survey || grant.signal.aborted) throw new Error('Survey authorization cannot reserve the body');
+    const record = { grant, restoreActions: installSurveyActions(bot, plan, grant) };
+    survey = record;
+    grant.signal.addEventListener('abort', stopSurveyBody, { once: true });
+    stopSurveyBody();
+    taskEpoch += 1;
+    paused = false;
+    record.prepared = Promise.all([director.disable('survey_plan'), brain.stop('survey_plan'), dispatch]).then(async () => {
+      await joinRetirement();
+      if (grant.signal.aborted || disposed) return;
+      assertBodyAvailable();
+      const restoreWalkOnly = applyWalkOnlyMovements(bot, { maxDrop: plan.template?.id === 'wheat_field' ? 1 : 3 });
+      const movements = bot.pathfinder.movements;
+      const openDoors = movements.canOpenDoors;
+      movements.canOpenDoors = false;
+      record.restoreMovements = () => {
+        movements.canOpenDoors = openDoors;
+        restoreWalkOnly();
+      };
+    });
+    return record.prepared;
   }
   const goalMethod = (create) => (options = {}, metadata) => startPlayerGoal(
     () => create({ bot, ...options }), metadata ?? { taskId: options?.taskId });
@@ -435,6 +479,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       const attempt = async (cleanup) => { try { await cleanup(); } catch (error) { errors.push(error); } };
       for (const behavior of behaviors) await attempt(() => behavior.dispose?.());
       await attempt(() => recovery.dispose());
+      if (survey) await attempt(() => releaseSurvey(survey));
       for (const goal of usedGoals) await attempt(() => goal.dispose?.());
       usedGoals.clear();
       goalOwner = null;
@@ -468,6 +513,30 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     },
     setGoal(goal, metadata) {
       return startPlayerGoal(() => goal, metadata, false);
+    },
+    // The host calls these only from its authenticated Mod channel. None are
+    // available through submitTask or the model tool schemas.
+    prepareSurveyPlan,
+    async startSurveyPlan(grant, goal, metadata) {
+      const record = survey;
+      if (record?.grant !== grant || grant.signal.aborted) return;
+      await record.prepared;
+      if (survey !== record || grant.signal.aborted) return;
+      assertBodyAvailable();
+      director.notePlayerGoal();
+      useGoal(goal, metadata);
+      await brain.tick();
+    },
+    async stopSurveyPlan(grant, reason) {
+      const record = survey;
+      if (record?.grant !== grant) return;
+      stopSurveyBody();
+      if (disposed) { await dispose(); return; }
+      await Promise.all([record.prepared, brain.stop(reason)]);
+      await joinRetirement();
+      // A late-opened window may arrive after the first abort callback.
+      stopSurveyBody();
+      releaseSurvey(record);
     },
     /** Lets the bot choose its own goals while no player task is set. */
     setAutonomy(on) {

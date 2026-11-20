@@ -12,6 +12,7 @@ const { waitUntil, runCancellable, sleep, abortError } = require('./confirm');
 const { ownedItems } = require('./perception');
 const { dropReturnPosition } = require('./pathReturn');
 const { meleeGeometry, meleeSight, MeleeFollowGoal, entitySizeEvidence } = require('./entityGeometry');
+const { surveyDigPermit, withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight } = require('./survey-plan-actions');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
@@ -240,11 +241,16 @@ function withinReach(bot, position, reach = 4.5) {
   return eye.distanceTo(position.offset(0.5, 0.5, 0.5)) <= reach;
 }
 
-async function digBlock(bot, ctx, block, { timeoutMs = 12000, tool: chosen = null } = {}) {
+async function digBlock(bot, ctx, block, { timeoutMs = 12000, tool: chosen = null, point = null, face = null } = {}) {
   if (bot.companionProtectBlock?.(block)) return fail('protected_home');
   const position = block.position;
+  const initialPermit = surveyDigPermit(bot, ctx, position);
+  if (initialPermit?.reason) return fail(initialPermit.reason);
   const originalName = block.name;
-  if (!withinReach(bot, position)) return fail('out_of_reach');
+  const canReach = () => initialPermit && point
+    ? bot.entity.position.offset(0, bot.entity.eyeHeight ?? 1.62, 0).distanceTo(point) <= 4.5
+    : withinReach(bot, position);
+  if (!canReach()) return fail('out_of_reach');
   // The fastest tool unless the caller picked one (to spare a better pickaxe).
   const tool = chosen || bot.pathfinder?.bestHarvestTool?.(block);
   if (tool) {
@@ -252,7 +258,7 @@ async function digBlock(bot, ctx, block, { timeoutMs = 12000, tool: chosen = nul
   }
   const current = bot.blockAt(position);
   if (!current || current.name !== originalName) return fail('block_changed');
-  if (!bot.canDigBlock(current)) return fail('cannot_dig');
+  if (initialPermit ? !current.diggable : !bot.canDigBlock(current)) return fail('cannot_dig');
   // Mid-air digging is five times slower on the server than the client's
   // timing assumes, and the break is rejected. Wait to land (not in water).
   if (!bot.entity.onGround && !bot.entity.isInWater) {
@@ -272,14 +278,27 @@ async function digBlock(bot, ctx, block, { timeoutMs = 12000, tool: chosen = nul
       }
     }
   }
+  // Native dig otherwise awaits a look before its first packet, leaving a
+  // cancellation window where stopDigging sees no active attempt.
+  if (initialPermit) {
+    await bot.lookAt(point || position.offset(0.5, 0.5, 0.5), true);
+    if (!canReach()) return fail('out_of_reach');
+  }
+  const permit = surveyDigPermit(bot, ctx, position);
+  if (permit?.reason) return fail(permit.reason);
+  let denial;
   try {
-    await runCancellable(() => bot.dig(current, true), {
+    permit?.start(face);
+    await runCancellable(() => bot.dig(permit ? bot.blockAt(position) : current, permit ? 'ignore' : true), {
       signal: ctx.signal, timeoutMs, timeoutCode: 'dig_timeout', cancel: () => bot.stopDigging(),
     });
   } catch (error) {
     if (isAbort(error)) throw error;
     // The server may still have broken it; trust only the block state below.
+  } finally {
+    denial = permit?.end();
   }
+  if (denial) return fail(denial);
   const gone = await waitUntil(() => bot.blockAt(position)?.name !== originalName,
     { timeoutMs: 1500, signal: ctx.signal });
   return gone ? { ok: true } : fail('dig_unconfirmed');
@@ -1088,6 +1107,7 @@ async function surface(bot, ctx, { targetY = bot.companionSurfaceY } = {}) {
 }
 
 module.exports = {
+  withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight,
   drainPocket,
   recentre, surface, underground, openSky, localSurfaceY, unstick, nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, gatherClimbBlocks, digStairsUp, digStairsDown, goTo, goNear, goToDig, withinReach, digBlock, collectDrops, countItems, eat, pickFood, attack, directStep, fleeFrom,
   equipBestWeapon, haltBody, weaponScore, droppedItemName, RISKY_FOODS,

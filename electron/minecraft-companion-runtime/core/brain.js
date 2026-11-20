@@ -11,6 +11,7 @@ const BAND = Object.freeze({ IDLE: 0, GOAL: 50, MAINTENANCE: 100, DEFENSE: 120, 
 function createBrain({
   perceive,
   behaviors = [],
+  permanentEnabled = () => true,
   now = Date.now,
   onEvent = () => {},
   noProgressLimit = 6,
@@ -77,7 +78,7 @@ function createBrain({
   }
 
   function candidates() {
-    const list = [...permanent];
+    const list = permanentEnabled() ? [...permanent] : [];
     const g = goalBehavior();
     if (g) list.push(g);
     return list;

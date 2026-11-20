@@ -8,29 +8,32 @@
     "core-host.js": "585ac68a40f803ec18b855c1592caee27c7897680be9ea540abcf10b269ceb74",
     "core-tools.js": "bfa35385b42ab58de2f65eaad39e15fb3d74f0f410fafd65396c7c5d11a5fcdc",
     "core/README.md": "e453e9c84bdc43057d4c38c23044c02e36b9e8283976af9eacfd83b409e0cdeb",
-    "core/actions.js": "7b4d7e9a61b79c7fb2677e5df4ebbb09e65c1e1d12fdf4fa007bef8cae9a5eaf",
+    "core/actions.js": "b6189a15e4dac37933f4d3a8439a4111fc227400faa4eace1575dd483abc0e52",
     "core/behaviors/recovery.js": "a09a6678e606da006ac5d0620f4a2e64a8c41ba756435c89fdb405f34774513f",
     "core/behaviors/survival.js": "2101e98f6904453cecfefc285512c8395dd7b962865060d7ec536f48e41ff43b",
-    "core/companion.js": "f606559fea3b8d08d157cd3ed0e687b87a498d874ae095dc9db31ca6ec5b114e",
+    "core/companion.js": "e9648072d01fcced5aaa4fb2fbb2f070a202aa11a83ad1aa9f2c94cabe4a65b7",
     "core/goals/gatherBlocks.js": "7a894f1df6c3db1155135e823725675cc040120e2d85276d0897c5c82ece298b",
     "core/goals/homestead.js": "df69280b6e42402b628bc3563dcd4bc93f87fc923755b3cbccfe226c075bd8c4",
     "core/site.js": "baf9c8e38daeb480183c2d100055f09154949424f09b76dd491557f6cb891cbb",
     "core/skills.js": "f46bc6575770d8355f8e14d5c9308f2962e48ed743bfd282a25a15dac5c37d4e",
     "core/behaviors/nightRest.js": "cd59579a3163aee1452d03d9f2c863f27af459b7aceaf7d12e8ffabc42c4afee",
-    "core/brain.js": "e42358c14ab5f8904db92063e37b8319d668364dbdcbd620bd36fbdd0d20baf6",
+    "core/brain.js": "5232ee8e7e10beedce834d3396e3aeb2d0bad1ebd5835d5511da2ac700d27fd8",
     "core/farming.js": "8130f4f4976f8c775e9c0d75de0362ca591e6e4b2a2aedf79458775cf5747920",
     "core/goals/common.js": "3b717d84c737b83bd8d0a2f99f4ccf400a250b218b10ca938be7b1f9d9674b36",
     "core/goals/gatherMaterials.js": "4b881e40fd0c71b76657a5aed5c32e20fac4267b31e1b04cc21b93dccb54fd29",
     "index.js": "051a47ab28fc958a79e9b9a2773a1c9465d666e07f7b6e38491e3bea12617f61",
     "README.md": "06b48c26c362055ce745dbf3074827199e79ef8ba4f1ec9e1fba4cd952271047",
-    "THIRD_PARTY_NOTICES.md": "20a95a0eba8d058245f8e7f6f6f80d85bc3d537b9d3768ff3bbcff671909ca41"
+    "THIRD_PARTY_NOTICES.md": "20a95a0eba8d058245f8e7f6f6f80d85bc3d537b9d3768ff3bbcff671909ca41",
+    "core/nether.js": "b1ca429fcf3630cb153c72742745ae672bb6dfcf9d9d469b0073b273f505573e"
   },
   "created_at": "2026-11-06T06:17:45.936334+00:00",
   "local_additions": {
     "core/goals/followOwner.js": "d62bb649f5482d8c5f37c8ef611d891cf5209824c53bafda277f872ae42f64ad",
     "core/logWaterRecovery.js": "1bceaa9db9e63ddcae6c0701b1b1e5e75afd0127baf68b0a50b7f581f8e95e70",
     "core/stance.js": "fac423b491ca39fc1e35bfe12a2e55ea3edf125e2df56b6c2ebba0a2cd9b2ee4",
-    "core/survey-plan-receiver.js": "0f98aa297ba992d87d0f4c11de2c3f54dc5190f0820b40bfdaacc7fb0e7131ba"
+    "core/survey-plan-receiver.js": "0f98aa297ba992d87d0f4c11de2c3f54dc5190f0820b40bfdaacc7fb0e7131ba",
+    "core/survey-plan-actions.js": "779029ce767cb63c8a18b622b947d89e41fb9108c6eed8df3f25ad2af369198f",
+    "core/survey-plan-rules.js": "05e220f72fa09740ae59d9bfab1164636f1b29e75610e3d1be2a8998a7e8583f"
   },
   "files": {
     "protocol.js": "7fd9e43a0d429285217f318c59434734cce7a15fb56a5ddee14a5ba0fdcd0bae",
