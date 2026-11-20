@@ -47,8 +47,10 @@ function worldKey(host, bot) {
 /** A single-bot, data-only tool host. Dispatch promises are NOT task completion. */
 function createCoreHost({ dataDir, emit = () => {}, createBot = require('mineflayer').createBot,
   createCompanion = require('./core/companion').createCompanion, now = Date.now,
-  surveyPlanDryRun = false, historyLimit = 256, historyTtlMs = 10 * 60 * 1000, connectTimeoutMs = 60000, maxPending = 64 } = {}) {
+  surveyPlanDryRun = false, surveyPlanMode = surveyPlanDryRun ? 'dry_run' : 'off',
+  historyLimit = 256, historyTtlMs = 10 * 60 * 1000, connectTimeoutMs = 60000, maxPending = 64 } = {}) {
   if (!dataDir || !path.isAbsolute(dataDir)) throw new TypeError('An absolute dataDir is required');
+  if (!['off', 'dry_run', 'execute'].includes(surveyPlanMode)) throw new TypeError('Invalid survey plan mode');
   if (!Number.isInteger(historyLimit) || historyLimit < 2 || !Number.isFinite(historyTtlMs) || historyTtlMs < 1
       || !Number.isInteger(maxPending) || maxPending < 1 || !Number.isFinite(connectTimeoutMs) || connectTimeoutMs < 1) {
     throw new TypeError('Invalid host limits');
@@ -61,6 +63,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
   let config = null;
   let generation = 0;
   let active = null;
+  let survey = null;
   let closed = false;
   let closePromise = null;
   let connection = { state: 'disconnected', generation, automaticReconnect: false };
@@ -111,6 +114,12 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     }
     // Never infer correlation from the current goal's name.
     const task = payload.taskId ? tasks.get(payload.taskId) : null;
+    if (task && task === survey?.task && ['goal_done', 'goal_failed'].includes(payload.type)) {
+      // A local failure can ask the Mod to pause. Only the paired Mod
+      // revocation may publish a construction task's terminal outcome.
+      try { survey.grant.blocked('survey_execution_error', undefined, (payload.reasons || ['local_goal_ended']).join(', ').slice(0, 240)); } catch { /* receiver owns the connection */ }
+      return;
+    }
     if (task && task.connectionGeneration === epoch && !TERMINAL.has(task.status)) {
       if (payload.type === 'goal_set') updateTask(task, 'running');
       else if (payload.type === 'goal_done') updateTask(task, 'completed', { progress: payload.progress });
@@ -130,6 +139,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     bot = null; companion = null;
     disposeSurveyPlan?.();
     disposeSurveyPlan = null;
+    survey = null;
     if (detachedTask && failed) updateTask(detachedTask, 'failed', { error: reason });
     setConnection(dispose ? 'disposed' : failed ? 'error' : 'disconnected', failed ? reason : undefined);
     // Queue cleanup so reconnect cannot attach a new engine before the old one
@@ -186,10 +196,49 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
       if (!current()) return;
       void detach({ code, message, retryable: true }, { failed: true }).catch(() => {});
     };
-    if (surveyPlanDryRun) {
+    if (surveyPlanMode !== 'off') {
+      let reservation = null;
       disposeSurveyPlan = installSurveyPlanReceiver(next, {
+        mode: surveyPlanMode,
         ledgerDir: path.join(dataDir, 'survey-plan-grants'),
-        onEvent: (payload) => { if (current()) event({ type: 'survey_plan_dry_run', payload }); },
+        onEvent(payload) {
+          if (!current()) return;
+          event({ type: surveyPlanMode === 'dry_run' ? 'survey_plan_dry_run' : 'survey_plan', payload });
+          if (payload.type === 'stop_failed') lost('survey_stop_failed', payload.reason);
+        },
+        async onPrepare(plan, grant) {
+          if (!current() || connection.state !== 'ready' || !companion || survey) throw problem('not_ready', 'The body is unavailable for a survey authorization');
+          const previous = active;
+          reservation = { grant, engine: companion, task: null };
+          survey = reservation;
+          await reservation.engine.prepareSurveyPlan(plan, grant);
+          if (previous) updateTask(previous, 'cancelled', { reason: 'survey_plan' });
+        },
+        async onRun(plan, grant, identity) {
+          if (!current() || !reservation || reservation !== survey || reservation.grant !== grant || grant.signal.aborted) return;
+          const task = { taskId: randomUUID(), name: 'survey_plan', status: 'accepted', paused: false,
+            createdAt: now(), updatedAt: now(), connectionGeneration: epoch, planId: identity.planId, revision: identity.revision };
+          reservation.task = task;
+          tasks.set(task.taskId, task); active = task;
+          event({ type: 'task', taskId: task.taskId, task });
+          const { createSurveyPlanGoal } = require('./core/goals/surveyPlan');
+          const goal = createSurveyPlanGoal({ bot: next, plan, grant, ownerName: nextConfig.ownerName || null });
+          await reservation.engine.startSurveyPlan(grant, goal, { taskId: task.taskId });
+        },
+        async onStop(grant, { status, reason }) {
+          const record = reservation;
+          if (!record || record.grant !== grant) return;
+          await record.engine.stopSurveyPlan(grant, reason || status);
+          reservation = null;
+          if (!current() || survey !== record) return;
+          survey = null;
+          if (!record.task) return;
+          const task = record.task;
+          const done = status === 'completed';
+          const payload = { type: done ? 'goal_done' : 'goal_failed', goal: task.name, taskId: task.taskId,
+            planId: task.planId, revision: task.revision, modStatus: status, ...(done ? { progress: 1 } : { reasons: [reason || status] }) };
+          coreEvent(payload, epoch);
+        },
       });
     }
     // These closures stay on their original bot and never affect a later one.
@@ -268,6 +317,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     }
     if (Object.hasOwn(GOAL_SCHEMAS, name)) {
       if (connection.state !== 'ready' || !companion) throw problem('not_ready', 'Connect and wait for connection.ready before submitting a task', true);
+      if (survey) throw problem('survey_owns_body', 'The Minecraft owner controls the active survey from the wand menu', true);
       if (active && !message.replaceCurrent) throw problem('busy', 'A task already owns the body; cancel it or explicitly replaceCurrent', true);
       if (active) {
         const previous = active;
@@ -280,6 +330,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
       // Cancellation may await I/O. A kick or external close during that wait
       // must not admit work into the disconnected/replaced generation.
       if (closed || connection.state !== 'ready' || !companion) throw problem('not_ready', 'Connection ended during task replacement', true);
+      if (survey) throw problem('survey_owns_body', 'The Minecraft owner controls the active survey from the wand menu', true);
       const task = { taskId: randomUUID(), requestId: message.id, name, status: 'accepted', paused: false,
         createdAt: now(), updatedAt: now(), connectionGeneration: generation };
       request.taskId = task.taskId;
@@ -296,6 +347,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     const task = currentTask(args.taskId);
     if (TERMINAL.has(task.status)) return { task: clone(task) };
     if (!companion) throw problem('not_ready', 'No live companion is attached', true);
+    if (survey) throw problem('survey_owns_body', 'The Minecraft owner controls the active survey from the wand menu', true);
     try {
       if (name === 'cancel') {
         await companion.cancelTask('host_cancel');
@@ -386,6 +438,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
   }
   send({ version: 1, type: 'ready', engine: 'core', capabilities: {
     tools: TOOLS, taskLifecycle: true, pauseKeepsSafety: true, automaticReconnect: false,
+    surveyPlanMode,
     idempotency: { limit: historyLimit, ttlMs: historyTtlMs, persistent: false },
   } });
   return { handle, close, status };

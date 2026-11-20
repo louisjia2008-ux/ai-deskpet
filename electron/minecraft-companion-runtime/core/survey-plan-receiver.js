@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { TextDecoder } = require('node:util');
+const { positionKey } = require('./survey-plan-rules');
 
 const CHANNEL = 'deskpet:plan';
 const PROTOCOL = 2;
@@ -11,8 +12,10 @@ const WIRE_LIMIT = 32 * 1024;
 const CHUNK_LIMIT = 512;
 const CHUNK_BYTES = 23 * 1024;
 const HEARTBEAT_MS = 5000;
+const REVOKE_STATUS = new Set(['completed', 'failed', 'paused', 'cancelled', 'expired']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
+const STATE = /^[a-z0-9_.-]+:[a-z0-9_/.-]+(?:\[[a-z0-9_,=.-]+\])?$/;
 const KINDS = new Set(['clear', 'cut', 'fill', 'build', 'furnish', 'scaffold']);
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 
@@ -83,15 +86,50 @@ function consumeGrant(ledgerDir, worldId, grantId) {
   }
 }
 
-/** Dry run. Receive and attest to a grant without making any Minecraft world changes. */
-function installSurveyPlanReceiver(bot, { ledgerDir, onEvent = () => {} }) {
+const position = (pos) => pos && [pos.x, pos.y, pos.z].every(Number.isSafeInteger);
+
+function validateExecutionDocument(plan) {
+  const bounds = plan.selection;
+  if (!bounds || !['minX', 'maxX', 'minY', 'maxY', 'minZ', 'maxZ'].every((key) => Number.isSafeInteger(bounds[key]))
+      || !UUID.test(plan.ownerUuid) || !Number.isSafeInteger(plan.expiresAt) || plan.expiresAt <= Date.now()
+      || !Array.isArray(plan.protected) || !plan.protected.every(position)
+      || !Array.isArray(plan.conflicts) || plan.conflicts.length || (plan.supplyChest !== null && !position(plan.supplyChest))) {
+    throw new Error('Invalid survey execution document');
+  }
+  const protectedPositions = new Set(plan.protected.map(positionKey));
+  const orders = new Set();
+  for (const op of plan.ops) {
+    const { x, y, z } = op.pos;
+    if (!STATE.test(op.expect) || !STATE.test(op.target) || (typeof op.phase !== 'string' || !/^[a-z0-9_]{1,48}$/.test(op.phase))
+      || op.order < 0 || orders.has(op.order) || protectedPositions.has(positionKey(op.pos))
+      || x < bounds.minX || x > bounds.maxX || y < bounds.minY || y > bounds.maxY || z < bounds.minZ || z > bounds.maxZ) {
+      throw new Error('Operation is outside the executable survey document');
+    }
+    orders.add(op.order);
+  }
+}
+
+function freezeDocument(node) {
+  if (node && typeof node === 'object') {
+    for (const value of Object.values(node)) freezeDocument(value);
+    Object.freeze(node);
+  }
+  return node;
+}
+
+/** Never dispatch executable work before the current Mod confirms RUNNING. */
+function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', onEvent = () => {}, onPrepare, onRun, onStop }) {
   if (!path.isAbsolute(ledgerDir)) throw new TypeError('An absolute survey plan ledger directory is required');
+  if (!['dry_run', 'execute'].includes(mode) || mode === 'execute' && ![onPrepare, onRun, onStop].every((fn) => typeof fn === 'function')) {
+    throw new TypeError('Invalid survey plan receiver mode or executor');
+  }
   const client = bot._client;
   if (!client || typeof client.registerChannel !== 'function') return () => {};
   client.registerChannel(CHANNEL, 'restBuffer');
   let worldId = null;
   let advertised = false;
   let transfer = null;
+  let disposed = false;
   const active = new Map();
   const report = (data) => { try { onEvent(data); } catch { /* observer owns delivery */ } };
   const dimension = () => {
@@ -99,9 +137,86 @@ function installSurveyPlanReceiver(bot, { ledgerDir, onEvent = () => {} }) {
     return typeof name === 'string' ? (name.includes(':') ? name : `minecraft:${name}`) : null;
   };
 
-  function endGrant(grantId) {
-    clearInterval(active.get(grantId));
-    active.delete(grantId);
+  function sameContext(plan) { return plan.worldId === worldId && plan.dimension === dimension(); }
+  function sameIdentity(message, identity) {
+    return Object.keys(identity).every((key) => message[key] === identity[key]);
+  }
+
+  function endGrant(grantId, result, ack = false) {
+    const record = active.get(grantId);
+    const reply = (shouldAck) => {
+      if (shouldAck && !disposed) sendPlanMessage(client, { type: 'revoke_ack', grantId });
+    };
+    if (!record) { reply(ack); return; }
+    record.ack ||= ack;
+    if (record.stopping) return;
+    clearInterval(record.timer);
+    clearTimeout(record.startDeadline);
+    record.result = Object.freeze(result);
+    if (mode === 'dry_run') {
+      active.delete(grantId);
+      reply(record.ack);
+      return;
+    }
+    record.stopping = true;
+    record.controller.abort(result.reason || result.status);
+    void Promise.resolve().then(() => onStop(record.capability, result)).then(() => {
+      active.delete(grantId);
+      reply(record.ack);
+    }).catch((error) => report({ type: 'stop_failed', ...record.identity, reason: String(error?.message || error) }));
+  }
+
+  function heartbeat(record) {
+    if (!sameContext(record.plan)) {
+      endGrant(record.identity.grantId, { status: 'paused', reason: 'world_or_dimension_changed' });
+      report({ type: 'stopped', ...record.identity, reason: 'world_or_dimension_changed' });
+      return;
+    }
+    if (record.blocked) return;
+    try {
+      sendPlanMessage(client, { type: 'heartbeat', ...record.identity });
+      if (mode === 'dry_run') {
+        sendPlanMessage(client, { type: 'progress', ...record.identity, completed: 0, total: record.plan.ops.length });
+        report({ type: 'dry_run_progress', ...record.identity, completed: 0, total: record.plan.ops.length });
+      }
+    } catch (error) {
+      endGrant(record.identity.grantId, { status: 'paused', reason: 'heartbeat_failed' });
+      report({ type: 'rejected', ...record.identity, reason: error.message });
+    }
+  }
+
+  function newExecution(plan, identity) {
+    const record = { plan: freezeDocument(plan), identity, controller: new AbortController(), result: null,
+      accepted: false, running: false, stopping: false, blocked: false, settled: false, completed: 0,
+      misplacements: new Map(), applied: new Map(), authorized: new Set(plan.ops.map((op) => positionKey(op.pos))) };
+    const sendIfRunning = (type, body) => {
+      if (!record.running || record.stopping || record.blocked || !sameContext(plan)) return false;
+      sendPlanMessage(client, { type, ...identity, ...body });
+      return true;
+    };
+    record.capability = Object.freeze({
+      signal: record.controller.signal,
+      get result() { return record.result; },
+      applied: (pos) => record.applied.get(positionKey(pos)) ?? null,
+      misplacement: (pos) => record.misplacements.get(positionKey(pos)) ?? null,
+      progress(completed) {
+        if (!Number.isSafeInteger(completed) || completed < record.completed || completed > plan.ops.length || record.settled) return false;
+        if (!sendIfRunning('progress', { completed })) return false;
+        record.completed = completed;
+        return true;
+      },
+      settled() {
+        if (record.settled || record.completed !== plan.ops.length) return false;
+        record.settled = sendIfRunning('progress', { completed: record.completed, settled: true });
+        return record.settled;
+      },
+      state(phase, waiting = null, missing) { return sendIfRunning('state', { phase, waiting, missing }); },
+      blocked(reason, pos, detail) {
+        record.blocked = sendIfRunning('blocked', { reason, pos, detail }) || record.blocked;
+        return record.blocked;
+      },
+    });
+    return record;
   }
 
   function accept(encoded, expectedGrantId) {
@@ -118,28 +233,40 @@ function installSurveyPlanReceiver(bot, { ledgerDir, onEvent = () => {} }) {
         || normalizedUUID(client.uuid || bot.player?.uuid) !== plan.botUuid) {
       throw new Error('Survey plan is for another world, dimension or bot');
     }
+    if (mode === 'execute') {
+      if (active.size) throw new Error('Another survey authorization still owns this connection');
+      validateExecutionDocument(plan);
+    }
     consumeGrant(ledgerDir, worldId, grantId);
-    sendPlanMessage(client, { type: 'accept', ...identity });
-    const tick = () => {
-      if (plan.worldId !== worldId || plan.dimension !== dimension()) {
-        endGrant(grantId);
-        report({ type: 'stopped', ...identity, reason: 'world_or_dimension_changed' });
-        return;
-      }
-      try {
-        sendPlanMessage(client, { type: 'heartbeat', ...identity });
-        sendPlanMessage(client, { type: 'progress', ...identity, completed: 0, total: plan.ops.length });
-        report({ type: 'dry_run_progress', ...identity, completed: 0, total: plan.ops.length });
-      } catch (error) {
-        endGrant(grantId);
-        report({ type: 'rejected', ...identity, reason: error.message });
-      }
+    const accepted = () => report({ type: 'accepted', ...identity, worldId, dimension: plan.dimension });
+    if (mode === 'dry_run') {
+      sendPlanMessage(client, { type: 'accept', ...identity });
+      const record = { plan, identity };
+      active.set(grantId, record);
+      record.timer = setInterval(() => heartbeat(record), HEARTBEAT_MS);
+      record.timer.unref?.();
+      accepted();
+      heartbeat(record);
+      return;
+    }
+    const record = newExecution(plan, identity);
+    active.set(grantId, record);
+    const preparationFailed = (error) => {
+      if (record.stopping) return;
+      report({ type: 'rejected', ...identity, reason: String(error?.message || error) });
+      endGrant(grantId, { status: 'paused', reason: 'survey_preparation_failed' });
     };
-    const timer = setInterval(tick, HEARTBEAT_MS);
-    timer.unref?.();
-    active.set(grantId, timer);
-    report({ type: 'accepted', ...identity, worldId, dimension: plan.dimension });
-    tick();
+    record.startDeadline = setTimeout(() => preparationFailed(new Error('Survey authorization did not reach RUNNING')), 10000);
+    record.startDeadline.unref?.();
+    try {
+      void Promise.resolve(onPrepare(record.plan, record.capability)).then(() => {
+        if (record.stopping) return;
+        if (!sameContext(plan)) throw new Error('Survey world or dimension changed before acceptance');
+        record.accepted = true;
+        sendPlanMessage(client, { type: 'accept', ...identity, execute: true });
+        accepted();
+      }).catch(preparationFailed);
+    } catch (error) { preparationFailed(error); }
   }
 
   function onChunk(message) {
@@ -173,7 +300,7 @@ function installSurveyPlanReceiver(bot, { ledgerDir, onEvent = () => {} }) {
           advertised = true;
         }
         if (worldId !== message.worldId) {
-          for (const grantId of active.keys()) endGrant(grantId);
+          for (const grantId of active.keys()) endGrant(grantId, { status: 'paused', reason: 'world_changed' });
           transfer = null;
         }
         worldId = message.worldId;
@@ -182,10 +309,37 @@ function installSurveyPlanReceiver(bot, { ledgerDir, onEvent = () => {} }) {
       } else if (message.type === 'grant_chunk') {
         onChunk(message);
       } else if (message.type === 'revoke' && worldId && UUID.test(message.grantId)) {
-        endGrant(message.grantId);
         if (transfer?.grantId === message.grantId) transfer = null;
-        report({ type: 'revoked', grantId: message.grantId, reason: message.reason });
-        sendPlanMessage(client, { type: 'revoke_ack', grantId: message.grantId });
+        let status = REVOKE_STATUS.has(message.status) ? message.status : 'paused';
+        if (mode === 'execute' && status === 'completed' && !active.get(message.grantId)?.settled) status = 'paused';
+        const reason = typeof message.reason === 'string' ? message.reason : 'revoked';
+        report({ type: 'revoked', grantId: message.grantId, status, reason });
+        endGrant(message.grantId, { status, reason }, true);
+      } else if (mode === 'execute') {
+        const record = active.get(message.grantId);
+        if (!record || record.stopping || !record.accepted || !sameIdentity(message, record.identity) || !sameContext(record.plan)) return;
+        if (message.type === 'running' && !record.running) {
+          clearTimeout(record.startDeadline);
+          record.running = true;
+          record.timer = setInterval(() => heartbeat(record), HEARTBEAT_MS);
+          record.timer.unref?.();
+          heartbeat(record);
+          void Promise.resolve().then(() => {
+            if (!record.stopping) return onRun(record.plan, record.capability, record.identity);
+          }).catch((error) => {
+            report({ type: 'execution_error', ...record.identity, reason: String(error?.message || error) });
+            try { record.capability.blocked('survey_execution_error', undefined, String(error?.message || error).slice(0, 240)); } catch { /* heartbeat fails closed */ }
+          });
+        } else if (record.running && message.type === 'misplacement' && position(message.pos)
+            && record.authorized.has(positionKey(message.pos))) {
+          record.misplacements.set(positionKey(message.pos), freezeDocument(message));
+        } else if (record.running && message.type === 'applied' && Array.isArray(message.positions) && message.positions.every(position)) {
+          freezeDocument(message);
+          for (const pos of message.positions) {
+            const key = positionKey(pos);
+            if (record.authorized.has(key)) record.applied.set(key, message);
+          }
+        }
       }
     } catch (error) {
       transfer = null;
@@ -194,15 +348,32 @@ function installSurveyPlanReceiver(bot, { ledgerDir, onEvent = () => {} }) {
   }
 
   function dispose() {
+    disposed = true;
     client.removeListener(CHANNEL, onMessage);
     bot.removeListener('end', dispose);
-    for (const grantId of active.keys()) endGrant(grantId);
+    bot.removeListener('game', onGame);
+    bot.removeListener('death', onDeath);
+    for (const grantId of active.keys()) endGrant(grantId, { status: 'paused', reason: 'disconnected' });
     transfer = null;
     worldId = null;
   }
 
+  function onGame() {
+    for (const [grantId, record] of active) {
+      if (!sameContext(record.plan)) endGrant(grantId, { status: 'paused', reason: 'world_or_dimension_changed' });
+    }
+  }
+
+  function onDeath() {
+    for (const record of active.values()) {
+      try { record.capability?.blocked('bot_died'); } catch { /* connection may be ending */ }
+    }
+  }
+
   client.on(CHANNEL, onMessage);
   bot.once('end', dispose);
+  bot.on('game', onGame);
+  bot.on('death', onDeath);
   return dispose;
 }
 

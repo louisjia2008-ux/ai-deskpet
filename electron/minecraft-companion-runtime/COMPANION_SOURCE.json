@@ -5,7 +5,7 @@
   "selection": "Production runtime extracted from frozen13; test/scenario/CLI and source archive excluded; legacy runtime in DeskPet left intact",
   "local_change": "DeskPet gatherLogs explores new dry terrain for surface logs, follows observed canopy hints, and recovers to shore after immersion; in-game owner chat and replies, followOwner (come, follow and guard the configured owner), climbing out of pits before log scouting, and no sweep attacks beside a player; planner wood gathering skips cave logs, and drops left to mobs in a cave are not fetched (time-boxed fetch otherwise); one shared combat stance (retreat/fight/alert/calm, weighed against weapon, armour and health, retreats held) drives escape, defend, hunting and drop fetching; house sites under rock rejected; an overworld task stops at its second death; homestead carries a spare crafting table and crafts where it stands; bare hands take on one zombie; setPolicy control (risk, guard order) and death causes in death_loop failures gatherMaterials places its crafting table or furnace beside the bot when no station spot is given and searches around the chest when asked from chat; a new farm takes over wheat already growing and a crafting table already standing nearby, and a station goes down on grass or leaf litter but never on crops; night rest digs in for any task but building, pearl hunting and guarding the owner. The house is remembered per world (server host and world spawn) across connections in the host data directory and reported as observation.home; unbury never fires while asleep in bed. Guarding the owner, self-defence also fights what is within 8 of the owner and takes the one closest to them first unless one is on the bot. Following hurt (10 or less) with hostiles within 16, the bot waits to heal instead of walking back or guarding, unless guarding the owner first. Melee closes in on a target within 4.5 on level, safe ground by walking straight at it, and defence waits for drops only from mobs that drop something kept. Guarding at health above 10, a fight is broken off for a mob within 3 of the owner while the one fought is 3 farther from them; a mob seen dying is no longer a threat. Holding ground for the owner, the round of hits that sends the bot back counts melee mobs within 4.5, not 3.",
   "local_files": {
-    "core-host.js": "585ac68a40f803ec18b855c1592caee27c7897680be9ea540abcf10b269ceb74",
+    "core-host.js": "39bd193d7ca19867e28bf84d3de954c6684a1afaf33a1756e1c67373e1d699fd",
     "core-tools.js": "bfa35385b42ab58de2f65eaad39e15fb3d74f0f410fafd65396c7c5d11a5fcdc",
     "core/README.md": "e453e9c84bdc43057d4c38c23044c02e36b9e8283976af9eacfd83b409e0cdeb",
     "core/actions.js": "b6189a15e4dac37933f4d3a8439a4111fc227400faa4eace1575dd483abc0e52",
@@ -21,7 +21,7 @@
     "core/farming.js": "8130f4f4976f8c775e9c0d75de0362ca591e6e4b2a2aedf79458775cf5747920",
     "core/goals/common.js": "3b717d84c737b83bd8d0a2f99f4ccf400a250b218b10ca938be7b1f9d9674b36",
     "core/goals/gatherMaterials.js": "4b881e40fd0c71b76657a5aed5c32e20fac4267b31e1b04cc21b93dccb54fd29",
-    "index.js": "051a47ab28fc958a79e9b9a2773a1c9465d666e07f7b6e38491e3bea12617f61",
+    "index.js": "70b332c7b3acd665c88753e51c4c24acb5e837dc96c755d30ba6c3e6026ec222",
     "README.md": "06b48c26c362055ce745dbf3074827199e79ef8ba4f1ec9e1fba4cd952271047",
     "THIRD_PARTY_NOTICES.md": "20a95a0eba8d058245f8e7f6f6f80d85bc3d537b9d3768ff3bbcff671909ca41",
     "core/nether.js": "b1ca429fcf3630cb153c72742745ae672bb6dfcf9d9d469b0073b273f505573e"
@@ -31,7 +31,7 @@
     "core/goals/followOwner.js": "d62bb649f5482d8c5f37c8ef611d891cf5209824c53bafda277f872ae42f64ad",
     "core/logWaterRecovery.js": "1bceaa9db9e63ddcae6c0701b1b1e5e75afd0127baf68b0a50b7f581f8e95e70",
     "core/stance.js": "fac423b491ca39fc1e35bfe12a2e55ea3edf125e2df56b6c2ebba0a2cd9b2ee4",
-    "core/survey-plan-receiver.js": "0f98aa297ba992d87d0f4c11de2c3f54dc5190f0820b40bfdaacc7fb0e7131ba",
+    "core/survey-plan-receiver.js": "afcdbbc07e11d8c885ab56ccf46d52263bdfb1b5d8357623a78be01a749d052e",
     "core/survey-plan-actions.js": "779029ce767cb63c8a18b622b947d89e41fb9108c6eed8df3f25ad2af369198f",
     "core/survey-plan-rules.js": "05e220f72fa09740ae59d9bfab1164636f1b29e75610e3d1be2a8998a7e8583f",
     "core/goals/surveyPlan.js": "a26143c319d17af8fb4086c28c4aec13f8540ae9384e58ca70afc61aa53a47fd",
