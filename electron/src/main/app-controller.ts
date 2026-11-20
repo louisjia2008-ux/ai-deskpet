@@ -3375,7 +3375,7 @@ export class AppController {
       && core.connectionState === 'ready' && core.config?.port === server.port
       && core.config.username === server.botName && (core.config.ownerName ?? '') === server.ownerName;
     return { ...server, botConnected: connected, botError: this.#minecraftDedicatedCompanion.error(),
-      plan: connected ? core.plan ?? null : null, offlineModelUsed: this.#minecraftOfflineModels.used() };
+      plan: connected ? core.plan ?? null : null, autonomy: connected ? core.engine?.autonomy ?? null : null, offlineModelUsed: this.#minecraftOfflineModels.used() };
   }
 
   #emitMinecraftDedicated(): void {

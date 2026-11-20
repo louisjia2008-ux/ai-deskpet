@@ -5,8 +5,9 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, isAbsolute } from 'node:path';
 
 import { initialMinecraftCompanionSnapshot, minecraftCompanionConfigSchema, minecraftCompanionPolicySchema, minecraftCompanionTaskSchema } from '../../shared/minecraft-companion';
+import type { MinecraftAutonomyRange } from '../../shared/minecraft-dedicated';
 import type { MinecraftCompanionConfig, MinecraftCompanionEngine, MinecraftCompanionObservation, MinecraftCompanionPolicy, MinecraftCompanionSnapshot, MinecraftCompanionTask, MinecraftCompanionTaskInput } from '../../shared/minecraft-companion';
-import { minecraftSurveyPlanStatusSchema } from '../../shared/minecraft-dedicated';
+import { minecraftAutonomyRangeSchema, minecraftAutonomyStatusSchema, minecraftSurveyPlanStatusSchema } from '../../shared/minecraft-dedicated';
 import type { MinecraftSurveyPlanStatus } from '../../shared/minecraft-dedicated';
 
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -103,7 +104,7 @@ export class MinecraftCompanionService {
 
   getState(): MinecraftCompanionSnapshot { return structuredClone(this.#state); }
 
-  async connect(input: MinecraftCompanionConfig, guard?: () => void, managed?: { dataDirectory: string; execute: boolean }): Promise<MinecraftCompanionSnapshot> {
+  async connect(input: MinecraftCompanionConfig, guard?: () => void, managed?: { dataDirectory: string; execute: boolean; autonomyRange?: MinecraftAutonomyRange }): Promise<MinecraftCompanionSnapshot> {
     guard?.();
     if (this.#disposed) throw new Error('Minecraft Companion service is disposed.');
     if (this.#worker || this.#connecting || this.#closing) throw new Error('Disconnect the current Companion connection before connecting again.');
@@ -122,7 +123,7 @@ export class MinecraftCompanionService {
       await this.#launch(generation, managed);
       this.#assertCurrent(generation); guard?.();
       // An empty owner name means in-game commands are off; the core takes the same field.
-      await this.#request({ type: 'connect', config: { ...config, ownerName: config.ownerName || undefined } }, guard);
+      await this.#request({ type: 'connect', config: { ...config, ownerName: config.ownerName || undefined, ...(managed?.autonomyRange ? { autonomyRange: managed.autonomyRange } : {}) } }, guard);
       this.#assertCurrent(generation); guard?.();
       return this.getState();
     } catch (error) {
@@ -191,6 +192,11 @@ export class MinecraftCompanionService {
     const applied = record(result.policy);
     return { risk: (applied?.risk ?? 'normal') as Required<MinecraftCompanionPolicy>['risk'],
       guard: (applied?.guard ?? 'self_first') as Required<MinecraftCompanionPolicy>['guard'] };
+  }
+
+  async setAutonomyRange(range: MinecraftAutonomyRange): Promise<void> {
+    const selected = minecraftAutonomyRangeSchema.parse(range);
+    await this.#request({ type: 'tool', name: 'setAutonomyRange', arguments: { range: selected } });
   }
 
   cancel(): Promise<MinecraftCompanionSnapshot> {
@@ -286,7 +292,7 @@ export class MinecraftCompanionService {
     if (this.#ready) { clearTimeout(this.#ready.timer); this.#ready.reject(error); this.#ready = null; }
   }
 
-  #launch(generation: number, managed?: { dataDirectory: string; execute: boolean }): Promise<void> {
+  #launch(generation: number, managed?: { dataDirectory: string; execute: boolean; autonomyRange?: MinecraftAutonomyRange }): Promise<void> {
     this.#buffer = Buffer.alloc(0);
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -402,7 +408,7 @@ export class MinecraftCompanionService {
       if (uri && code && /^https:\/\//i.test(uri)) this.#state.auth = { userCode: code, verificationURI: uri, expiresIn: finite(event.expiresIn) };
     } else if (event.type === 'core' && event.connectionGeneration === this.#state.connectionGeneration) {
       const payload = record(event.payload); const kind = text(payload?.type, 80);
-      if (kind) this.#event(kind, text(payload?.reason, 500) ?? kind, text(event.taskId, 128));
+      if (kind) this.#event(kind, text(payload?.reason, 500) ?? text(payload?.milestone, 80) ?? kind, text(event.taskId, 128));
     } else if (managed && ['connecting', 'ready'].includes(this.#state.connectionState) && event.connectionGeneration === this.#state.connectionGeneration) {
       if (event.type === 'survey_plan_status') {
         const worldId = text(event.worldId, 128);
@@ -491,7 +497,9 @@ export class MinecraftCompanionService {
         home: corner && [corner.x, corner.y, corner.z].every(Number.isInteger) ? { x: corner.x as number, y: corner.y as number, z: corner.z as number, finished: home?.finished === true } : null,
       } satisfies MinecraftCompanionObservation : null;
       const engine = record(result.engine); const goal = record(engine?.goal);
+      const autonomy = minecraftAutonomyStatusSchema.safeParse(engine?.autonomy);
       this.#state.engine = engine ? {
+        ...(autonomy.success ? { autonomy: autonomy.data } : {}),
         running: text(engine.running, 120), paused: engine.paused === true, blocked: engine.blocked === true, disposed: engine.disposed === true,
         goal: goal ? { name: text(goal.name, 120) ?? '', taskId: text(goal.taskId, 128), progress: boundedData(goal.progress), stalls: finite(goal.stalls) ?? 0 } : null,
       } satisfies MinecraftCompanionEngine : null;

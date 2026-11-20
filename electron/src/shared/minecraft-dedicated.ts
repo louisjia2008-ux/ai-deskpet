@@ -1,18 +1,36 @@
 import { z } from 'zod';
 
-export const MINECRAFT_OFFLINE_MODEL_LIMIT_MAX = 1000;
+export const MINECRAFT_OFFLINE_MODEL_LIMIT_MAX = 20;
+
+export const minecraftAutonomyRangeSchema = z.enum(['overworld', 'nether', 'end']);
+export type MinecraftAutonomyRange = z.infer<typeof minecraftAutonomyRangeSchema>;
+
+export const minecraftAutonomyStatusSchema = z.object({
+  enabled: z.boolean(),
+  stage: z.number().int().min(0).max(7).nullable(),
+  range: minecraftAutonomyRangeSchema,
+  goal: z.string().max(120).nullable(),
+  milestones: z.record(z.string().max(40), z.number().finite()),
+  deaths: z.array(z.object({
+    at: z.number().finite(), cause: z.string().max(160).nullable(), dimension: z.string().max(128).nullable(),
+    stage: z.number().int().nullable(), card: z.string().max(120).nullable(),
+  })).max(10),
+  stagePauses: z.array(z.object({ stage: z.number().int(), until: z.number().finite() })).max(8),
+});
+export type MinecraftAutonomyStatus = z.infer<typeof minecraftAutonomyStatusSchema>;
 
 export const minecraftDedicatedSettingsSchema = z.object({
   enabled: z.boolean(),
   memoryGb: z.number().int().min(2).max(6),
   allowPlanApproval: z.boolean(),
+  autonomyRange: minecraftAutonomyRangeSchema,
   offlineModelDailyLimit: z.number().int().min(0).max(MINECRAFT_OFFLINE_MODEL_LIMIT_MAX),
 }).strict();
 
 export type MinecraftDedicatedSettings = z.infer<typeof minecraftDedicatedSettingsSchema>;
 
 export const defaultMinecraftDedicatedSettings: MinecraftDedicatedSettings = {
-  enabled: true, memoryGb: 3, allowPlanApproval: false, offlineModelDailyLimit: 20,
+  enabled: true, memoryGb: 3, allowPlanApproval: false, autonomyRange: 'end', offlineModelDailyLimit: 20,
 };
 
 export const minecraftDedicatedIdentitySchema = z.object({
@@ -69,6 +87,7 @@ export interface MinecraftDedicatedServerSnapshot extends MinecraftDedicatedIden
 
 export interface MinecraftDedicatedSnapshot extends MinecraftDedicatedServerSnapshot {
   botConnected: boolean;
+  autonomy?: MinecraftAutonomyStatus | null;
   botError: string | null;
   offlineModelUsed: number;
   plan: MinecraftSurveyPlanStatus | null;

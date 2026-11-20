@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
 import type { DeskPetApi, ResolvedLocale } from '../../shared';
 import { MINECRAFT_OFFLINE_MODEL_LIMIT_MAX } from '../../shared/minecraft-dedicated';
-import type { MinecraftDedicatedSnapshot } from '../../shared/minecraft-dedicated';
+import type { MinecraftAutonomyRange, MinecraftDedicatedSnapshot } from '../../shared/minecraft-dedicated';
 import './minecraft-dedicated-panel.css';
 
 type DedicatedAPI = NonNullable<DeskPetApi['minecraftDedicated']>;
@@ -66,6 +66,22 @@ const copy = {
   siteChanges: ['现场变化', 'Site changes'],
   lateAttempts: ['迟到操作', 'Late actions'],
 } as const satisfies Record<string, Localized>;
+
+const autonomyRanges = {
+  overworld: ['只在主世界（到钻石）', 'Overworld through diamond'],
+  nether: ['到下界', 'Through the Nether'],
+  end: ['到末地（含打龙）', 'Through the End and dragon fight'],
+} as const satisfies Record<MinecraftAutonomyRange, Localized>;
+
+const stages: Localized[] = [
+  ['建家与工具', 'Home and tools'], ['农田与装置', 'Wheat and machinery'], ['铁装备', 'Iron equipment'],
+  ['钻石工具', 'Diamond tools'], ['下界与珍珠', 'Nether and pearls'], ['要塞与末地准备', 'Stronghold and End supplies'],
+  ['末地与末影龙', 'End and dragon'], ['后期维护', 'Maintenance'],
+];
+const milestones: Record<string, Localized> = {
+  diamond_pickaxe: ['钻石镐', 'Diamond pickaxe'], nether: ['首次进下界', 'First Nether visit'],
+  blaze_rod: ['烈焰棒', 'Blaze rod'], end: ['进入末地', 'Entered the End'], dragon: ['击败末影龙', 'Defeated the dragon'],
+};
 
 const serverStates = {
   unpackaged: ['未打包', 'Not packaged'],
@@ -288,6 +304,13 @@ export function MinecraftDedicatedSettings({ api, locale }: { api: DedicatedAPI;
           onChange={event => run(() => api.updateSettings({ allowPlanApproval: event.target.checked }))} />
       </label>
       <PlayerNames key={`${ownerName}:${botName}`} api={api} ownerName={ownerName} botName={botName} disabled={disabled} run={run} t={t} />
+      <label>
+        <span>{t(['自主发育范围', 'Autonomous progression range'])}</span>
+        <select value={settings.autonomyRange} disabled={disabled}
+          onChange={event => run(() => api.updateSettings({ autonomyRange: event.target.value as MinecraftAutonomyRange }))}>
+          {Object.entries(autonomyRanges).map(([value, title]) => <option key={value} value={value}>{t(title)}</option>)}
+        </select>
+      </label>
       <ModelLimit key={settings.offlineModelDailyLimit} api={api} limit={settings.offlineModelDailyLimit} disabled={disabled} run={run} t={t} />
     </section>
     <section className="dedicated-settings-group">
@@ -367,6 +390,23 @@ export function MinecraftDedicatedStatus({ api, locale, onSettings }: { api: Ded
         <div><dt>{t(copy.lastBackup)}</dt><dd>{dateLabel(state.lastBackupAt, locale)}</dd></div>
         <div><dt>{t(copy.modelUsed)}</dt><dd>{state.offlineModelUsed}/{state.settings.offlineModelDailyLimit}</dd></div>
       </dl>
+      {state.autonomy?.enabled && <section className="dedicated-status-plan" aria-labelledby="autonomy-status-title">
+        <h3 id="autonomy-status-title">{t(['自主发育', 'Autonomous progression'])}</h3>
+        <dl className="dedicated-facts">
+          <div><dt>{t(['阶段', 'Stage'])}</dt><dd>{state.autonomy.stage === null ? '—' : t(stages[state.autonomy.stage]!)}</dd></div>
+          <div><dt>{t(['当前目标', 'Current goal'])}</dt><dd>{state.autonomy.goal ?? '—'}</dd></div>
+          {Object.entries(state.autonomy.milestones).map(([id, at]) =>
+            <div key={id}><dt>{milestones[id] ? t(milestones[id]) : id}</dt><dd>{dateLabel(new Date(at).toISOString(), locale)}</dd></div>)}
+          {state.autonomy.deaths.slice(-3).map(death => <div key={death.at}>
+            <dt>{t(['死亡', 'Death'])} · {dateLabel(new Date(death.at).toISOString(), locale)}</dt>
+            <dd>{death.cause ?? t(['原因未知', 'Unknown cause'])}</dd>
+          </div>)}
+          {state.autonomy.stagePauses.map(pause => <div key={pause.stage}>
+            <dt>{t(['暂停阶段', 'Paused stage'])} · {stages[pause.stage] ? t(stages[pause.stage]!) : pause.stage}</dt>
+            <dd>{t(['恢复时间', 'Resumes'])} · {dateLabel(new Date(pause.until).toISOString(), locale)}</dd>
+          </div>)}
+        </dl>
+      </section>}
       {state.error && <p className="error-banner" role="alert">{state.error}</p>}
       {state.botError && <p className="error-banner" role="alert">{state.botError}</p>}
       {state.offlineModelUsed >= state.settings.offlineModelDailyLimit && <p className="notice" role="status">{t(copy.limitReached)}</p>}

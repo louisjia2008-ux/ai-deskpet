@@ -1,4 +1,4 @@
-import type { MinecraftDedicatedServerSnapshot } from '../../shared/minecraft-dedicated';
+import type { MinecraftAutonomyRange, MinecraftDedicatedServerSnapshot } from '../../shared/minecraft-dedicated';
 import type { MinecraftCompanionService } from './companion-service';
 
 const holdsWorld = new Set(['starting', 'running', 'restarting', 'stopping']);
@@ -7,6 +7,7 @@ const holdsWorld = new Set(['starting', 'running', 'restarting', 'stopping']);
 export class MinecraftDedicatedCompanion {
   #world: MinecraftDedicatedServerSnapshot | null = null;
   #attached: string | null = null;
+  #range: MinecraftAutonomyRange | null = null;
   #retry: ReturnType<typeof setTimeout> | null = null;
   #operation: Promise<void> | null = null;
   #disposed = false;
@@ -47,7 +48,23 @@ export class MinecraftDedicatedCompanion {
     if (!target && !this.#attached) return;
     if (target && target === this.#attached) {
       const state = this.companion.getState();
-      if (state.connectionState === 'ready' || state.connectionState === 'connecting') return;
+      if (state.connectionState === 'connecting') return;
+      if (state.connectionState === 'ready') {
+        const range = this.#world?.settings.autonomyRange ?? 'end';
+        if (range === this.#range) return;
+        this.#operation = this.companion.setAutonomyRange(range).then(() => {
+          this.#range = range;
+          this.#error = null;
+        }).catch(error => {
+          this.#error = error instanceof Error ? error.message.slice(0, 500) : 'Could not update Minecraft autonomy.';
+          this.#scheduleRetry();
+        }).finally(() => {
+          this.#operation = null;
+          this.changed();
+          this.sync();
+        });
+        return;
+      }
       if (!retrying) {
         this.#error = state.lastError;
         this.#scheduleRetry();
@@ -60,12 +77,14 @@ export class MinecraftDedicatedCompanion {
       const desired = this.#target();
       if (this.#attached || desired) await this.companion.disconnect();
       this.#attached = null;
+      this.#range = null;
       if (!world || !desired || desired !== this.#target()) return;
       this.#attached = desired;
+      this.#range = world.settings.autonomyRange ?? 'end';
       await this.companion.connect({ host: '127.0.0.1', port: world.port, username: world.botName, auth: 'offline',
         version: world.versions.minecraft, ownerName: world.ownerName }, () => {
         if (desired !== this.#target()) throw new Error('Minecraft dedicated world changed while the bot was connecting.');
-      }, { dataDirectory: this.dataDirectory, execute: world.settings.allowPlanApproval && world.ownerName !== '' });
+      }, { dataDirectory: this.dataDirectory, execute: world.settings.allowPlanApproval && world.ownerName !== '', autonomyRange: this.#range });
       this.#error = null;
     }).catch(error => {
       if (this.#disposed || this.#target() !== target) return;

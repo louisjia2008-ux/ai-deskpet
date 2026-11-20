@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
-import { defaultMinecraftDedicatedSettings, minecraftDedicatedIdentitySchema, minecraftDedicatedSettingsSchema } from '../../shared/minecraft-dedicated';
+import { MINECRAFT_OFFLINE_MODEL_LIMIT_MAX, defaultMinecraftDedicatedSettings, minecraftDedicatedIdentitySchema, minecraftDedicatedSettingsSchema } from '../../shared/minecraft-dedicated';
 import type { MinecraftDedicatedIdentity, MinecraftDedicatedServerSnapshot, MinecraftDedicatedSettings } from '../../shared/minecraft-dedicated';
 import { atomicWriteFile, removeAbandonedTemporaryFiles } from '../persistence/atomic-file';
 import { assertChecksum, dedicatedEnvironment, dedicatedJavaVersion, DEDICATED_DATA_DIRECTORY, DEDICATED_HOST, DEDICATED_MINECRAFT_VERSION,
@@ -22,7 +22,15 @@ const RESTART_BACKOFF_MS = [1500, 5000] as const;
 const PID_FILE = 'server-pid.json';
 const DEFAULT_IDENTITY = { ownerName: '', botName: 'DeskPetCore' } as const;
 const storedSchema = z.object({
-  version: z.literal(1), settings: minecraftDedicatedSettingsSchema,
+  version: z.literal(1), settings: z.preprocess(value => {
+    if (!value || typeof value !== 'object') return value;
+    const settings = value as Record<string, unknown>;
+    const limit = settings.offlineModelDailyLimit;
+    return {
+      autonomyRange: 'end', ...settings,
+      offlineModelDailyLimit: typeof limit === 'number' && Number.isInteger(limit) ? Math.min(limit, MINECRAFT_OFFLINE_MODEL_LIMIT_MAX) : limit,
+    };
+  }, minecraftDedicatedSettingsSchema),
   identity: minecraftDedicatedIdentitySchema.default(DEFAULT_IDENTITY),
   port: z.number().int().min(DEFAULT_PORT).max(65_535), eulaAcceptedAt: z.iso.datetime().nullable(),
 }).strict();
@@ -181,6 +189,7 @@ export class MinecraftDedicatedServer {
           enabled: patch.enabled ?? previous.enabled,
           memoryGb: patch.memoryGb ?? previous.memoryGb,
           allowPlanApproval: patch.allowPlanApproval ?? previous.allowPlanApproval,
+          autonomyRange: patch.autonomyRange ?? previous.autonomyRange,
           offlineModelDailyLimit: patch.offlineModelDailyLimit ?? previous.offlineModelDailyLimit,
         });
         await this.#save({ ...this.#stored, settings }, false);

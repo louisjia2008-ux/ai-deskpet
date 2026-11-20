@@ -1,3 +1,4 @@
+import type { MinecraftAutonomyStatus } from './minecraft-dedicated';
 import { z } from 'zod';
 import type { MinecraftSurveyPlanStatus } from './minecraft-dedicated';
 
@@ -72,6 +73,7 @@ export interface MinecraftCompanionObservation {
 }
 
 export interface MinecraftCompanionEngine {
+  autonomy?: MinecraftAutonomyStatus;
   running: string | null;
   paused: boolean;
   blocked: boolean;
