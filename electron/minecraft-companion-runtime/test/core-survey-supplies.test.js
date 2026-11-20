@@ -2,9 +2,11 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { EventEmitter } = require('node:events');
 const { Vec3 } = require('vec3');
 const actions = require('../core/actions');
 const { abortError } = require('../core/confirm');
+const { createSurveyPlanGoal } = require('../core/goals/surveyPlan');
 const { createSurveyInventory, createSurveySupplies } = require('../core/survey-supplies');
 
 test('resumed survey returns borrowed stock after a partial withdrawal and keeps pre-plan items', async (t) => {
@@ -45,4 +47,33 @@ test('resumed survey returns borrowed stock after a partial withdrawal and keeps
   const resumed = createSurveySupplies(bot, plan, state);
   assert.deepEqual(await resumed.putBack({ signal: new AbortController().signal }), { ok: true });
   assert.deepEqual(deposits, [[log.type, 3], [hoe.type, 1]]);
+});
+
+test('a recompiled goal recomputes its material wait from new operations and carried stock', async () => {
+  const bot = new EventEmitter();
+  bot.inventory = { items: () => [] };
+  bot.time = { timeOfDay: 0 };
+  bot.blockAt = () => ({ name: 'air' });
+  const supplyInventory = createSurveyInventory(bot);
+  // One block taken under the previous authorization remains in the bag.
+  supplyInventory.borrowed.add('cobblestone');
+  bot.inventory.items = () => [{ name: 'cobblestone', count: 1 }];
+  const ops = [1, 2, 3].map((x, order) => ({ pos: new Vec3(x, 64, 0), expect: 'minecraft:air',
+    target: 'minecraft:cobblestone', kind: 'build', phase: 'walls', order }));
+  const plan = { revision: 2, ops, materials: { required: { 'minecraft:cobblestone': 3 } }, supplyChest: null };
+  const revoke = new AbortController();
+  let waiting;
+  const goal = createSurveyPlanGoal({ bot, plan, supplyInventory, grant: {
+    signal: revoke.signal,
+    applied: () => null,
+    blocked(reason, _pos, detail) { assert.fail(`${reason}: ${detail}`); },
+    state(phase, reason, missing) {
+      if (reason === 'materials') {
+        waiting = { phase, missing };
+        revoke.abort('test complete');
+      }
+    },
+  } });
+  await assert.rejects(goal.run({}), { code: 'aborted' });
+  assert.deepEqual(waiting, { phase: 'walls', missing: { 'minecraft:cobblestone': 2 } });
 });

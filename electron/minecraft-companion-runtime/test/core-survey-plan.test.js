@@ -74,6 +74,7 @@ function makeGrant(data = {}) {
   const sorted = (value) => Array.isArray(value) ? value.map(sorted)
     : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])])) : value;
   const planHash = createHash('sha256').update(JSON.stringify(sorted(plan))).digest('hex');
+  const opPalette = [...new Set(plan.ops.flatMap(({ expect, target }) => [expect, target]))];
   return {
     planId: plan.planId,
     revision: plan.revision,
@@ -82,8 +83,9 @@ function makeGrant(data = {}) {
     plan: {
       ...plan,
       planHash,
-      opPalette: ['minecraft:oak_planks', 'minecraft:air'],
-      ops: [[1, 65, 2, 1, 0, 'build', 'walls', 0]],
+      opPalette,
+      ops: plan.ops.map(({ pos, expect, target, kind, phase, order }) =>
+        [pos.x, pos.y, pos.z, opPalette.indexOf(expect), opPalette.indexOf(target), kind, phase, order]),
     },
   };
 }
@@ -216,7 +218,7 @@ test('execute receiver requires Mod running, correlates placement feedback and j
   assert.deepEqual(client.messages.at(-1), { type: 'revoke_ack', grantId: grant.grantId });
 });
 
-test('execute receiver waits for old-body teardown before admitting a queued continuation', async (t) => {
+test('execute receiver waits for old-body teardown before admitting a recompiled operation list', async (t) => {
   const grants = [];
   const runs = [];
   let finishStop;
@@ -229,7 +231,12 @@ test('execute receiver waits for old-body teardown before admitting a queued con
     },
   });
   const first = makeGrant(executionFields);
-  const second = makeGrant({ ...executionFields, planId: first.planId, revision: 2 });
+  const changedCell = { x: 3, y: 65, z: 3 };
+  const amended = [
+    { pos: changedCell, phase: 'terrain', kind: 'cut', order: 0, expect: 'minecraft:dirt', target: 'minecraft:air' },
+    { pos: changedCell, phase: 'walls', kind: 'build', order: 1, expect: 'minecraft:air', target: 'minecraft:cobblestone' },
+  ];
+  const second = makeGrant({ ...executionFields, planId: first.planId, revision: 2, ops: amended });
   client.feed({ type: 'hello', protocol: 2, worldId });
   deliver(client, first);
   await turn();
@@ -262,6 +269,13 @@ test('execute receiver waits for old-body teardown before admitting a queued con
   client.feed({ type: 'running', ...identityOf(second) });
   await turn();
   assert.deepEqual(runs, [1, 2]);
+  assert.deepEqual(grants[1].plan.ops, amended);
+  client.feed({ type: 'applied', ...identityOf(first), positions: [changedCell] });
+  assert.equal(grants[1].grant.applied(changedCell), null);
+  grants[1].grant.progress(1);
+  assert.equal(grants[1].grant.settled(), false);
+  grants[1].grant.progress(2);
+  assert.equal(grants[1].grant.settled(), true);
 });
 
 test('execute receiver discards a queued continuation revoked before old-body teardown', async (t) => {
