@@ -14,9 +14,11 @@ const { inventories, verifyBlocks, verifyMaterials } = require('./m3-verificatio
 const TEMPLATES = ['starter_house', 'porch_cabin', 'two_storey_house', 'wheat_field'];
 const TEMPLATE = { starter: 'starter_house', wheat: 'wheat_field', porch: 'porch_cabin', two: 'two_storey_house' };
 const DIRECTIONS = ['north', 'east', 'south', 'west'];
-const SCENARIOS = ['foundation', 'selection', 'materials', 'night', 'blocked', 'cancel', 'disconnect', 'natural', 'chest_full', 'stone_fill'];
+const SCENARIOS = ['foundation', 'selection', 'materials', 'night', 'blocked', 'cancel', 'disconnect', 'disconnect_stock',
+  'natural', 'chest_full', 'stone_fill'];
 const MAX_RUN_MS = 15 * 60_000;
 const MISSING_ID = 'minecraft:oak_door';
+const STONE_HOE = 'minecraft:stone_hoe';
 const STOCK = [
   ['cobblestone', 64], ['cobblestone', 64], ['cobblestone', 64],
   ['oak_planks', 64], ['oak_planks', 64], ['oak_planks', 64], ['oak_planks', 64],
@@ -278,7 +280,18 @@ async function exerciseScenario(env) {
       serverSnapshot: stopped.hash });
     return { done: true };
   }
-  if (scenario === 'disconnect') {
+  if (scenario === 'disconnect' || scenario === 'disconnect_stock') {
+    if (scenario === 'disconnect_stock') {
+      assert.equal(env.plan.ops.length, 241, 'Use the single-tile raised wheat fixture');
+      const tilling = await waitPlan(rcon, id, (state) => state.status === 'running' && state.phase === 'till' && progress(state) >= 85,
+        'Core tilled the field with a borrowed hoe', MAX_RUN_MS);
+      const inventory = await inventories(rcon, chest);
+      assert.equal(inventory.chest[STONE_HOE] || 0, 0);
+      assert.equal(inventory.bot[STONE_HOE], 1);
+      const damage = inventory.botDamage[STONE_HOE];
+      assert.ok(damage > 0 && damage < 80, `The borrowed hoe must have partly tilled the plot before disconnection, got ${damage}`);
+      record('m3-disconnect-stock-borrowed', { id, completed: progress(tilling), damage, inventory });
+    }
     await rcon.command('kick DeskPetBot M3 isolated connection loss');
     const paused = await waitPlan(rcon, id, (state) => state.status === 'paused', 'Mod pauses on disconnect');
     assert.equal(paused.reason, 'disconnected');
@@ -305,7 +318,7 @@ async function main() {
   const turns = DIRECTIONS.indexOf(direction);
   assert.ok(template && turns >= 0 && SCENARIOS.includes(scenario),
     `Use (${Object.keys(TEMPLATE).join('|')}) (${DIRECTIONS.join('|')}) (${SCENARIOS.join('|')})`);
-  const scenarioTemplate = scenario === 'chest_full' ? TEMPLATE.wheat : TEMPLATE.starter;
+  const scenarioTemplate = ['chest_full', 'disconnect_stock'].includes(scenario) ? TEMPLATE.wheat : TEMPLATE.starter;
   assert.ok(scenario === 'foundation' || template === scenarioTemplate, 'Use the scenario with its intended acceptance fixture');
   const prefix = `m3_${alias}_${direction}_${scenario}_${randomUUID().slice(0, 8)}`;
   const settings = await serverSettings();
@@ -395,6 +408,10 @@ async function main() {
       const inventoryAfter = await inventories(rcon, scenarioSite.chest);
       await verifyBlocks(plan, before.blocks, final.blocks, { normal: scenario === 'natural', grade: scenarioSite.grade });
       verifyMaterials(plan, inventoryBefore, inventoryAfter, scenarioResult.replenished, { normal: scenario === 'natural' });
+      if (scenario === 'disconnect_stock') {
+        assert.equal(inventoryAfter.bot[STONE_HOE] || 0, 0);
+        assert.equal(inventoryAfter.chestDamage[STONE_HOE], 80);
+      }
       const grant = evidence.coreEvents.findLast(({ type, payload }) => type === 'survey_plan'
         && payload.type === 'accepted' && payload.planId === id && payload.revision === state.plan.revision)?.payload;
       assert.ok(grant, 'The completed revision must have come from the Mod');
