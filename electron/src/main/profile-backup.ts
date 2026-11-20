@@ -21,6 +21,8 @@ import { CRAWL4AI_SECRET_ID } from './plugins/credentials';
 
 // Chromium caches, locks, and the separately managed Minecraft runtime/data
 // are deliberately outside this snapshot and restore transaction.
+// The dedicated Minecraft world and its rotating snapshots live in their own
+// user-data root and must stay out of profile archives and restore swaps.
 export const PROFILE_ROOTS = ['profile.enc.json', 'settings.json', 'managed', 'vault', 'events', 'workspace', 'migration'] as const;
 const MAGIC = Buffer.from('DESKPET-BACKUP-1\n');
 const MAX_BYTES = 768 * 1024 * 1024;

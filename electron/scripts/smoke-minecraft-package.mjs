@@ -1,7 +1,8 @@
 /* global process, setTimeout, clearTimeout */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,19 @@ const macBundle = join(packageRoot, product + '.app', 'Contents');
 const executable = process.platform === 'darwin' ? join(macBundle, 'MacOS', 'deskpet-electron')
   : join(packageRoot, process.platform === 'win32' ? 'deskpet-electron.exe' : 'deskpet-electron');
 const resources = process.platform === 'darwin' ? join(macBundle, 'Resources') : join(packageRoot, 'resources');
+const dedicated = join(resources, 'minecraft-dedicated');
+const mod = JSON.parse(await readFile(join(dedicated, 'manifest.json'), 'utf8'));
+assert.equal(mod.version, 1);
+if (mod.packaged === false) {
+  await assert.rejects(stat(join(dedicated, 'deskpet-mod.jar')), { code: 'ENOENT' });
+  process.stdout.write('Packaged Minecraft dedicated server correctly reports the Mod unavailable.\n');
+} else {
+  assert.equal(mod.packaged, true);
+  assert.equal(mod.jar, 'deskpet-mod.jar');
+  assert.match(mod.sha256, /^[a-f0-9]{64}$/u);
+  assert.equal(createHash('sha256').update(await readFile(join(dedicated, mod.jar))).digest('hex'), mod.sha256);
+  process.stdout.write(`Packaged Minecraft dedicated Mod ${mod.modVersion} SHA-256 verified.\n`);
+}
 for (const engine of ['minecraft-runtime', 'minecraft-companion-runtime']) {
   await assert.rejects(stat(join(resources, engine, 'node_modules')), { code: 'ENOENT' });
   const require = createRequire(join(resources, engine, 'package.json'));
