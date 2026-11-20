@@ -14,6 +14,7 @@ interface MinecraftPageProps {
   providers: ProviderConfig[];
   locale: ResolvedLocale;
   t: (key: string) => string;
+  onDedicatedSettings?: () => void;
 }
 
 const defaultConfig: MinecraftConnectionConfig = {
@@ -24,7 +25,7 @@ const activeTaskStates = new Set(['pending', 'planning', 'running', 'paused']);
 const isPlainChat = (message: string): boolean => message.trim().length > 0
   && !message.trimStart().startsWith('/') && ![...message].some((character) => character.charCodeAt(0) < 32);
 
-export const MinecraftPage = ({ providers, locale, t }: MinecraftPageProps): JSX.Element => {
+export const MinecraftPage = ({ providers, locale, t, onDedicatedSettings }: MinecraftPageProps): JSX.Element => {
   const [snapshot, setSnapshot] = useState<MinecraftSnapshot | null>(null);
   const [config, setConfig] = useState<MinecraftConnectionConfig>(defaultConfig);
   const [goal, setGoal] = useState('');
@@ -137,7 +138,7 @@ export const MinecraftPage = ({ providers, locale, t }: MinecraftPageProps): JSX
 
   return <section className="minecraft-page">
     <header className="page-header"><span>{t('nav.minecraft')}</span><h1>{t('minecraft.title')}</h1><p>{t('minecraft.description')}</p></header>
-    {window.deskpet.minecraftCompanion && <MinecraftCompanionPanel locale={locale} />}
+    {window.deskpet.minecraftCompanion && <MinecraftCompanionPanel locale={locale} {...(onDedicatedSettings ? { onDedicatedSettings } : {})} />}
     {shownError && <div className="error-banner" role="alert">{shownError === 'minecraft.error' ? t(shownError) : shownError} <button type="button" className="secondary" disabled={busy !== null} onClick={() => void refreshState()}>{t('common.retry')}</button></div>}
     {snapshot === null && <p role="status">{t('minecraft.loading')}</p>}
     <div className="minecraft-connection-summary" role="status" aria-live="polite">

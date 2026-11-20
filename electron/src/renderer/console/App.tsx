@@ -36,6 +36,7 @@ import { ResearchTasks } from './ResearchTasks';
 import { BackgroundJobs } from './BackgroundJobs';
 import { CodingTasks } from './CodingTasks';
 import { MinecraftPage } from './MinecraftPage';
+import { MinecraftDedicatedSettings, MinecraftDedicatedStatus } from './MinecraftDedicatedPanel';
 import { ArrowUp, Bell, BookOpen, CalendarDots, CaretRight, PaperPlaneTilt, ChatCircleDots, ClockCounterClockwise, Copy, GearSix, ListChecks, MagnifyingGlass, PushPin, SidebarSimple, Plus, Sparkle, Square, Toolbox } from '@phosphor-icons/react';
 import { ChatReply } from './ChatReply';
 import { MediaLibraryPage } from './MediaLibraryPage';
@@ -216,6 +217,7 @@ const MainConsoleApp = (): JSX.Element => {
     if (next === 'media') openMedia(); else setView(next);
   };
   const openCompanion = (tab: CompanionTab): void => { setCompanionTab(tab); setView('companion'); };
+  const openDedicatedSettings = (): void => { setSettingsTab('minecraft'); setView('settings'); };
   const openHealthFeature = (feature: HealthFeature): void => {
     if (feature === 'asr') openCompanion('voice');
     else if (feature === 'diary') openCompanion('diary');
@@ -288,7 +290,7 @@ const MainConsoleApp = (): JSX.Element => {
         {view === 'media' && <MediaLibraryPage api={window.deskpet.media} wechat={window.deskpet.wechat} providers={snapshot.providers} locale={locale} sessionId={activeSessionId} onAttached={() => setView('chat')} />}
         {view === 'conversations' && <ConversationManager t={t} locale={locale} busy={conversationBusy} onSelect={selectChat} onAction={conversations.act} />}
         {view === 'companion' && <CompanionPage initialTab={companionTab} snapshot={snapshot} name={name} t={t} refresh={refresh} />}
-        {view === 'minecraft' && <MinecraftPage providers={snapshot.providers} locale={locale} t={t} />}
+        {view === 'minecraft' && <MinecraftPage providers={snapshot.providers} locale={locale} t={t} onDedicatedSettings={openDedicatedSettings} />}
         {view === 'focus' && <FocusPage snapshot={snapshot} t={t} refresh={refresh} />}
         {view === 'memory' && <MemoryPage conversationBusy={conversationBusy} onUseQuery={continueMemoryQuery} currentSessionTitle={memorySession?.title ?? ''} items={snapshot.memories} t={t} refresh={refresh} providers={snapshot.providers} activeProviderId={snapshot.app.activeProviderId ?? null} openBatchId={attentionTarget?.kind === 'consolidation' && attentionTarget.sessionId === activeSessionId ? attentionTarget.id : undefined} currentSessionId={memorySession?.id ?? ''} locale={snapshot.app.resolvedLocale} onStartSession={async () => { if (conversationBusy) throw new Error('chat.busy'); const session = await window.deskpet.chat.createSession({ title: snapshot.app.resolvedLocale === 'zh-CN' ? '记忆审阅' : 'Memory review', kind: 'normal' }); setSelectedChat(session.id); await refresh(); }} />}
         {view === 'schedules' && <ScheduleOverview api={window.deskpet.chatWork} telegram={window.deskpet.telegram} qq={window.deskpet.qq} sessions={snapshot.sessions} locale={snapshot.app.resolvedLocale} onOpenSession={selectChat} timers={<TimerList t={t} />}><PersistentSchedules api={window.deskpet.automation} providers={snapshot.providers} locale={snapshot.app.resolvedLocale} /></ScheduleOverview>}
@@ -299,7 +301,9 @@ const MainConsoleApp = (): JSX.Element => {
         {view === 'activity' && <ActivityPage t={t} locale={locale} />}
         {view === 'wechat-digests' && digests && <WeChatGroupDigestResults api={digests} locale={locale} />}
         {view === 'wechat-followup' && followup && <WeChatFollowupList api={followup} locale={locale} />}
-        {view === 'health' && <HealthPanel api={window.deskpet.attention} locale={locale} onOpen={openHealthFeature} onIssues={setHealthIssues} />}
+        {view === 'health' && <HealthPanel api={window.deskpet.attention} locale={locale} onOpen={openHealthFeature} onIssues={setHealthIssues}>
+          {window.deskpet.minecraftDedicated && <MinecraftDedicatedStatus api={window.deskpet.minecraftDedicated} locale={locale} onSettings={openDedicatedSettings} />}
+        </HealthPanel>}
         {view === 'doctor' && <DoctorPanel api={window.deskpet.attention} locale={locale} />}
         {view === 'settings' && <SettingsPage snapshot={snapshot} t={t} refresh={refresh} initialTab={settingsTab} onOpenSession={selectChat} />}
         </div>}
@@ -982,13 +986,13 @@ const MemoryPage = ({ onUseQuery, conversationBusy, currentSessionTitle, items, 
 };
 
 
-type SettingsEntry = 'general' | 'permissions' | 'qq' | 'telegram' | 'wechat' | 'knowledge';
+type SettingsEntry = 'general' | 'permissions' | 'qq' | 'telegram' | 'wechat' | 'knowledge' | 'minecraft';
 type SettingsTab = SettingsEntry | 'providers' | 'plugins' | 'skills' | 'mcp' | 'sandbox' | 'privacy' | 'migration' | 'advanced';
 // Single-entry groups need no heading; her own settings live on the companion page.
 const SETTINGS_GROUPS: ReadonlyArray<{ zh: string; en: string; tabs: readonly SettingsTab[] }> = [
   { zh: '基础', en: 'Basics', tabs: ['general', 'providers'] },
   { zh: '聊天渠道', en: 'Channels', tabs: ['wechat', 'qq', 'telegram'] },
-  { zh: '扩展', en: 'Extensions', tabs: ['plugins', 'skills', 'mcp', 'knowledge', 'sandbox'] },
+  { zh: '扩展', en: 'Extensions', tabs: ['plugins', 'skills', 'mcp', 'knowledge', 'sandbox', 'minecraft'] },
   { zh: '隐私与安全', en: 'Privacy and security', tabs: ['permissions', 'privacy'] },
   { zh: '系统', en: 'System', tabs: ['migration', 'advanced'] },
 ];
@@ -996,9 +1000,10 @@ const SettingsPage = ({ snapshot, t, refresh, initialTab, onOpenSession }: { sna
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [diagnostics, setDiagnostics] = useState<DiagnosticSnapshot | null>(null);
   const zh = snapshot.app.resolvedLocale === 'zh-CN';
+  const dedicated = window.deskpet.minecraftDedicated;
   return <section><Header eyebrow={t('nav.settings')} title={t('nav.settings')} /><div className="settings-layout"><div className="settings-tabs" role="tablist">{SETTINGS_GROUPS.map(group => <div className="settings-tab-group" key={group.tabs[0]}>
     <span className="settings-tab-heading">{zh ? group.zh : group.en}</span>
-    {group.tabs.map(id => <button type="button" role="tab" aria-selected={tab === id} key={id} onClick={() => setTab(id)}>{t(`settings.${id}`)}</button>)}
+    {group.tabs.filter(id => id !== 'minecraft' || dedicated).map(id => <button type="button" role="tab" aria-selected={tab === id} key={id} onClick={() => setTab(id)}>{id === 'minecraft' ? 'Minecraft' : t(`settings.${id}`)}</button>)}
   </div>)}</div><div className="settings-panel">
     {tab === 'general' && <GeneralSettings snapshot={snapshot} t={t} refresh={refresh} />}
     {tab === 'providers' && <ProviderSettings providers={snapshot.providers} activeId={snapshot.app.activeProviderId ?? snapshot.providers.find((item) => item.enabled)?.id ?? null} t={t} refresh={refresh} />}
@@ -1006,6 +1011,7 @@ const SettingsPage = ({ snapshot, t, refresh, initialTab, onOpenSession }: { sna
     {(tab === 'skills' || tab === 'mcp') && <DesktopExtensionsPanel key={tab} section={tab} api={window.deskpet.plugins.extensions} providers={snapshot.providers.filter(provider => provider.kind === 'ollama' && routingDestination(provider) === 'local')} zh={snapshot.app.resolvedLocale === 'zh-CN'} />}
     {tab === 'knowledge' && <KnowledgeSettings locale={snapshot.app.resolvedLocale} />}
     {tab === 'sandbox' && <SandboxSettings api={window.deskpet.vmSandbox} locale={snapshot.app.resolvedLocale} />}
+    {tab === 'minecraft' && dedicated && <MinecraftDedicatedSettings api={dedicated} locale={snapshot.app.resolvedLocale} />}
     {tab === 'telegram' && <TelegramSettings providers={snapshot.providers} locale={snapshot.app.resolvedLocale} />}
     {tab === 'qq' && <QqSettings providers={snapshot.providers} locale={snapshot.app.resolvedLocale} />}
     {tab === 'wechat' && <WeChatSettings api={window.deskpet.wechat} locale={snapshot.app.resolvedLocale} />}

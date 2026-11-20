@@ -4,6 +4,7 @@ import type { FormEvent, JSX } from 'react';
 import type { ResolvedLocale } from '../../shared';
 import { minecraftCompanionConfigSchema, minecraftCompanionMaterialSchema, minecraftCompanionTaskSchema } from '../../shared/minecraft-companion';
 import type { MinecraftCompanionConfig, MinecraftCompanionSnapshot, MinecraftCompanionTaskInput, MinecraftCompanionTaskStatus } from '../../shared/minecraft-companion';
+import { useDedicatedState } from './MinecraftDedicatedPanel';
 import './minecraft-companion-panel.css';
 
 const defaults: MinecraftCompanionConfig = { host: '127.0.0.1', port: 25565, username: 'DeskPetCore', auth: 'offline', version: 'auto' };
@@ -76,9 +77,11 @@ const TaskState = ({ snapshot, text, locale }: { snapshot: MinecraftCompanionSna
   {snapshot.safetyActive && <p role="status">{text.safety}</p>}
 </div>;
 
-export const MinecraftCompanionPanel = ({ locale }: { locale: ResolvedLocale }): JSX.Element => {
+export const MinecraftCompanionPanel = ({ locale, onDedicatedSettings }: { locale: ResolvedLocale; onDedicatedSettings?: () => void }): JSX.Element => {
   const text = copy[locale];
   const { snapshot, error, busy, cancelling, perform, cancel } = useCompanion();
+  const { state: dedicated } = useDedicatedState(window.deskpet.minecraftDedicated);
+  const managed = dedicated?.status === 'starting' || dedicated?.status === 'running' || dedicated?.status === 'restarting' || dedicated?.status === 'stopping';
   const [config, setConfig] = useState<MinecraftCompanionConfig>(defaults);
   const edited = useRef(false);
   useEffect(() => { if (!edited.current && snapshot?.config) setConfig(snapshot.config); }, [snapshot?.config]);
@@ -89,7 +92,7 @@ export const MinecraftCompanionPanel = ({ locale }: { locale: ResolvedLocale }):
   const ready = snapshot?.connectionState === 'ready';
   const connecting = snapshot?.connectionState === 'connecting' || snapshot?.runtimeState === 'starting';
   const activeTask = Boolean(snapshot?.task && activeStates.has(snapshot.task.status));
-  const frozen = snapshot === null || Boolean(busy) || ready || connecting || snapshot?.controlPending === 'disconnect';
+  const frozen = managed || snapshot === null || Boolean(busy) || ready || connecting || snapshot?.controlPending === 'disconnect';
   const cancelPending = cancelling || snapshot?.controlPending === 'cancel';
   const canCancel = Boolean(snapshot && (activeTask || ready || connecting || busy === 'start' || busy === 'connect'));
   const update = <K extends keyof MinecraftCompanionConfig>(key: K, value: MinecraftCompanionConfig[K]): void => { edited.current = true; setConfig((current) => ({ ...current, [key]: value })); };
@@ -110,7 +113,11 @@ export const MinecraftCompanionPanel = ({ locale }: { locale: ResolvedLocale }):
     {(error || snapshot?.lastError || invalid) && <div className="error-banner" role="alert">{invalid ? text.validation : error === 'minecraftCompanion.unavailable' ? text.unavailable : error === 'minecraftCompanion.error' ? text.error : error ?? snapshot?.lastError}</div>}
     {!snapshot && <p role="status">{text.loading}</p>}
     <div className="companion-connection" role="status" aria-live="polite"><span>{text.connection}: <strong title={snapshot?.connectionState}>{snapshot ? stateLabel(snapshot.connectionState, locale) : '—'}</strong></span><span>{text.runtime}: <strong title={snapshot?.runtimeState}>{snapshot ? stateLabel(snapshot.runtimeState, locale) : '—'}</strong></span></div>
-    <article className="panel"><h2>{text.connection}</h2><p>{text.readyHelp}</p><form className="stack-form" onSubmit={connect}>
+    <article className="panel"><h2>{text.connection}</h2><p>{text.readyHelp}</p>
+      {managed && <div className="notice"><p>{locale === 'zh-CN' ? '机器人由本地 Minecraft 世界管理。' : 'The local Minecraft world manages the bot connection.'}</p>
+        {onDedicatedSettings && <button type="button" className="secondary" onClick={onDedicatedSettings}>{locale === 'zh-CN' ? 'Minecraft 设置' : 'Minecraft settings'}</button>}
+      </div>}
+      <form className="stack-form" onSubmit={connect}>
       <fieldset className="companion-config-grid" disabled={frozen}>
         <label>{text.host}<input required maxLength={253} value={config.host} onChange={(e) => update('host', e.target.value)} autoComplete="off" /></label>
         <label>{text.port}<input required type="number" min={1} max={65535} value={config.port} onChange={(e) => update('port', Number(e.target.value))} /></label>
@@ -119,7 +126,7 @@ export const MinecraftCompanionPanel = ({ locale }: { locale: ResolvedLocale }):
         <label>{text.version}<input required maxLength={32} value={config.version} onChange={(e) => update('version', e.target.value)} /></label>
         <label>{text.owner}<input maxLength={16} value={config.ownerName ?? ''} onChange={(e) => update('ownerName', e.target.value)} autoComplete="off" /><small>{text.ownerHelp}</small></label>
       </fieldset>
-      <div className="button-row"><button type="submit" disabled={frozen}>{text.connect}</button><button type="button" className="secondary" disabled={!snapshot || snapshot.runtimeState === 'stopped' || snapshot.controlPending === 'disconnect' || busy === 'disconnect'} onClick={() => void perform('disconnect', () => companionApi().disconnect())}>{text.disconnect}</button></div>
+      <div className="button-row"><button type="submit" disabled={frozen}>{text.connect}</button><button type="button" className="secondary" disabled={managed || !snapshot || snapshot.runtimeState === 'stopped' || snapshot.controlPending === 'disconnect' || busy === 'disconnect'} onClick={() => void perform('disconnect', () => companionApi().disconnect())}>{text.disconnect}</button></div>
     </form></article>
     {snapshot?.auth && <article className="panel"><h2>{text.microsoft}</h2><p>{text.authHelp}</p><code>{snapshot.auth.verificationURI}</code><p><strong>{snapshot.auth.userCode}</strong></p></article>}
     <article className="panel"><h2>{text.task}</h2><form className="stack-form" onSubmit={start}><fieldset disabled={!ready || Boolean(busy) || activeTask || Boolean(snapshot?.controlPending)} className="companion-task-fields">

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { JSX } from 'react';
+import type { JSX, ReactNode } from 'react';
 import type { AttentionAPI, HealthFeature, HealthItem, HealthSnapshot, HealthState } from '../../shared/attention';
 import { describeWeChatSendDiagnostics } from '../../shared/wechat-send-diagnostics';
 import './attention-center.css';
@@ -273,8 +273,8 @@ export const useHealthIssues = (api: AttentionAPI): [number, (issues: number) =>
   return [issues, setIssues];
 };
 
-export const HealthPanel = ({ api, locale, onOpen, onIssues }: {
-  api: AttentionAPI; locale: string; onOpen(feature: HealthFeature): void; onIssues?(issues: number): void;
+export const HealthPanel = ({ api, locale, onOpen, onIssues, children }: {
+  api: AttentionAPI; locale: string; onOpen(feature: HealthFeature): void; onIssues?(issues: number): void; children?: ReactNode;
 }): JSX.Element => {
   const lang: Locale = locale === 'zh-CN' ? 'zh-CN' : 'en';
   const text = copy[lang];
@@ -348,6 +348,7 @@ export const HealthPanel = ({ api, locale, onOpen, onIssues }: {
     <header className="page-header"><div><h1>{text.title}</h1><p>{text.intro}</p></div><button type="button" disabled={busy} onClick={() => void refresh()}>{text.refresh}</button></header>
     {readFailed && <p role="alert">{text.readFailed}</p>}
     {ackFailed && <p role="alert">{text.acknowledgeFailed}</p>}
+    {children}
     {snapshot === null ? <p>{text.loading}</p> : <>
       <div className="attention-overview"><strong>{snapshot.issues || '✓'}</strong><span>{snapshot.issues ? text.issues(snapshot.issues) : seen ? text.onlyAcknowledged(seen) : text.allGood}</span></div>
       <div className="attention-list">{items.map(card)}</div>

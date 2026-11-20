@@ -1,0 +1,29 @@
+.dedicated-settings { display: grid; gap: 18px; min-width: 0; }
+.dedicated-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.dedicated-heading h2 { margin: 0; }
+.dedicated-settings-group { display: grid; gap: 14px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.dedicated-settings-group h3, .dedicated-status-plan h3 { margin: 0; font-size: 14px; color: var(--strong); }
+.dedicated-toggle, .dedicated-memory { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dedicated-toggle small, .dedicated-memory small { display: block; margin-top: 4px; color: var(--muted); line-height: 1.5; }
+.dedicated-memory select { width: auto; }
+.dedicated-actions { flex-wrap: wrap; }
+.dedicated-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.dedicated-eula { display: grid; justify-items: start; gap: 6px; }
+.dedicated-eula a { color: var(--blue-strong); }
+.dedicated-address { display: grid; justify-items: start; gap: 5px; padding: 12px 14px; border-radius: 10px; background: var(--soft); }
+.dedicated-address code { color: var(--strong); font-size: 15px; user-select: all; }
+.dedicated-inline-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.dedicated-inline-form label { display: grid; flex: 1 1 118px; gap: 4px; font-size: 12px; }
+.dedicated-inline-form .dedicated-note { flex-basis: 100%; }
+.dedicated-files summary { cursor: pointer; color: var(--strong); font-size: 13px; }
+.dedicated-files[open] summary { margin-bottom: 14px; }
+.dedicated-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: 12px 18px; margin: 0; }
+.dedicated-facts > div { min-width: 0; }
+.dedicated-facts dt { color: var(--muted); font-size: 12px; }
+.dedicated-facts dd { margin: 4px 0 0; color: var(--strong); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.dedicated-full-width { grid-column: 1 / -1; }
+.dedicated-status { display: grid; gap: 16px; margin-bottom: 16px; }
+.dedicated-status-plan { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+.dedicated-plan { display: grid; gap: 12px; padding: 14px; border-radius: 10px; background: var(--soft); }
+.dedicated-progress { display: flex; align-items: center; gap: 12px; font-variant-numeric: tabular-nums; }
+.dedicated-progress progress { width: 100%; min-width: 0; height: 10px; accent-color: var(--blue-strong); }
