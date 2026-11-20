@@ -59,6 +59,8 @@ public final class PlanCompiler {
     private static final Gson JSON = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
     private static final BlockState AIR = Blocks.AIR.getDefaultState();
     private static final BlockState DIRT = Blocks.DIRT.getDefaultState();
+    private static final List<Block> FILL_BLOCKS = List.of(Blocks.DIRT, Blocks.COBBLESTONE,
+        Blocks.COBBLED_DEEPSLATE, Blocks.ANDESITE, Blocks.DIORITE, Blocks.GRANITE, Blocks.TUFF, Blocks.CALCITE);
 
     enum Mode {
         FOUNDATION("建筑地基与走道"), SELECTION("整个选区");
@@ -269,6 +271,7 @@ public final class PlanCompiler {
                     findFill(world, x, z, groundY, settings.fillDepth(), ops, conflicts);
                 }
             }
+            useExcavatedFill(ops, clears);
             addBuild(world, request, placement, clears, protectedCells, ops);
         }
 
@@ -645,6 +648,28 @@ public final class PlanCompiler {
         }
     }
 
+    private static void useExcavatedFill(List<Operation> ops, List<Operation> clears) {
+        if (ops.size() == clears.size() || clears.isEmpty()) return;
+        Map<String, Integer> excavated = new HashMap<>();
+        for (Operation clear : clears) {
+            String drop = excavationDrop(clear.expect());
+            if (drop != null) increment(excavated, drop);
+        }
+        for (int i = clears.size(); i < ops.size(); i++) {
+            Operation fill = ops.get(i);
+            for (Block material : FILL_BLOCKS) {
+                String id = Registries.BLOCK.getId(material).toString();
+                int available = excavated.getOrDefault(id, 0);
+                if (available == 0) continue;
+                excavated.put(id, available - 1);
+                if (material != Blocks.DIRT) {
+                    ops.set(i, new Operation(fill.pos(), fill.expect(), material.getDefaultState(), fill.kind(), fill.phase()));
+                }
+                break;
+            }
+        }
+    }
+
     private static void addBuild(WorldView world, Request request, Placement placement, List<Operation> clears,
                                  Set<BlockPos> protectedCells, List<Operation> ops) {
         var template = placement.template();
@@ -782,16 +807,8 @@ public final class PlanCompiler {
         int hoeUses = 0;
         for (Operation op : ops) {
             if (op.kind().equals("cut") || op.kind().equals("clear")) {
-                // Guaranteed simple drops only. Fortune, Silk Touch, tools and loot remain relevant at execution.
-                String id = TerrainRules.id(op.expect());
-                if (id.equals("stone")) {
-                    increment(excavated, "minecraft:cobblestone");
-                } else if (id.equals("grass_block") || id.equals("podzol") || id.equals("mycelium")) {
-                    increment(excavated, "minecraft:dirt");
-                } else if (TerrainRules.naturalGround(op.expect()) && !Set.of("clay", "snow", "snow_block", "gravel").contains(id) ||
-                    TerrainRules.log(op.expect())) {
-                    increment(excavated, Registries.BLOCK.getId(op.expect().getBlock()).toString());
-                }
+                String drop = excavationDrop(op.expect());
+                if (drop != null) increment(excavated, drop);
                 continue;
             }
             if (op.kind().equals("scaffold")) {
@@ -838,6 +855,19 @@ public final class PlanCompiler {
         json.add("available", counts(supply));
         json.add("deficit", counts(deficit));
         return json;
+    }
+
+    private static String excavationDrop(BlockState state) {
+        // Usual drops with a suitable tool. Execution checks the actual inventory.
+        String id = TerrainRules.id(state);
+        return switch (id) {
+            case "stone" -> "minecraft:cobblestone";
+            case "deepslate" -> "minecraft:cobbled_deepslate";
+            case "grass_block", "podzol", "mycelium" -> "minecraft:dirt";
+            case "clay", "snow", "snow_block", "gravel" -> null;
+            default -> TerrainRules.naturalGround(state) || TerrainRules.log(state)
+                ? Registries.BLOCK.getId(state.getBlock()).toString() : null;
+        };
     }
 
     private static void increment(Map<String, Integer> counts, String id) {

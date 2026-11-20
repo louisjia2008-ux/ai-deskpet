@@ -99,6 +99,18 @@ class PlanCompilerTest {
     }
 
     @Test
+    void excavatedStoneCanSupplyAnAuthorizedFill() {
+        BlockPos cut = new BlockPos(6, 64, 4);
+        BlockPos pit = new BlockPos(6, 63, 6);
+        var result = compile(new Ground().put(cut, Blocks.STONE.getDefaultState()).put(pit, Blocks.AIR.getDefaultState()));
+        assertTrue(result.valid(), () -> result.conflicts().toString());
+        assertTrue(result.ops().stream().anyMatch(op -> op.pos().equals(pit) && op.kind().equals("fill")
+            && op.target().isOf(Blocks.COBBLESTONE)));
+        assertEquals(1, result.plan().getAsJsonObject("materials").getAsJsonObject("excavated")
+            .get("minecraft:cobblestone").getAsInt());
+    }
+
+    @Test
     void protectedPlacementConflictsAndIsNeverScheduled() {
         BlockPos chest = new BlockPos(6, 64, 6);
         var world = new Ground().put(chest, Blocks.CHEST.getDefaultState())

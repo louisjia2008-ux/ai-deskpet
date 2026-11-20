@@ -280,7 +280,8 @@ function createSurveyPlanGoal({ bot, plan, grant, ownerName }) {
           let restock = true;
           let stagedRoof = false;
           while (pending.length) {
-            const eligible = pending.filter(({ step }) => !materialFor(step[0]) || supplies.item(step[0]));
+            const currentLayer = pending.filter((entry) => entry.level === pending[0].level);
+            const eligible = currentLayer.filter(({ step }) => !materialFor(step[0]) || supplies.item(step[0]));
             if (restock || !eligible.length) {
               const materials = await duringDay(ctx, (stepCtx) => supplies.ensure(stepCtx, pending.map(({ step }) => step)));
               if (!materials.ok) return block(ctx, materials);
@@ -290,14 +291,16 @@ function createSurveyPlanGoal({ bot, plan, grant, ownerName }) {
               }
               restock = false;
             }
-            const materialReady = pending.filter(({ step }) => !materialFor(step[0]) || supplies.item(step[0]));
+            const materialReady = currentLayer.filter(({ step }) => !materialFor(step[0]) || supplies.item(step[0]));
             if (!materialReady.length) continue;
             if (phase === 'roof' && !stagedRoof) {
               await duringDay(ctx, (stepCtx) => climbSurveyScaffold(bot, stepCtx, plan,
                 (reason, detail) => recordStation(ctx, pending[0].step[0], reason, detail)));
               stagedRoof = true;
             }
-            const result = await duringDay(ctx, (stepCtx) => nextStep(stepCtx, materialReady));
+            // Removal can consume the second half of a plant on the layer below.
+            const work = materialReady[0].step[0].target === 'minecraft:air' ? pending : materialReady;
+            const result = await duringDay(ctx, (stepCtx) => nextStep(stepCtx, work));
             if (result.reason === 'no_material') {
               restock = true;
               continue;

@@ -6,7 +6,7 @@ const { abortError, waitUntil } = require('./confirm');
 const { vec, placementSpec, openDoorIfVisible } = require('./survey-placement');
 
 const HOE = 'wooden_hoe';
-const SALVAGE = /^(dirt|coarse_dirt|rooted_dirt|cobblestone|cobbled_deepslate|stone|andesite|diorite|granite|tuff|calcite|sand|red_sand|gravel|.+_log|.+_stem)$/;
+const SALVAGE = /^(grass_block|dirt|coarse_dirt|rooted_dirt|mud|cobblestone|cobbled_deepslate|stone|andesite|diorite|granite|tuff|calcite|dripstone_block|sand|red_sand|sandstone|red_sandstone|gravel|.+_log|.+_stem)$/;
 const PATH_TIMEOUT = 14000;
 
 function materialFor(op) {
@@ -160,9 +160,12 @@ function createSurveySupplies(bot, plan) {
     }
     if (!returns.size) return { ok: true };
     return chestTransaction(ctx, async (window) => {
-      for (const [name, quantity] of returns) {
-        let left = quantity;
-        for (const item of window.slots.slice(window.inventoryStart, window.inventoryEnd).filter((item) => item?.name === name)) {
+      for (const name of returns.keys()) {
+        const items = window.slots.slice(window.inventoryStart, window.inventoryEnd).filter((item) => item?.name === name);
+        // The final placement acknowledgement can precede the inventory slot update.
+        // The contents delivered when opening the chest are the current server view.
+        let left = items.reduce((total, item) => total + item.count, 0) - (baseline.get(name) || 0);
+        for (const item of items) {
           const n = Math.min(left, item.count, room(window, item, 0, window.inventoryStart));
           if (n <= 0) break;
           await window.deposit(item.type, item.metadata, n, item.nbt);
