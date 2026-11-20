@@ -180,6 +180,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   const priorBodyLife = Object.getOwnPropertyDescriptor(bot, 'companionBodyLife');
   const bodyLifeOwner = Object.freeze({});
   let bodyLifeEpoch = 0;
+  let surveyDeathEpoch = null;
   const readBodyLife = () => !disposed && bot.companionBodyLife === readBodyLife
     ? { owner: bodyLifeOwner, epoch: bodyLifeEpoch } : null;
   Object.defineProperty(bot, 'companionBodyLife', { value: readBodyLife, writable: true, configurable: true });
@@ -213,6 +214,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     feeding: () => FEEDING_GOALS.has(brain?.status().goal?.name),
     activeGoal: () => brain?.status().goal?.name,
     surveyArea: () => survey?.area ?? null,
+    suppressDeathDrops: () => surveyDeathEpoch === bodyLifeEpoch,
     home: () => (director ? homeOf(director.memory)?.centre || null : null) }), ...recovery.behaviors,
     nightRest, homeMaintenance, ...createEndHazards({ bot, onEvent: (event) => onEvent(event) })];
   const usedGoals = new Set();
@@ -317,7 +319,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   // drank again, and burned to death at the next blaze.
   const onDeath = () => {
     if (disposed) return;
+    // Survival's death listener has already checked which life just ended.
     bodyLifeEpoch += 1;
+    surveyDeathEpoch = null;
     if (bot.entity?.effects) bot.entity.effects = {};
     haltBody(bot);
     brain.interrupt('death').catch(() => {});
@@ -370,7 +374,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     if (survey || grant.signal.aborted) throw new Error('Survey authorization cannot reserve the body');
     const { minX, maxX, minZ, maxZ } = plan.selection;
     const area = { x: (minX + maxX + 1) / 2, z: (minZ + maxZ + 1) / 2 };
-    const record = { grant, area, restoreActions: installSurveyActions(bot, plan, grant) };
+    const record = { grant, area, lifeEpoch: bodyLifeEpoch, restoreActions: installSurveyActions(bot, plan, grant) };
     survey = record;
     grant.signal.addEventListener('abort', stopSurveyBody, { once: true });
     stopSurveyBody();
@@ -534,6 +538,8 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     async stopSurveyPlan(grant, reason) {
       const record = survey;
       if (record?.grant !== grant) return;
+      // Mod can revoke the grant before Minecraft delivers the death event.
+      if (reason === 'bot_died' && record.lifeEpoch === bodyLifeEpoch) surveyDeathEpoch = bodyLifeEpoch;
       record.closing = true;
       stopSurveyBody();
       if (disposed) { await dispose(); return; }

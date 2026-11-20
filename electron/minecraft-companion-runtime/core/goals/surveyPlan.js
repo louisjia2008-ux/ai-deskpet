@@ -60,7 +60,7 @@ function stepGroups(plan) {
   return groups;
 }
 
-function createSurveyPlanGoal({ bot, plan, grant, ownerName, supplyInventory }) {
+function createSurveyPlanGoal({ bot, plan, grant, supplyInventory }) {
   let completed = 0;
   let stationFailures = 0;
   let phase = '';
@@ -102,15 +102,8 @@ function createSurveyPlanGoal({ bot, plan, grant, ownerName, supplyInventory }) 
   async function overnight(ctx) {
     if (!night()) return;
     grant.state(phase, 'night');
-    const position = bot.entity.position.floored();
-    const covered = [2, 3, 4].some((y) => bot.blockAt(position.offset(0, y, 0))?.shapes.length);
-    const owner = bot.players?.[ownerName]?.entity?.position;
-    const siteX = (plan.selection.minX + plan.selection.maxX + 1) / 2;
-    const siteZ = (plan.selection.minZ + plan.selection.maxZ + 1) / 2;
-    if (!covered && owner && Math.hypot(owner.x - siteX, owner.z - siteZ) <= 12
-      && bot.entity.position.distanceTo(owner) < 18) {
-      await actions.goNear(bot, ctx, owner, 3, { timeoutMs: 4500, retryNoProgress: false });
-    }
+    // The survival behaviors own nighttime movement. Restarting the goal
+    // after an encounter must not pull the body back to an exposed owner.
     while (night()) await sleep(350, ctx.signal);
     grant.state(phase, waitingFor?.reason || null, waitingFor?.missing);
   }

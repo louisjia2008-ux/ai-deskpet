@@ -15,7 +15,7 @@ const { createStance } = require('../stance');
 const { goals } = require('mineflayer-pathfinder');
 const { isSurveySurvivalItem } = require('../survey-plan-actions');
 
-const SURVEY_REFLEXES = new Set(['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block']);
+const SURVEY_REFLEXES = new Set(['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer']);
 const enabledDuringSurvey = ({ name }) => SURVEY_REFLEXES.has(name);
 const SURVEY_LEASH = 16;
 // Leave room for the body and braking at the edge of a planned route.
@@ -272,6 +272,7 @@ function incomingBlazeShot(bot, range = 10) {
 
 const { RISKY_FOODS } = defaultActions;
 const RANGED = new Set(['skeleton', 'stray', 'bogged']);
+const surveyBowUser = (name) => RANGED.has(name) || name === 'pillager' || name === 'illusioner';
 // Pillagers come in groups from outposts that keep spawning them: keep away.
 const AVOIDED = new Set(['pillager', 'vindicator', 'evoker', 'ravager']);
 // Piglin brutes ignore gold armour and hit for half a heart bar with their axe: keep clear of them too.
@@ -309,7 +310,8 @@ const FOOD_ANIMALS = ['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom'];
 const FEEDING_RANGE = 32;
 
 function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defaultSkills, isFood, spare = () => false,
-  feeding = () => false, home = () => null, activeGoal = () => null, surveyArea = () => null, thresholds = {} } = {}) {
+  feeding = () => false, home = () => null, activeGoal = () => null, surveyArea = () => null,
+  suppressDeathDrops = () => false, thresholds = {} } = {}) {
   // At night an archer is not chased far: out there more of them spawn, and
   // the way home to bed is the better defence.
   const t = { ghastRange: 48, escapeHealth: 6, healHealth: 10, escapeRange: 6, defendRange: 5, rangedRange: 14, nightRangedRange: 6, rangedHealth: 14, eatFood: 14,
@@ -358,16 +360,19 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   };
   bot.on?.('entityDead', onDead);
   const threats = (state) => state.hostiles.filter((h) => !calm(h) && !deaths.has(h.id));
-  // entityHurt names no attacker, so a mob counts as the culprit only if it
-  // swung its arm at melee range just before the hit; a skeleton arrow, a fall
-  // or fire next to a calm piglin must not turn the pack hostile.
+  // Legacy entityHurt has no source. For neutral mobs keep the arm-swing
+  // heuristic so nearby arrows, falls or fire do not turn the pack hostile.
   const swings = new Map(); // entity id -> time of last arm swing
+  let archerHit = null;
   const trackedNeutral = (e) => CALM_UNLESS_PROVOKED.has(e.name) || e.name === 'enderman';
   const onSwing = (entity) => {
     if (entity && trackedNeutral(entity)) swings.set(entity.id, Date.now());
   };
-  const onHurt = (entity) => {
+  const onHurt = (entity, source) => {
     if (entity !== bot.entity) return;
+    if (surveyArea() && source?.position && surveyBowUser(source.name)) {
+      archerHit = { source, until: Date.now() + 8000 };
+    }
     const here = bot.entity.position;
     const culprit = Object.values(bot.entities || {})
       .filter((e) => trackedNeutral(e) && e.position && e.position.distanceTo(here) <= 4
@@ -395,6 +400,16 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   const nearest = (state) => threats(state)[0] || null;
   // Chasing an archer bare-handed, or down into the cave it shoots from, loses.
   const armed = (state) => Object.keys(state.inventory).some((n) => n.endsWith('_sword') || n.endsWith('_axe'));
+  const surveyCanPursue = (area, position) => surveyDistance(area, position) <= SURVEY_ROUTE_RADIUS &&
+    surveyDistance(area, bot.entity.position) <= SURVEY_LEASH - 0.5;
+  const surveyAttack = (area, ctx, id) => withSurveyLeash(bot, area, () => actions.attack(bot, ctx, id,
+    { canPursue: (position) => surveyCanPursue(area, position) }));
+  const surveyAttacker = () => {
+    if (!surveyArea() || !archerHit || archerHit.until <= Date.now()) return null;
+    const { source } = archerHit;
+    if (deaths.has(source.id) || bot.entities?.[source.id] !== source) return null;
+    return source;
+  };
   // Melee anything close; go after archers only while healthy enough to close in.
   // A brute by the way home keeps coming back however often the bot runs.
   // Fled from five times in three minutes, it is fought instead, while
@@ -464,6 +479,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       // In the End an enderman teleports after anything that runs, and the
       // run ends in the void: fight it out there instead.
       if (threat.name === 'enderman' && dimensionOf(bot) === 'the_end') return 0;
+      if (surveyArea() && threat.distance > 8) return 0;
       return reading(state).stance === 'retreat' ? 1 : 0;
     },
     async run(ctx) {
@@ -528,9 +544,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       let result;
       try {
         if (area) {
-          const canPursue = (position) => surveyDistance(area, position) <= SURVEY_ROUTE_RADIUS &&
-            surveyDistance(area, bot.entity.position) <= SURVEY_LEASH - 0.5;
-          result = await withSurveyLeash(bot, area, () => actions.attack(bot, ctx, threat.id, { canPursue }));
+          result = await surveyAttack(area, ctx, threat.id);
         } else {
           result = await actions.attack(bot, ctx, threat.id, guarded() ? { yieldTo: guardSwitch(ctx, threat) } : undefined);
         }
@@ -1166,7 +1180,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   // Items dropped on death stay for five minutes: go back for them once it is safe.
   let lastDeath = null;
   const onDeathDrops = () => {
-    if (surveyArea()) { lastDeath = null; return; }
+    if (surveyArea() || suppressDeathDrops()) { lastDeath = null; return; }
     // Died in lava: whatever dropped burnt up, and going back is the same swim.
     const feet = bot.blockAt?.(bot.entity.position.floored());
     const burnt = /lava/.test(feet?.name || '');
@@ -1312,6 +1326,53 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   // hits for a heart and a half through fire resistance. A raised shield
   // takes them all: it was golden apples, then a death, without one.
   const hasShield = () => bot.inventory?.slots?.[45]?.name === 'shield' || bot.inventory?.items?.().some((i) => i.name === 'shield');
+  const surveyShield = () => [bot.inventory?.slots?.[45], ...bot.inventory.items()]
+    .find((item) => item?.name === 'shield' && safeSurveyItem(item));
+  const surveyArcher = {
+    name: 'survey_archer',
+    band: BAND.ESCAPE + 1,
+    want: () => (surveyAttacker() ? 1 : 0),
+    async run(ctx) {
+      const area = surveyArea();
+      const shooter = surveyAttacker();
+      if (!area || !shooter) return { ok: true };
+      const here = bot.entity.position;
+      const distance = here.distanceTo(shooter.position);
+      if (armed(ctx.perceive()) && (distance <= 3 || surveyCanPursue(area, shooter.position))) {
+        ctx.record('survey_archer_response', { mob: shooter.name, action: 'approach', distance });
+        const fought = await surveyAttack(area, ctx, shooter.id);
+        if (fought.ok || !surveyAttacker()) return fought;
+      }
+
+      // A shooter outside the leash can still hit the site. Raise the shield
+      // before its next shot rather than waiting until an arrow is in flight.
+      const shield = surveyShield();
+      if (shield) {
+        ctx.record('survey_archer_response', { mob: shooter.name, action: 'shield', distance });
+        if (bot.inventory.slots?.[45] !== shield) await bot.equip(shield, 'off-hand');
+        if (ctx.signal?.aborted) throw abortError(ctx.signal);
+        await bot.lookAt(shooter.position.offset(0, 1.3, 0), true);
+        if (ctx.signal?.aborted) throw abortError(ctx.signal);
+        try {
+          bot.activateItem(true);
+          for (let i = 0; i < 25 && surveyAttacker() === shooter; i += 1) {
+            await bot.lookAt(shooter.position.offset(0, 1.3, 0), true);
+            await sleep(100, ctx.signal);
+          }
+        } finally {
+          bot.deactivateItem();
+        }
+        return { ok: true };
+      }
+
+      ctx.record('survey_archer_response', { mob: shooter.name, action: 'withdraw', distance });
+      const goal = new goals.GoalCompositeAll([
+        new goals.GoalInvert(new goals.GoalNearXZ(shooter.position.x, shooter.position.z, 16)),
+        new goals.GoalNearXZ(area.x, area.z, SURVEY_ROUTE_RADIUS - 1),
+      ]);
+      return withSurveyLeash(bot, area, () => actions.goTo(bot, ctx, goal, { timeoutMs: 4000, retryNoProgress: false }));
+    },
+  };
   const incomingShieldThreat = (range) => (surveyArea() && incomingArrow(bot))
     || (!hasEffect(bot, 'FireResistance') && incomingBlazeShot(bot, range));
   const block = {
@@ -1395,7 +1456,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   };
   deflect.dispose = disposeNether;
 
-  return [quench, leaveLava, leaveFire, unbury, heal, escape, breathe, deflect, block, hide, defend, cover, avoid, eat, provision, recover, recoverDrops];
+  return [quench, leaveLava, leaveFire, unbury, heal, escape, breathe, deflect, block, surveyArcher, hide, defend, cover, avoid, eat, provision, recover, recoverDrops];
 }
 
 module.exports = { createSurvivalBehaviors, enabledDuringSurvey };

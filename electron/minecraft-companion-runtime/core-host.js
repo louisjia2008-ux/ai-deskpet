@@ -234,7 +234,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
           const { createSurveyInventory } = require('./core/survey-supplies');
           const supplyInventory = surveyInventories.get(reservation.inventoryKey) ?? createSurveyInventory(next);
           surveyInventories.set(reservation.inventoryKey, supplyInventory);
-          const goal = createSurveyPlanGoal({ bot: next, plan, grant, supplyInventory, ownerName: nextConfig.ownerName || null });
+          const goal = createSurveyPlanGoal({ bot: next, plan, grant, supplyInventory });
           await reservation.engine.startSurveyPlan(grant, goal, { taskId: task.taskId });
         },
         async onStop(grant, { status, reason }) {

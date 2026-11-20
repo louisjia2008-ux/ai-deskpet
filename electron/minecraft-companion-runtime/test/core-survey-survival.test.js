@@ -6,6 +6,7 @@ const { setImmediate: nextTurn } = require('node:timers/promises');
 const { test } = require('node:test');
 const { Vec3 } = require('vec3');
 const { createBrain, BAND } = require('../core/brain');
+const { createCompanion } = require('../core/companion');
 const { createSurvivalBehaviors, enabledDuringSurvey } = require('../core/behaviors/survival');
 const { sleep } = require('../core/confirm');
 
@@ -25,9 +26,9 @@ function setup(items = []) {
 }
 
 test('survey only schedules non-mutating reflexes and joins one action before restarting construction', async () => {
-  assert.deepEqual(['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block',
+  assert.deepEqual(['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer',
     'night_rest', 'danger_bunker', 'unstick', 'unbury', 'recover_drops', 'provision', 'home_maintenance']
-    .filter((name) => enabledDuringSurvey({ name })), ['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block']);
+    .filter((name) => enabledDuringSurvey({ name })), ['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer']);
   const runs = [];
   let threatened = false;
   const brain = createBrain({
@@ -123,12 +124,80 @@ test('survey hunger uses a safe owned food item and waits for server-visible foo
   assert.equal(bread.count, 1);
 });
 
-test('survey death leaves material recovery to the paused site instead of launching recover_drops', () => {
-  let area = site;
+test('survey responds to the real archer at low health and shields against a shooter outside the leash', async () => {
   const bot = setup();
-  const recover = createSurvivalBehaviors({ bot, surveyArea: () => area }).find(({ name }) => name === 'recover_drops');
-  bot.emit('death');
+  const nearbySpider = { id: 1, name: 'spider', distance: 3, position: origin.offset(0, 0, 3) };
+  const shooter = { id: 2, name: 'skeleton', position: origin.offset(12, 0, 0) };
+  bot.entities = { [nearbySpider.id]: nearbySpider, [shooter.id]: shooter };
+  bot.pathfinder = { movements: { companionWalkOnly: true, getNeighbors: () => [] } };
+  const state = { alive: true, health: 4, food: 20, position: origin, hostiles: [nearbySpider], inventory: { iron_sword: 1 } };
+  let area = site;
+  const calls = [];
+  const behaviors = createSurvivalBehaviors({ bot, surveyArea: () => area, actions: {
+    async attack(_bot, _ctx, id, { canPursue }) {
+      assert.equal(id, shooter.id);
+      assert.equal(canPursue(shooter.position), true);
+      calls.push('attack');
+      return { ok: true };
+    },
+  } });
+  const archer = behaviors.find(({ name }) => name === 'survey_archer');
+  assert.equal(archer.want(state), 0);
+  bot.emit('entityHurt', bot.entity, shooter);
+  assert.ok(archer.band > behaviors.find(({ name }) => name === 'escape').band);
+  assert.equal(archer.want(state), 1);
+  await archer.run(context(state));
+
+  shooter.position = origin.offset(18, 0, 0);
+  bot.inventory.slots[45] = { name: 'shield' };
+  const controller = new AbortController();
+  bot.lookAt = async (point) => { assert.equal(point.x, shooter.position.x); };
+  bot.activateItem = (offhand) => {
+    assert.equal(offhand, true);
+    calls.push('shield');
+    controller.abort('test_stop');
+  };
+  bot.deactivateItem = () => calls.push('release');
+  await assert.rejects(archer.run({ ...context(state), signal: controller.signal }), { code: 'aborted' });
+  assert.deepEqual(calls, ['attack', 'shield', 'release']);
   area = null;
-  bot.emit('spawn');
-  assert.equal(recover.want({ health: 20, food: 20, position: origin, hostiles: [], inventory: {} }), 0);
+  assert.equal(archer.want(state), 0);
 });
+
+for (const deathFirst of [true, false]) {
+  test(`survey death suppresses drop recovery when ${deathFirst ? 'Minecraft death' : 'Mod revocation'} arrives first`, async () => {
+    const bot = Object.assign(setup(), {
+      health: 20,
+      food: 20,
+      time: { timeOfDay: 1000 },
+      registry: require('prismarine-registry')('1.21.8'),
+      _client: { write() {} },
+      pathfinder: { setMovements(movements) { this.movements = movements; }, setGoal() {} },
+    });
+    const originalWrite = bot._client.write;
+    const events = [];
+    const companion = createCompanion({ bot, tickMs: 60000, onEvent: (event) => events.push(event) });
+    const grant = new AbortController();
+    const death = () => { bot.health = 0; bot.emit('death'); };
+    try {
+      await companion.prepareSurveyPlan({ selection: { minX: 0, maxX: 6, minZ: 0, maxZ: 6 }, ops: [] }, grant);
+      if (deathFirst) death();
+      grant.abort('bot_died');
+      await companion.stopSurveyPlan(grant, 'bot_died');
+      assert.equal(bot._client.write, originalWrite);
+      if (!deathFirst) death();
+      bot.health = 20;
+      bot.emit('spawn');
+      await companion.brain.tick();
+      assert.equal(events.some((event) => event.behavior === 'recover_drops'), false);
+
+      death();
+      bot.health = 20;
+      bot.emit('spawn');
+      await companion.brain.tick();
+      assert.equal(events.some((event) => event.type === 'behavior_started' && event.behavior === 'recover_drops'), true);
+    } finally {
+      await companion.dispose();
+    }
+  });
+}
