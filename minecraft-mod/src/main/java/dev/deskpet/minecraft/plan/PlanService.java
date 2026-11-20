@@ -72,7 +72,7 @@ public final class PlanService {
         PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {
             if (world instanceof ServerWorld serverWorld && player instanceof ServerPlayerEntity serverPlayer
                 && config.enabled() && config.isBot(serverPlayer)) {
-                footprint(pos, state, null).forEach((block, before) -> observeChange(serverWorld, serverPlayer, block, before));
+                footprint(pos, state).forEach((block, before) -> observeChange(serverWorld, serverPlayer, block, before));
             }
         });
         WandInteractions.authorization(new WandInteractions.Authorization() {
@@ -137,10 +137,8 @@ public final class PlanService {
         if (plan.document.getAsJsonArray("conflicts").size() > 0) {
             return deny(store, plan, id, "confirm", "preview_conflicts");
         }
-        String hash = PlanCompiler.snapshotHash(world, plan.document.getAsJsonObject("selection"));
-        if (!hash.equals(plan.document.get("snapshotHash").getAsString())) {
-            return deny(store, plan, id, "confirm", "snapshot_changed");
-        }
+        String conflict = firstSiteConflict(world, plan);
+        if (conflict != null) return deny(store, plan, id, "confirm", conflict);
         return issue(server, store, plan, "confirm");
     }
 
@@ -164,23 +162,12 @@ public final class PlanService {
         if (error == null) error = contextCheck(world, plan);
         if (error != null) return deny(store, plan, id, "resume", error);
         if (plan.status != PAUSED) return deny(store, plan, id, "resume", "not_paused");
-        for (var target : plan.finalTargets.entrySet()) {
-            var pos = target.getKey();
-            var next = plan.next(pos);
-            String expected = next == null ? target.getValue() : next.expect();
-            String actual = PlanCompiler.stateName(world.getBlockState(pos));
-            if (!actual.equals(expected)) {
-                return deny(store, plan, id, "resume", mismatch(pos, expected, actual));
-            }
-        }
-        if (!matches(world, plan.protectedBaseline)) {
-            return deny(store, plan, id, "resume", "protected_block_changed");
-        }
+        String conflict = firstSiteConflict(world, plan);
+        if (conflict != null) return deny(store, plan, id, "resume", conflict);
 
         var revised = plan.document.deepCopy();
         revised.addProperty("revision", revised.get("revision").getAsInt() + 1);
         revised.add("ops", plan.remaining());
-        revised.addProperty("snapshotHash", PlanCompiler.snapshotHash(world, revised.getAsJsonObject("selection")));
         revised.addProperty("expiresAt", System.currentTimeMillis() + PREVIEW_MILLIS);
         revised.remove("planHash");
         revised.addProperty("planHash", PlanCompiler.sha256(revised));
@@ -237,7 +224,6 @@ public final class PlanService {
             case "wrong_world" -> "计划属于另一个世界";
             case "wrong_dimension" -> "请回到计划所在维度";
             case "preview_expired" -> "预览已过期，请重新预览";
-            case "snapshot_changed" -> "现场已变化，请重新预览";
             case "overlapping_plan" -> "已有进行中的计划和此选区重叠";
             case "bot_busy" -> "机器人正在处理另一份计划";
             case "bot_unavailable" -> "机器人尚未连接计划频道";
@@ -471,10 +457,10 @@ public final class PlanService {
             return;
         }
         if (type.equals("accept")) {
-            String snapshot = PlanCompiler.snapshotHash(world, plan.document.getAsJsonObject("selection"));
-            if (!snapshot.equals(plan.document.get("snapshotHash").getAsString())) {
+            String conflict = firstSiteConflict(world, plan);
+            if (conflict != null) {
                 plan.siteChanges++;
-                revoke(server, store, plan, PAUSED, "snapshot_changed", true);
+                revoke(server, store, plan, PAUSED, conflict, true);
                 return;
             }
             plan.status = RUNNING;
@@ -511,41 +497,47 @@ public final class PlanService {
         return reasonLabel(reason);
     }
 
+    private static String firstSiteConflict(ServerWorld world, SurveyPlan plan) {
+        return PlanCompiler.firstSiteConflict(world, plan.document, plan.remaining(), plan.finalTargets, plan.protectedBaseline);
+    }
+
     private static boolean allowBreak(ServerWorld world, ServerPlayerEntity player, BlockPos pos, BlockState state) {
         if (!config.enabled() || !config.isBot(player)) return true;
-        return allowed(world, player, "break", pos,
-            footprint(pos, state, "minecraft:air"), Map.of(pos, PlanCompiler.stateName(state)), false);
-    }
-
-    public static Map<BlockPos, String> checkPlacement(ServerWorld world, ServerPlayerEntity player, BlockPos pos,
-                                                       BlockState state, boolean custom) {
-        if (!config.enabled() || !config.isBot(player)) return Map.of();
-        var targets = footprint(pos, state, null);
-        var before = new LinkedHashMap<BlockPos, String>();
-        targets.keySet().forEach(block -> before.put(block, PlanCompiler.stateName(world.getBlockState(block))));
-        return allowed(world, player, "place", pos, targets, before, custom) ? before : null;
-    }
-
-    private static Map<BlockPos, String> footprint(BlockPos pos, BlockState state, String change) {
         var targets = new LinkedHashMap<BlockPos, String>();
-        targets.put(pos, change == null ? PlanCompiler.stateName(state) : change);
+        footprint(pos, state).keySet().forEach(block -> targets.put(block, "minecraft:air"));
+        return allowed(world, player, "break", pos, targets, false);
+    }
+
+    public static Map<BlockPos, BlockState> checkPlacement(ServerWorld world, ServerPlayerEntity player, BlockPos pos,
+                                                          BlockState state, boolean custom) {
+        if (!config.enabled() || !config.isBot(player)) return Map.of();
+        var targets = new LinkedHashMap<BlockPos, String>();
+        var before = new LinkedHashMap<BlockPos, BlockState>();
+        footprint(pos, state).forEach((block, target) -> {
+            targets.put(block, PlanCompiler.stateName(target));
+            before.put(block, world.getBlockState(block));
+        });
+        return allowed(world, player, "place", pos, targets, custom) ? before : null;
+    }
+
+    private static Map<BlockPos, BlockState> footprint(BlockPos pos, BlockState state) {
+        var targets = new LinkedHashMap<BlockPos, BlockState>();
+        targets.put(pos, state);
         if (state.getBlock() instanceof DoorBlock || state.getBlock() instanceof TallPlantBlock) {
             var half = state.get(DoorBlock.HALF);
             var other = half == DoubleBlockHalf.LOWER ? DoubleBlockHalf.UPPER : DoubleBlockHalf.LOWER;
-            targets.put(half == DoubleBlockHalf.LOWER ? pos.up() : pos.down(),
-                change == null ? PlanCompiler.stateName(state.with(DoorBlock.HALF, other)) : change);
+            targets.put(half == DoubleBlockHalf.LOWER ? pos.up() : pos.down(), state.with(DoorBlock.HALF, other));
         } else if (state.getBlock() instanceof BedBlock) {
             var part = state.get(BedBlock.PART);
             var other = part == BedPart.FOOT ? BedPart.HEAD : BedPart.FOOT;
             var facing = state.get(BedBlock.FACING);
-            targets.put(pos.offset(part == BedPart.FOOT ? facing : facing.getOpposite()),
-                change == null ? PlanCompiler.stateName(state.with(BedBlock.PART, other)) : change);
+            targets.put(pos.offset(part == BedPart.FOOT ? facing : facing.getOpposite()), state.with(BedBlock.PART, other));
         }
         return targets;
     }
 
     private static boolean allowed(ServerWorld world, ServerPlayerEntity player, String action, BlockPos origin,
-                                   Map<BlockPos, String> targets, Map<BlockPos, String> observed, boolean custom) {
+                                   Map<BlockPos, String> targets, boolean custom) {
         if (!config.enabled() || !config.isBot(player)) return true;
         var server = world.getServer();
         var store = PlanStore.get(server);
@@ -585,13 +577,23 @@ public final class PlanService {
         for (var target : targets.entrySet()) {
             var pos = target.getKey();
             var op = matching.next(pos);
-            if (op == null || !op.target().equals(target.getValue())) {
+            if (op == null) {
                 return rejectChange(store, matching, action, pos, "outside_authorized_operations", BlockDenial.VIOLATION);
             }
-            String actual = observed.containsKey(pos) ? observed.get(pos) : PlanCompiler.stateName(world.getBlockState(pos));
-            if (!actual.equals(op.expect())) {
-                revoke(server, store, matching, PAUSED, mismatch(pos, op.expect(), actual), true);
+            var current = world.getBlockState(pos);
+            if (!PlanCompiler.matchesExpect(world, pos, op.kind(), op.expect(), current)) {
+                revoke(server, store, matching, PAUSED, mismatch(pos, op.expect(), PlanCompiler.stateName(current)), true);
                 return rejectChange(store, matching, action, pos, "expected_block_changed", BlockDenial.SITE_CHANGE);
+            }
+            if (!PlanCompiler.matchesState(op.target(), target.getValue())) {
+                return rejectChange(store, matching, action, pos, "outside_authorized_operations", BlockDenial.VIOLATION);
+            }
+            if (target.getValue().equals("minecraft:air") && !current.isAir()) {
+                String conflict = PlanCompiler.removalConflict(world, matching.document, pos, targets::containsKey);
+                if (conflict != null) {
+                    revoke(server, store, matching, PAUSED, conflict, true);
+                    return rejectChange(store, matching, action, pos, "expected_block_changed", BlockDenial.SITE_CHANGE);
+                }
             }
         }
         return true;
@@ -604,19 +606,21 @@ public final class PlanService {
         return null;
     }
 
-    public static void observePlacement(ServerWorld world, ServerPlayerEntity player, Map<BlockPos, String> changes) {
+    public static void observePlacement(ServerWorld world, ServerPlayerEntity player, Map<BlockPos, BlockState> changes) {
         changes.forEach((pos, before) -> observeChange(world, player, pos, before));
     }
 
-    private static void observeChange(ServerWorld world, ServerPlayerEntity player, BlockPos pos, String before) {
+    private static void observeChange(ServerWorld world, ServerPlayerEntity player, BlockPos pos, BlockState before) {
         if (!config.enabled() || !config.isBot(player)) return;
         var server = world.getServer();
         var store = PlanStore.get(server);
         for (var plan : store.plans.values()) {
             if (plan.status != RUNNING || !player.getUuid().equals(plan.botUuid) || !plan.dimension.equals(dimension(world))) continue;
             var operation = plan.next(pos);
-            if (operation == null || !operation.expect().equals(before)
-                || !operation.target().equals(PlanCompiler.stateName(world.getBlockState(pos)))) continue;
+            if (operation == null || !PlanCompiler.matchesState(operation.target(), world.getBlockState(pos))) continue;
+            // Authorization checked the original state before the write. At this point,
+            // the live world has already changed (including any connected tree blocks).
+            if (before.equals(world.getBlockState(pos))) continue;
             plan.consumed.merge(pos.toImmutable(), 1, Integer::sum);
             store.markDirty();
             finishIfDone(world, store, plan);
@@ -628,18 +632,22 @@ public final class PlanService {
         var server = world.getServer();
         if (plan.violations > 0) {
             revoke(server, store, plan, FAILED, "outside_authorized_operations", true);
-        } else if (!matches(world, plan.protectedBaseline) || !matches(world, plan.finalTargets)) {
-            plan.siteChanges++;
-            String reason = matches(world, plan.protectedBaseline) ? "server_final_state_changed" : "protected_block_changed";
-            revoke(server, store, plan, PAUSED, reason, true);
         } else {
-            revoke(server, store, plan, COMPLETED, "", true);
+            boolean protectedMatches = matches(world, plan.protectedBaseline);
+            boolean targetsMatch = matches(world, plan.finalTargets);
+            if (protectedMatches && targetsMatch) {
+                revoke(server, store, plan, COMPLETED, "", true);
+                return;
+            }
+            plan.siteChanges++;
+            String reason = protectedMatches ? "server_final_state_changed" : "protected_block_changed";
+            revoke(server, store, plan, PAUSED, reason, true);
         }
     }
 
     private static boolean matches(ServerWorld world, Map<BlockPos, String> expected) {
         return expected.entrySet().stream().allMatch(entry ->
-            entry.getValue().equals(PlanCompiler.stateName(world.getBlockState(entry.getKey()))));
+            PlanCompiler.matchesState(entry.getValue(), world.getBlockState(entry.getKey())));
     }
 
     private static String mismatch(BlockPos pos, String expected, String actual) {

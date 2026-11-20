@@ -1,6 +1,7 @@
 package dev.deskpet.minecraft.wand;
 
 import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.registry.Registries;
 import net.minecraft.state.property.Properties;
 import net.minecraft.util.math.BlockPos;
@@ -29,24 +30,33 @@ final class TerrainRules {
     }
 
     static boolean naturalGround(BlockState state) {
-        return NATURAL_GROUND.contains(id(state));
+        return isVanilla(state) && NATURAL_GROUND.contains(id(state));
     }
 
     static boolean plant(BlockState state) {
-        return NATURAL_PLANTS.contains(id(state));
+        return isVanilla(state) && NATURAL_PLANTS.contains(id(state));
     }
 
-    static boolean unsafeToFill(BlockState state) {
-        return !state.getFluidState().isEmpty() || !state.isAir();
+    static boolean naturalToClear(BlockState state) {
+        return !state.hasBlockEntity() && (naturalGround(state) || plant(state) || naturalLeaves(state));
+    }
+
+    static boolean replaceableForBuild(BlockState state) {
+        return state.getFluidState().isEmpty() &&
+            (state.isAir() || state.isOf(Blocks.SNOW) || plant(state) && state.isReplaceable());
     }
 
     static boolean log(BlockState state) {
         String id = id(state);
-        return id.endsWith("_log") && !id.startsWith("stripped_");
+        return isVanilla(state) && id.endsWith("_log") && !id.startsWith("stripped_");
     }
 
     static boolean leaves(BlockState state) {
-        return state.contains(Properties.PERSISTENT) && id(state).endsWith("_leaves");
+        return isVanilla(state) && state.contains(Properties.PERSISTENT) && id(state).endsWith("_leaves");
+    }
+
+    private static boolean isVanilla(BlockState state) {
+        return Registries.BLOCK.getId(state.getBlock()).getNamespace().equals("minecraft");
     }
 
     static boolean naturalLeaves(BlockState state) {

@@ -25,7 +25,7 @@ public abstract class BlockItemPlanGuard {
     @WrapOperation(method = "place(Lnet/minecraft/item/ItemPlacementContext;)Lnet/minecraft/util/ActionResult;",
         at = @At(value = "INVOKE", target = "Lnet/minecraft/item/BlockItem;place(Lnet/minecraft/item/ItemPlacementContext;Lnet/minecraft/block/BlockState;)Z"))
     private boolean deskpet$checkPlacement(BlockItem item, ItemPlacementContext context, BlockState target,
-                                            Operation<Boolean> place, @Share("deskpetChanges") LocalRef<Map<BlockPos, String>> previous) {
+                                            Operation<Boolean> place, @Share("deskpetChanges") LocalRef<Map<BlockPos, BlockState>> previous) {
         if (context.getWorld() instanceof ServerWorld world && context.getPlayer() instanceof ServerPlayerEntity player) {
             boolean custom = context.getStack().contains(DataComponentTypes.BLOCK_STATE)
                 || context.getStack().contains(DataComponentTypes.BLOCK_ENTITY_DATA);
@@ -39,7 +39,7 @@ public abstract class BlockItemPlanGuard {
     @Inject(method = "place(Lnet/minecraft/item/ItemPlacementContext;)Lnet/minecraft/util/ActionResult;",
         at = @At("RETURN"))
     private void deskpet$observePlacement(ItemPlacementContext context, CallbackInfoReturnable<ActionResult> result,
-                                          @Share("deskpetChanges") LocalRef<Map<BlockPos, String>> previous) {
+                                          @Share("deskpetChanges") LocalRef<Map<BlockPos, BlockState>> previous) {
         var changes = previous.get();
         if (changes != null && !changes.isEmpty() && result.getReturnValue().isAccepted()
             && context.getWorld() instanceof ServerWorld world && context.getPlayer() instanceof ServerPlayerEntity player) {

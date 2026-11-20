@@ -24,9 +24,9 @@ final class SurveyPlan {
         }
     }
 
-    record Operation(BlockPos pos, String expect, String target) {
+    record Operation(BlockPos pos, String kind, String expect, String target) {
         static Operation read(JsonObject object) {
-            return new Operation(readPosition(object.getAsJsonObject("pos")),
+            return new Operation(readPosition(object.getAsJsonObject("pos")), object.get("kind").getAsString(),
                 object.get("expect").getAsString(), object.get("target").getAsString());
         }
     }

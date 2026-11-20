@@ -1,6 +1,7 @@
 package dev.deskpet.minecraft.wand;
 
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.minecraft.Bootstrap;
@@ -25,6 +26,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PlanCompilerTest {
@@ -198,6 +200,67 @@ class PlanCompilerTest {
             .plan().get("snapshotHash");
         assertNotEquals(before, inside);
         assertNotEquals(before, outside);
+    }
+
+    @Test
+    void recheckAcceptsNaturalChangesAndReadsOnlyTheNextOperationAtEachPosition() {
+        BlockPos fill = new BlockPos(6, 62, 6);
+        BlockPos cut = new BlockPos(6, 64, 7);
+        BlockPos crop = new BlockPos(-2, 64, 0);
+        var world = new Ground().put(fill.up(), Blocks.AIR.getDefaultState()).put(fill, Blocks.AIR.getDefaultState())
+            .put(cut, Blocks.DIRT.getDefaultState()).put(crop, Blocks.WHEAT.getDefaultState());
+        var plan = compile(world).plan();
+        world.put(fill, Blocks.SHORT_GRASS.getDefaultState()).put(cut, Blocks.GRASS_BLOCK.getDefaultState())
+            .put(crop, Blocks.WHEAT.getDefaultState().with(Properties.AGE_7, 7));
+        assertNull(siteConflict(world, plan));
+        world.put(fill, Blocks.SNOW.getDefaultState());
+        assertNull(siteConflict(world, plan));
+        world.put(fill, Blocks.WATER.getDefaultState());
+        assertTrue(siteConflict(world, plan).contains("expected_block_changed"));
+    }
+
+    @Test
+    void recheckFindsNewAttachmentFluidFallingColumnBoundaryTreeAndProtectedBlock() {
+        BlockPos edge = new BlockPos(0, 64, 6);
+        var before = new Ground().put(edge, Blocks.DIRT.getDefaultState());
+        var plan = compile(before).plan();
+        var addedTorch = new Ground().put(edge, Blocks.DIRT.getDefaultState()).put(edge.west(),
+            Blocks.WALL_TORCH.getDefaultState().with(Properties.HORIZONTAL_FACING, Direction.WEST));
+        assertTrue(siteConflict(addedTorch, plan).contains("outside_attachment"));
+        var addedFluid = new Ground().put(edge, Blocks.DIRT.getDefaultState()).put(edge.west(), Blocks.LAVA.getDefaultState());
+        assertTrue(siteConflict(addedFluid, plan).contains("adjacent_fluid"));
+        var addedSand = new Ground().put(edge, Blocks.DIRT.getDefaultState()).put(edge.up(), Blocks.SAND.getDefaultState());
+        assertTrue(siteConflict(addedSand, plan).contains("falling_column"));
+        var crossedTree = new Ground().put(edge, Blocks.OAK_LOG.getDefaultState()).put(edge.west(),
+            Blocks.OAK_LEAVES.getDefaultState().with(Properties.PERSISTENT, false));
+        assertTrue(siteConflict(crossedTree, plan).contains("cross_boundary_tree"));
+        var addedPlank = new Ground().put(edge, Blocks.OAK_PLANKS.getDefaultState());
+        assertTrue(siteConflict(addedPlank, plan).contains("protected_block_changed"));
+    }
+
+    @Test
+    void opensAreIgnoredForCompletedAndProtectedStatesButOrientationStillMatters() {
+        var plan = compile(new Ground()).plan();
+        BlockPos door = new BlockPos(5, 64, 6);
+        BlockPos barrel = door.east();
+        BlockState originalDoor = Blocks.OAK_DOOR.getDefaultState();
+        BlockState openDoor = originalDoor.with(Properties.OPEN, true);
+        BlockState closedBarrel = Blocks.BARREL.getDefaultState();
+        BlockState openBarrel = closedBarrel.with(Properties.OPEN, true);
+        var world = new Ground().put(door, openDoor).put(barrel, openBarrel);
+        var finalTargets = Map.of(door, PlanCompiler.stateName(originalDoor));
+        var protectedBaseline = Map.of(barrel, PlanCompiler.stateName(closedBarrel));
+        assertTrue(PlanCompiler.isOpenToggle(originalDoor, openDoor));
+        assertNull(PlanCompiler.firstSiteConflict(world, plan, new JsonArray(), finalTargets, protectedBaseline));
+        BlockState wrongDoor = openDoor.cycle(Properties.HORIZONTAL_FACING);
+        assertFalse(PlanCompiler.isOpenToggle(originalDoor, wrongDoor));
+        world.put(door, wrongDoor);
+        assertTrue(PlanCompiler.firstSiteConflict(world, plan, new JsonArray(), finalTargets, protectedBaseline)
+            .contains("expected_block_changed"));
+    }
+
+    private static String siteConflict(Ground ground, JsonObject plan) {
+        return PlanCompiler.firstSiteConflict(ground, plan, plan.getAsJsonArray("ops"), Map.of(), Map.of());
     }
 
     private static void verifyExpectations(PlanCompiler.Result result) {
