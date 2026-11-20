@@ -78,10 +78,11 @@ test('refuses a changed Mod before downloads and cannot start from an unavailabl
 
 test('disabling during first provisioning aborts it and persists the stop', async () => {
   const { root, managed, server } = await fixture(true);
+  let fetchCount = 0;
   let observeFetch: () => void = () => undefined;
   const fetching = new Promise<void>(resolve => { observeFetch = resolve; });
   vi.stubGlobal('fetch', (_url: string, init: { signal: AbortSignal }) => {
-    observeFetch();
+    if (++fetchCount === 4) observeFetch();
     return new Promise<Response>((_resolve, reject) => {
       if (init.signal.aborted) reject(init.signal.reason);
       else init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
@@ -93,6 +94,7 @@ test('disabling during first provisioning aborts it and persists the stop', asyn
     const stopped = server.setSettings({ enabled: false });
     await starting;
     expect(await stopped).toMatchObject({ status: 'stopped', settings: { enabled: false } });
+    expect(fetchCount).toBe(4);
     await expect(stat(join(managed, 'server-pid.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await server.dispose();

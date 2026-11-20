@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { lstat, mkdir, readdir, readFile, rename, rm } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { lstat, mkdir, open, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import serverArtifacts from '../../../../minecraft-mod/scripts/server-artifacts.json';
@@ -71,8 +72,58 @@ export async function assertChecksum(path: string, algorithm: 'sha1' | 'sha256',
 }
 
 const MAX_JAR_BYTES = 80 * 1024 * 1024;
+const DOWNLOAD_CONCURRENCY = 4;
+const DOWNLOAD_TIMEOUT_MS = 180_000;
+const RETRY_DELAYS_MS = [350, 1000];
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-async function ensureDownload(file: string, url: string, algorithm: 'sha1' | 'sha256', expected: string, signal: AbortSignal, size?: number): Promise<void> {
+class RetryableDownloadError extends Error {}
+
+async function openArtifactBody(url: string, signal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
+  let target = new URL(url);
+  for (let hops = 0; hops <= 5; hops++) {
+    if (target.protocol !== 'https:' || target.username || target.password) throw new Error('Minecraft artifact download requires HTTPS without credentials.');
+    let response: Response;
+    try {
+      response = await fetch(target.href, { signal, redirect: 'manual' });
+    } catch (error) {
+      throw new RetryableDownloadError('Minecraft artifact connection failed.', { cause: error });
+    }
+    if (response.ok && response.body) return response.body;
+    // Release the unused response before following a redirect or retrying.
+    await response.body?.cancel().catch(() => undefined);
+    const status = response.status;
+    if (REDIRECT_STATUSES.has(status)) {
+      const location = response.headers.get('location');
+      if (!location || hops === 5) throw new Error('Minecraft artifact download has an invalid redirect.');
+      target = new URL(location, target);
+    } else if (status === 408 || status === 429 || (status >= 500 && status < 600)) {
+      throw new RetryableDownloadError(`Minecraft artifact download failed (HTTP ${status}).`);
+    } else throw new Error(`Minecraft artifact download failed (HTTP ${status}).`);
+  }
+  throw new Error('Minecraft artifact download has too many redirects.');
+}
+
+async function* limitedBody(body: ReadableStream<Uint8Array>, limit: number) {
+  const reader = body.getReader();
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read().catch((error: unknown) => {
+        throw new RetryableDownloadError('Minecraft artifact download was interrupted.', { cause: error });
+      });
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > limit) throw new Error('Minecraft artifact exceeds its download limit.');
+      yield value;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+export async function ensureDownload(file: string, url: string, algorithm: 'sha1' | 'sha256', expected: string, signal: AbortSignal, size?: number): Promise<void> {
   const directory = dirname(file);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const prefix = `${basename(file)}.download-`;
@@ -88,33 +139,33 @@ async function ensureDownload(file: string, url: string, algorithm: 'sha1' | 'sh
     // Refuse a modified cached artifact. Atomic downloads never leave an incomplete final file.
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  const temporary = `${file}.download-${randomUUID()}`;
-  const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(180_000)]);
-  try {
-    const response = await fetch(url, { signal: requestSignal });
-    if (!response.ok || !response.body || new URL(response.url).protocol !== 'https:') {
-      throw new Error(`Minecraft artifact download failed (${response.status}, ${basename(file)}).`);
-    }
-    let bytes = 0;
-    const body = response.body;
-    const limited = async function* () {
-      const reader = body.getReader();
+  for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
+    const temporary = `${file}.download-${randomUUID()}`;
+    const timeout = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+    const requestSignal = AbortSignal.any([signal, timeout]);
+    try {
+      // Open before piping so an early body failure cannot create a file after cleanup.
+      const output = await open(temporary, 'wx', 0o600);
       try {
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          bytes += value.byteLength;
-          if (bytes > (size ?? MAX_JAR_BYTES)) throw new Error(`Minecraft artifact exceeds its download limit (${basename(file)}).`);
-          yield value;
-        }
-      } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
-    };
-    await pipeline(limited(), createWriteStream(temporary, { flags: 'wx', mode: 0o600 }), { signal: requestSignal });
-    await assertChecksum(temporary, algorithm, expected, requestSignal, size);
-    await rename(temporary, file);
-  } catch (error) {
-    throw new Error(`Could not provision ${basename(file)}. ${error instanceof Error ? error.message : ''}`, { cause: error });
-  } finally { await rm(temporary, { force: true }); }
+        const body = await openArtifactBody(url, requestSignal);
+        await pipeline(limitedBody(body, size ?? MAX_JAR_BYTES), output.createWriteStream(), { signal: requestSignal });
+      } finally { await output.close(); }
+      await assertChecksum(temporary, algorithm, expected, signal, size);
+      signal.throwIfAborted();
+      await rename(temporary, file);
+      return;
+    } catch (error) {
+      signal.throwIfAborted();
+      const timedOut = timeout.aborted && (error instanceof RetryableDownloadError || (error instanceof Error && error.name === 'AbortError'));
+      const retryIn = RETRY_DELAYS_MS[attempt];
+      if (retryIn === undefined || !(error instanceof RetryableDownloadError || timedOut)) {
+        const detail = timedOut ? 'Minecraft artifact download timed out.' : error instanceof Error ? error.message : '';
+        throw new Error(`Could not provision ${basename(file)}. ${detail}`, { cause: error });
+      }
+    } finally { await rm(temporary, { force: true }); }
+    await delay(RETRY_DELAYS_MS[attempt], undefined, { signal });
+  }
 }
 
 /** Never inherit JVM injection variables, model provider credentials or an arbitrary PATH. */
@@ -160,13 +211,20 @@ export async function prepareDedicatedRuntime(root: string, directory: string, s
   const group = new AbortController();
   const operation = AbortSignal.any([group.signal, signal]);
   const tasks = [
-    ensureDownload(archive, pkg.url, 'sha256', pkg.sha256, operation, pkg.size),
-    ensureDownload(join(directory, 'server.jar'), mojang.url, 'sha1', MOJANG_SERVER_SHA1, operation, MOJANG_SERVER_BYTES),
+    () => ensureDownload(archive, pkg.url, 'sha256', pkg.sha256, operation, pkg.size),
+    () => ensureDownload(join(directory, 'server.jar'), mojang.url, 'sha1', MOJANG_SERVER_SHA1, operation, MOJANG_SERVER_BYTES),
     ...serverArtifacts.filter(artifact => artifact !== mojang)
-      .map(artifact => ensureDownload(join(directory, artifact.path), artifact.url, 'sha256', artifact.sha256, operation)),
+      .map(artifact => () => ensureDownload(join(directory, artifact.path), artifact.url, 'sha256', artifact.sha256, operation)),
   ];
-  try { await Promise.all(tasks); }
-  catch (error) { group.abort(); await Promise.allSettled(tasks); throw error; }
+  let next = 0;
+  const workers = Array.from({ length: Math.min(DOWNLOAD_CONCURRENCY, tasks.length) }, async () => {
+    while (next < tasks.length) {
+      operation.throwIfAborted();
+      await tasks[next++]!();
+    }
+  });
+  try { await Promise.all(workers); }
+  catch (error) { group.abort(); await Promise.allSettled(workers); throw error; }
   // Also check the SHA-256 from the shared Fabric acceptance pins for Minecraft itself.
   await assertChecksum(join(directory, 'server.jar'), 'sha256', mojang.sha256, signal);
   // These caches contain executable JARs extracted or remapped by Fabric and Mojang.
