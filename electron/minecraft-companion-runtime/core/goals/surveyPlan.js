@@ -278,7 +278,7 @@ function createSurveyPlanGoal({ bot, plan, grant, ownerName }) {
             if (!travel.ok) return block(ctx, { reason: 'worksite_unreachable', pos: first, detail: travel.reason });
           }
           let restock = true;
-          let stagedRoof = false;
+          let scaffoldApproachChecked = false;
           while (pending.length) {
             const currentLayer = pending.filter((entry) => entry.level === pending[0].level);
             const eligible = currentLayer.filter(({ step }) => !materialFor(step[0]) || supplies.item(step[0]));
@@ -293,10 +293,10 @@ function createSurveyPlanGoal({ bot, plan, grant, ownerName }) {
             }
             const materialReady = currentLayer.filter(({ step }) => !materialFor(step[0]) || supplies.item(step[0]));
             if (!materialReady.length) continue;
-            if (phase === 'roof' && !stagedRoof) {
+            if ((phase === 'roof' || phase === 'upper_walls') && !scaffoldApproachChecked) {
               await duringDay(ctx, (stepCtx) => climbSurveyScaffold(bot, stepCtx, plan,
                 (reason, detail) => recordStation(ctx, pending[0].step[0], reason, detail)));
-              stagedRoof = true;
+              scaffoldApproachChecked = true;
             }
             // Removal can consume the second half of a plant on the layer below.
             const work = materialReady[0].step[0].target === 'minecraft:air' ? pending : materialReady;

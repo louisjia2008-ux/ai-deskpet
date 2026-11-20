@@ -738,6 +738,9 @@ public final class PlanCompiler {
         if (cell.local().getY() == template.height() - 2) {
             return "roof";
         }
+        if (template.type() == HouseTemplates.Type.PORCH_CABIN && cell.local().getY() == 2) {
+            return "upper_walls";
+        }
         if (template.type() == HouseTemplates.Type.TWO_STOREY_HOUSE &&
             (cell.local().getY() >= 3 || id.equals("oak_stairs"))) {
             return "floor";

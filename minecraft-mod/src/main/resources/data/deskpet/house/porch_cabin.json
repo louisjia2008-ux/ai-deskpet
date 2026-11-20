@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 4,
   "kind": "house",
   "entrance": [
     4,
@@ -14,6 +14,7 @@
   "phases": [
     "walls",
     "scaffold",
+    "upper_walls",
     "roof",
     "furnish"
   ],
@@ -23,7 +24,13 @@
     [0, 1, 6],
     [0, 0, 7],
     [0, 1, 7],
-    [0, 2, 7]
+    [0, 2, 7],
+    [8, 0, 5],
+    [8, 0, 6],
+    [8, 1, 6],
+    [8, 0, 7],
+    [8, 1, 7],
+    [8, 2, 7]
   ],
   "buildOrder": "roof_outside_in"
 }

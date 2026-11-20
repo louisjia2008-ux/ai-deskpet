@@ -240,6 +240,7 @@ public final class PlanService {
             case "foundation" -> "地基";
             case "scaffold" -> "搭脚手架";
             case "walls" -> "砌墙";
+            case "upper_walls" -> "砌上部墙体";
             case "floor" -> "铺楼板与楼梯";
             case "roof" -> "盖屋顶";
             case "furnish" -> "布置家具";
