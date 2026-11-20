@@ -378,6 +378,11 @@ const minecraftDedicatedRuntime = {
   mainSHA256: 'b61398f3af931e75be0784d790e32c2555c81b250f6a4acff12e1b73f0118af7',
   asarSHA256: '9acae22086eeb8c33d8e438b81ca2835dccad9b58f2afdf5d9e2a4ecaab5e88c',
 };
+const minecraftProxyDownloadRuntime = {
+  sourceSHA256: 'ac688d9806c1ff5383c3dfc2990aba7bd58adbe1e625ba65e03634f123592751',
+  mainSHA256: 'bb0602405e9b10448d6260b9df407119d90640792a2bfaebd36e1a3e1b2bfa26',
+  asarSHA256: '2962c2e1cd39739828413b7d7bfff114cbf28fa5e9010645575dc4db75456743',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -487,6 +492,8 @@ const reviewedRuntimeManifest = [
   { runtime: digestHeartbeatBirthdayRuntime, previous: doctorV2Runtime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   // Survey wand construction and the managed local Minecraft world, over the installed digest/heartbeat/birthday build, diary still on (2026-11-20).
   { runtime: minecraftDedicatedRuntime, previous: digestHeartbeatBirthdayRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Local Minecraft runtime downloads through the system proxy, over the installed managed-world build, diary still on (2026-11-20).
+  { runtime: minecraftProxyDownloadRuntime, previous: minecraftDedicatedRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
