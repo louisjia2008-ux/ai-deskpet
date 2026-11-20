@@ -52,7 +52,7 @@ function build(context) {
   const env = { DESKPET_PACKAGE_MODE: 'daily', DESKPET_MAC_SIGN_IDENTITY: config.signingIdentity, DESKPET_ELECTRON_ZIP_DIR: config.electronZipDir };
   check(!existsSync(join(stage, 'forge')), 'build-stage-already-used');
   // Same dependencies as the canonical package command, not an abbreviated build.
-  for (const script of ['build:migration', 'prepare:minecraft', 'prepare:minecraft-companion', 'prepare:minecraft-shared', 'prepare:playwright-mcp']) command('npm', ['run', script], { env });
+  for (const script of ['build:migration', 'prepare:minecraft', 'prepare:minecraft-companion', 'prepare:minecraft-shared', 'prepare:minecraft-dedicated', 'prepare:playwright-mcp']) command('npm', ['run', script], { env });
   command(process.execPath, ['-e', 'require("@electron-forge/core").api.package({dir:process.cwd(),platform:"darwin",arch:process.arch,outDir:process.argv[1]}).catch(error=>{console.error(error);process.exitCode=1})', join(stage, 'forge')], { env });
   const bundle = join(stage, 'forge', `DeskPet Electron-darwin-${process.arch}`, 'DeskPet Electron.app');
   verifyMacPackage(bundle, 'daily', config.signingIdentity);
