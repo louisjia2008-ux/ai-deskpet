@@ -97,9 +97,11 @@ async function maintenance({ bundle, profile, runtime, evidence, identity, inspe
     const hold=await rpc('Debugger.evaluateOnCallFrame',{callFrameId:frame.callFrameId,expression:"(()=>{const {app}=require('electron');globalThis.__usabilityInspectionExit=app.exit.bind(app);app.exit=()=>{};return true;})()",returnByValue:true});
     check(!hold.exceptionDetails&&hold.result.value===true,'maintenance-exit-hold-failed');
     await rpc('Debugger.removeBreakpoint',{breakpointId:bp.breakpointId});await rpc('Debugger.resume');
-    const until=Date.now()+540_000;while(!fs.existsSync(reportFile)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,100));
-    check(fs.existsSync(reportFile),'maintenance-bootstrap-timeout');
-    const bootstrap=JSON.parse(fs.readFileSync(reportFile,'utf8'));validateBootstrap(bootstrap,identity,profile);
+    // The report appears before it is fully written: wait until it parses, not merely exists.
+    const readReport=()=>{try{return JSON.parse(fs.readFileSync(reportFile,'utf8'));}catch{return null;}};
+    const until=Date.now()+540_000;let bootstrap=readReport();
+    while(!bootstrap&&Date.now()<until){await new Promise(resolve=>setTimeout(resolve,100));bootstrap=readReport();}
+    check(bootstrap,'maintenance-bootstrap-timeout');validateBootstrap(bootstrap,identity,profile);
     const checkedArgs={...args,installedAsar:path.join(bundle,'Contents/Resources/app.asar'),expectedSHA:identity.asarSHA256};
     const expression=`(()=>{const require=process.getBuiltinModule('module').createRequire(process.execPath);const {app}=require('electron');if(!app.isPackaged||app.getName()!=='DeskPet Electron'||app.getAppPath()!==${JSON.stringify(checkedArgs.installedAsar)}||process.execPath!==${JSON.stringify(binary)}||app.getPath('userData')!==${JSON.stringify(path.join(runtime,'profile'))}||!${JSON.stringify(flags.slice(1))}.every(flag=>process.argv.includes(flag)))throw Error('wrong-maintenance-identity');return (${inspect.toString()})(${JSON.stringify(checkedArgs)});})()`;
     const result=await rpc('Runtime.evaluate',{expression,includeCommandLineAPI:true,returnByValue:true,awaitPromise:true});
