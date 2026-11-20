@@ -26,8 +26,14 @@ function commandAssert(response, context) {
 }
 
 async function move(rcon, bot, position) {
-  commandAssert(await rcon.command(`tp ${bot.username} ${position.x} ${position.y} ${position.z}`), 'Position test player');
-  await until(() => bot.entity?.position.distanceTo(position) < 0.35, `server position for ${bot.username}`);
+  let acknowledged = false;
+  const listener = () => { acknowledged = true; };
+  bot.once('forcedMove', listener);
+  try {
+    commandAssert(await rcon.command(`tp ${bot.username} ${position.x} ${position.y} ${position.z}`), 'Position test player');
+    await until(() => acknowledged && bot.entity?.position.distanceTo(position) < 0.35,
+      `server teleport acknowledgement for ${bot.username}`);
+  } finally { bot.removeListener('forcedMove', listener); }
 }
 
 async function equip(rcon, bot, item = WAND) {
@@ -82,7 +88,7 @@ async function blockClick(rcon, bot, target, { sneaking = false } = {}) {
   try {
     bot.setControlState('sneak', sneaking);
     await bot.activateBlock(expected, new Vec3(0, 1, 0), new Vec3(0.5, 1, 0.5));
-    await delay(220);
+    await finishClientAction(bot);
   } finally { bot.setControlState('sneak', false); }
 }
 
@@ -91,8 +97,15 @@ async function airClick(bot, sneaking = false) {
     bot.setControlState('sneak', sneaking);
     await bot.look(0, Math.PI / 2, true);
     bot.activateItem();
-    await delay(220);
+    await finishClientAction(bot);
   } finally { bot.setControlState('sneak', false); }
+}
+
+async function finishClientAction(bot) {
+  // Mineflayer 4.37.1 does not send this vanilla 1.21.8 packet.
+  // Polymer ends its same-tick duplicate-interaction guard on receipt.
+  bot._client.write('tick_end', {});
+  await delay(220);
 }
 
 async function openMenu(bot) {
@@ -122,17 +135,27 @@ async function click(bot, slot) {
 
 function observeDisplays(bot) {
   const spawns = [];
+  const labelSpawns = [];
   const removals = [];
   const active = new Set();
+  bot._client.on('system_chat', (packet) => {
+    if (packet.isActionBar) record('action-bar', { player: bot.username, packet });
+  });
   bot._client.on('spawn_entity', (packet) => {
-    if (packet.type !== bot.registry?.entitiesByName?.block_display?.id) return;
-    spawns.push(packet.entityId);
+    const types = bot.registry?.entitiesByName;
+    if (packet.type === types?.block_display?.id) {
+      spawns.push(packet.entityId);
+    } else if (packet.type === types?.text_display?.id) {
+      labelSpawns.push(packet.entityId);
+    } else {
+      return;
+    }
     active.add(packet.entityId);
   });
   bot._client.on('entity_destroy', (packet) => {
     removals.push(...packet.entityIds.filter((id) => active.delete(id)));
   });
-  return { spawns, removals, active };
+  return { spawns, labelSpawns, removals, active };
 }
 
 async function stageSelection(rcon, owner, { first = FIRST, second = SECOND, supply = false } = {}) {

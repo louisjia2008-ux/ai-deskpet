@@ -14,6 +14,7 @@ async function requireChanged(bot, slot, label) {
 }
 
 async function main() {
+  const normalRules = process.env.DESKPET_TEST_NORMAL_RULES === '1';
   const settings = await serverSettings();
   const rcon = await createRcon(settings);
   const owner = newBot(settings, 'Owner');
@@ -24,6 +25,13 @@ async function main() {
   try {
     await Promise.all([ready(owner), ready(observer)]);
     await setupArena(rcon, [owner.bot, observer.bot]);
+    if (normalRules) {
+      await rcon.command('gamerule randomTickSpeed 3');
+      await rcon.command('gamerule doMobSpawning true');
+      await rcon.command('gamerule doFireTick true');
+      await rcon.command('gamerule mobGriefing true');
+      await rcon.command('gamerule doDaylightCycle true');
+    }
     const initialHash = await snapshot(rcon, `${evidenceId}_before`);
     await equip(rcon, owner.bot);
     await blockClick(rcon, owner.bot, P.first);
@@ -34,15 +42,28 @@ async function main() {
     await blockClick(rcon, owner.bot, P.second);
     await blockClick(rcon, owner.bot, P.chest, { sneaking: true });
 
-    await openMenu(owner.bot);
-    await until(() => preview.active.size > 0, 'Owner-only virtual block displays');
+    const menu = await openMenu(owner.bot);
+    const initialConfirm = describeSlot(menu.slots[BUTTON.confirm]);
+    assert.equal(initialConfirm.name, 'barrier');
+    assert.match(JSON.stringify(initialConfirm.label), /确认开工尚未启用/);
+    assert.match(JSON.stringify(describeSlot(menu.slots[4]).lore), /材料箱/);
+    await until(() => preview.active.size > 0 && preview.spawns.length > 0, 'Owner-only virtual block displays');
+    assert.ok(preview.labelSpawns.length > 0, 'Owner receives a virtual entrance direction label');
+    assert.ok(preview.active.size <= 385, 'Preview displays must stay inside the configured rendering cap');
     assert.deepEqual(nonOwnerPreview.spawns, []);
+    assert.deepEqual(nonOwnerPreview.labelSpawns, []);
     // Template, rotation, position, height, mode and layers are changed through the real GUI.
     await requireChanged(owner.bot, BUTTON.template, 'template');
     await requireChanged(owner.bot, BUTTON.rotation, 'rotation');
+    const siteSummary = () => describeSlot(owner.bot.currentWindow?.slots[4]);
+    const centered = siteSummary();
     await click(owner.bot, BUTTON.east);
+    const moved = siteSummary();
+    assert.notDeepEqual(moved, centered, 'East control should move the entrance and template in bounds');
     await click(owner.bot, BUTTON.groundDown);
+    assert.notDeepEqual(siteSummary(), moved, 'Ground grade changed');
     await click(owner.bot, BUTTON.groundUp);
+    assert.deepEqual(siteSummary(), moved, 'Push both ground controls to restore the original grade');
     await requireChanged(owner.bot, BUTTON.mode, 'grading mode');
     await requireChanged(owner.bot, BUTTON.buildLayer, 'building preview layer');
     await requireChanged(owner.bot, BUTTON.buildLayer, 'building preview layer');
@@ -51,7 +72,8 @@ async function main() {
     const changed = await snapshot(rcon, `${evidenceId}_after`);
     assert.equal(changed, initialHash, 'Server block snapshot changed during preview/cancel');
     await delay(200);
-    assert.deepEqual(nonOwnerPreview.spawns, [], 'DeskPetBot intercepted virtual display spawn packets');
+    assert.deepEqual(nonOwnerPreview.spawns, [], 'DeskPetBot received virtual block display spawn packets');
+    assert.deepEqual(nonOwnerPreview.labelSpawns, [], 'DeskPetBot received virtual entrance labels');
 
     // The site is intentionally narrower than every supported template.
     await airClick(owner.bot, true);
@@ -61,14 +83,18 @@ async function main() {
     const confirm = describeSlot(narrow.slots[BUTTON.confirm]);
     assert.ok(confirm && ['barrier', 'red_concrete', 'red_stained_glass_pane', 'gray_dye'].includes(confirm.name),
       `Confirm remained enabled for undersized site: ${JSON.stringify(confirm)}`);
+    assert.match(JSON.stringify(confirm.label), /有冲突，不能开工/);
+    assert.match(JSON.stringify(confirm.lore), /选区放不下这个房型/);
     record('undersized-conflict-confirm-disabled', { confirm });
     await click(owner.bot, BUTTON.cancel);
     await until(() => !owner.bot.currentWindow && preview.active.size === 0, 'undersized preview cleanup');
     assert.deepEqual(owner.errors, []);
     assert.deepEqual(observer.errors, []);
     assert.equal(await snapshot(rcon, `${evidenceId}_narrow`), initialHash);
-    record('m1-pass', { initialHash, ownerDisplaySpawns: preview.spawns.length,
-      ownerDisplayRemovals: preview.removals.length, observerDisplaySpawns: nonOwnerPreview.spawns.length });
+    assert.equal(preview.removals.length, preview.spawns.length + preview.labelSpawns.length);
+    record('m1-pass', { rules: normalRules ? 'normal' : 'stable', initialHash, ownerDisplaySpawns: preview.spawns.length,
+      ownerLabelSpawns: preview.labelSpawns.length, ownerDisplayRemovals: preview.removals.length,
+      observerDisplaySpawns: nonOwnerPreview.spawns.length + nonOwnerPreview.labelSpawns.length });
   } finally {
     closeBot(owner);
     closeBot(observer);

@@ -79,16 +79,20 @@ async function expectDenial(rcon, id, expectedReason, description) {
   record('confirmation-denied', { id, description, status: plan.status, reason: plan.lastDenial });
 }
 
-function protocolCount(data) {
-  return typeof data.protocolRejections === 'number' ? data.protocolRejections : data.protocolRejections?.length ?? 0;
+async function expectProtocolRejection(rcon, previousCount, planId, description) {
+  const rejection = await until(async () => {
+    const { protocolRejections } = await readPlans(rcon);
+    return protocolRejections.slice(previousCount).find((entry) => entry.planId === planId
+      && entry.action === 'accept' && entry.reason === 'replayed_or_inactive_grant');
+  }, description);
+  record('protocol-rejected', { description, rejection });
 }
 
-async function expectProtocolRejection(rcon, previousCount, description) {
-  const after = await until(async () => {
-    const data = await readPlans(rcon);
-    return protocolCount(data) > previousCount && data.protocolRejections;
-  }, description);
-  record('protocol-rejected', { description, evidence: after });
+async function grass(bot, pos) {
+  return until(() => {
+    const block = bot.blockAt(pos);
+    return block?.name === 'grass_block' && block;
+  }, `fixture grass at ${coords(pos)}`);
 }
 
 function attemptDig(bot, block) {
@@ -124,7 +128,7 @@ async function newRejections(rcon, count, expected) {
   record('server-block-rejections', { entries });
 }
 
-async function suite({ preparingRestart = false } = {}) {
+async function suite({ preparingRestart = false, fragmented = false } = {}) {
   const settings = await serverSettings();
   const rcon = await createRcon(settings);
   const owner = newBot(settings, 'Owner');
@@ -186,7 +190,8 @@ async function suite({ preparingRestart = false } = {}) {
       await click(owner.bot, BUTTON.confirm);
       const activeGrant = await accepted(planned.id);
       const recordPath = path.join(serverDir, 'm2-before-restart.json');
-      await fs.writeFile(recordPath, JSON.stringify(activeGrant, null, 2) + '\n', { mode: 0o600 });
+      const savedGrant = { ...activeGrant, worldId: planned.plan.worldId };
+      await fs.writeFile(recordPath, JSON.stringify(savedGrant, null, 2) + '\n', { mode: 0o600 });
       const saved = await rcon.command('save-all flush');
       assert.match(saved, /Saved the game/);
       record('restart-running-saved', { id: planned.id, recordPath, activeGrant });
@@ -199,10 +204,39 @@ async function suite({ preparingRestart = false } = {}) {
         'isolated Fabric stopped while the granted robot was connected', 30_000);
       return;
     }
+    if (fragmented) {
+      // Put 25 wheat tiles in a new area outside the other authorization fixtures.
+      await move(rcon, owner.bot, new Vec3(86.5, Y, 86.5));
+      await rcon.command(`fill 56 ${Y - 1} 56 116 ${Y - 1} 116 grass_block`);
+      await rcon.command(`fill 56 ${Y - 7} 56 116 ${Y - 2} 116 dirt`);
+      for (let low = Y; low <= Y + 31; low += 8) {
+        const result = await rcon.command(`fill 56 ${low} 56 116 ${low + 7} 116 air`);
+        assert.match(result, /Successfully filled|No blocks were filled/);
+      }
+      const lower = new Vec3(56, Y - 8, 56);
+      const upper = new Vec3(116, Y + 6, 116);
+      const before = await snapshot(rcon, `${ID}_fragmented_before`, lower, upper);
+      await preview(rcon, owner.bot, { first: new Vec3(64, Y - 1, 64), second: new Vec3(108, Y - 1, 108) });
+      for (let next = 0; next < 3; next++) await click(owner.bot, BUTTON.template);
+      const field = await until(async () => (await readPlans(rcon)).plans.find((plan) =>
+        plan.status === 'previewed' && plan.plan?.template?.id === 'wheat_field'
+        && plan.plan.selection.minX === 64 && plan.plan.selection.maxX === 108), '45×45 wheat field preview');
+      assert.ok(field.plan.ops.length >= 2_025);
+      await click(owner.bot, BUTTON.confirm);
+      const grant = await accepted(field.id);
+      assert.ok(fragmentLengths.length > 1, 'Real grant payload must be split into multiple packets');
+      assert.ok(fragmentLengths.every((length) => length <= 32 * 1024));
+      assert.equal(await snapshot(rcon, `${ID}_fragmented_after`, lower, upper), before);
+      await click(owner.bot, BUTTON.cancel);
+      await planWhere(rcon, field.id, (entry) => entry.status === 'cancelled', 'large dry run cancelled');
+      record('m2-fragmented-pass', { grant, operations: field.plan.ops.length, fragmentLengths, before });
+      return;
+    }
+
     await equip(rcon, robot.bot, 'minecraft:diamond_shovel');
     await move(rcon, robot.bot, NO_AUTH.offset(0.5, 1, 2.5));
     const ordinaryBefore = await snapshot(rcon, `${ID}_ungranted_before`, NO_AUTH, NO_AUTH);
-    await attemptDig(robot.bot, robot.bot.blockAt(NO_AUTH));
+    await attemptDig(robot.bot, await grass(robot.bot, NO_AUTH));
     await delay(250);
     const ordinaryAfter = await snapshot(rcon, `${ID}_ungranted_after`, NO_AUTH, NO_AUTH);
     assert.notEqual(ordinaryAfter, ordinaryBefore, 'Unassigned robot must be able to do normal work');
@@ -224,11 +258,13 @@ async function suite({ preparingRestart = false } = {}) {
     commandAssert(await rcon.command('execute in minecraft:the_nether run tp Owner 0.5 128 0.5'),
       'Move Owner into Nether');
     await until(() => owner.bot.game?.dimension?.endsWith('the_nether'), 'Owner entered Nether');
+    await ready(owner);
     await rcon.command(`execute as Owner at @s run deskpet debug confirm ${crossDimension.id}`);
     await expectDenial(rcon, crossDimension.id, 'wrong_dimension', 'Overworld plan confirmed in Nether');
     commandAssert(await rcon.command(`execute in minecraft:overworld run tp Owner 2.5 ${Y} 2.5`),
       'Move Owner back into Overworld');
     await until(() => owner.bot.game?.dimension?.endsWith('overworld'), 'Owner returned to Overworld');
+    await ready(owner);
 
     const stale = await preview(rcon, owner.bot);
     await rcon.command(`deskpet debug expire ${stale.id}`);
@@ -247,9 +283,9 @@ async function suite({ preparingRestart = false } = {}) {
     await click(owner.bot, BUTTON.confirm);
     const firstGrant = await accepted(active.id);
     assert.ok(fragmentLengths.length > 0 && fragmentLengths.every((length) => length <= 32 * 1024));
-    const beforeDuplicate = protocolCount(await readPlans(rcon));
+    const beforeDuplicate = (await readPlans(rcon)).protocolRejections.length;
     sendPlanMessage(robot.bot._client, { type: 'accept', ...firstGrant });
-    await expectProtocolRejection(rcon, beforeDuplicate, 'Second accept for same grantId');
+    await expectProtocolRejection(rcon, beforeDuplicate, active.id, 'Second accept for same grantId');
     assert.equal(currentPlan(await readPlans(rcon), active.id).status, 'running');
 
     // The second plan comes from the same actual configured Owner; failure must be the overlap check.
@@ -259,10 +295,10 @@ async function suite({ preparingRestart = false } = {}) {
 
     await move(rcon, robot.bot, BREAK.offset(0.5, 1, 2.5));
     const originals = (await readPlans(rcon)).rejections.length;
-    await attemptDig(robot.bot, robot.bot.blockAt(BREAK));
+    await attemptDig(robot.bot, await grass(robot.bot, BREAK));
     await move(rcon, robot.bot, PLACE_AGAINST.offset(0.5, 1, 2.5));
     await equip(rcon, robot.bot, 'minecraft:cobblestone');
-    await attemptPlace(robot.bot, robot.bot.blockAt(PLACE_AGAINST));
+    await attemptPlace(robot.bot, await grass(robot.bot, PLACE_AGAINST));
     await newRejections(rcon, originals, [['break', BREAK], ['place', PLACE]]);
     assert.equal(await snapshot(rcon, `${ID}_grant_after`), activeBefore);
 
@@ -272,9 +308,9 @@ async function suite({ preparingRestart = false } = {}) {
     robot = connectRobot();
     await ready(robot);
     await until(() => events.filter((event) => event.type === 'hello').length >= 2, 'receiver handshakes again');
-    const beforeReconnectReplay = protocolCount(await readPlans(rcon));
+    const beforeReconnectReplay = (await readPlans(rcon)).protocolRejections.length;
     sendPlanMessage(robot.bot._client, { type: 'accept', ...firstGrant });
-    await expectProtocolRejection(rcon, beforeReconnectReplay, 'Old grant replay after reconnect');
+    await expectProtocolRejection(rcon, beforeReconnectReplay, active.id, 'Old grant replay after reconnect');
     const orphaned = currentPlan(await readPlans(rcon), active.id);
     assert.equal(orphaned.status, 'paused');
     assert.equal(events.filter((event) => event.type === 'accepted').length, 1);
@@ -306,7 +342,7 @@ async function suite({ preparingRestart = false } = {}) {
     await reopenPlanMenu();
     const pressed = performance.now();
     await click(owner.bot, BUTTON.cancel);
-    const worldPos = robot.bot.blockAt(CANCEL_BREAK);
+    const worldPos = await grass(robot.bot, CANCEL_BREAK);
     const attemptStarted = performance.now() - pressed;
     assert.ok(attemptStarted <= 1000, `Cancel block attempt reached harness after ${attemptStarted}ms`);
     await attemptDig(robot.bot, worldPos);
@@ -328,8 +364,18 @@ async function suite({ preparingRestart = false } = {}) {
 
 async function verifyRestart() {
   const previous = JSON.parse(await fs.readFile(path.join(serverDir, 'm2-before-restart.json'), 'utf8'));
-  const rcon = await createRcon(await serverSettings());
+  const settings = await serverSettings();
+  const rcon = await createRcon(settings);
+  const messages = [];
+  const robot = newBot(settings, 'DeskPetBot', {
+    install(bot) {
+      bot._client.registerChannel(CHANNEL, null);
+      bot._client.on(CHANNEL, (bytes) => messages.push(decodeMessage(bytes)));
+    },
+  });
   try {
+    await ready(robot);
+    const hello = await until(() => messages.find((message) => message.type === 'hello'), 'world hello after restart');
     const entry = currentPlan(await readPlans(rcon), previous.planId);
     assert.ok(entry, 'Running plan was lost from the world save');
     assert.equal(entry.status, 'paused');
@@ -337,9 +383,15 @@ async function verifyRestart() {
     assert.equal(entry.grantId ?? null, null, 'A restart must revoke the previous authorization');
     assert.equal(entry.plan.revision, previous.revision);
     assert.equal(entry.plan.planHash, previous.planHash);
+    assert.equal(hello.worldId, entry.plan.worldId);
+    if (previous.worldId) assert.equal(hello.worldId, previous.worldId);
+    assert.ok(messages.every((message) => message.type !== 'grant_chunk'));
     record('m2-restart-pass', { id: previous.planId, status: entry.status, reason: entry.reason,
-      revision: previous.revision, planHash: previous.planHash });
-  } finally { rcon.close(); }
+      revision: previous.revision, planHash: previous.planHash, worldId: hello.worldId });
+  } finally {
+    closeBot(robot);
+    rcon.close();
+  }
 }
 
 const action = process.argv[2] ?? 'verify';
@@ -347,7 +399,8 @@ Promise.resolve().then(() => {
   if (action === 'configure') return writeConfig();
   if (action === 'restart-prepare') return suite({ preparingRestart: true });
   if (action === 'restart-verify') return verifyRestart();
-  assert.equal(action, 'verify', 'Use configure, verify, restart-prepare, or restart-verify');
+  if (action === 'fragmented') return suite({ fragmented: true });
+  assert.equal(action, 'verify', 'Use configure, verify, restart-prepare, restart-verify, or fragmented');
   return suite();
 }).catch((error) => {
   record('m2-failed', { error: error.stack });
