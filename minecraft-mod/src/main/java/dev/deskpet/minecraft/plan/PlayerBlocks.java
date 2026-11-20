@@ -22,6 +22,7 @@ import java.util.Set;
 public final class PlayerBlocks extends PersistentState {
     private static final int MAX_CHUNKS = 8192;
     private static final int MAX_PER_CHUNK = 2048;
+    private static final int MAX_CELLS = 262_144;
     private static final int SYNC_RADIUS = 3;
     private static final Codec<Map<Long, List<Integer>>> CHUNKS =
         Codec.unboundedMap(Codec.STRING.xmap(Long::parseLong, String::valueOf), Codec.INT.listOf());
@@ -34,11 +35,13 @@ public final class PlayerBlocks extends PersistentState {
 
     private final Map<Long, Set<Integer>> chunks = new HashMap<>();
     private boolean overflow;
+    private int size;
     private long revision;
-    private long nextWarning;
+    private long nextWarning = System.nanoTime();
 
     private PlayerBlocks(Map<Long, List<Integer>> saved, boolean overflow) {
         saved.forEach((chunk, cells) -> chunks.put(chunk, new HashSet<>(cells)));
+        size = chunks.values().stream().mapToInt(Set::size).sum();
         this.overflow = overflow;
     }
 
@@ -60,12 +63,15 @@ public final class PlayerBlocks extends PersistentState {
         if (overflow) return;
         long chunk = new ChunkPos(pos).toLong();
         var cells = chunks.get(chunk);
-        if ((cells == null && chunks.size() >= MAX_CHUNKS)
-            || (cells != null && cells.size() >= MAX_PER_CHUNK && !cells.contains(cell(pos)))) {
+        if (cells != null && cells.contains(cell(pos))) return;
+        if (size >= MAX_CELLS || (cells == null && chunks.size() >= MAX_CHUNKS)
+            || (cells != null && cells.size() >= MAX_PER_CHUNK)) {
             overflow = true;
             changed();
             DeskPetMod.LOGGER.warn("Player block protection capacity reached; automatic block destruction is disabled in this dimension");
-        } else if (chunks.computeIfAbsent(chunk, ignored -> new HashSet<>()).add(cell(pos))) {
+        } else {
+            chunks.computeIfAbsent(chunk, ignored -> new HashSet<>()).add(cell(pos));
+            size++;
             changed();
         }
     }
@@ -75,6 +81,7 @@ public final class PlayerBlocks extends PersistentState {
         var cells = chunks.get(chunk);
         if (cells != null && cells.remove(cell(pos))) {
             if (cells.isEmpty()) chunks.remove(chunk);
+            size--;
             changed();
         }
     }
@@ -89,7 +96,7 @@ public final class PlayerBlocks extends PersistentState {
         return overflow || (cells != null && cells.contains(cell(pos)));
     }
 
-    boolean deny(BlockPos pos, String action) {
+    public boolean deny(BlockPos pos, String action) {
         if (!contains(pos)) return false;
         long now = System.nanoTime();
         if (now - nextWarning >= 0) {
