@@ -476,7 +476,7 @@ public final class PlanCompiler {
             if (protectedBaseline.containsKey(pos)) return at("protected_block_changed", pos);
             BlockState actual = world.state(pos);
             String expected = op.get("expect").getAsString();
-            if (!matchesExpect(op.get("kind").getAsString(), expected, actual,
+            if (!matchesExpect(op.get("kind").getAsString(), expected, op.get("target").getAsString(), actual,
                 () -> tree(world, pos, selection.area(), trees).natural())) {
                 String reason = mismatch(pos, expected, actual);
                 return TerrainRules.naturalToClear(actual) || TerrainRules.replaceableForBuild(actual)
@@ -538,12 +538,13 @@ public final class PlanCompiler {
         return reason + " at " + pos.toShortString();
     }
 
-    public static boolean matchesExpect(ServerWorld world, BlockPos pos, String kind, String expected, BlockState current) {
+    public static boolean matchesExpect(ServerWorld world, BlockPos pos, String kind, String expected,
+                                        String target, BlockState current) {
         var area = Area.between(pos, pos);
-        return matchesExpect(kind, expected, current, () -> tree(view(world), pos, area, new HashMap<>()).natural());
+        return matchesExpect(kind, expected, target, current, () -> tree(view(world), pos, area, new HashMap<>()).natural());
     }
 
-    static boolean matchesExpect(String kind, String expected, BlockState current, BooleanSupplier naturalLog) {
+    static boolean matchesExpect(String kind, String expected, String target, BlockState current, BooleanSupplier naturalLog) {
         return switch (kind) {
             case "clear", "cut" -> TerrainRules.naturalToClear(current) || TerrainRules.log(current) &&
                 // During construction the canopy may already be gone. An exact log from the
@@ -551,7 +552,10 @@ public final class PlanCompiler {
                 (expected.equals(stateName(current)) || naturalLog.getAsBoolean());
             case "fill" -> TerrainRules.replaceableForBuild(current);
             case "build", "furnish", "scaffold" -> matchesState(expected, current) ||
-                TerrainRules.replaceableForBuild(current) && defaultReplaceable(expected);
+                TerrainRules.replaceableForBuild(current) && defaultReplaceable(expected) ||
+                // Prepared dirt can grow grass before the hoe reaches this cell.
+                kind.equals("build") && expected.equals("minecraft:dirt") &&
+                    "minecraft:farmland[moisture=0]".equals(target) && current.isOf(Blocks.GRASS_BLOCK);
             default -> false;
         };
     }
@@ -747,6 +751,7 @@ public final class PlanCompiler {
             return "upper_walls";
         }
         if (template.type() == HouseTemplates.Type.TWO_STOREY_HOUSE) {
+            if (id.equals("oak_stairs") && cell.local().getY() == 0) return "stair_base";
             if (cell.local().getY() >= 4) return "upper_walls";
             if (cell.local().getY() == 3 || id.equals("oak_stairs")) return "floor";
         }

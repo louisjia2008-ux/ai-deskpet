@@ -53,7 +53,7 @@ function matchesTarget(block, target) {
 
 const replaceable = (state) => REPLACEABLE.has(name(state)) && !/\bwaterlogged=true(?=[,\]])/.test(state);
 
-function matchesExpectState(kind, expected, actual, hasNaturalCanopy = () => false) {
+function matchesExpectState({ kind, expect: expected, target }, actual, hasNaturalCanopy = () => false) {
   if (!actual) return false;
   if (kind === 'clear' || kind === 'cut') {
     return NATURAL_GROUND.has(name(actual)) || NATURAL_PLANTS.has(name(actual)) || naturalLeaves(actual)
@@ -61,7 +61,9 @@ function matchesExpectState(kind, expected, actual, hasNaturalCanopy = () => fal
   }
   if (kind === 'fill') return replaceable(actual);
   if (kind === 'build' || kind === 'furnish' || kind === 'scaffold') {
-    return matchesState(expected, actual) || (replaceable(actual) && REPLACEABLE.has(name(expected)));
+    return matchesState(expected, actual) || (replaceable(actual) && REPLACEABLE.has(name(expected)))
+      || (kind === 'build' && expected === 'minecraft:dirt' && target === 'minecraft:farmland[moisture=0]'
+        && id(actual) === 'minecraft:grass_block');
   }
   return false;
 }
@@ -115,7 +117,7 @@ function walkTree(bot, origin, area, found) {
 function matchesExpect(bot, op, block = bot.blockAt(asVec(op.pos))) {
   const origin = asVec(op.pos);
   const area = { minX: origin.x, maxX: origin.x, minZ: origin.z, maxZ: origin.z };
-  return matchesExpectState(op.kind, op.expect, stateName(block), () => walkTree(bot, origin, area, (type) => type === 'leaf'));
+  return matchesExpectState(op, stateName(block), () => walkTree(bot, origin, area, (type) => type === 'leaf'));
 }
 
 function supportsBlock(attached, attachedPos, support) {

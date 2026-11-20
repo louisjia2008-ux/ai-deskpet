@@ -361,8 +361,9 @@ test('execute host replaces the old task, trusts Mod completion and reports inte
 });
 
 test('Core expected-state rules agree with the Mod fixture', () => {
-  for (const { kind, expect, actual, naturalLog, matches } of cases) {
-    assert.equal(matchesExpectState(kind, expect, actual, () => naturalLog), matches, `${kind}: ${expect} vs ${actual}`);
+  for (const row of cases) {
+    const { actual, naturalLog, matches } = row;
+    assert.equal(matchesExpectState(row, actual, () => naturalLog), matches, JSON.stringify(row));
   }
   const blocks = new Map([['(0, 0, 0)', { name: 'oak_log', getProperties: () => ({ axis: 'x' }) }],
     ['(1, 1, 0)', { name: 'oak_log' }], ['(2, 2, 0)', { name: 'oak_leaves', getProperties: () => ({ persistent: false }) }]]);

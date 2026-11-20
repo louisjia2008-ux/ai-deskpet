@@ -239,6 +239,7 @@ public final class PlanService {
             case "terrain" -> "整地";
             case "foundation" -> "地基";
             case "scaffold" -> "搭脚手架";
+            case "stair_base" -> "安装楼梯起步";
             case "walls" -> "砌墙";
             case "upper_walls" -> "砌上部墙体";
             case "floor" -> "铺楼板与楼梯";
@@ -716,7 +717,7 @@ public final class PlanService {
                 return rejectViolation(server, store, matching, action, pos, "outside_authorized_operations");
             }
             var current = world.getBlockState(pos);
-            if (!PlanCompiler.matchesExpect(world, pos, op.kind(), op.expect(), current)) {
+            if (!PlanCompiler.matchesExpect(world, pos, op.kind(), op.expect(), op.target(), current)) {
                 revoke(server, store, matching, PAUSED, mismatch(pos, op.expect(), PlanCompiler.stateName(current)), true);
                 return rejectChange(store, matching, action, pos, "expected_block_changed", BlockDenial.SITE_CHANGE);
             }

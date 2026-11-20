@@ -200,12 +200,12 @@
     }
   },
   "two_storey_house/0": {
-    "planHash": "586bb7bea1179ca0886872562dabbe5aed9b50066313e1b6854438bb1924015b",
+    "planHash": "059bba4e21c5ab09713ce6eb5daf32439df422ec2e87216be4c428950707e898",
     "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
     "operations": 373,
     "template": {
       "id": "two_storey_house",
-      "version": 3,
+      "version": 4,
       "rotation": 0,
       "anchor": {
         "x": 2,
@@ -225,12 +225,12 @@
     }
   },
   "two_storey_house/90": {
-    "planHash": "96f106b5317a28a850ca5a16a977a541e026d0ab7b66098203eda0a673e8cb12",
+    "planHash": "3e7fb122163baaf1090b5fa1a70bef6f9b80d2277e4605e27d26a13085f589fa",
     "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
     "operations": 373,
     "template": {
       "id": "two_storey_house",
-      "version": 3,
+      "version": 4,
       "rotation": 90,
       "anchor": {
         "x": 2,
@@ -250,12 +250,12 @@
     }
   },
   "two_storey_house/180": {
-    "planHash": "e30bb3b94b6c2dec982da7b2f4908f617c20c5888bbd5eda388a647c1ff6199d",
+    "planHash": "ec2735b63ba6f65c70a9a11d968debdba9831c424ecdf5fee8485d452b6b0bb0",
     "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
     "operations": 373,
     "template": {
       "id": "two_storey_house",
-      "version": 3,
+      "version": 4,
       "rotation": 180,
       "anchor": {
         "x": 2,
@@ -275,12 +275,12 @@
     }
   },
   "two_storey_house/270": {
-    "planHash": "aec10ae3aab9fbc62ddc9718f09de2c4ddc297f86de1f77051e0d443158b30b1",
+    "planHash": "ffd2e11a68c179f9c0b081601de3edd18dd0872b8315d5bf83c8e89780ab8003",
     "snapshotHash": "e6f8f357966e5c4bbe1810dcf39a014f4687f3f8dc74f737f8bfcbdb84389a25",
     "operations": 373,
     "template": {
       "id": "two_storey_house",
-      "version": 3,
+      "version": 4,
       "rotation": 270,
       "anchor": {
         "x": 2,

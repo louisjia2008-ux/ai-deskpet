@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "kind": "house",
   "entrance": [
     4,
@@ -13,6 +13,7 @@
   ],
   "phases": [
     "scaffold",
+    "stair_base",
     "walls",
     "floor",
     "upper_walls",

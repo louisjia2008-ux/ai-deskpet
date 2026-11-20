@@ -135,11 +135,12 @@ class PlanCompilerTest {
             assertTrue(result.valid(), () -> result.conflicts().toString());
             Map<String, List<PlanCompiler.Operation>> phases = new LinkedHashMap<>();
             result.ops().forEach(op -> phases.computeIfAbsent(op.phase(), phase -> new ArrayList<>()).add(op));
-            assertEquals(List.of("scaffold", "walls", "floor", "upper_walls", "roof", "furnish", "remove_scaffold"),
+            assertEquals(List.of("scaffold", "stair_base", "walls", "floor", "upper_walls", "roof", "furnish", "remove_scaffold"),
                 List.copyOf(phases.keySet()));
             assertEquals(21, phases.get("scaffold").size());
             assertEquals(21, phases.get("remove_scaffold").size());
-            assertEquals(4, phases.get("floor").stream().filter(op -> op.target().isOf(Blocks.OAK_STAIRS)).count());
+            assertTrue(phases.get("stair_base").getFirst().target().isOf(Blocks.OAK_STAIRS));
+            assertEquals(3, phases.get("floor").stream().filter(op -> op.target().isOf(Blocks.OAK_STAIRS)).count());
             assertTrue(result.ops().stream().allMatch(op -> area.contains(op.pos())));
         }
     }
@@ -336,11 +337,13 @@ class PlanCompilerTest {
                 var row = entry.getAsJsonObject();
                 String kind = row.get("kind").getAsString();
                 String expect = row.get("expect").getAsString();
+                String target = row.has("target") ? row.get("target").getAsString() : null;
                 String state = row.get("actual").getAsString();
                 var actual = BlockArgumentParser.block(Registries.BLOCK, state, false).blockState();
                 assertEquals(state, PlanCompiler.stateName(actual), row::toString);
                 assertEquals(row.get("matches").getAsBoolean(),
-                    PlanCompiler.matchesExpect(kind, expect, actual, () -> row.get("naturalLog").getAsBoolean()), row::toString);
+                    PlanCompiler.matchesExpect(kind, expect, target, actual, () -> row.get("naturalLog").getAsBoolean()),
+                    row::toString);
             }
         }
     }
