@@ -11,11 +11,15 @@ import net.minecraft.world.PersistentStateType;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
 final class PlanStore extends PersistentState {
+    private static final int FINISHED_LIMIT = 20;
     private static final Codec<PlanStore> CODEC = Codec.BYTE_BUFFER.fieldOf("plans").codec().xmap(
         PlanStore::decode, value -> ByteBuffer.wrap(value.export().toString().getBytes(StandardCharsets.UTF_8)));
     private static final PersistentStateType<PlanStore> TYPE = new PersistentStateType<>(
@@ -27,6 +31,8 @@ final class PlanStore extends PersistentState {
     final Map<UUID, Revocation> revocations = new LinkedHashMap<>();
     final JsonArray rejections = new JsonArray();
     final JsonArray protocolRejections = new JsonArray();
+    private long lastFinishOrder;
+    private boolean historyNeedsTrim;
     private long lastProtocolWarning = System.nanoTime() - Duration.ofSeconds(1).toNanos();
 
     static PlanStore get(MinecraftServer server) {
@@ -46,7 +52,31 @@ final class PlanStore extends PersistentState {
         return true;
     }
 
+    void recordFinish(SurveyPlan plan) {
+        plan.finishOrder = ++lastFinishOrder;
+        historyNeedsTrim = true;
+        markDirty();
+    }
+
+    void trimHistory() {
+        if (!historyNeedsTrim) return;
+        historyNeedsTrim = false;
+        var finished = new ArrayList<SurveyPlan>();
+        for (var plan : plans.values()) {
+            if (plan.status.finished()) finished.add(plan);
+        }
+        if (finished.size() <= FINISHED_LIMIT) return;
+        // Fall back to most recently inserted first for old plans saved without a finish order.
+        Collections.reverse(finished);
+        finished.sort(Comparator.comparingLong((SurveyPlan plan) -> plan.finishOrder).reversed());
+        for (int index = FINISHED_LIMIT; index < finished.size(); index++) {
+            plans.remove(finished.get(index).id);
+        }
+        markDirty();
+    }
+
     JsonObject export() {
+        trimHistory();
         var result = new JsonObject();
         var entities = new JsonArray();
         plans.values().forEach(plan -> entities.add(plan.export()));
@@ -68,9 +98,12 @@ final class PlanStore extends PersistentState {
         for (var entry : source.getAsJsonArray("plans")) {
             var plan = SurveyPlan.restore(entry.getAsJsonObject());
             store.plans.put(plan.id, plan);
+            store.lastFinishOrder = Math.max(store.lastFinishOrder, plan.finishOrder);
         }
         store.rejections.addAll(source.getAsJsonArray("rejections"));
         store.protocolRejections.addAll(source.getAsJsonArray("protocolRejections"));
+        store.historyNeedsTrim = true;
+        store.trimHistory();
         store.markDirty();
         return store;
     }

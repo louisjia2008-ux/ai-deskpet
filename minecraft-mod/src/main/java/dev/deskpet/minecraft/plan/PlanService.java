@@ -131,11 +131,8 @@ public final class PlanService {
         String error = ownerCheck(player, plan);
         if (error == null) error = contextCheck(world, plan);
         if (error != null) return deny(store, plan, id, "confirm", error);
-        if (plan.status == EXPIRED || (plan.status == PREVIEWED && expired(plan))) {
-            plan.status = EXPIRED;
-            plan.reason = "preview_expired";
-            return deny(store, plan, id, "confirm", "preview_expired");
-        }
+        if (plan.status == PREVIEWED && expired(plan)) expirePreview(store, plan);
+        if (plan.status == EXPIRED) return deny(store, plan, id, "confirm", "preview_expired");
         if (plan.status != PREVIEWED) return deny(store, plan, id, "confirm", "not_previewed");
         if (plan.document.getAsJsonArray("conflicts").size() > 0) {
             return deny(store, plan, id, "confirm", "preview_conflicts");
@@ -197,7 +194,7 @@ public final class PlanService {
         return issue(server, store, renewed, "resume");
     }
 
-    private static String cancel(ServerPlayerEntity player, UUID id) {
+    static String cancel(ServerPlayerEntity player, UUID id) {
         var world = player.getWorld();
         var store = PlanStore.get(world.getServer());
         var plan = store.plans.get(id);
@@ -386,6 +383,7 @@ public final class PlanService {
         plan.grantId = null;
         plan.status = next;
         plan.reason = reason;
+        if (next.finished()) store.recordFinish(plan);
         if (oldGrant != null) {
             store.revocations.put(plan.id, new PlanStore.Revocation(plan, oldGrant, System.nanoTime() + REVOKE_NANOS));
         }
@@ -412,13 +410,18 @@ public final class PlanService {
         pruneRevocations(store, System.nanoTime());
         for (var plan : store.plans.values()) {
             if (plan.status == PREVIEWED && expired(plan)) {
-                plan.status = EXPIRED;
-                plan.reason = "preview_expired";
-                store.markDirty();
+                expirePreview(store, plan);
             } else if (hasGrant(plan) && System.nanoTime() >= plan.heartbeatDeadline) {
                 revoke(server, store, plan, PAUSED, "disconnected", true);
             }
         }
+        store.trimHistory();
+    }
+
+    private static void expirePreview(PlanStore store, SurveyPlan plan) {
+        plan.status = EXPIRED;
+        plan.reason = "preview_expired";
+        store.recordFinish(plan);
     }
 
     private static void receive(ServerPlayerEntity player, JsonObject message) {

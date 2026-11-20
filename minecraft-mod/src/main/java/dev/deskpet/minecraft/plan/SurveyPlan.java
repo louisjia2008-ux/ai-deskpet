@@ -18,6 +18,10 @@ final class SurveyPlan {
         boolean holdsSelection() {
             return this == CONFIRMED || this == RUNNING || this == PAUSED;
         }
+
+        boolean finished() {
+            return this == COMPLETED || this == FAILED || this == CANCELLED || this == EXPIRED;
+        }
     }
 
     record Operation(BlockPos pos, String expect, String target) {
@@ -47,6 +51,7 @@ final class SurveyPlan {
     int siteChanges;
     int lateAttempts;
     int reportedProgress;
+    long finishOrder;
 
     SurveyPlan(JsonObject document) {
         this.document = document.deepCopy();
@@ -107,6 +112,7 @@ final class SurveyPlan {
         json.addProperty("siteChanges", siteChanges);
         json.addProperty("lateAttempts", lateAttempts);
         json.addProperty("reportedProgress", reportedProgress);
+        if (finishOrder > 0) json.addProperty("finishOrder", finishOrder);
         var counts = new JsonObject();
         consumed.forEach((pos, count) -> counts.addProperty(Long.toString(pos.asLong()), count));
         json.add("consumed", counts);
@@ -140,6 +146,7 @@ final class SurveyPlan {
         if (json.has("siteChanges")) plan.siteChanges = json.get("siteChanges").getAsInt();
         if (json.has("lateAttempts")) plan.lateAttempts = json.get("lateAttempts").getAsInt();
         plan.reportedProgress = json.get("reportedProgress").getAsInt();
+        if (json.has("finishOrder")) plan.finishOrder = json.get("finishOrder").getAsLong();
         json.getAsJsonObject("consumed").entrySet().forEach(entry ->
             plan.consumed.put(BlockPos.fromLong(Long.parseLong(entry.getKey())), entry.getValue().getAsInt()));
         restoreStates(json.getAsJsonObject("targets"), plan.finalTargets);
