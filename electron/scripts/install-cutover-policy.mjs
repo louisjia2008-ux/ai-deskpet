@@ -373,6 +373,11 @@ const digestHeartbeatBirthdayRuntime = {
   mainSHA256: '5c10a4121d3ee077cc56b5490c406dfda680c65d5b556ea92f4f272b46222bfe',
   asarSHA256: '6ee9408bfc3205432da441b9376168c287f77e61ca4fae122650d6efc4576475',
 };
+const minecraftDedicatedRuntime = {
+  sourceSHA256: '5e866227b8833ecfac3a136fd867029261a4fcfb4e0ad70d78630e50b6da0ade',
+  mainSHA256: 'b61398f3af931e75be0784d790e32c2555c81b250f6a4acff12e1b73f0118af7',
+  asarSHA256: '9acae22086eeb8c33d8e438b81ca2835dccad9b58f2afdf5d9e2a4ecaab5e88c',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -480,6 +485,8 @@ const reviewedRuntimeManifest = [
   { runtime: doctorOwnerSelfTestRuntime, previous: doctorV2Runtime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   // Digest resume, doctor acknowledgements, app heartbeat watchdog and birthday/diary context, over the installed doctor v2 build, diary still on (2026-11-18).
   { runtime: digestHeartbeatBirthdayRuntime, previous: doctorV2Runtime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Survey wand construction and the managed local Minecraft world, over the installed digest/heartbeat/birthday build, diary still on (2026-11-20).
+  { runtime: minecraftDedicatedRuntime, previous: digestHeartbeatBirthdayRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
