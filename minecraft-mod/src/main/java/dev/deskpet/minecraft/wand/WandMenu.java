@@ -11,8 +11,9 @@ import net.minecraft.util.BlockRotation;
 import net.minecraft.util.Formatting;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.TreeSet;
 import java.util.UUID;
 
@@ -21,7 +22,7 @@ final class WandMenu extends SimpleGui {
     private final WandInteractions.Selection selection;
     private int materialsPage;
     private int ticks;
-    private String lastStatus;
+    private WandInteractions.Progress lastStatus;
     private boolean expired;
 
     WandMenu(WandInteractions.Selection selection) {
@@ -45,20 +46,31 @@ final class WandMenu extends SimpleGui {
     @Override
     public void onTick() {
         if (++ticks % 20 == 0) {
-            if (selection.managing != null) {
-                String status = WandInteractions.authorization().status(selection.owner, selection.managing);
-                if (!status.equals(lastStatus)) {
+            if (selection.isManagement()) {
+                if (selection.comparison != null) {
+                    if (!expired && isExpired(selection.comparisonPlan())) render();
+                } else if (!selection.historyPage && !Objects.equals(selection.progress(), lastStatus)) {
                     render();
                 }
-            } else if (selection.result != null && !expired && isExpired()) {
+            } else if (selection.result != null && !expired && isExpired(selection.result.plan())) {
                 render();
             }
         }
     }
 
     private void render() {
-        if (selection.managing != null) {
-            renderStatus();
+        if (selection.isManagement()) {
+            for (int slot = 0; slot < 54; slot++) clearSlot(slot);
+            if (selection.historyPage) {
+                renderHistory();
+                title("施工历史");
+            } else if (selection.comparison != null) {
+                renderComparison();
+                title("重新比对");
+            } else {
+                renderStatus();
+                title("施工中");
+            }
             return;
         }
         PlanCompiler.Result result = selection.result;
@@ -113,7 +125,7 @@ final class WandMenu extends SimpleGui {
         }
         renderMaterials(result.plan().getAsJsonObject("materials"));
 
-        expired = isExpired();
+        expired = isExpired(result.plan());
         if (expired) {
             item(45, Items.BARRIER, "预览已过期", List.of(Text.literal("点击按钮重新预览")), null);
             item(49, Items.SPYGLASS, "重新预览", List.of(), () -> recompile(selection.settings));
@@ -129,6 +141,13 @@ final class WandMenu extends SimpleGui {
             } else {
                 item(45, Items.BARRIER, "确认开工尚未启用", List.of(), null);
             }
+        }
+        var auth = WandInteractions.authorization();
+        if (auth.isOwner(selection.owner)) {
+            item(47, Items.CLOCK, "施工中", List.of(), () -> {
+                selection.showManagement(auth.active(selection.owner));
+                render();
+            });
         }
         item(51, Items.OAK_SIGN, "撤销上一个角", List.of(), selection::undo);
         item(53, Items.RED_CONCRETE, "取消", List.of(), () -> {
@@ -183,34 +202,107 @@ final class WandMenu extends SimpleGui {
     }
 
     private void renderStatus() {
-        for (int slot = 0; slot < 54; slot++) {
-            clearSlot(slot);
-        }
         UUID id = selection.managing;
         var auth = WandInteractions.authorization();
-        lastStatus = auth.status(selection.owner, id);
-        item(4, Items.CLOCK, "施工状态", Arrays.stream(lastStatus.split("\\R")).map(Text::literal)
-            .map(Text.class::cast).toList(), null);
-        item(46, Items.YELLOW_CONCRETE, "暂停", List.of(), () -> action(auth.pause(selection.owner, id)));
-        item(47, Items.LIME_CONCRETE, "继续", List.of(), () -> action(auth.resume(selection.owner, id)));
-        item(53, Items.RED_CONCRETE, "取消施工", List.of(), () -> {
-            action(auth.cancel(selection.owner, id));
-            if (!id.equals(auth.active(selection.owner))) {
-                selection.invalidate();
-                selection.close();
-            }
+        lastStatus = selection.progress();
+        if (isOpen()) selection.showProgress(lastStatus);
+        item(4, Items.CLOCK, "施工状态", lastStatus == null ? List.of(Text.literal("当前没有施工计划")) : lore(lastStatus.lines()), null);
+        String status = lastStatus == null ? "" : lastStatus.status();
+        boolean working = status.equals("confirmed") || status.equals("running");
+        boolean paused = status.equals("paused");
+        control(46, Items.YELLOW_CONCRETE, "暂停", working, () -> action(auth.pause(selection.owner, id)));
+        control(47, Items.LIME_CONCRETE, "继续", paused, () -> action(auth.resume(selection.owner, id)));
+        control(48, Items.SPYGLASS, "重新比对", paused, this::recompare);
+        control(49, Items.GLASS, "显示剩余工作 · " + (selection.showRemaining ? "开" : "关"), working || paused, () -> {
+            selection.showRemaining = !selection.showRemaining;
+            render();
         });
+        item(51, Items.WRITABLE_BOOK, "历史记录", List.of(), () -> {
+            selection.historyPage = true;
+            selection.clearDisplay();
+            render();
+        });
+        control(53, Items.RED_CONCRETE, "取消施工", working || paused, () -> action(auth.cancel(selection.owner, id)));
+    }
+
+    private void renderHistory() {
+        var entries = WandInteractions.authorization().history(selection.owner);
+        item(4, Items.WRITABLE_BOOK, "历史记录", List.of(Text.literal(entries.isEmpty() ? "暂无记录" : "最近 " + entries.size() + " 份已结束计划")), null);
+        for (int index = 0; index < entries.size(); index++) {
+            var entry = entries.get(index);
+            item(9 + index, Items.PAPER, entry.title(), lore(entry.lines()), null);
+        }
+        item(53, Items.ARROW, "返回施工状态", List.of(), () -> {
+            selection.historyPage = false;
+            render();
+        });
+    }
+
+    private void renderComparison() {
+        var plan = selection.comparisonPlan();
+        var diff = selection.comparison.getAsJsonObject("diff");
+        int added = diff.getAsJsonArray("added").size();
+        int removed = diff.getAsJsonArray("removed").size();
+        int unchanged = diff.getAsJsonArray("unchanged").size();
+        item(4, Items.MAP, "重新比对 · 版本 " + plan.get("revision").getAsInt(),
+            List.of(Text.literal("新增 " + added + " · 取消 " + removed + " · 不变 " + unchanged)), null);
+        item(10, Items.LIME_STAINED_GLASS, "新增 · " + added, List.of(Text.literal("确认后授权这些操作")), null);
+        item(11, Items.MAGENTA_STAINED_GLASS, "取消 · " + removed, List.of(), null);
+        item(12, Items.LIGHT_BLUE_STAINED_GLASS, "不变 · " + unchanged, List.of(), null);
+        renderMaterials(plan.getAsJsonObject("materials"));
+        expired = isExpired(plan);
+        var conflicts = plan.getAsJsonArray("conflicts");
+        if (expired) {
+            item(45, Items.BARRIER, "预览已过期", List.of(Text.literal("请重新比对")), null);
+        } else if (!conflicts.isEmpty()) {
+            var lines = conflicts.asList().stream().limit(12).map(conflict -> {
+                var data = conflict.getAsJsonObject();
+                var kind = PlanCompiler.ConflictKind.valueOf(data.get("kind").getAsString().toUpperCase(Locale.ROOT));
+                return kind.label + " " + WandInteractions.label(WandPreview.position(data));
+            }).toList();
+            item(45, Items.BARRIER, "有冲突，不能确认", lore(lines), null);
+        } else {
+            item(45, Items.EMERALD_BLOCK, "确认新版", List.of(), this::confirmComparison);
+        }
+        item(49, Items.SPYGLASS, "重新比对", List.of(), this::recompare);
+        item(53, Items.ARROW, "返回施工状态", List.of(), () -> {
+            selection.showManagement(selection.managing);
+            render();
+        });
+    }
+
+    private void recompare() {
+        var result = WandInteractions.authorization().recompare(selection.owner, selection.managing);
+        if (result.has("error")) {
+            action(result.get("error").getAsString());
+            return;
+        }
+        if (!result.has("plan")) return;
+        selection.comparison = result;
+        materialsPage = 0;
+        selection.refreshDisplay();
+        render();
+    }
+
+    private void confirmComparison() {
+        UUID token = UUID.fromString(selection.comparison.get("previewId").getAsString());
+        int version = selection.comparisonPlan().get("revision").getAsInt();
+        var message = WandInteractions.authorization().confirm(selection.owner, token);
+        var status = selection.progress();
+        if (status != null && status.revision() == version && !status.status().equals("paused")) {
+            selection.showManagement(selection.managing);
+        }
+        action(message);
     }
 
     private void confirm() {
         UUID id = UUID.fromString(selection.result.plan().get("planId").getAsString());
         var auth = WandInteractions.authorization();
-        action(auth.confirm(selection.owner, id));
+        var message = auth.confirm(selection.owner, id);
         if (id.equals(auth.active(selection.owner))) {
-            selection.managing = id;
-            selection.clearDisplay();
-            renderStatus();
+            selection.showManagement(id);
         }
+        action(message);
     }
 
     private void action(String message) {
@@ -218,8 +310,17 @@ final class WandMenu extends SimpleGui {
         render();
     }
 
-    private boolean isExpired() {
-        return selection.result.plan().get("expiresAt").getAsLong() <= System.currentTimeMillis();
+    void refresh() {
+        render();
+        if (!selection.isManagement() || selection.comparison != null) selection.refreshDisplay();
+    }
+
+    private void title(String label) {
+        if (!getTitle().getString().equals(label)) setTitle(Text.literal(label));
+    }
+
+    private boolean isExpired(JsonObject plan) {
+        return plan.get("expiresAt").getAsLong() <= System.currentTimeMillis();
     }
 
     private void recompile(PlanCompiler.Settings settings) {
@@ -255,6 +356,15 @@ final class WandMenu extends SimpleGui {
 
     private static <E extends Enum<E>> E next(E[] values, E current) {
         return values[(current.ordinal() + 1) % values.length];
+    }
+
+    private static List<Text> lore(List<String> lines) {
+        return lines.stream().map(Text::literal).map(Text.class::cast).toList();
+    }
+
+    private void control(int slot, Item icon, String caption, boolean enabled, Runnable action) {
+        item(slot, enabled ? icon : Items.BARRIER, caption, enabled ? List.of() : List.of(Text.literal("当前状态不可用")),
+            enabled ? action : null);
     }
 
     private void item(int slot, Item icon, String caption, List<Text> lore, Runnable action) {

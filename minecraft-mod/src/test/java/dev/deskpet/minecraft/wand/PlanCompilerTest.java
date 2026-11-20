@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -352,6 +353,158 @@ class PlanCompilerTest {
         return PlanCompiler.firstSiteConflict(ground, plan, plan.getAsJsonArray("ops"), Map.of(), Map.of());
     }
 
+    @Test
+    void recompareAddsClearanceToOnePendingBuildAndFreezesOriginalParameters() {
+        var world = new Ground();
+        var original = PlanCompiler.compile(world, new PlanCompiler.Request(
+            new UUID(0, 1), 4, new UUID(0, 2), "minecraft:overworld", new UUID(0, 3), new UUID(0, 4),
+            FIELD, new PlanCompiler.Settings(HouseTemplates.Type.STARTER_HOUSE, BlockRotation.CLOCKWISE_90,
+                1, -1, 0, PlanCompiler.Mode.FOUNDATION, 4, true), new BlockPos(-2, 64, 0), 1000));
+        var targets = apply(original, world);
+        var obs = original.ops().stream().filter(op -> op.target().isOf(Blocks.COBBLESTONE)).findFirst().orElseThrow();
+        world.put(obs.pos(), Blocks.DIRT.getDefaultState());
+        var remaining = new JsonArray();
+        for (var entry : original.plan().getAsJsonArray("ops")) {
+            var op = entry.getAsJsonObject();
+            if (opPos(op).equals(obs.pos())) remaining.add(op);
+        }
+        var revised = PlanCompiler.recompare(world, original.plan(), remaining, targets, Map.of(), 2000);
+        var document = revised.document();
+        assertEquals(5, document.get("revision").getAsInt());
+        assertEquals(2000 + PlanCompiler.PREVIEW_MILLIS, document.get("expiresAt").getAsLong());
+        for (String field : java.util.List.of("planId", "worldId", "ownerUuid", "botUuid", "dimension", "selection",
+            "groundY", "mode", "template", "fillDepthLimit", "clipTrees", "supplyChest")) {
+            assertEquals(original.plan().get(field), document.get(field), field);
+        }
+        var ops = document.getAsJsonArray("ops");
+        assertEquals(0, document.getAsJsonArray("conflicts").size());
+        assertEquals(2, ops.size());
+        assertEquals(obs.pos(), opPos(ops.get(0).getAsJsonObject()));
+        assertEquals(obs.pos(), opPos(ops.get(1).getAsJsonObject()));
+        assertEquals("cut", ops.get(0).getAsJsonObject().get("kind").getAsString());
+        assertEquals("build", ops.get(1).getAsJsonObject().get("kind").getAsString());
+        assertNull(PlanCompiler.firstSiteConflict(world, document, ops, revised.targets(), revised.protectedBaseline()));
+        var unhashed = document.deepCopy();
+        String hash = unhashed.remove("planHash").getAsString();
+        assertEquals(hash, PlanCompiler.sha256(unhashed));
+    }
+
+    @Test
+    void recompareRecoversFinalDriftWithNoRemainingOperationsAndRefreshesMaterials() {
+        var world = new Ground();
+        var original = compile(world);
+        var targets = apply(original, world);
+        var missing = original.ops().stream().filter(op -> op.target().isOf(Blocks.COBBLESTONE))
+            .limit(3).map(PlanCompiler.Operation::pos).toList();
+        missing.forEach(pos -> world.put(pos, Blocks.AIR.getDefaultState()));
+        world.cobblestoneStock = 1;
+        var revised = PlanCompiler.recompare(world, original.plan(), new JsonArray(), targets, Map.of(), 2000);
+        var doc = revised.document();
+        var ops = doc.getAsJsonArray("ops");
+        assertEquals(0, doc.getAsJsonArray("conflicts").size());
+        assertEquals(Set.copyOf(missing), ops.asList().stream().map(op -> opPos(op.getAsJsonObject()))
+            .collect(java.util.stream.Collectors.toSet()));
+        assertEquals(3, ops.size());
+        var materials = doc.getAsJsonObject("materials");
+        assertEquals(3, materials.getAsJsonObject("required").get("minecraft:cobblestone").getAsInt());
+        assertEquals(1, materials.getAsJsonObject("available").get("minecraft:cobblestone").getAsInt());
+        assertEquals(2, materials.getAsJsonObject("deficit").get("minecraft:cobblestone").getAsInt());
+        assertNull(PlanCompiler.firstSiteConflict(world, doc, ops, revised.targets(), revised.protectedBaseline()));
+    }
+
+    @Test
+    void recompareFlagsProtectedBuildAndOutOfRangeRemovalAttachment() {
+        var world = new Ground();
+        var original = compile(world);
+        var target = original.ops().stream().filter(op -> op.target().isOf(Blocks.COBBLESTONE)).findFirst().orElseThrow().pos();
+        world.put(target, Blocks.CHEST.getDefaultState());
+        BlockPos edge = new BlockPos(FIELD.minX(), 64, 6);
+        world.put(edge, Blocks.DIRT.getDefaultState()).put(edge.west(),
+            Blocks.WALL_TORCH.getDefaultState().with(Properties.HORIZONTAL_FACING, Direction.WEST));
+        var revised = PlanCompiler.recompare(world, original.plan(), original.plan().getAsJsonArray("ops"), targetStates(original),
+            Map.of(), 2000);
+        var doc = revised.document();
+        assertEquals(original.plan().get("selection"), doc.get("selection"));
+        var conflicts = doc.getAsJsonArray("conflicts").asList().stream().map(element -> element.getAsJsonObject()).toList();
+        assertTrue(conflicts.stream().anyMatch(conflict ->
+            conflict.get("kind").getAsString().equals("protected") && opPos(conflict).equals(target)));
+        assertTrue(conflicts.stream().anyMatch(conflict ->
+            conflict.get("kind").getAsString().equals("outside_attachment") && opPos(conflict).equals(edge.west())));
+        for (var entry : doc.getAsJsonArray("ops")) {
+            var pos = opPos(entry.getAsJsonObject());
+            assertTrue(FIELD.contains(pos));
+            assertNotEquals(target, pos);
+        }
+    }
+
+    @Test
+    void recompareRefusesToReplaceAnAlreadyCorrectHalfOfADoor() {
+        var world = new Ground();
+        var original = compile(world);
+        var targets = apply(original, world);
+        BlockPos upper = original.door().up();
+        world.put(upper, Blocks.AIR.getDefaultState());
+        var revised = PlanCompiler.recompare(world, original.plan(), new JsonArray(), targets, Map.of(), 2000);
+        assertTrue(revised.document().getAsJsonArray("conflicts").asList().stream()
+            .anyMatch(element -> element.getAsJsonObject().get("kind").getAsString().equals("incomplete_multiblock")));
+        assertTrue(revised.document().getAsJsonArray("ops").asList().stream()
+            .noneMatch(element -> opPos(element.getAsJsonObject()).equals(original.door())));
+    }
+
+    @Test
+    void recompareRejectsANewTreeAboveTheFrozenVerticalBounds() {
+        var world = new Ground();
+        var original = compile(world);
+        int maxY = original.plan().getAsJsonObject("selection").get("maxY").getAsInt();
+        var upper = new BlockPos(1, maxY, 1);
+        world.put(upper, Blocks.OAK_LOG.getDefaultState())
+            .put(upper.up(), Blocks.OAK_LOG.getDefaultState())
+            .put(upper.up(2), Blocks.OAK_LEAVES.getDefaultState().with(Properties.PERSISTENT, false));
+        var revised = PlanCompiler.recompare(world, original.plan(), original.plan().getAsJsonArray("ops"),
+            targetStates(original), Map.of(), 2000);
+        var document = revised.document();
+        assertEquals(original.plan().get("selection"), document.get("selection"));
+        assertTrue(document.getAsJsonArray("conflicts").asList().stream()
+            .anyMatch(element -> element.getAsJsonObject().get("kind").getAsString().equals("cross_boundary_tree")));
+        assertTrue(document.getAsJsonArray("ops").asList().stream()
+            .noneMatch(element -> opPos(element.getAsJsonObject()).getY() > maxY));
+    }
+
+    @Test
+    void recompareReusesOnlyOriginalTemporaryAccessForCompletedRoofRepair() {
+        var world = new Ground();
+        var original = compile(world);
+        var targets = apply(original, world);
+        var roof = original.ops().stream().filter(op -> op.phase().equals("roof")).findFirst().orElseThrow().pos();
+        world.put(roof, Blocks.AIR.getDefaultState());
+        var revised = PlanCompiler.recompare(world, original.plan(), new JsonArray(), targets, Map.of(), 2000);
+        var document = revised.document();
+        assertEquals(0, document.getAsJsonArray("conflicts").size());
+        var ops = document.getAsJsonArray("ops").asList().stream().map(element -> element.getAsJsonObject()).toList();
+        assertEquals(List.of(roof), ops.stream().filter(op -> !op.get("kind").getAsString().equals("scaffold"))
+            .map(PlanCompilerTest::opPos).toList());
+        assertEquals(original.ops().stream().filter(op -> op.kind().equals("scaffold")).map(PlanCompiler.Operation::pos).toList(),
+            ops.stream().filter(op -> op.get("kind").getAsString().equals("scaffold")).map(PlanCompilerTest::opPos).toList());
+        assertNull(PlanCompiler.firstSiteConflict(world, document, document.getAsJsonArray("ops"),
+            revised.targets(), revised.protectedBaseline()));
+    }
+
+    private static BlockPos opPos(JsonObject operation) {
+        var pos = operation.getAsJsonObject("pos");
+        return new BlockPos(pos.get("x").getAsInt(), pos.get("y").getAsInt(), pos.get("z").getAsInt());
+    }
+
+    private static Map<BlockPos, String> apply(PlanCompiler.Result plan, Ground world) {
+        plan.ops().forEach(op -> world.put(op.pos(), op.target()));
+        return targetStates(plan);
+    }
+
+    private static Map<BlockPos, String> targetStates(PlanCompiler.Result plan) {
+        var targets = new HashMap<BlockPos, String>();
+        plan.ops().forEach(op -> targets.put(op.pos(), PlanCompiler.stateName(op.target())));
+        return targets;
+    }
+
     private static void verifyExpectations(PlanCompiler.Result result) {
         var cells = new HashMap<BlockPos, BlockState>();
         for (var op : result.ops()) {
@@ -381,6 +534,7 @@ class PlanCompilerTest {
 
     private static final class Ground implements PlanCompiler.WorldView {
         private final Map<BlockPos, BlockState> terrain = new HashMap<>();
+        private int cobblestoneStock = 10;
 
         Ground put(BlockPos pos, BlockState state) {
             terrain.put(pos, state);
@@ -414,7 +568,7 @@ class PlanCompilerTest {
 
         @Override
         public Map<String, Integer> materials(BlockPos pos) {
-            return Map.of("minecraft:cobblestone", 10);
+            return Map.of("minecraft:cobblestone", cobblestoneStock);
         }
     }
 }

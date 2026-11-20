@@ -61,7 +61,10 @@ public final class PlanService {
         PlanChannel.onMessage(PlanService::receive);
         ServerTickEvents.END_SERVER_TICK.register(PlanService::tick);
         ServerLifecycleEvents.SERVER_STARTING.register(server -> stopping = false);
-        ServerLifecycleEvents.SERVER_STOPPING.register(server -> stopping = true);
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            stopping = true;
+            PlanPresentation.clear();
+        });
         ServerLivingEntityEvents.AFTER_DEATH.register((entity, damage) -> {
             if (config.enabled() && entity instanceof ServerPlayerEntity bot && config.isBot(bot)) {
                 pauseOnDeath(bot);
@@ -94,7 +97,15 @@ public final class PlanService {
             @Override public String pause(ServerPlayerEntity p, UUID id) { return PlanService.pause(p, id); }
             @Override public String resume(ServerPlayerEntity p, UUID id) { return PlanService.resume(p, id); }
             @Override public String cancel(ServerPlayerEntity p, UUID id) { return PlanService.cancel(p, id); }
-            @Override public String status(ServerPlayerEntity p, UUID id) { return PlanService.status(p, id); }
+            @Override public boolean isOwner(ServerPlayerEntity p) { return PlanService.isOwner(p); }
+            @Override public JsonObject recompare(ServerPlayerEntity p, UUID id) { return PlanService.recompare(p, id); }
+            @Override public WandInteractions.Progress progress(ServerPlayerEntity p, UUID id, boolean includeRemaining) {
+                var plan = PlanStore.get(p.getWorld().getServer()).plans.get(id);
+                return ownerCheck(p, plan) == null ? PlanPresentation.progress(plan, includeRemaining) : null;
+            }
+            @Override public List<WandInteractions.HistoryEntry> history(ServerPlayerEntity p) {
+                return isOwner(p) ? PlanPresentation.history(PlanStore.get(p.getWorld().getServer()), p) : List.of();
+            }
             @Override public boolean enabled() { return config.enabled(); }
         });
     }
@@ -122,8 +133,12 @@ public final class PlanService {
         return UUID.nameUUIDFromBytes(("OfflinePlayer:" + config.botName()).getBytes(StandardCharsets.UTF_8));
     }
 
+    private static boolean isOwner(ServerPlayerEntity player) {
+        return config.enabled() && player.getUuid().equals(config.ownerUuid());
+    }
+
     private static UUID active(ServerPlayerEntity player) {
-        if (!config.enabled() || !player.getUuid().equals(config.ownerUuid())) return null;
+        if (!isOwner(player)) return null;
         var store = PlanStore.get(player.getWorld().getServer());
         UUID id = null;
         for (var plan : store.plans.values()) {
@@ -153,7 +168,12 @@ public final class PlanService {
         var world = player.getWorld();
         var server = world.getServer();
         var store = PlanStore.get(server);
+        var draft = comparisonByToken(store, id);
+        if (draft != null) return confirmComparison(player, store, draft);
         var plan = store.plans.get(id);
+        if (isOwner(player) && store.retiredPreviews.containsKey(id)) {
+            return deny(store, null, id, "confirm", store.retiredPreviews.get(id));
+        }
         String error = ownerCheck(player, plan);
         if (error == null) error = contextCheck(world, plan);
         if (error != null) return deny(store, plan, id, "confirm", error);
@@ -163,9 +183,98 @@ public final class PlanService {
         if (plan.document.getAsJsonArray("conflicts").size() > 0) {
             return deny(store, plan, id, "confirm", "preview_conflicts");
         }
-        String conflict = firstSiteConflict(world, plan);
-        if (conflict != null) return deny(store, plan, id, "confirm", conflict);
+        var conflict = siteProblem(world, plan);
+        if (conflict != null) return deny(store, plan, id, "confirm", conflict.message());
         return issue(server, store, plan, "confirm");
+    }
+
+    static JsonObject recompare(ServerPlayerEntity player, UUID id) {
+        var world = player.getWorld();
+        var store = PlanStore.get(world.getServer());
+        var plan = store.plans.get(id);
+        String error = ownerCheck(player, plan);
+        if (error == null) error = contextCheck(world, plan);
+        if (error == null && plan.status != PAUSED) error = "not_paused";
+        if (error == null) {
+            var compiled = PlanCompiler.recompare(world, plan.document, plan.remaining(), plan.finalTargets,
+                plan.protectedBaseline, System.currentTimeMillis());
+            if (compiled != null) {
+                var diff = comparisonDiff(plan.remaining(), compiled.document().getAsJsonArray("ops"));
+                var draft = new PlanStore.Recomparison(UUID.randomUUID(), plan, compiled, diff);
+                store.retireComparison(id, "preview_superseded");
+                store.recomparisons.put(id, draft);
+                return draft.export();
+            }
+            error = "template_revision_unavailable";
+        }
+        var result = new JsonObject();
+        result.addProperty("error", deny(store, plan, id, "recompare", error));
+        return result;
+    }
+
+    private static JsonObject comparisonDiff(JsonArray before, JsonArray after) {
+        var old = indexOperations(before);
+        var revised = indexOperations(after);
+        var added = new JsonArray();
+        var removed = new JsonArray();
+        var unchanged = new JsonArray();
+        revised.forEach((key, op) -> (old.containsKey(key) ? unchanged : added).add(op.deepCopy()));
+        old.forEach((key, op) -> {
+            if (!revised.containsKey(key)) removed.add(op.deepCopy());
+        });
+        var diff = new JsonObject();
+        diff.add("added", added);
+        diff.add("removed", removed);
+        diff.add("unchanged", unchanged);
+        return diff;
+    }
+
+    private static Map<String, JsonObject> indexOperations(JsonArray operations) {
+        var indexed = new LinkedHashMap<String, JsonObject>();
+        for (var element : operations) {
+            var op = element.getAsJsonObject();
+            var identity = op.deepCopy();
+            identity.remove("order");
+            indexed.put(PlanCompiler.canonical(identity), op);
+        }
+        return indexed;
+    }
+
+    private static PlanStore.Recomparison comparisonByToken(PlanStore store, UUID token) {
+        return store.recomparisons.values().stream().filter(draft -> draft.previewId().equals(token)).findFirst().orElse(null);
+    }
+
+    static boolean expireComparison(PlanStore store, UUID token) {
+        var draft = comparisonByToken(store, token);
+        if (draft == null) return false;
+        store.retireComparison(draft.base().id, "preview_expired");
+        return true;
+    }
+
+    private static String confirmComparison(ServerPlayerEntity player, PlanStore store, PlanStore.Recomparison draft) {
+        var world = player.getWorld();
+        var old = store.plans.get(draft.base().id);
+        var token = draft.previewId();
+        String error = ownerCheck(player, old);
+        if (error == null) error = contextCheck(world, old);
+        if (error == null && (old != draft.base() || old.status != PAUSED)) error = "preview_superseded";
+        if (error != null) return deny(store, old, token, "confirm", error);
+        var revised = new SurveyPlan(draft.compiled().document());
+        if (expired(revised)) {
+            expireComparison(store, token);
+            return deny(store, old, token, "confirm", "preview_expired");
+        }
+        if (revised.document.getAsJsonArray("conflicts").size() > 0) {
+            return deny(store, old, token, "confirm", "preview_conflicts");
+        }
+        revised.finalTargets.clear();
+        revised.finalTargets.putAll(draft.compiled().targets());
+        revised.protectedBaseline.putAll(draft.compiled().protectedBaseline());
+        revised.inheritProgress(old);
+        revised.status = PAUSED;
+        var conflict = siteProblem(world, revised);
+        if (conflict != null) return deny(store, old, token, "confirm", conflict.message());
+        return issue(world.getServer(), store, revised, "confirm");
     }
 
     private static String pause(ServerPlayerEntity player, UUID id) {
@@ -188,8 +297,8 @@ public final class PlanService {
         if (error == null) error = contextCheck(world, plan);
         if (error != null) return deny(store, plan, id, "resume", error);
         if (plan.status != PAUSED) return deny(store, plan, id, "resume", "not_paused");
-        String conflict = firstSiteConflict(world, plan);
-        if (conflict != null) return deny(store, plan, id, "resume", conflict);
+        var conflict = siteProblem(world, plan);
+        if (conflict != null) return deny(store, plan, id, "resume", conflict.message());
 
         var revised = plan.document.deepCopy();
         revised.addProperty("revision", revised.get("revision").getAsInt() + 1);
@@ -200,11 +309,7 @@ public final class PlanService {
         var renewed = new SurveyPlan(revised);
         renewed.finalTargets.putAll(plan.finalTargets);
         renewed.protectedBaseline.putAll(plan.protectedBaseline);
-        renewed.violations = plan.violations;
-        renewed.misplacements = plan.misplacements;
-        renewed.siteChanges = plan.siteChanges;
-        renewed.lateAttempts = plan.lateAttempts;
-        renewed.completedBefore = plan.completed();
+        renewed.inheritProgress(plan);
         renewed.status = PAUSED;
         return issue(server, store, renewed, "resume");
     }
@@ -222,32 +327,16 @@ public final class PlanService {
         return describe(plan);
     }
 
-    private static String status(ServerPlayerEntity player, UUID id) {
-        var plan = PlanStore.get(player.getWorld().getServer()).plans.get(id);
-        return ownerCheck(player, plan) == null ? describe(plan) : "";
-    }
-
     private static String describe(SurveyPlan plan) {
-        var label = switch (plan.status) {
-            case DRAFT -> "草稿";
-            case PREVIEWED -> "已预览";
-            case CONFIRMED -> "已确认，等待机器人接单";
-            case RUNNING -> "运行中";
-            case PAUSED -> "已暂停";
-            case COMPLETED -> "已完成";
-            case FAILED -> "失败";
-            case CANCELLED -> "已取消";
-            case EXPIRED -> "已过期";
-        };
-        return label + (plan.reason.isEmpty() ? "" : " · " + describeReason(plan))
+        return PlanPresentation.statusLabel(plan.status) + (plan.reason.isEmpty() ? "" : " · " + describeReason(plan))
             + (plan.status == RUNNING ? " · " + progressLabel(plan) : "")
             + " · 越界 " + plan.violations + " · 放错 " + plan.misplacements
             + " · 现场变化 " + plan.siteChanges + " · 迟到操作 " + plan.lateAttempts;
     }
 
     private static String describeReason(SurveyPlan plan) {
-        String reason = reasonLabel(plan.reason);
-        if (plan.status != PAUSED || plan.blockage == null) return reason;
+        if (plan.status != PAUSED || plan.blockage == null) return reasonLabel(plan.reason);
+        String reason = reasonLabel(string(plan.blockage, "reason"));
         if (plan.blockage.has("pos")) {
             reason += " · " + SurveyPlan.readPosition(plan.blockage.getAsJsonObject("pos")).toShortString();
         }
@@ -256,23 +345,7 @@ public final class PlanService {
     }
 
     private static String progressLabel(SurveyPlan plan) {
-        String phase = switch (plan.phase) {
-            case "terrain" -> "整地";
-            case "foundation" -> "地基";
-            case "scaffold" -> "搭脚手架";
-            case "stair_base" -> "安装楼梯起步";
-            case "walls" -> "砌墙";
-            case "upper_walls" -> "砌上部墙体";
-            case "floor" -> "铺楼板与楼梯";
-            case "roof" -> "盖屋顶";
-            case "furnish" -> "布置家具";
-            case "remove_scaffold" -> "拆脚手架";
-            case "irrigate" -> "放水";
-            case "till" -> "锄地";
-            case "sow" -> "播种";
-            case "" -> "施工";
-            default -> plan.phase;
-        };
+        String phase = PlanPresentation.phaseLabel(plan.phase);
         String waiting = switch (plan.waiting) {
             case "night" -> " · 夜里停工";
             case "chest_full" -> " · 等材料箱腾出空间";
@@ -287,7 +360,7 @@ public final class PlanService {
         return phase + " · " + completed + "/" + plan.total() + waiting;
     }
 
-    private static String reasonLabel(String reason) {
+    static String reasonLabel(String reason) {
         return switch (reason) {
             case "disabled" -> "游戏内授权未启用";
             case "wrong_owner" -> "只有配置的主人可以操作";
@@ -295,6 +368,9 @@ public final class PlanService {
             case "wrong_world" -> "计划属于另一个世界";
             case "wrong_dimension" -> "请回到计划所在维度";
             case "preview_expired" -> "预览已过期，请重新预览";
+            case "preview_superseded" -> "预览已作废，请使用最新的重新比对";
+            case "template_revision_unavailable" -> "原房型版本不可用";
+            case "preview_conflicts" -> "有现场冲突，不能确认";
             case "overlapping_plan" -> "已有进行中的计划和此选区重叠";
             case "bot_busy" -> "机器人正在处理另一份计划";
             case "bot_unavailable" -> "机器人尚未连接计划频道";
@@ -308,6 +384,12 @@ public final class PlanService {
             case "outside_authorized_operations" -> "机器人尝试了授权清单外的操作";
             case "server_final_state_changed" -> "现场目标格发生变化";
             case "protected_block_changed" -> "受保护格发生变化";
+            case "expected_block_changed" -> "现场方块与预期不符";
+            case "outside_selection" -> "需要改动原选区之外的方块";
+            case "outside_attachment" -> "待挖方块有外部附着";
+            case "cross_boundary_tree" -> "树超出选区";
+            case "adjacent_fluid" -> "待挖方块贴着水或岩浆";
+            case "falling_column" -> "沙或沙砾柱超出范围";
             case "no_reachable_stand", "no_reachable_station", "placement_station_unreachable" ->
                 "没有可达的施工站位";
             case "placement_rejected", "misplacement_retries_exhausted" -> "多次放置仍未达到指定状态";
@@ -372,6 +454,7 @@ public final class PlanService {
         plan.blockage = null;
         plan.heartbeatDeadline = System.nanoTime() + HEARTBEAT_NANOS;
         store.plans.put(plan.id, plan);
+        store.retireComparison(plan.id, "preview_superseded");
         store.markDirty();
 
         for (int index = 0; index < chunks; index++) {
@@ -448,6 +531,7 @@ public final class PlanService {
 
     private static void revoke(MinecraftServer server, PlanStore store, SurveyPlan plan,
                                SurveyPlan.Status next, String reason, boolean notify) {
+        var previous = plan.status;
         UUID oldGrant = plan.grantId;
         plan.grantId = null;
         plan.status = next;
@@ -458,7 +542,11 @@ public final class PlanService {
             var owner = server.getPlayerManager().getPlayer(plan.ownerUuid);
             if (owner != null) owner.sendMessage(Text.literal(describe(plan)), true);
         }
-        if (next.finished()) store.recordFinish(plan);
+        if (next.finished()) {
+            store.retireComparison(plan.id, "preview_superseded");
+            store.recordFinish(plan);
+        }
+        if (!stopping && plan.ownerUuid.equals(config.ownerUuid())) PlanPresentation.transition(server, plan, previous);
         if (oldGrant != null) {
             store.revocations.put(plan.id, new PlanStore.Revocation(plan, oldGrant, System.nanoTime() + REVOKE_NANOS));
         }
@@ -494,7 +582,14 @@ public final class PlanService {
                 if (owner != null) owner.sendMessage(Text.literal(progressLabel(plan)), true);
             }
         }
+        var elapsed = new ArrayList<UUID>();
+        long now = System.currentTimeMillis();
+        store.recomparisons.forEach((id, draft) -> {
+            if (draft.compiled().document().get("expiresAt").getAsLong() <= now) elapsed.add(id);
+        });
+        elapsed.forEach(id -> store.retireComparison(id, "preview_expired"));
         store.trimHistory();
+        PlanPresentation.tick(server, store, config.ownerUuid());
     }
 
     private static void expirePreview(PlanStore store, SurveyPlan plan) {
@@ -550,15 +645,17 @@ public final class PlanService {
             return;
         }
         if (type.equals("accept")) {
-            String conflict = firstSiteConflict(world, plan);
+            var conflict = siteProblem(world, plan);
             if (conflict != null) {
                 plan.siteChanges++;
-                revoke(server, store, plan, PAUSED, conflict, true);
+                recordSiteBlockage(plan, conflict.reason(), conflict.pos());
+                revoke(server, store, plan, PAUSED, conflict.message(), true);
                 return;
             }
             plan.status = RUNNING;
             plan.execute = truth(message.get("execute"));
             plan.heartbeatDeadline = System.nanoTime() + HEARTBEAT_NANOS;
+            if (!stopping && plan.ownerUuid.equals(config.ownerUuid())) PlanPresentation.transition(server, plan, CONFIRMED);
             store.markDirty();
             var running = identity(plan);
             running.addProperty("type", "running");
@@ -667,8 +764,16 @@ public final class PlanService {
         return reasonLabel(reason);
     }
 
-    private static String firstSiteConflict(ServerWorld world, SurveyPlan plan) {
-        return PlanCompiler.firstSiteConflict(world, plan.document, plan.remaining(), plan.finalTargets, plan.protectedBaseline);
+    private static PlanCompiler.SiteProblem siteProblem(ServerWorld world, SurveyPlan plan) {
+        return PlanCompiler.siteProblem(world, plan.document, plan.remaining(), plan.finalTargets, plan.protectedBaseline);
+    }
+
+    private static void recordSiteBlockage(SurveyPlan plan, String reason, BlockPos pos) {
+        var blockage = new JsonObject();
+        blockage.addProperty("reason", reason);
+        blockage.add("pos", position(pos));
+        blockage.addProperty("dimension", plan.dimension);
+        plan.blockage = blockage;
     }
 
     private static boolean allowBreak(ServerWorld world, ServerPlayerEntity player, BlockPos pos, BlockState state) {
@@ -740,6 +845,7 @@ public final class PlanService {
             }
             var current = world.getBlockState(pos);
             if (!PlanCompiler.matchesExpect(world, pos, op.kind(), op.expect(), op.target(), current)) {
+                recordSiteBlockage(matching, "expected_block_changed", pos);
                 revoke(server, store, matching, PAUSED, mismatch(pos, op.expect(), PlanCompiler.stateName(current)), true);
                 return rejectChange(store, matching, action, pos, "expected_block_changed", BlockDenial.SITE_CHANGE);
             }
@@ -752,9 +858,10 @@ public final class PlanService {
                 return rejectViolation(server, store, matching, action, pos, "outside_authorized_operations");
             }
             if (target.getValue().isAir() && !current.isAir()) {
-                String conflict = PlanCompiler.removalConflict(world, matching.document, pos, targets::containsKey);
+                var conflict = PlanCompiler.removalProblem(world, matching.document, pos, targets::containsKey);
                 if (conflict != null) {
-                    revoke(server, store, matching, PAUSED, conflict, true);
+                    recordSiteBlockage(matching, conflict.reason(), conflict.pos());
+                    revoke(server, store, matching, PAUSED, conflict.message(), true);
                     return rejectChange(store, matching, action, pos, "expected_block_changed", BlockDenial.SITE_CHANGE);
                 }
             }
@@ -805,24 +912,23 @@ public final class PlanService {
         if (plan.violations > 0) {
             revoke(server, store, plan, FAILED, "outside_authorized_operations", true);
         } else {
-            boolean protectedMatches = matches(world, plan.protectedBaseline);
+            var changedProtected = plan.protectedBaseline.entrySet().stream().filter(entry ->
+                !PlanCompiler.matchesState(entry.getValue(), world.getBlockState(entry.getKey())))
+                .map(Map.Entry::getKey).findFirst().orElse(null);
             boolean randomTicksEnabled = world.getGameRules().getInt(GameRules.RANDOM_TICK_SPEED) > 0;
-            boolean targetsMatch = plan.finalTargets.entrySet().stream().allMatch(target ->
-                PlanCompiler.matchesFinalTarget(plan.document, target.getKey(), target.getValue(),
-                    world.getBlockState(target.getKey()), randomTicksEnabled));
-            if (protectedMatches && targetsMatch) {
+            var changedTarget = plan.finalTargets.entrySet().stream().filter(target ->
+                !PlanCompiler.matchesFinalTarget(plan.document, target.getKey(), target.getValue(),
+                    world.getBlockState(target.getKey()), randomTicksEnabled))
+                .map(Map.Entry::getKey).findFirst().orElse(null);
+            if (changedProtected == null && changedTarget == null) {
                 revoke(server, store, plan, COMPLETED, "", true);
                 return;
             }
             plan.siteChanges++;
-            String reason = protectedMatches ? "server_final_state_changed" : "protected_block_changed";
+            String reason = changedProtected == null ? "server_final_state_changed" : "protected_block_changed";
+            recordSiteBlockage(plan, reason, changedProtected == null ? changedTarget : changedProtected);
             revoke(server, store, plan, PAUSED, reason, true);
         }
-    }
-
-    private static boolean matches(ServerWorld world, Map<BlockPos, String> expected) {
-        return expected.entrySet().stream().allMatch(entry ->
-            PlanCompiler.matchesState(entry.getValue(), world.getBlockState(entry.getKey())));
     }
 
     private static String mismatch(BlockPos pos, String expected, String actual) {

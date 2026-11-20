@@ -28,7 +28,7 @@ final class PlanDebugCommands {
                 try {
                     var directory = server.getSavePath(WorldSavePath.ROOT).resolve("deskpet-debug");
                     Files.createDirectories(directory);
-                    Files.writeString(directory.resolve("plans.json"), PlanStore.get(server).export().toString());
+                    Files.writeString(directory.resolve("plans.json"), PlanStore.get(server).debugExport().toString());
                     source.sendFeedback(() -> Text.literal("survey plan state exported"), false);
                     return 1;
                 } catch (IOException error) {
@@ -42,13 +42,26 @@ final class PlanDebugCommands {
                 debug.then(CommandManager.literal("expire").then(CommandManager.argument("plan", StringArgumentType.word())
                     .executes(context -> {
                         var store = PlanStore.get(context.getSource().getServer());
-                        var plan = store.plans.get(id(StringArgumentType.getString(context, "plan")));
+                        var id = id(StringArgumentType.getString(context, "plan"));
+                        if (PlanService.expireComparison(store, id)) {
+                            context.getSource().sendFeedback(() -> Text.literal("survey plan preview deadline elapsed"), false);
+                            return 1;
+                        }
+                        var plan = store.plans.get(id);
                         if (plan == null || plan.status != SurveyPlan.Status.PREVIEWED) throw UNKNOWN_PLAN.create();
                         plan.document.addProperty("expiresAt", System.currentTimeMillis() - 1);
                         plan.document.remove("planHash");
                         plan.document.addProperty("planHash", PlanCompiler.sha256(plan.document));
                         store.markDirty();
                         context.getSource().sendFeedback(() -> Text.literal("survey plan preview deadline elapsed"), false);
+                        return 1;
+                    })));
+                debug.then(CommandManager.literal("recompare").then(CommandManager.argument("plan", StringArgumentType.word())
+                    .executes(context -> {
+                        var source = context.getSource();
+                        var result = PlanService.recompare(source.getPlayerOrThrow(), id(StringArgumentType.getString(context, "plan")));
+                        String text = result.has("previewId") ? result.get("previewId").getAsString() : result.get("error").getAsString();
+                        source.sendFeedback(() -> Text.literal(text), false);
                         return 1;
                     })));
                 debug.then(CommandManager.literal("confirm").then(CommandManager.argument("plan", StringArgumentType.word())

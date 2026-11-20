@@ -65,6 +65,17 @@ final class SurveyPlan {
     JsonObject missing = new JsonObject();
     JsonObject blockage;
     long finishOrder;
+    long finishedAt;
+    boolean started;
+
+    void inheritProgress(SurveyPlan previous) {
+        violations = previous.violations;
+        misplacements = previous.misplacements;
+        siteChanges = previous.siteChanges;
+        lateAttempts = previous.lateAttempts;
+        completedBefore = previous.completed();
+        started = previous.started;
+    }
 
     SurveyPlan(JsonObject document) {
         this.document = document.deepCopy();
@@ -149,6 +160,8 @@ final class SurveyPlan {
         json.add("missing", missing);
         if (blockage != null) json.add("blocked", blockage);
         if (finishOrder > 0) json.addProperty("finishOrder", finishOrder);
+        if (finishedAt > 0) json.addProperty("finishedAt", finishedAt);
+        json.addProperty("started", started);
         var counts = new JsonObject();
         consumed.forEach((pos, count) -> counts.addProperty(Long.toString(pos.asLong()), count));
         json.add("consumed", counts);
@@ -187,9 +200,12 @@ final class SurveyPlan {
         if (json.has("phase")) plan.phase = json.get("phase").getAsString();
         if (json.has("blocked")) plan.blockage = json.getAsJsonObject("blocked");
         if (json.has("finishOrder")) plan.finishOrder = json.get("finishOrder").getAsLong();
+        if (json.has("finishedAt")) plan.finishedAt = json.get("finishedAt").getAsLong();
         json.getAsJsonObject("consumed").entrySet().forEach(entry ->
             plan.consumed.put(BlockPos.fromLong(Long.parseLong(entry.getKey())), entry.getValue().getAsInt()));
         plan.appliedCount = plan.consumed.values().stream().mapToInt(Integer::intValue).sum();
+        plan.started = json.has("started") ? json.get("started").getAsBoolean()
+            : plan.status == Status.RUNNING || plan.completed() > 0;
         restoreStates(json.getAsJsonObject("targets"), plan.finalTargets);
         restoreStates(json.getAsJsonObject("protectedBaseline"), plan.protectedBaseline);
         if (plan.status == Status.RUNNING || plan.status == Status.CONFIRMED) {

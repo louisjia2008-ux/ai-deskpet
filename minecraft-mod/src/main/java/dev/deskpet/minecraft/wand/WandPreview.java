@@ -1,5 +1,7 @@
 package dev.deskpet.minecraft.wand;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import eu.pb4.polymer.virtualentity.api.ElementHolder;
 import eu.pb4.polymer.virtualentity.api.attachment.ManualAttachment;
 import eu.pb4.polymer.virtualentity.api.elements.AbstractElement;
@@ -7,6 +9,7 @@ import eu.pb4.polymer.virtualentity.api.elements.BlockDisplayElement;
 import eu.pb4.polymer.virtualentity.api.elements.TextDisplayElement;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.entity.decoration.Brightness;
 import net.minecraft.entity.decoration.DisplayEntity;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
@@ -52,11 +55,7 @@ final class WandPreview extends ElementHolder {
         WandPreview view = new WandPreview(origin);
         Map<BlockPos, Marker> markers = new LinkedHashMap<>();
         for (var op : result.ops()) {
-            Layer layer = switch (op.kind()) {
-                case "build", "furnish" -> Layer.BUILD;
-                case "fill", "scaffold" -> Layer.FILL;
-                default -> Layer.CLEAR;
-            };
+            Layer layer = operationLayer(op.kind());
             if (enabled.contains(layer) && !op.phase().equals("remove_scaffold")) {
                 BlockState state = layer == Layer.BUILD && !TerrainRules.id(op.target()).equals("water")
                     ? op.target() : layer.marker;
@@ -70,26 +69,7 @@ final class WandPreview extends ElementHolder {
             result.conflicts().forEach(conflict -> markers.put(conflict.pos(), new Marker(Layer.CONFLICT.marker, Layer.CONFLICT)));
         }
 
-        if (markers.size() <= FULL_DISPLAY_UNTIL) {
-            markers.forEach((pos, marker) -> {
-                float inset = marker.layer() == Layer.BUILD || marker.layer() == Layer.FILL ? 0.02f : -0.012f;
-                float size = 1 - 2 * inset;
-                view.addDisplay(pos, marker.actual(), inset, inset, inset, size, size, size);
-            });
-        } else {
-            List<Map.Entry<BlockPos, Marker>> boundaries = new ArrayList<>();
-            markers.entrySet().stream()
-                .filter(entry -> entry.getValue().layer() == Layer.CONFLICT).forEach(boundaries::add);
-            markers.entrySet().stream().filter(entry -> entry.getValue().layer() != Layer.CONFLICT)
-                .filter(entry -> !enclosed(markers, entry.getKey())).forEach(boundaries::add);
-            // Distribute the outlines over the boundary. Always include a conflict when present.
-            int budget = MAX_EDGE_ENTITIES / 12;
-            int sampleCount = Math.min(budget, boundaries.size());
-            for (int index = 0; index < sampleCount; index++) {
-                var entry = boundaries.get(index * boundaries.size() / sampleCount);
-                view.addOutline(entry.getKey(), entry.getValue().layer().marker);
-            }
-        }
+        view.drawMarkers(markers);
 
         if (result.door() != null && enabled.contains(Layer.BUILD)) {
             TextDisplayElement door = new TextDisplayElement();
@@ -100,10 +80,95 @@ final class WandPreview extends ElementHolder {
                 result.doorFacing().getOffsetZ() * 0.7);
             view.addAt(door, at);
         }
-        // An unattached holder is removed on the next network tick. Manual tracking
-        // keeps this holder private instead of enrolling nearby players via the chunk.
-        new ManualAttachment(view, owner.getWorld(), () -> origin).startWatching(owner);
+        view.showTo(owner);
         return view;
+    }
+
+    static WandPreview showComparison(ServerPlayerEntity owner, JsonObject comparison) {
+        var view = new WandPreview(Vec3d.of(owner.getBlockPos()));
+        var diff = comparison.getAsJsonObject("diff");
+        // Different offsets keep categories visible when one cell has both a new and an unchanged operation.
+        view.addDiff(diff.getAsJsonArray("added"), Blocks.LIME_STAINED_GLASS.getDefaultState(), 0.04f, 144);
+        view.addDiff(diff.getAsJsonArray("removed"), Blocks.MAGENTA_STAINED_GLASS.getDefaultState(), 0.36f, 96);
+        view.addDiff(diff.getAsJsonArray("unchanged"), Blocks.LIGHT_BLUE_STAINED_GLASS.getDefaultState(), 0.68f, 96);
+        var conflicts = comparison.getAsJsonObject("plan").getAsJsonArray("conflicts");
+        for (int index = 0; index < Math.min(48, conflicts.size()); index++) {
+            view.addGlow(position(conflicts.get(index).getAsJsonObject()), false);
+        }
+        view.showTo(owner);
+        return view;
+    }
+
+    static WandPreview showProgress(ServerPlayerEntity owner, BlockPos blockage, boolean death, JsonArray remaining) {
+        var view = new WandPreview(Vec3d.of(owner.getBlockPos()));
+        Map<BlockPos, Marker> markers = new LinkedHashMap<>();
+        for (var entry : remaining) {
+            var op = entry.getAsJsonObject();
+            Layer layer = operationLayer(op.get("kind").getAsString());
+            var pos = position(op);
+            if (!pos.equals(blockage)) markers.putIfAbsent(pos, new Marker(layer.marker, layer));
+        }
+        view.drawMarkers(markers);
+        if (blockage != null) view.addGlow(blockage, death);
+        view.showTo(owner);
+        return view;
+    }
+
+    static BlockPos position(JsonObject entry) {
+        var pos = entry.getAsJsonObject("pos");
+        return new BlockPos(pos.get("x").getAsInt(), pos.get("y").getAsInt(), pos.get("z").getAsInt());
+    }
+
+    private static Layer operationLayer(String kind) {
+        return switch (kind) {
+            case "build", "furnish" -> Layer.BUILD;
+            case "fill", "scaffold" -> Layer.FILL;
+            default -> Layer.CLEAR;
+        };
+    }
+
+    private void showTo(ServerPlayerEntity owner) {
+        // Manual tracking sends entity packets only to the authorized viewer.
+        Vec3d origin = getPos();
+        new ManualAttachment(this, owner.getWorld(), () -> origin).startWatching(owner);
+    }
+
+    private void addDiff(JsonArray operations, BlockState color, float x, int limit) {
+        var positions = operations.asList().stream().map(op -> position(op.getAsJsonObject())).distinct().toList();
+        int count = Math.min(limit, positions.size());
+        for (int index = 0; index < count; index++) {
+            addDisplay(positions.get(index * positions.size() / count), color, x, 0.06f, 0.06f, 0.28f, 0.88f, 0.88f);
+        }
+    }
+
+    private void addGlow(BlockPos pos, boolean death) {
+        var marker = new BlockDisplayElement((death ? Blocks.PURPLE_STAINED_GLASS : Blocks.RED_STAINED_GLASS).getDefaultState());
+        marker.setTranslation(new Vector3f(-0.014f, -0.014f, -0.014f));
+        marker.setScale(new Vector3f(1.028f, 1.028f, 1.028f));
+        marker.setGlowing(true);
+        marker.setGlowColorOverride(death ? 0xB460FF : 0xFF3030);
+        marker.setBrightness(new Brightness(15, 15));
+        addAt(marker, Vec3d.of(pos));
+    }
+
+    private void drawMarkers(Map<BlockPos, Marker> markers) {
+        if (markers.size() <= FULL_DISPLAY_UNTIL) {
+            markers.forEach((pos, marker) -> {
+                float inset = marker.layer() == Layer.BUILD || marker.layer() == Layer.FILL ? 0.02f : -0.012f;
+                float size = 1 - 2 * inset;
+                addDisplay(pos, marker.actual(), inset, inset, inset, size, size, size);
+            });
+            return;
+        }
+        List<Map.Entry<BlockPos, Marker>> boundaries = new ArrayList<>();
+        markers.entrySet().stream().filter(entry -> entry.getValue().layer() == Layer.CONFLICT).forEach(boundaries::add);
+        markers.entrySet().stream().filter(entry -> entry.getValue().layer() != Layer.CONFLICT)
+            .filter(entry -> !enclosed(markers, entry.getKey())).forEach(boundaries::add);
+        int count = Math.min(MAX_EDGE_ENTITIES / 12, boundaries.size());
+        for (int index = 0; index < count; index++) {
+            var entry = boundaries.get(index * boundaries.size() / count);
+            addOutline(entry.getKey(), entry.getValue().layer().marker);
+        }
     }
 
     private static boolean enclosed(Map<BlockPos, Marker> markers, BlockPos pos) {

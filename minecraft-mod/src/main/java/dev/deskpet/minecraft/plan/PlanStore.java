@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.serialization.Codec;
+import dev.deskpet.minecraft.wand.PlanCompiler;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.PersistentState;
 import net.minecraft.world.PersistentStateType;
@@ -29,6 +30,19 @@ final class PlanStore extends PersistentState {
     record Revocation(SurveyPlan plan, UUID grantId, long deadline) {}
 
     final Map<UUID, Revocation> revocations = new LinkedHashMap<>();
+    record Recomparison(UUID previewId, SurveyPlan base, PlanCompiler.Recomparison compiled, JsonObject diff) {
+        JsonObject export() {
+            var value = new JsonObject();
+            value.addProperty("previewId", previewId.toString());
+            value.add("plan", compiled.document().deepCopy());
+            value.add("diff", diff.deepCopy());
+            return value;
+        }
+    }
+
+    // Unconfirmed revisions are session-local. A restart requires a fresh comparison.
+    final Map<UUID, Recomparison> recomparisons = new LinkedHashMap<>();
+    final LinkedHashMap<UUID, String> retiredPreviews = new LinkedHashMap<>();
     final JsonArray rejections = new JsonArray();
     final JsonArray protocolRejections = new JsonArray();
     private long lastFinishOrder;
@@ -54,6 +68,7 @@ final class PlanStore extends PersistentState {
 
     void recordFinish(SurveyPlan plan) {
         plan.finishOrder = ++lastFinishOrder;
+        plan.finishedAt = System.currentTimeMillis();
         historyNeedsTrim = true;
         markDirty();
     }
@@ -84,6 +99,21 @@ final class PlanStore extends PersistentState {
         result.add("rejections", rejections);
         result.add("protocolRejections", protocolRejections);
         return result;
+    }
+
+    JsonObject debugExport() {
+        var result = export();
+        var pending = new JsonArray();
+        recomparisons.values().forEach(draft -> pending.add(draft.export()));
+        result.add("recomparisons", pending);
+        return result;
+    }
+
+    void retireComparison(UUID planId, String reason) {
+        var draft = recomparisons.remove(planId);
+        if (draft == null) return;
+        if (retiredPreviews.size() == 32) retiredPreviews.pollFirstEntry();
+        retiredPreviews.put(draft.previewId(), reason);
     }
 
     private static PlanStore decode(ByteBuffer data) {

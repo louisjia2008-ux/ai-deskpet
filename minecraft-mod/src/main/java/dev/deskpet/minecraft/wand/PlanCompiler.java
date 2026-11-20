@@ -7,15 +7,19 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import net.minecraft.block.BarrelBlock;
+import net.minecraft.block.BedBlock;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.ChestBlock;
 import net.minecraft.block.DoorBlock;
 import net.minecraft.block.FenceGateBlock;
+import net.minecraft.block.TallPlantBlock;
 import net.minecraft.block.TrapdoorBlock;
 import net.minecraft.block.entity.ChestBlockEntity;
+import net.minecraft.block.enums.BedPart;
 import net.minecraft.block.enums.ChestType;
+import net.minecraft.block.enums.DoubleBlockHalf;
 import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.world.ServerWorld;
@@ -134,6 +138,9 @@ public final class PlanCompiler {
         ADJACENT_FLUID("挖方贴着水或岩浆"),
         FALLING_COLUMN("沙或沙砾柱超出范围"),
         OUTSIDE_ATTACHMENT("框外有附着的方块"),
+        OUTSIDE_SELECTION("需要改动原选区之外的方块"),
+        INCOMPLETE_MULTIBLOCK("多格方块不能只补一半"),
+        UNREPAIRABLE_TARGET("无法在原授权范围内恢复目标"),
         FILL_TOO_DEEP("超过填坑深度上限"),
         UNSUPPORTED_FOUNDATION("地基含不可填入的方块");
 
@@ -154,6 +161,11 @@ public final class PlanCompiler {
             return conflicts.isEmpty();
         }
     }
+
+    public record Recomparison(JsonObject document, Map<BlockPos, String> targets,
+                               Map<BlockPos, String> protectedBaseline) {}
+
+    public record SiteProblem(String reason, BlockPos pos, String message) {}
 
     private record Placement(HouseTemplates.Template template, BlockPos anchor, Area footprint,
                              Area affected, int shiftX, int shiftZ, int tileX, int tileZ) {}
@@ -262,7 +274,7 @@ public final class PlanCompiler {
         Map<BlockPos, Tree> trees = new HashMap<>();
         List<Operation> clears = new ArrayList<>();
         if (conflicts.isEmpty()) {
-            inspect(world, request, placement, groundY, minY, maxY, trees, protectedCells, conflicts, clears);
+            inspect(world, request, placement, groundY, minY, maxY, trees, protectedCells, conflicts, clears, pos -> false);
             clears.sort(Comparator.comparingInt((Operation op) -> op.pos().getY()).reversed()
                 .thenComparingInt(op -> op.pos().getX()).thenComparingInt(op -> op.pos().getZ()));
             ops.addAll(clears);
@@ -281,6 +293,215 @@ public final class PlanCompiler {
         return new Result(plan, List.copyOf(ops), java.util.Collections.unmodifiableSet(protectedCells),
             List.copyOf(conflicts), door, facing, groundY, footprint.width(), footprint.length(),
             placement.shiftX(), placement.shiftZ());
+    }
+
+    public static Recomparison recompare(ServerWorld world, JsonObject original, JsonArray remaining,
+                                          Map<BlockPos, String> finalTargets, Map<BlockPos, String> protectedBaseline,
+                                          long now) {
+        return recompare(view(world), original, remaining, finalTargets, protectedBaseline, now);
+    }
+
+    static Recomparison recompare(WorldView world, JsonObject original, JsonArray remaining,
+                                   Map<BlockPos, String> finalTargets, Map<BlockPos, String> protectedBaseline,
+                                   long now) {
+        var bounds = SelectionBounds.read(original);
+        var template = original.getAsJsonObject("template");
+        var type = java.util.Arrays.stream(HouseTemplates.Type.values())
+            .filter(value -> value.id.equals(template.get("id").getAsString())).findFirst().orElse(null);
+        if (type == null || HouseTemplates.get(type).version() != template.get("version").getAsInt()) return null;
+        int turns = template.get("rotation").getAsInt();
+        if (turns < 0 || turns > 270 || turns % 90 != 0) return null;
+        var rotation = BlockRotation.values()[turns / 90];
+        var area = bounds.area();
+        int groundY = original.get("groundY").getAsInt();
+        var mode = Mode.valueOf(original.get("mode").getAsString().toUpperCase(Locale.ROOT));
+        int fillDepth = original.get("fillDepthLimit").getAsInt();
+        boolean clip = original.has("clipTrees") && original.get("clipTrees").getAsBoolean();
+        var anchor = readPosition(template.getAsJsonObject("anchor"));
+        var centered = placement(area, new Settings(type, rotation, 0, 0, 0, mode, fillDepth, clip), groundY);
+        var settings = new Settings(type, rotation, anchor.getX() - centered.anchor().getX(),
+            anchor.getZ() - centered.anchor().getZ(), 0, mode, fillDepth, clip);
+        var layout = placement(area, settings, groundY);
+        var chest = original.get("supplyChest");
+        var supplyChest = chest == null || chest.isJsonNull() ? null : readPosition(chest.getAsJsonObject());
+        var bot = original.get("botUuid");
+        var request = new Request(UUID.fromString(original.get("planId").getAsString()),
+            original.get("revision").getAsInt() + 1, UUID.fromString(original.get("worldId").getAsString()),
+            original.get("dimension").getAsString(), UUID.fromString(original.get("ownerUuid").getAsString()),
+            bot.isJsonNull() ? null : UUID.fromString(bot.getAsString()), area, settings, supplyChest, now);
+        var preserved = new LinkedHashMap<>(protectedBaseline);
+        var targets = new LinkedHashMap<>(finalTargets);
+        var conflicts = new LinkedHashSet<Conflict>();
+        var ops = new ArrayList<Operation>();
+        if (!layout.anchor().equals(anchor) || layout.footprint().width() + 2 > area.width()
+            || layout.footprint().length() + 2 > area.length()) {
+            conflicts.add(new Conflict(ConflictKind.OUTSIDE_SELECTION, anchor));
+        } else {
+            recompileLocked(world, request, layout, bounds, original, remaining, preserved, targets, conflicts, ops);
+        }
+        var selection = original.getAsJsonObject("selection");
+        var derived = json(request, layout, null, groundY, selection, ops, preserved.keySet(), List.copyOf(conflicts),
+            snapshotHash(world, selection), world.materials(supplyChest));
+        var revised = original.deepCopy();
+        for (String field : List.of("revision", "ops", "protected", "conflicts", "materials", "snapshotHash", "expiresAt")) {
+            revised.add(field, derived.get(field));
+        }
+        revised.remove("planHash");
+        revised.addProperty("planHash", sha256(revised));
+        return new Recomparison(revised, java.util.Collections.unmodifiableMap(targets),
+            java.util.Collections.unmodifiableMap(preserved));
+    }
+
+    private static void recompileLocked(WorldView world, Request request, Placement layout, SelectionBounds bounds,
+                                        JsonObject original, JsonArray remaining, Map<BlockPos, String> protectedBaseline,
+                                        Map<BlockPos, String> targets, Set<Conflict> conflicts, List<Operation> ops) {
+        var blueprint = new ArrayList<Operation>();
+        addBuild(world, request, layout, List.of(), Set.of(), blueprint);
+        blueprint.forEach(op -> targets.put(op.pos(), stateName(op.target())));
+        int groundY = layout.anchor().getY();
+        var missing = new HashSet<BlockPos>();
+        targets.forEach((pos, target) -> {
+            if (!bounds.contains(pos)) conflicts.add(new Conflict(ConflictKind.OUTSIDE_SELECTION, pos));
+            else if (!matchesFinalTarget(original, pos, target, world.state(pos), world.randomTicksEnabled())) missing.add(pos);
+        });
+        protectedBaseline.forEach((pos, old) -> {
+            if (!bounds.contains(pos)) conflicts.add(new Conflict(ConflictKind.OUTSIDE_SELECTION, pos));
+            else if (!matchesState(old, world.state(pos))) conflicts.add(new Conflict(ConflictKind.PROTECTED, pos));
+        });
+
+        var pendingScaffolds = new LinkedHashMap<BlockPos, String>();
+        for (var entry : remaining) {
+            var op = entry.getAsJsonObject();
+            if (op.get("kind").getAsString().equals("scaffold")) {
+                pendingScaffolds.putIfAbsent(readPosition(op.getAsJsonObject("pos")), op.get("phase").getAsString());
+            }
+        }
+        var existingScaffolds = new HashSet<BlockPos>();
+        pendingScaffolds.forEach((pos, phase) -> {
+            if (phase.equals("remove_scaffold") && world.state(pos).isOf(Blocks.DIRT)) existingScaffolds.add(pos);
+        });
+        boolean needsScaffolds = blueprint.stream().anyMatch(op -> !op.kind().equals("scaffold")
+            && op.pos().getY() >= groundY + 2 && missing.contains(op.pos()));
+        // A repaired roof may need its access rebuilt even after the old scaffold was removed.
+        // The new preview shows both operations at the original template's temporary cells.
+        boolean repairRoof = blueprint.stream().anyMatch(op -> op.phase().equals("roof") && missing.contains(op.pos()));
+        var tillReady = new HashSet<BlockPos>();
+        blueprint.stream().filter(op -> op.phase().equals("till")).forEach(op -> {
+            var current = world.state(op.pos());
+            if (current.isOf(Blocks.DIRT) || current.isOf(Blocks.GRASS_BLOCK)) tillReady.add(op.pos());
+        });
+
+        var protectedCells = new LinkedHashSet<>(protectedBaseline.keySet());
+        var clears = new ArrayList<Operation>();
+        // Existing target cells, prepared soil and live scaffolds remain available to the new revision.
+        Predicate<BlockPos> preserve = pos -> protectedBaseline.containsKey(pos) ||
+            targets.containsKey(pos) && !missing.contains(pos) || existingScaffolds.contains(pos) || tillReady.contains(pos);
+        inspect(world, request, layout, groundY, bounds.minY(), bounds.maxY(), new HashMap<>(), protectedCells,
+            conflicts, clears, preserve);
+        protectedCells.forEach(pos -> protectedBaseline.putIfAbsent(pos, stateName(world.state(pos))));
+        clears.sort(Comparator.comparingInt((Operation op) -> op.pos().getY()).reversed()
+            .thenComparingInt(op -> op.pos().getX()).thenComparingInt(op -> op.pos().getZ()));
+        ops.addAll(clears);
+        clears.forEach(op -> targets.putIfAbsent(op.pos(), "minecraft:air"));
+
+        var filled = new LinkedHashMap<BlockPos, Operation>();
+        for (int x = layout.affected().minX(); x <= layout.affected().maxX(); x++) {
+            for (int z = layout.affected().minZ(); z <= layout.affected().maxZ(); z++) {
+                var column = new ArrayList<Operation>();
+                findFill(world, x, z, groundY, request.settings().fillDepth(), column, conflicts);
+                column.forEach(op -> filled.put(op.pos(), op));
+            }
+        }
+        for (var target : targets.entrySet()) {
+            var pos = target.getKey();
+            var block = blockFromState(target.getValue());
+            if (pos.getY() < groundY && missing.contains(pos) && bounds.contains(pos) && block != null && FILL_BLOCKS.contains(block)
+                && TerrainRules.replaceableForBuild(world.state(pos))
+                && pos.getY() >= groundY - request.settings().fillDepth()) {
+                filled.put(pos, new Operation(pos, world.state(pos), block.getDefaultState(), "fill", "terrain"));
+            }
+        }
+        filled.values().stream().sorted(Comparator.comparingInt(op -> op.pos().getY())).forEach(op -> {
+            if (!protectedCells.contains(op.pos())) {
+                ops.add(op);
+                targets.putIfAbsent(op.pos(), stateName(op.target()));
+            }
+        });
+
+        var cleared = new HashSet<BlockPos>();
+        clears.forEach(op -> cleared.add(op.pos()));
+        var scaffoldAdds = new HashSet<BlockPos>();
+        for (var op : blueprint) {
+            var pos = op.pos();
+            if (protectedCells.contains(pos)) continue;
+            if (op.phase().equals("remove_scaffold")) {
+                if (existingScaffolds.contains(pos) || scaffoldAdds.contains(pos)) ops.add(op);
+                continue;
+            }
+            if (op.kind().equals("scaffold")) {
+                if (existingScaffolds.contains(pos) || !needsScaffolds || !repairRoof && !pendingScaffolds.containsKey(pos)) continue;
+                scaffoldAdds.add(pos);
+            } else if (!missing.contains(pos) || op.phase().equals("foundation") && tillReady.contains(pos)) {
+                continue;
+            }
+            BlockState expect = cleared.contains(pos) && !op.phase().equals("till") ? AIR : op.expect();
+            if (op.phase().equals("till") && tillReady.contains(pos)) expect = world.state(pos);
+            ops.add(new Operation(pos, expect, op.target(), op.kind(), op.phase()));
+        }
+
+        ops.removeIf(op -> {
+            if (bounds.contains(op.pos())) return false;
+            conflicts.add(new Conflict(ConflictKind.OUTSIDE_SELECTION, op.pos()));
+            return true;
+        });
+        validateRecomparison(world, bounds, targets, missing, ops, conflicts);
+    }
+
+    private static void validateRecomparison(WorldView world, SelectionBounds bounds, Map<BlockPos, String> targets,
+                                             Set<BlockPos> missing, List<Operation> ops, Set<Conflict> conflicts) {
+        var next = new LinkedHashMap<BlockPos, Operation>();
+        var last = new LinkedHashMap<BlockPos, Operation>();
+        ops.forEach(op -> {
+            next.putIfAbsent(op.pos(), op);
+            last.put(op.pos(), op);
+        });
+        ops.forEach(op -> {
+            if (op.target().isAir() && next.get(op.pos()) == op) {
+                Predicate<BlockPos> removal = pos -> next.containsKey(pos) && next.get(pos).target().isAir();
+                checkClear(world, op.pos(), removal, conflicts::add);
+                if (op.expect().getBlock() instanceof TallPlantBlock) {
+                    var other = pairedPosition(op.pos(), op.expect());
+                    if (!bounds.contains(other) || !removal.test(other)) {
+                        conflicts.add(new Conflict(ConflictKind.OUTSIDE_ATTACHMENT, other));
+                    }
+                }
+            } else if (op.target().getBlock() instanceof BedBlock || op.target().getBlock() instanceof DoorBlock) {
+                var other = pairedPosition(op.pos(), op.target());
+                var paired = last.get(other);
+                if (!bounds.contains(other)) conflicts.add(new Conflict(ConflictKind.OUTSIDE_SELECTION, other));
+                else if (paired == null || paired.target().getBlock() != op.target().getBlock()) {
+                    conflicts.add(new Conflict(ConflictKind.INCOMPLETE_MULTIBLOCK, op.pos()));
+                }
+            }
+        });
+        for (BlockPos pos : missing) {
+            var lastOp = last.get(pos);
+            if (lastOp == null || !targets.get(pos).equals(stateName(lastOp.target()))) {
+                conflicts.add(new Conflict(ConflictKind.UNREPAIRABLE_TARGET, pos));
+            }
+        }
+    }
+
+    private static BlockPos pairedPosition(BlockPos pos, BlockState state) {
+        if (state.getBlock() instanceof BedBlock) {
+            var facing = state.get(Properties.HORIZONTAL_FACING);
+            return pos.offset(state.get(Properties.BED_PART) == BedPart.FOOT ? facing : facing.getOpposite());
+        }
+        return state.get(Properties.DOUBLE_BLOCK_HALF) == DoubleBlockHalf.LOWER ? pos.up() : pos.down();
+    }
+
+    private static BlockPos readPosition(JsonObject pos) {
+        return new BlockPos(pos.get("x").getAsInt(), pos.get("y").getAsInt(), pos.get("z").getAsInt());
     }
 
     private static int groundHeight(WorldView world, Area area) {
@@ -343,22 +564,23 @@ public final class PlanCompiler {
 
     private static void inspect(WorldView world, Request request, Placement placement, int groundY, int minY, int maxY,
                                 Map<BlockPos, Tree> trees, Set<BlockPos> protectedCells, Set<Conflict> conflicts,
-                                List<Operation> clears) {
+                                List<Operation> clears, Predicate<BlockPos> preserve) {
         Area area = request.area();
         Area affected = placement.affected();
+        var bounds = new SelectionBounds(area, minY, maxY);
         for (int x = area.minX(); x <= area.maxX(); x++) {
             for (int z = area.minZ(); z <= area.maxZ(); z++) {
                 int top = Math.min(maxY, world.top(x, z));
                 for (int y = minY; y <= top; y++) {
                     BlockPos pos = new BlockPos(x, y, z);
                     BlockState old = world.state(pos);
-                    if (old.isAir()) {
+                    if (old.isAir() || preserve.test(pos)) {
                         continue;
                     }
                     boolean removable = TerrainRules.naturalToClear(old);
                     Tree tree = null;
                     if (TerrainRules.log(old) && !old.hasBlockEntity()) {
-                        tree = tree(world, pos, request.area(), trees);
+                        tree = tree(world, pos, bounds, trees);
                         removable = tree.natural();
                     }
                     boolean clear = y >= groundY && affected.contains(pos);
@@ -370,11 +592,12 @@ public final class PlanCompiler {
                     } else if (clear) {
                         if (!request.settings().clipTrees() &&
                             (tree != null && tree.crossBoundary() || TerrainRules.naturalLeaves(old) &&
-                                leafAcrossBorder(world, pos, area))) {
+                                leafAcrossBorder(world, pos, bounds))) {
                             conflicts.add(new Conflict(ConflictKind.CROSS_BOUNDARY_TREE, pos));
                         }
                         checkClear(world, pos,
-                            neighbor -> area.contains(neighbor) && affected.contains(neighbor) && neighbor.getY() <= maxY,
+                            neighbor -> area.contains(neighbor) && affected.contains(neighbor) && neighbor.getY() <= maxY
+                                && !preserve.test(neighbor),
                             conflicts::add);
                         String kind = TerrainRules.naturalGround(old) ? "cut" : "clear";
                         clears.add(new Operation(pos, old, AIR, kind, "terrain"));
@@ -384,12 +607,12 @@ public final class PlanCompiler {
         }
     }
 
-    private static Tree tree(WorldView world, BlockPos seed, Area area, Map<BlockPos, Tree> cache) {
+    private static Tree tree(WorldView world, BlockPos seed, SelectionBounds bounds, Map<BlockPos, Tree> cache) {
         Tree known = cache.get(seed);
         if (known != null) {
             return known;
         }
-        Area boundary = area.expanded(INSPECTION_BAND);
+        Area boundary = bounds.area().expanded(INSPECTION_BAND);
         Set<BlockPos> logs = new LinkedHashSet<>();
         ArrayDeque<BlockPos> queue = new ArrayDeque<>();
         queue.add(seed);
@@ -398,7 +621,7 @@ public final class PlanCompiler {
         boolean cross = false;
         while (!queue.isEmpty()) {
             BlockPos pos = queue.removeFirst();
-            cross |= !area.contains(pos);
+            cross |= !bounds.contains(pos);
             for (BlockPos adjacent : BlockPos.iterate(pos.add(-1, -1, -1), pos.add(1, 1, 1))) {
                 if (adjacent.getY() < world.minY() || adjacent.getY() > world.maxY()) {
                     continue;
@@ -408,7 +631,7 @@ public final class PlanCompiler {
                     queue.add(adjacent.toImmutable());
                 } else if (TerrainRules.naturalLeaves(state)) {
                     natural = true;
-                    cross |= leafAcrossBorder(world, adjacent, area);
+                    cross |= leafAcrossBorder(world, adjacent, bounds);
                 }
             }
         }
@@ -417,12 +640,14 @@ public final class PlanCompiler {
         return result;
     }
 
-    private static boolean leafAcrossBorder(WorldView world, BlockPos seed, Area area) {
-        if (!area.contains(seed)) {
+    private static boolean leafAcrossBorder(WorldView world, BlockPos seed, SelectionBounds bounds) {
+        if (!bounds.contains(seed)) {
             return true;
         }
+        var area = bounds.area();
         if (seed.getX() - area.minX() >= 6 && area.maxX() - seed.getX() >= 6 &&
-            seed.getZ() - area.minZ() >= 6 && area.maxZ() - seed.getZ() >= 6) {
+            seed.getZ() - area.minZ() >= 6 && area.maxZ() - seed.getZ() >= 6 &&
+            seed.getY() - bounds.minY() >= 6 && bounds.maxY() - seed.getY() >= 6) {
             return false;
         }
         // Vanilla leaves can connect up to six steps from a supporting log.
@@ -441,7 +666,7 @@ public final class PlanCompiler {
                     }
                     BlockState state = world.state(adjacent);
                     if (TerrainRules.naturalLeaves(state)) {
-                        if (!area.contains(adjacent)) {
+                        if (!bounds.contains(adjacent)) {
                             return true;
                         }
                         level.add(adjacent);
@@ -452,38 +677,41 @@ public final class PlanCompiler {
         return false;
     }
 
-    public static String firstSiteConflict(ServerWorld world, JsonObject document, JsonArray remaining,
-                                           Map<BlockPos, String> finalTargets, Map<BlockPos, String> protectedBaseline) {
-        return firstSiteConflict(view(world), document, remaining, finalTargets, protectedBaseline);
+    public static SiteProblem siteProblem(ServerWorld world, JsonObject document, JsonArray remaining,
+                                          Map<BlockPos, String> finalTargets, Map<BlockPos, String> protectedBaseline) {
+        return siteProblem(view(world), document, remaining, finalTargets, protectedBaseline);
     }
 
     static String firstSiteConflict(WorldView world, JsonObject document, JsonArray remaining,
                                     Map<BlockPos, String> finalTargets, Map<BlockPos, String> protectedBaseline) {
+        var problem = siteProblem(world, document, remaining, finalTargets, protectedBaseline);
+        return problem == null ? null : problem.message();
+    }
+
+    private static SiteProblem siteProblem(WorldView world, JsonObject document, JsonArray remaining,
+                                           Map<BlockPos, String> finalTargets, Map<BlockPos, String> protectedBaseline) {
         var selection = SelectionBounds.read(document);
         var next = new LinkedHashMap<BlockPos, JsonObject>();
         for (var entry : remaining) {
             var op = entry.getAsJsonObject();
-            var coords = op.getAsJsonObject("pos");
-            var pos = new BlockPos(coords.get("x").getAsInt(), coords.get("y").getAsInt(), coords.get("z").getAsInt());
-            next.putIfAbsent(pos, op);
+            next.putIfAbsent(readPosition(op.getAsJsonObject("pos")), op);
         }
         Predicate<BlockPos> scheduledRemoval = pos -> next.containsKey(pos) && removesBlock(next.get(pos));
         Map<BlockPos, Tree> trees = new HashMap<>();
         for (var entry : next.entrySet()) {
             BlockPos pos = entry.getKey();
             JsonObject op = entry.getValue();
-            if (!selection.contains(pos)) return at("outside_selection", pos);
-            if (protectedBaseline.containsKey(pos)) return at("protected_block_changed", pos);
+            if (!selection.contains(pos)) return siteProblem("outside_selection", pos);
+            if (protectedBaseline.containsKey(pos)) return siteProblem("protected_block_changed", pos);
             BlockState actual = world.state(pos);
             String expected = op.get("expect").getAsString();
             if (!matchesExpect(op.get("kind").getAsString(), expected, op.get("target").getAsString(), actual,
-                () -> tree(world, pos, selection.area(), trees).natural())) {
-                String reason = mismatch(pos, expected, actual);
-                return TerrainRules.naturalToClear(actual) || TerrainRules.replaceableForBuild(actual)
-                    ? reason : reason + " (protected_block_changed)";
+                () -> tree(world, pos, selection, trees).natural())) {
+                boolean protectedBlock = !TerrainRules.naturalToClear(actual) && !TerrainRules.replaceableForBuild(actual);
+                return mismatch(pos, expected, actual, protectedBlock);
             }
             if (removesBlock(op)) {
-                String conflict = removalConflict(world, document, selection, pos, scheduledRemoval, trees);
+                var conflict = removalProblem(world, document, selection, pos, scheduledRemoval, trees);
                 if (conflict != null) return conflict;
             }
         }
@@ -492,13 +720,13 @@ public final class PlanCompiler {
             if (!next.containsKey(pos)) {
                 BlockState actual = world.state(pos);
                 if (!matchesFinalTarget(document, pos, target.getValue(), actual, world.randomTicksEnabled())) {
-                    return mismatch(pos, target.getValue(), actual);
+                    return mismatch(pos, target.getValue(), actual, false);
                 }
             }
         }
         for (var entry : protectedBaseline.entrySet()) {
             if (!matchesState(entry.getValue(), world.state(entry.getKey()))) {
-                return at("protected_block_changed", entry.getKey());
+                return siteProblem("protected_block_changed", entry.getKey());
             }
         }
         return null;
@@ -508,40 +736,41 @@ public final class PlanCompiler {
         return op.get("target").getAsString().equals("minecraft:air");
     }
 
-    private static String mismatch(BlockPos pos, String expected, BlockState actual) {
-        return at("expected_block_changed", pos) + " expected " + expected + " actual " + stateName(actual);
+    private static SiteProblem mismatch(BlockPos pos, String expected, BlockState actual, boolean protectedBlock) {
+        String message = "expected_block_changed at " + pos.toShortString() + " expected " + expected + " actual " + stateName(actual);
+        return new SiteProblem(protectedBlock ? "protected_block_changed" : "expected_block_changed", pos,
+            protectedBlock ? message + " (protected_block_changed)" : message);
     }
 
-    public static String removalConflict(ServerWorld world, JsonObject document, BlockPos pos,
-                                         Predicate<BlockPos> scheduledRemoval) {
-        return removalConflict(view(world), document, SelectionBounds.read(document), pos, scheduledRemoval, new HashMap<>());
+    public static SiteProblem removalProblem(ServerWorld world, JsonObject document, BlockPos pos,
+                                              Predicate<BlockPos> scheduledRemoval) {
+        return removalProblem(view(world), document, SelectionBounds.read(document), pos, scheduledRemoval, new HashMap<>());
     }
 
-    private static String removalConflict(WorldView world, JsonObject document, SelectionBounds selection, BlockPos pos,
-                                          Predicate<BlockPos> scheduledRemoval, Map<BlockPos, Tree> trees) {
+    private static SiteProblem removalProblem(WorldView world, JsonObject document, SelectionBounds selection, BlockPos pos,
+                                               Predicate<BlockPos> scheduledRemoval, Map<BlockPos, Tree> trees) {
         BlockState actual = world.state(pos);
         if (!document.has("clipTrees") || !document.get("clipTrees").getAsBoolean()) {
-            var area = selection.area();
-            if (TerrainRules.log(actual) && tree(world, pos, area, trees).crossBoundary() ||
-                TerrainRules.naturalLeaves(actual) && leafAcrossBorder(world, pos, area)) {
-                return at("cross_boundary_tree", pos);
+            if (TerrainRules.log(actual) && tree(world, pos, selection, trees).crossBoundary() ||
+                TerrainRules.naturalLeaves(actual) && leafAcrossBorder(world, pos, selection)) {
+                return siteProblem("cross_boundary_tree", pos);
             }
         }
         var conflicts = new ArrayList<Conflict>();
         checkClear(world, pos, neighbor -> selection.contains(neighbor) && scheduledRemoval.test(neighbor), conflicts::add);
         if (conflicts.isEmpty()) return null;
         var first = conflicts.getFirst();
-        return at(first.kind().name().toLowerCase(Locale.ROOT), first.pos());
+        return siteProblem(first.kind().name().toLowerCase(Locale.ROOT), first.pos());
     }
 
-    private static String at(String reason, BlockPos pos) {
-        return reason + " at " + pos.toShortString();
+    private static SiteProblem siteProblem(String reason, BlockPos pos) {
+        return new SiteProblem(reason, pos, reason + " at " + pos.toShortString());
     }
 
     public static boolean matchesExpect(ServerWorld world, BlockPos pos, String kind, String expected,
                                         String target, BlockState current) {
-        var area = Area.between(pos, pos);
-        return matchesExpect(kind, expected, target, current, () -> tree(view(world), pos, area, new HashMap<>()).natural());
+        var bounds = new SelectionBounds(Area.between(pos, pos), world.getBottomY(), world.getTopYInclusive());
+        return matchesExpect(kind, expected, target, current, () -> tree(view(world), pos, bounds, new HashMap<>()).natural());
     }
 
     static boolean matchesExpect(String kind, String expected, String target, BlockState current, BooleanSupplier naturalLog) {
