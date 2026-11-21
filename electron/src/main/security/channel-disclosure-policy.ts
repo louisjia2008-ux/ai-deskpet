@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ContextTrace, MemoryItem } from '../../shared';
 import type { PersistentState } from '../domain/schemas';
+import { recentTraceAllowed } from '../domain/companion-recent-state';
 
 type DiaryReference = NonNullable<ContextTrace['diaryReferences']>[number];
 
@@ -26,7 +27,7 @@ const assertChannelDisclosure = (
   approvedLocalResult: boolean,
   memoryEnabled: boolean,
   message: { contextTrace?: ContextTrace | undefined },
-  state?: Pick<PersistentState, 'chatSessions' | 'chatMessages' | 'memories'>,
+  state?: DisclosureState,
   sessionId?: string,
   suppressed: (id: string) => boolean = () => false,
   knowledgePolicyToken?: string | null,
@@ -34,11 +35,18 @@ const assertChannelDisclosure = (
 ): void => {
   const blocked = (): never => { throw new Error(`${channel}.disclosureBlocked`); };
   const checked = new Set<string>(), checking = new Set<string>();
+  const session = state?.chatSessions.find(item => item.id === sessionId);
+  const allowedRecent = new Set<string>();
   const check = (trace: ContextTrace | undefined): void => {
     if (!trace || trace.version !== 1 || trace.lineage !== 'complete' || (!approvedLocalResult && trace.privacy !== 'cloud-allowed')
       || (trace.knowledgePolicyToken !== undefined && (trace.knowledgePolicyToken !== knowledgePolicyToken || trace.privacy === 'local-only'))
       || trace.diaryReferences?.some(ref => channel !== 'qq' || !state || !sessionId || qqOwnerDiaryCurrent?.(ref) !== true)
       || trace.representationReferences?.length || (channel === 'qq' && trace.historyLookupReferences?.length)) blocked();
+    const revision = trace!.recentRevision;
+    if (revision !== undefined && !allowedRecent.has(revision)) {
+      if (!state || channel !== 'qq' || session?.companionScope !== 'owner' || !recentTraceAllowed(state, revision, 'remote')) blocked();
+      allowedRecent.add(revision);
+    }
     if (trace!.scope.kind === 'session' && sessionId !== undefined && trace!.scope.sessionId !== sessionId) blocked();
     if (!state) {
       // Without a current snapshot, only an empty lineage can be established.
@@ -70,13 +78,12 @@ const assertChannelDisclosure = (
     }
   };
   if (state) {
-    const session = state.chatSessions.find(item => item.id === sessionId);
     if (!session || session.archivedAt || session.deletedAt || (!approvedLocalResult && session.historyPrivacy === 'local-only')) blocked();
   }
   check(message.contextTrace);
 };
 
-type DisclosureState = Pick<PersistentState, 'chatSessions' | 'chatMessages' | 'memories'>;
+type DisclosureState = Pick<PersistentState, 'chatSessions' | 'chatMessages' | 'memories'> & Partial<Pick<PersistentState, 'companionRecent'>>;
 export const assertDeliverableToQq = (message: {contextTrace?: ContextTrace | undefined}, state?: DisclosureState,
   sessionId?: string, suppressed?: (id: string) => boolean, knowledgePolicyToken?: string | null,
   /** Only the live owner-private binding can supply a cloud-allowed, current diary reference verifier. */

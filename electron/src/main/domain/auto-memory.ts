@@ -12,7 +12,7 @@ import type { DomainRepository } from './repository';
 import type { PersistentState } from './schemas';
 
 /** The provider that has just answered in a conversation. Only it reads that conversation again. */
-export interface AutoMemoryTurn { providerId: string; model: string; destination: 'local' | 'remote' }
+export interface AutoMemoryTurn { providerId: string; model: string; destination: 'local' | 'remote'; source?: 'desktop' | 'qq' | 'wechat' | 'telegram' }
 
 interface Dependencies {
   available(): boolean;
@@ -50,7 +50,7 @@ const INSTRUCTION = 'You keep the long-term profile a personal assistant has of 
 
 interface Batch {
   sessionId: string; lastMessageId: string; hasMore: boolean;
-  sources: Array<{ n: number; id: string; sha: string; lineageSHA: string; text: string }>;
+  sources: Array<{ n: number; id: string; sha: string; lineageSHA: string; text: string; channel?: ChatMessage['companionSource'] }>;
   known: Array<{ id: string; revision: number; text: string }>;
   localOnly: boolean; sessionScope: boolean; channelBindingId: string | null; cursor: string | null;
 }
@@ -134,7 +134,7 @@ export class AutoMemoryService {
       if (spoken(item)) {
         if (used + item.content.length > TRANSCRIPT_CHARACTERS || sources.length >= 60) { hasMore = true; break; }
         used += item.content.length;
-        sources.push({ n: 0, id: item.id, sha: digest(item.content), lineageSHA: digest(JSON.stringify(item.contextTrace)), text: item.content });
+        sources.push({ n: 0, id: item.id, sha: digest(item.content), lineageSHA: digest(JSON.stringify(item.contextTrace)), text: item.content, channel: item.companionSource });
       }
       lastMessageId = item.id;
     }
@@ -195,7 +195,8 @@ export class AutoMemoryService {
         // An edited or deleted message no longer supports what was read from it.
         if (!evidence.every((source) => { const current = state.chatMessages.find((message) => message.id === source.id); return current?.sessionId === sessionId && digest(current.content) === source.sha; })) return;
         const references = evidence.map((source) => ({ kind: 'chat-user' as const, sessionId, messageId: source.id }));
-        const result = commitMemoryCandidate(state, { operationId: `auto-profile:${batch.lastMessageId}:${index}`, text: item.text, tags: ['auto'],
+        const channels = [...new Set(evidence.flatMap(source => source.channel ?? turn.source ?? []))];
+        const result = commitMemoryCandidate(state, { operationId: `auto-profile:${batch.lastMessageId}:${index}`, text: item.text, tags: ['auto', ...channels],
           sourceReferences: references, sourceEventIds: stableMemorySources(references), origin: 'auto-profile', authority: 'reviewed-import',
           scope: batch.sessionScope ? { kind: 'session', sessionId } : { kind: 'global' }, ...(batch.localOnly ? { privacy: 'local-only' as const } : {}) });
         const memory = state.memories.find((value) => value.id === result.memoryId);

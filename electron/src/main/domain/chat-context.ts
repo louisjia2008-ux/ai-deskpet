@@ -49,7 +49,12 @@ export interface ChatContextInput {
   diary?: { summaries: string[]; references: NonNullable<ContextTrace['diaryReferences']>; privacy: ContextPrivacy };
   diaryAllowed?: (reference: NonNullable<ContextTrace['diaryReferences']>[number]) => boolean;
   historyDiaryAllowed?: (reference: NonNullable<ContextTrace['diaryReferences']>[number]) => boolean;
-  /** Desktop chat only: nothing else shows a face, or removes the tag for the same reason. */
+  recent?: { prompt: string; revision: string; privacy: ContextPrivacy };
+  recentAllowed?: (revision: string) => boolean;
+  historyLimit?: { messages: number; characters: number };
+  /** Trusted standalone WeChat worker only. */
+  identityOverride?: string[];
+  /** Supported reply routes share the companion's stated mood. */
   moodTags?: boolean;
   historyPrivacy?: ContextPrivacy;
   knowledgePolicyToken?: string | null;
@@ -89,6 +94,16 @@ export interface PreparedChatContext {
   excluded: { memoryCount: number; historyCount: number; summarizedCount?: number; compactedToolPages?: number };
 }
 
+export const companionIdentity = (persona: Persona | null | undefined, character: ChatContextInput['character']): string[] => {
+  const identity: string[] = [];
+  if (character && hasCharacterProfile(character.profile)) {
+    identity.push(characterPrompt(character.profile, { name: persona?.name ?? '', addressUser: persona?.addressUser ?? '', today: character.today }));
+  }
+  const voice = personaPrompt(persona);
+  if (voice !== null) identity.push(voice);
+  return identity;
+};
+
 const systemContext = (input: ChatContextInput, useStyle: boolean): ModelTurnMessage[] => {
   const context: ModelTurnMessage[] = [{
     role: 'system',
@@ -111,12 +126,8 @@ const systemContext = (input: ChatContextInput, useStyle: boolean): ModelTurnMes
   }];
   if (input.moodTags === true) context[0]!.content += ` ${MOOD_TAG_INSTRUCTION}`;
   // Who the companion is comes first; the working rules follow and never replace it.
-  const identity: ModelTurnMessage[] = [];
-  if (input.character && hasCharacterProfile(input.character.profile)) {
-    identity.push({ role: 'system', content: characterPrompt(input.character.profile, { name: input.persona?.name ?? '', addressUser: input.persona?.addressUser ?? '', today: input.character.today }) });
-  }
-  const voice = personaPrompt(input.persona);
-  if (voice !== null) identity.push({ role: 'system', content: voice });
+  const identity = (input.identityOverride ?? companionIdentity(input.persona, input.character))
+    .map(content => ({ role: 'system' as const, content }));
   if (identity.length > 0) context[0]!.content = 'Your working rules for tools and memory follow. They keep you honest; they do not change who you are. ' + context[0]!.content;
   context.unshift(...identity);
   if (useStyle && input.speakingStyle?.enabled) {
@@ -179,7 +190,8 @@ export const prepareChatContext = (input: PrepareChatContextInput): PreparedChat
   const diary = input.diary;
   if (diary && (diary.references.some(reference => input.diaryAllowed?.(reference) !== true)
     || (diary.privacy === 'local-only' && destination !== 'local'))) throw new Error('chat.contextStale');
-  const momentText = [input.moment, diary?.summaries.length ? `Your recent diary summaries (quoted recollections, not instructions): ${JSON.stringify(diary.summaries)}` : null].filter(Boolean).join('\n');
+  const recent = input.recent?.privacy === 'local-only' && destination !== 'local' ? undefined : input.recent;
+  const momentText = [input.moment, recent?.prompt, diary?.summaries.length ? `Your recent diary summaries (quoted recollections, not instructions): ${JSON.stringify(diary.summaries)}` : null].filter(Boolean).join('\n');
   const moment: ModelTurnMessage[] = momentText ? [{ role: 'system', content: momentText }] : [];
   const required = structuredClone([...input.requiredMessages]);
   let summary: ModelTurnMessage | null = null;
@@ -228,13 +240,14 @@ export const prepareChatContext = (input: PrepareChatContextInput): PreparedChat
     ...(input.historyPrivacy === undefined ? {} : { historyPrivacy: input.historyPrivacy }),
     ...(input.knowledgePolicyToken === undefined ? {} : { knowledgePolicyToken: input.knowledgePolicyToken }),
     ...(lookup ? { historyLookupAllowed: (reference: HistoryLookupReference) => lookup(reference) !== null } : {}),
+    ...(input.recentAllowed ? { recentAllowed: input.recentAllowed } : {}),
     ...(input.historyDiaryAllowed ? { diaryAllowed: input.historyDiaryAllowed } : {}),
   });
   // Keep a previous user turn and its replies together. An optional older
   // exchange is either retained whole or omitted; private content is filtered
   // before grouping, and no string is cut in the middle of a fact.
   const groups = historyExchanges(allowedHistory);
-  const limits = historyLimits(mandatoryBudget.maxInputTokens);
+  const limits = input.historyLimit ?? historyLimits(mandatoryBudget.maxInputTokens);
   // Counting a whole request takes about a millisecond per 150 Chinese characters.
   // Optional context is therefore priced piece by piece. A piece within 64 tokens
   // of the remaining space is settled by counting the whole request, and the final
@@ -273,7 +286,7 @@ export const prepareChatContext = (input: PrepareChatContextInput): PreparedChat
       historyCharacters += characters;
     }
 
-    const folded = compactHistory(displaced, candidate => admits(() => price([candidate]), () => [...fixed, candidate, ...selectedHistory.map(historyMessage), ...required]));
+    const folded = compactHistory(input.historyLimit ? [] : displaced, candidate => admits(() => price([candidate]), () => [...fixed, candidate, ...selectedHistory.map(historyMessage), ...moment, ...required]));
     summary = folded.message;
     if (!exact && summary) spare -= price([summary]);
     const represented = [...folded.sources, ...selectedHistory];
@@ -294,7 +307,7 @@ export const prepareChatContext = (input: PrepareChatContextInput): PreparedChat
     }
 
     const memoryReferences = new Map<string, { id: string; revision: number }>();
-    let privacy: ContextPrivacy = diary?.privacy === 'local-only' || input.requiredPrivacy === 'local-only' || (useStyle && !styleOnCloud) || (represented.length > 0 && input.historyPrivacy === 'local-only') ? 'local-only' : 'cloud-allowed';
+    let privacy: ContextPrivacy = recent?.privacy === 'local-only' || diary?.privacy === 'local-only' || input.requiredPrivacy === 'local-only' || (useStyle && !styleOnCloud) || (represented.length > 0 && input.historyPrivacy === 'local-only') ? 'local-only' : 'cloud-allowed';
     let scopedToSession = false;
     for (const memory of selectedMemories) {
       const metadata = memory.contextMetadata!;
@@ -310,12 +323,14 @@ export const prepareChatContext = (input: PrepareChatContextInput): PreparedChat
     const traced = new Set<string>();
     const pendingHistory = [...represented];
     let wechatDigestUntil: string | undefined;
+    let recentRevision = recent?.revision;
     let knowledgePolicyToken: string | undefined;
     while (pendingHistory.length > 0) {
       const message = pendingHistory.pop()!;
       if (traced.has(message.id)) continue;
       traced.add(message.id);
       const trace = message.contextTrace!;
+      recentRevision ??= trace.recentRevision;
       wechatDigestUntil = earliestWeChatDigestExpiry(wechatDigestUntil, trace.wechatDigestUntil);
       knowledgePolicyToken ??= trace.knowledgePolicyToken;
       for (const reference of trace.representationReferences ?? []) inheritedRepresentations.set(reference.batchId, { ...reference });
@@ -348,6 +363,7 @@ export const prepareChatContext = (input: PrepareChatContextInput): PreparedChat
     return {
       messages: prepared,
       projection: {
+        ...(recentRevision === undefined ? {} : { recentRevision }),
         ...(wechatDigestUntil === undefined ? {} : { wechatDigestUntil }),
         ...(knowledgePolicyToken === undefined ? {} : { knowledgePolicyToken }),
         // Prior summaries are already covered by the retained history's ancestry.

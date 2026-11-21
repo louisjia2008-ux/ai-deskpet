@@ -34,6 +34,12 @@ const character: CharacterState = {
 
 const on = () => () => undefined;
 const api = (locale: ResolvedLocale): DeskPetApi => ({
+  companionRecent: {
+    status: vi.fn(async () => ({ text: '', updatedAt: null, localOnly: false, containsLocal: false })),
+    clear: vi.fn(),
+    setLocalOnly: vi.fn(),
+    onChanged: () => () => undefined,
+  },
   autoMemory: { status: vi.fn(async () => ({ enabled: true })), configure: vi.fn(async () => ({ enabled: true })) },
   vmSandbox: { status: vi.fn(async () => ({ state: 'absent' as const, busy: null, failed: false, sharedFolder: '/Users/test/DeskPet Sandbox' })), setup: vi.fn(), stop: vi.fn(), remove: vi.fn(), openFolder: vi.fn(), onChanged: on },
   memorySleep: {status:vi.fn(), configure:vi.fn(), runNow:vi.fn(), undo:vi.fn()},

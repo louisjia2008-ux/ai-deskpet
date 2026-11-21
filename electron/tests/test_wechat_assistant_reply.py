@@ -77,6 +77,44 @@ class AssistantReplyTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.plan({"reply": "好" * 81, "sticker": False, "routeFingerprint": FINGERPRINT})
 
+    def test_owner_only_history_and_local_reply_observation_shapes(self):
+        def parse(value):
+            return replies.cloud_request_from_bytes((json.dumps(value, ensure_ascii=False) + "\n").encode())
+
+        history = [{"role": "assistant" if index % 2 else "user", "text": f"合成记录 {index}"} for index in range(16)]
+        packet = {**REQUEST, "history": history, "contextOnly": True, "localModel": "fixture",
+                  "localResult": {"reply": "明早见。", "mood": "happy"}}
+        self.assertEqual(parse(packet), packet)
+        for changes in ({"target": "group", "groupId": "d" * 32},
+                        {"history": [{**item, "text": "字" * 400} for item in history]},
+                        {"localResult": {"reply": "明早见。", "mood": "unknown"}},
+                        {"localResult": {"reply": "明早见。", "mood": []}},
+                        {"localResult": {"reply": "https://example.test", "mood": "happy"}}):
+            with self.subTest(changes=tuple(changes)), self.assertRaises(ValueError):
+                parse({**packet, **changes})
+        with self.assertRaises(ValueError):
+            parse({key: value for key, value in packet.items() if key not in ("contextOnly", "localModel")})
+        with patch.object(replies, "_host_reply", return_value={"accepted": True}) as host:
+            replies.report_local_reply(Path("/unused"), {**REQUEST, "history": history}, "fixture",
+                                       {"reply": "明早见。", "mood": "happy"})
+            host.assert_called_once_with(Path("/unused"), packet, timeout=4, response_limit=512, wait_hook=None)
+
+    def test_only_owner_reply_carries_private_context_retention_flag(self):
+        response = {"reply": "好的", "sticker": False, "routeFingerprint": FINGERPRINT, "privateContext": True}
+        self.assertTrue(self.plan(response)[0]["privateContext"])
+        with self.assertRaises(ValueError):
+            self.plan(response, {**REQUEST, "target": "group", "groupId": "d" * 32})
+        with self.assertRaises(ValueError):
+            self.plan({**response, "privateContext": 1})
+
+    def test_local_owner_identity_keeps_both_exact_frames_up_to_the_ipc_bound(self):
+        local = {"name": "Fixture", "persona": None, "memories": [], "identity": ["设" * 9_900, "정" * 11_000]}
+        with patch.object(replies, "_host_reply", return_value=local) as host:
+            self.assertEqual(replies.local_reply_context(Path("/unused"), REQUEST, "fixture"), local)
+            self.assertEqual(host.call_args.kwargs["response_limit"], replies.LOCAL_CONTEXT_RESPONSE_LIMIT)
+        with patch.object(replies, "_host_reply", return_value={**local, "identity": ["😀" * 6_001]}):
+            self.assertIsNone(replies.local_reply_context(Path("/unused"), REQUEST, "fixture"))
+
     def test_article_request_is_a_separate_private_wire_shape(self):
         request = {**REQUEST, "text": ARTICLE["url"], "article": ARTICLE}
 

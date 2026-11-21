@@ -46,6 +46,25 @@ class QueueGuardTest(unittest.TestCase):
         self.guard.settle(self.state, binding, target, head, outcome, self.eligible, now=0)
         return head
 
+    def test_owner_history_retains_eight_pairs_and_never_replays_private_context_to_cloud(self):
+        for index in range(10):
+            self.admit(row(local=11 + index, created=NOW + index, body=f"合成私聊 {index}"),
+                       row(GROUP, local=11 + index, sender="member", created=NOW + index, body=f"合成群聊 {index}"))
+            for binding in (OWNER, ROOM):
+                event = self.state.pending(binding)[0]
+                presentation = {"localContext": True} if binding == OWNER and index == 9 else {}
+                self.assertTrue(self.state.prepare(event.id, f"回答 {index} " + "字" * 100, presentation=presentation))
+                self.assertTrue(self.state.mark_attempted(event.id))
+                self.assertTrue(self.state.mark_sent(event.id))
+        owner = self.state.history(OWNER, owner=True)
+        self.assertEqual(len(owner), 16)
+        self.assertEqual(owner[0]["text"], "合成私聊 2")
+        self.assertEqual(owner[-2]["text"], "合成私聊 9")
+        cloud = self.state.history(OWNER, owner=True, for_cloud=True)
+        self.assertEqual(len(cloud), 14)
+        self.assertEqual(cloud[-2]["text"], "合成私聊 8")
+        self.assertEqual(len(self.state.history(ROOM)), 6)
+
     def test_a_failing_private_message_retries_then_says_so_then_lets_the_next_one_go(self):
         self.admit(row(local=11, created=NOW, body="第一条"), row(local=12, created=NOW, body="第二条"))
         waits = []

@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { ArtifactMode } from './artifact-mode';
 
 const selector = '--deskpet-isolated-profile';
+export const wechatWorkerSwitch = '--deskpet-wechat-worker';
 export const isolatedApplicationName = 'DeskPet Electron Candidate';
 let isolatedRoot: string | null = null;
 export const isIsolatedProfile = (): boolean => isolatedRoot !== null;
@@ -64,7 +65,7 @@ export const selectIsolatedProfile = (argv: readonly string[], defaultAppData: s
 
 /** Resolve every option and existing path before applying paths or initializing anything. */
 export const planProfileLocation = (application: ApplicationPaths, argv: readonly string[], artifactMode: ArtifactMode): LaunchPlan => {
-  const known = [selector, '--deskpet-maintenance-root', '--deskpet-inspect-profile', '--deskpet-inspection-report'];
+  const known = [selector, wechatWorkerSwitch, '--deskpet-maintenance-root', '--deskpet-inspect-profile', '--deskpet-inspection-report'];
   if (argv.some((arg) => arg.startsWith('--deskpet-') && !known.some((name) => arg === name || arg.startsWith(`${name}=`)))) throw new Error('startup.argumentsConflict');
   if (argv.some((arg) => ['--user-data-dir', '--profile-directory'].some((name) => arg === name || arg.startsWith(`${name}=`)))) throw new Error('startup.argumentsConflict');
   const isolated = option(argv, selector);
@@ -74,6 +75,10 @@ export const planProfileLocation = (application: ApplicationPaths, argv: readonl
   if (artifactMode === 'validation-candidate' && isolated === undefined) throw new Error('startup.candidateRequiresIsolation');
   if ((isolated !== undefined && maintenanceRoot !== undefined) || (artifactMode === 'validation-candidate' && maintenanceRoot !== undefined)) throw new Error('startup.argumentsConflict');
   const inspection = target !== undefined;
+  const worker = argv.filter(arg => arg === wechatWorkerSwitch || arg.startsWith(wechatWorkerSwitch + '='));
+  if (worker.length && (worker.length !== 1 || worker[0] !== wechatWorkerSwitch || isolated === undefined || inspection)) {
+    throw new Error('startup.argumentsConflict');
+  }
   if (inspection !== (report !== undefined) || (maintenanceRoot !== undefined && !inspection) || (inspection && isolated === undefined && maintenanceRoot === undefined)) throw new Error('startup.inspectionArgumentsInvalid');
   // Invalid candidate arguments/markers/children are rejected without even asking for daily appData.
   const root = isolated !== undefined ? validateRoot(isolated) : maintenanceRoot !== undefined ? validateRoot(maintenanceRoot, true) : null;

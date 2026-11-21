@@ -2,7 +2,8 @@ import { expect, it } from 'vitest';
 import type { MemoryContextMetadata, MemoryItem } from '../../../shared';
 import { defaultPersona } from '../../../shared/persona';
 import { wechatReplyContext, withWeChatQuote } from './wechat-context';
-import { defaultCharacterProfile } from '../../../shared/character';
+import { defaultCharacterProfile, localDay } from '../../../shared/character';
+import { companionIdentity } from '../../domain/chat-context';
 
 const binding = '1'.repeat(64);
 const timestamp = '2026-01-01T00:00:00Z';
@@ -36,12 +37,13 @@ it('limits WeChat private memory to relevant, trusted, globally opted-in entries
   expect(wechatReplyContext({ ...input, destination: 'remote' }).memories).toEqual([cloudAllowed.text]);
 });
 
-it('uses persona locally and sends it to a cloud model only with its separate sharing flag', () => {
-  expect(wechatReplyContext({ ...input, destination: 'local' }).persona).toContain('PRIVATE_NAME');
-  expect(wechatReplyContext({ ...input, destination: 'remote' }).persona).toBeNull();
-  const shared = wechatReplyContext({ ...input, destination: 'remote', persona: { ...persona, shareStyleWithCloud: true } });
-  expect(shared.persona).toContain('PUBLIC_TONE');
-  expect(shared.persona).toContain('PRIVATE_NAME');
+it('uses the same owner persona frames for local and cloud private chats', () => {
+  const identity = companionIdentity(persona, null);
+  expect(identity.join('\n')).toContain('PRIVATE_NAME');
+  expect(identity.join('\n')).toContain('PUBLIC_TONE');
+  expect(wechatReplyContext({ ...input, destination: 'local' }).identity).toEqual(identity);
+  expect(wechatReplyContext({ ...input, destination: 'remote' }).identity).toEqual(identity);
+  expect(wechatReplyContext({ ...input, destination: 'remote', persona: { ...persona, shareStyleWithCloud: true } }).identity).toEqual(identity);
 });
 
 it('keeps opted-in owner memories and private persona fields out of group replies', () => {
@@ -57,8 +59,11 @@ it('keeps opted-in owner memories and private persona fields out of group replie
 it('propagates the current name and character privately, while groups receive only the public name and style', () => {
   const character = { ...defaultCharacterProfile(), bible: 'PRIVATE_CHARACTER', pet: 'PRIVATE_PET' };
   const changed = { ...persona, name: '星.芽+(1)', personality: 'PRIVATE_PERSONALITY', catchphrases: ['PRIVATE_CATCH'], tapLines: ['PRIVATE_TAP'], shareStyleWithCloud: true };
-  const local = wechatReplyContext({ ...input, persona: changed, character, destination: 'local' });
-  expect(local.name).toBe(changed.name); expect(local.persona).toContain('PRIVATE_CHARACTER');
+  const now = new Date('2026-11-21T04:00:00.000Z');
+  const local = wechatReplyContext({ ...input, persona: changed, character, destination: 'local', now });
+  expect(local.name).toBe(changed.name);
+  expect(local.identity?.join('\n')).toContain('PRIVATE_CHARACTER');
+  expect(local.identity).toEqual(companionIdentity(changed, { profile: character, today: localDay(now, Intl.DateTimeFormat().resolvedOptions().timeZone) }));
   for (const destination of ['local', 'remote'] as const) {
     const group = wechatReplyContext({ ...input, persona: changed, character, destination, target: 'group' });
     expect(group.name).toBe(changed.name); expect(group.persona).toContain('PUBLIC_TONE'); expect(group.persona).not.toContain('PRIVATE_'); expect(group.memories).toEqual([]);

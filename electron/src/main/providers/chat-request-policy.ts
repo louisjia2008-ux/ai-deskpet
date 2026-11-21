@@ -76,9 +76,12 @@ export const mergeTurnContextTrace = (previous: ContextTrace | null, current: Co
     diaries.set(reference.date, reference);
   }
   const wechatDigestUntil = earliestWeChatDigestExpiry(previous.wechatDigestUntil, current.wechatDigestUntil);
+  const recentRevision = previous.recentRevision ?? current.recentRevision;
+  if (current.recentRevision !== undefined && current.recentRevision !== recentRevision) throw new Error('chat.contextStale');
   const knowledgePolicyToken = previous.knowledgePolicyToken ?? current.knowledgePolicyToken;
   if (current.knowledgePolicyToken !== undefined && current.knowledgePolicyToken !== knowledgePolicyToken) throw new Error('chat.contextStale');
   return {
+    ...(recentRevision === undefined ? {} : { recentRevision }),
     ...(wechatDigestUntil === undefined ? {} : { wechatDigestUntil }),
     ...(knowledgePolicyToken === undefined ? {} : { knowledgePolicyToken }),
     ...(diaries.size ? { diaryReferences: [...diaries.values()] } : {}),

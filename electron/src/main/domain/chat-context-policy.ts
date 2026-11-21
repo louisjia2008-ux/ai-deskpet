@@ -86,6 +86,7 @@ export const selectAllowedHistory = (input: {
   /** Set only for the authenticated owner in a private WeChat turn. */
   allowWeChatDigestContext?: boolean;
   representationAllowed?: (reference: {batchId:string;candidateVersion:number}) => boolean;
+  recentAllowed?: (revision: string) => boolean;
   historyLookupAllowed?: (reference: NonNullable<ContextTrace['historyLookupReferences']>[number]) => boolean;
   /** Historical text is checked for withdrawal of its sources independently of the diary summary. */
   diaryAllowed?: (reference: DiaryReference) => boolean;
@@ -109,6 +110,7 @@ export const selectAllowedHistory = (input: {
       && (message.role === 'user' || message.role === 'assistant')
       && message.wechatDigest !== true && message.wechatFriend !== true
       && trace !== undefined && trace.version === 1 && trace.lineage === 'complete'
+      && (trace.recentRevision === undefined || input.recentAllowed?.(trace.recentRevision) === true)
       && (trace.knowledgePolicyToken === undefined || trace.knowledgePolicyToken === input.knowledgePolicyToken)
       && (trace.wechatDigestUntil === undefined || (input.allowWeChatDigestContext === true
         && trace.scope.kind === 'session' && Date.parse(trace.wechatDigestUntil) > now))

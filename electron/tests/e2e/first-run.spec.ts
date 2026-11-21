@@ -6,7 +6,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const EXPOSED_DOMAINS = ['app', 'attention', 'autoMemory', 'automation', 'backup', 'character', 'chat', 'chatWork', 'coding', 'consolidation', 'delegations', 'imports', 'jobs', 'journal', 'knowledge', 'media', 'memory', 'memoryRecall', 'memorySleep', 'migration', 'minecraft', 'minecraftCompanion', 'permissions', 'persona', 'plugins', 'proactive', 'providers', 'qq', 'rea', 'recovery', 'relationship', 'research', 'speech', 'tasks', 'telegram', 'timers', 'usage', 'vmSandbox', 'wechat', 'wechatDigests', 'wechatFollowup', 'wechatInbox'];
+const EXPOSED_DOMAINS = ['app', 'attention', 'autoMemory', 'automation', 'backup', 'character', 'chat', 'chatWork', 'coding', 'companionRecent', 'consolidation', 'delegations', 'imports', 'jobs', 'journal', 'knowledge', 'media', 'memory', 'memoryRecall', 'memorySleep', 'migration', 'minecraft', 'minecraftCompanion', 'permissions', 'persona', 'plugins', 'proactive', 'providers', 'qq', 'rea', 'recovery', 'relationship', 'research', 'speech', 'tasks', 'telegram', 'timers', 'usage', 'vmSandbox', 'wechat', 'wechatDigests', 'wechatFollowup', 'wechatInbox'];
 
 
 let application: ElectronApplication;

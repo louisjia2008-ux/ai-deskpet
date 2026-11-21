@@ -14,6 +14,8 @@ from wechat_rich_message import chat_quote_excerpt
 
 
 HISTORY_TURNS = 3
+OWNER_HISTORY_TURNS = 8
+OWNER_HISTORY_CHARACTERS = 6_000
 DIGEST_KINDS = ('groups', 'official', 'moments')
 DIGEST_BYTES_PER_KIND = 2_000
 QUEUE_COMMANDS = frozenset(("/queue", "/pause-queue", "/resume-queue", "/cancel-queue"))
@@ -835,16 +837,17 @@ class WeChatState:
                 """, (binding, sequence, decoded['text'], reply))
             if (decoded.get("presentation") or {}).get("localContext") is True:
                 self.db.execute("INSERT OR IGNORE INTO wechat_local_context VALUES (?, ?)", (binding, sequence))
+            history_turns = OWNER_HISTORY_TURNS if (decoded.get("database") or {}).get("target") == "private" else HISTORY_TURNS
             self.db.execute("""
                 DELETE FROM wechat_history WHERE binding = ? AND sequence NOT IN (
                     SELECT sequence FROM wechat_history WHERE binding = ? ORDER BY sequence DESC LIMIT ?
                 )
-            """, (binding, binding, HISTORY_TURNS))
+            """, (binding, binding, history_turns))
             self.db.execute("""
                 DELETE FROM wechat_digest_history WHERE binding = ? AND (expires_at <= ? OR sequence NOT IN (
                     SELECT sequence FROM wechat_digest_history WHERE binding = ? ORDER BY sequence DESC LIMIT ?
                 ))
-            """, (binding, sent_at, binding, HISTORY_TURNS))
+            """, (binding, sent_at, binding, history_turns))
             self.db.execute("""
                 DELETE FROM wechat_local_context WHERE binding = ? AND sequence NOT IN (
                     SELECT sequence FROM wechat_history WHERE binding = ?
@@ -931,7 +934,7 @@ class WeChatState:
         return [tuple(row) for row in self.db.execute(
             "SELECT binding, reason, at FROM wechat_dropped WHERE at >= ? ORDER BY at DESC LIMIT 100", (since,))]
 
-    def history(self, binding: str, *, for_cloud: bool = False) -> list[dict[str, str]]:
+    def history(self, binding: str, *, for_cloud: bool = False, owner: bool = False) -> list[dict[str, str]]:
         history = 'SELECT sequence, incoming, reply FROM wechat_history WHERE binding = ?'
         params = [binding]
         if self._has_table('wechat_digest_history'):
@@ -944,7 +947,10 @@ class WeChatState:
                     SELECT 1 FROM wechat_local_context p WHERE p.binding = ? AND p.sequence = h.sequence
                 ) ORDER BY sequence DESC LIMIT ?
             ) ORDER BY sequence
-        """, (*params, for_cloud, binding, HISTORY_TURNS))
+        """, (*params, for_cloud, binding, OWNER_HISTORY_TURNS if owner else HISTORY_TURNS)).fetchall()
+        if owner:
+            while sum(len(incoming) + len(reply) for incoming, reply in rows) > OWNER_HISTORY_CHARACTERS:
+                rows.pop(0)
         return [item for incoming, reply in rows for item in (
             {"role": "user", "text": incoming}, {"role": "assistant", "text": reply}
         )]

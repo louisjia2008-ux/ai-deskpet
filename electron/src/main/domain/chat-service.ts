@@ -12,6 +12,8 @@ import { isWeChatExcludedFromMemory, memoryInSession, sourceUserBefore } from '.
 import { createHistoryLookupResolver } from './chat-history-lineage';
 import { memoDiaryHistory } from './chat-context-policy';
 
+import { recentTraceAllowed } from './companion-recent-state';
+
 const receiptConflict = (): never => { throw new Error('chat.contextReceiptConflict'); };
 const sameJSON = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
 
@@ -35,6 +37,8 @@ const assertTraceCurrent = (state: PersistentState, sessionId: string, trace: Co
   const lookup = createHistoryLookupResolver({ state, sessionId, destination, suppressed, forbidden: forbiddenHistory, diaryAllowed: diaryRetained });
   const assertReferences = (source: ContextTrace, diaryAllowed: (reference: DiaryReference) => boolean): void => {
     if (source.lineage !== 'complete' || (source.scope.kind === 'session' && source.scope.sessionId !== sessionId)) throw new Error('chat.contextStale');
+    if (source.recentRevision !== undefined && (source.recentRevision !== trace.recentRevision
+      || !recentTraceAllowed(state, source.recentRevision, destination))) throw new Error('chat.contextStale');
     if (source.knowledgePolicyToken !== undefined && (trace.knowledgePolicyToken !== source.knowledgePolicyToken
       || knowledgeCurrent?.(source.knowledgePolicyToken) !== true)) throw new Error('chat.contextStale');
     if (source.privacy === 'local-only' && trace.privacy !== 'local-only') throw new Error('chat.contextStale');
@@ -221,7 +225,7 @@ export class ChatService {
   }
 
   async addMessage(
-    input: Pick<ChatMessage, 'sessionId' | 'role' | 'content' | 'status' | 'errorCode' | 'attachments'>,
+    input: Pick<ChatMessage, 'sessionId' | 'role' | 'content' | 'status' | 'errorCode' | 'attachments' | 'companionSource'>,
     now = new Date(),
   ): Promise<ChatMessage> {
     const message: ChatMessage = { id: randomUUID(), createdAt: now.toISOString(), ...input };
@@ -385,6 +389,7 @@ export class ChatService {
         if (preparation.userMessageIds !== undefined && prior.userMessageIds?.some((id) => !preparation.userMessageIds!.includes(id))) throw new Error('chat.contextStale');
         if ((prior.contextTrace.summaryReferences ?? []).some(ref => currentSummaries.get(ref.messageId) !== ref.contentSHA256)) throw new Error('chat.contextStale');
         if ((prior.contextTrace.historyLookupReferences ?? []).some((reference) => !sameJSON(currentLookups.get(reference.messageId), reference))) throw new Error('chat.contextStale');
+        if (prior.contextTrace.recentRevision !== undefined && prior.contextTrace.recentRevision !== preparation.contextTrace.recentRevision) throw new Error('chat.contextStale');
         if (prior.contextTrace.knowledgePolicyToken !== undefined &&
           preparation.contextTrace.knowledgePolicyToken !== prior.contextTrace.knowledgePolicyToken) throw new Error('chat.contextStale');
         if ((prior.contextTrace.diaryReferences ?? []).some(reference => !sameJSON(currentDiaries.get(reference.date), reference))) throw new Error('chat.contextStale');
@@ -409,7 +414,12 @@ export class ChatService {
       historyTrace.historyMessageIds = [...continuationHistory];
       if (session.historyPrivacy === 'local-only') historyTrace.privacy = 'local-only';
       assistant.contextTrace = historyTrace;
-      for (const user of users) user.contextTrace = structuredClone(historyTrace);
+      for (const user of users) {
+        user.contextTrace = structuredClone(historyTrace);
+        // Verbatim owner input has its own source. The answer depends on the
+        // rolling summary, but the current input predates exposure to it.
+        delete user.contextTrace.recentRevision;
+      }
       if (preparation.contextTrace.privacy === 'local-only') {
         session.historyPrivacy = 'local-only';
       }

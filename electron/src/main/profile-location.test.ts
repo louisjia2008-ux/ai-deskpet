@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { configureProfileLocation, isIsolatedProfile, selectIsolatedProfile } from './profile-location';
+import { configureProfileLocation, isIsolatedProfile, planProfileLocation, selectIsolatedProfile, wechatWorkerSwitch } from './profile-location';
 
 const roots: string[] = [];
 const fixture = (): string => {
@@ -15,6 +15,15 @@ const fixture = (): string => {
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('early isolated packaged profile selection', () => {
+  it('allows the WeChat worker switch only for an explicit interactive isolated profile', () => {
+    const root = fixture();
+    const isolated = `--deskpet-isolated-profile=${root}`;
+    const application = { isPackaged: true, getPath: vi.fn(() => '/daily-app-data'), setPath: vi.fn(), setName: vi.fn(), setAppLogsPath: vi.fn() };
+    expect(planProfileLocation(application, [isolated, wechatWorkerSwitch], 'daily')).toMatchObject({ root, operation: 'interactive' });
+    for (const argv of [[wechatWorkerSwitch], [isolated, wechatWorkerSwitch, wechatWorkerSwitch], [isolated, `${wechatWorkerSwitch}=true`]]) {
+      expect(() => planProfileLocation(application, argv, 'daily')).toThrow('startup.argumentsConflict');
+    }
+  });
   it('binds every data path and keychain name before any caller can initialize storage', () => {
     const root = fixture();
     const application = { isPackaged: true, getPath: vi.fn(() => '/daily-app-data'), setPath: vi.fn(), setName: vi.fn(), setAppLogsPath: vi.fn() };

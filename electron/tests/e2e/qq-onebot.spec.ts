@@ -2,7 +2,7 @@ import { _electron as electron, expect, test } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,7 +18,7 @@ const GROUP = 77777;
 /** Real sockets and the real main-process WebSocket; only NapCat and the model
  * are synthetic. Auth and framing follow NapCat's websocket-server.ts. */
 // eslint-disable-next-line no-empty-pattern
-test('secondary-account OneBot pairing, replies and stop run over a real local WebSocket', async ({}) => {
+test('secondary-account OneBot pairing, replies and stop run over a real local WebSocket', async ({}, testInfo) => {
   test.setTimeout(180_000);
   const root = await realpath(await mkdtemp(join(tmpdir(), 'deskpet-qq-e2e-')));
   await writeFile(join(root, 'isolated-candidate.json'), JSON.stringify({ version: 1, purpose: 'deskpet-isolated-candidate' }));
@@ -49,15 +49,21 @@ test('secondary-account OneBot pairing, replies and stop run over a real local W
     for (const client of clients) if (client.readyState === 1) client.send(body);
   };
   const texts = () => sent.map(item => item.message.map(segment => segment.data.text).join(''));
-  const wires: unknown[] = [];
+  const exam = '我明天要考试';
+  const examSummary = '主人明天要考试';
+  const wires: Array<{ messages: Array<{ role: string; content: string }>; tools?: unknown[] }> = [];
   const model = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
       if (request.url?.endsWith('/models')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"data":[{"id":"qq-fixture-model"}]}'); return; }
-      wires.push(JSON.parse(Buffer.concat(chunks).toString()));
+      const body = JSON.parse(Buffer.concat(chunks).toString()) as typeof wires[number];
+      wires.push(body);
+      const input = body.messages.filter(message => message.role === 'user').at(-1)?.content;
+      const content = body.messages[0]?.content.startsWith('Summarize the owner') ? JSON.stringify({ summary: examSummary })
+        : input === exam ? '[mood:happy] 加油。' : reply;
       response.writeHead(200, { 'content-type': 'text/event-stream' });
-      response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: reply }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+      response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
     });
   });
   await new Promise<void>((resolve, reject) => { model.once('error', reject); model.listen(0, '127.0.0.1', resolve); });
@@ -74,7 +80,10 @@ test('secondary-account OneBot pairing, replies and stop run over a real local W
   try {
     const env: Record<string, string> = {};
     for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'DISPLAY']) if (process.env[key]) env[key] = process.env[key]!;
-    application = await electron.launch({ env, cwd: process.cwd(), timeout: 30_000, args: [join(process.cwd(), '.webpack', process.arch, 'main/index.js'), `--deskpet-isolated-profile=${root}`] });
+    const executablePath = process.env.DESKPET_QQ_APP;
+    application = await electron.launch({ env, cwd: process.cwd(), timeout: 30_000,
+      ...(executablePath ? { executablePath, args: [`--deskpet-isolated-profile=${root}`, '--use-mock-keychain'] }
+        : { args: [join(process.cwd(), '.webpack', process.arch, 'main/index.js'), `--deskpet-isolated-profile=${root}`] }) });
     await application.evaluate(({dialog}) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
     await expect.poll(() => application!.windows().some(window => window.url().includes('/main_window/'))).toBe(true);
     page = application.windows().find(window => window.url().includes('/main_window/'))!;
@@ -113,12 +122,23 @@ test('secondary-account OneBot pairing, replies and stop run over a real local W
     await page.getByRole('button', { name: 'Confirm this QQ identity', exact: true }).click();
     await expect.poll(state).toMatchObject({ bound: true, pairingCandidate: null });
 
+    const desktopSession = await page.evaluate(() => window.deskpet.chat.createSession({ title: 'Fixture desktop', kind: 'normal' }));
+    await page.evaluate(input => window.deskpet.chat.send(input), { sessionId: desktopSession.id, content: exam, providerId: provider.id });
+    await expect.poll(() => page.evaluate(() => window.deskpet.companionRecent.status()), { timeout: 20_000 }).toMatchObject({ text: examSummary, localOnly: false });
+    const overlay = application.windows().find(window => window.url().includes('/overlay_window/'))!;
+    await expect.poll(() => overlay.evaluate(() => window.deskpet.character.getState())).toMatchObject({ mood: { name: 'happy' } });
+    const desktopWire = wires.find(wire => wire.messages.some(message => message.role === 'user' && message.content === exam));
+    expect(desktopWire).toBeDefined();
+
     event('/ping');
     await expect.poll(texts).toEqual(['pong']);
     expect(sent[0]).toEqual({ user_id: OWNER, message: [{ type: 'text', data: { text: 'pong' } }] });
     event('/ping', { user_id: INTRUDER }); await page.waitForTimeout(300); expect(sent).toHaveLength(1);
     event('Say something');
     await expect.poll(texts).toEqual(['pong', ...paragraphs]);
+    const qqPrivateWire = wires.find(wire => wire.messages.some(message => message.role === 'user' && message.content === 'Say something'));
+    expect(JSON.stringify(qqPrivateWire)).toContain(examSummary);
+    expect(qqPrivateWire?.messages.some(message => message.content.includes('happy'))).toBe(true);
     expect(sent.slice(1).every(item => item.user_id === OWNER && item.message.length === 1 && item.message[0]?.type === 'text')).toBe(true);
     expect(JSON.stringify(wires)).not.toContain(token);
 
@@ -141,8 +161,28 @@ test('secondary-account OneBot pairing, replies and stop run over a real local W
     const wire = JSON.stringify(wires[before]);
     expect(wire).toContain('Say something to the group');
     expect(wire).not.toContain('Say something"');
+    expect(wire).not.toContain(examSummary);
+    if (process.env.DESKPET_QQ_EVIDENCE) {
+      await mkdir(process.env.DESKPET_QQ_EVIDENCE, { recursive: true });
+      await writeFile(join(process.env.DESKPET_QQ_EVIDENCE, 'phase-a-qq-wire.json'),
+        JSON.stringify({ desktop: desktopWire, qqPrivate: qqPrivateWire, qqGroup: wires[before] }, null, 2), { mode: 0o600 });
+    }
+    await testInfo.attach('same-self-wire', { body: JSON.stringify({ desktop: desktopWire, qqPrivate: qqPrivateWire, qqGroup: wires[before] }), contentType: 'application/json' });
     expect((wires[before] as { tools?: unknown[] }).tools ?? []).toHaveLength(4);
     expect((wires[before] as { messages: Array<{ content: string }> }).messages.some(message => message.content.includes('hello before desktop confirmation'))).toBe(false);
+
+    await page.locator('nav').getByRole('button', { name: 'Memory', exact: true }).click();
+    const memory = page.getByRole('region', { name: 'Recent conversations with you' });
+    await expect(memory.getByText(examSummary, { exact: true })).toBeVisible();
+    await expect(memory.getByRole('checkbox', { name: 'Keep the summary local' })).not.toBeChecked();
+    const memoryScreenshot = testInfo.outputPath('memory-recent.png');
+    await page.screenshot({ path: memoryScreenshot, scale: 'css' });
+    await testInfo.attach('memory-recent', { path: memoryScreenshot, contentType: 'image/png' });
+    await memory.getByRole('button', { name: 'Clear summary', exact: true }).click();
+    await memory.getByRole('button', { name: 'Confirm clear', exact: true }).click();
+    await expect(memory.getByText('There is no summary for the last 36 hours yet.', { exact: true })).toBeVisible();
+    await page.locator('nav').getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('tab', { name: 'QQ channel', exact: true }).click();
 
     // Drive the normal host timer at an afternoon check-in window. No new
     // inbound QQ event or manual "send now" action initiates this message.

@@ -5,10 +5,11 @@ import { contextPrivacyAllows, contextScopeAllows, memoDiaryHistory, memoryAllow
 import type { ContextDestination } from './chat-context-policy';
 import { consolidationDependenciesCurrent } from './consolidation-state';
 import { isExcludedFromMemory } from './context-provenance';
+import { recentTraceAllowed } from './companion-recent-state';
 
 export type HistoryLookupReference = NonNullable<ContextTrace['historyLookupReferences']>[number];
 export type HistoryLookupState = Pick<PersistentState, 'profileId' | 'memories' | 'chatMessages' | 'chatSessions' | 'conversationImports' | 'consolidationBatches'>
-  & Partial<Pick<PersistentState, 'automationTriggers' | 'chatWorkTasks'>>;
+  & Partial<Pick<PersistentState, 'automationTriggers' | 'chatWorkTasks' | 'companionRecent'>>;
 
 export const historyLookupReference = (message: ChatMessage): HistoryLookupReference => ({
   sessionId: message.sessionId, messageId: message.id, contentSHA256: createHash('sha256').update(message.content).digest('hex'),
@@ -36,6 +37,14 @@ export const createHistoryLookupResolver = (input: {
   }
   const checked = new Map<string, ContextPrivacy | null>(), checking = new Set<string>();
   const diaryAllowed = memoDiaryHistory(input.diaryAllowed);
+  const recentChecked = new Map<string, boolean>();
+  const recentAllowed = (revision: string): boolean => {
+    const cached = recentChecked.get(revision);
+    if (cached !== undefined) return cached;
+    const allowed = recentTraceAllowed(state, revision, destination);
+    recentChecked.set(revision, allowed);
+    return allowed;
+  };
   const digest = new Map<string, string>();
   const lookup = (reference: HistoryLookupReference): ContextPrivacy | null => {
     const message = messages.get(reference.messageId);
@@ -54,6 +63,7 @@ export const createHistoryLookupResolver = (input: {
       || (message.status !== 'complete' && !(terminalTask && ['failed', 'cancelled'].includes(message.status)))
       || (message.role !== 'user' && message.role !== 'assistant') || !trace || trace.version !== 1 || trace.lineage !== 'complete'
       || !contextScopeAllows(trace.scope, message.sessionId) || !contextPrivacyAllows(trace.privacy, destination)
+      || (trace.recentRevision !== undefined && !recentAllowed(trace.recentRevision))
       || (message.automationTriggerId !== undefined && !state.automationTriggers?.some((trigger) => trigger.id === message.automationTriggerId && trigger.status === 'succeeded' && trigger.publishedAt != null))) {
       checked.set(message.id, null); return null;
     }

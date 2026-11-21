@@ -23,12 +23,15 @@ from wechat_messages import MessageSnapshot, key, new_messages, select_quote
 from wechat_reply_settings import CLOUD_GROUP_ID, FRIEND_ID, SHA256
 from wechat_rich_message import forward_owner_command, valid_quote_excerpt, valid_rich
 from wechat_service import prepare_runtime
-from wechat_state import HISTORY_TURNS
+from wechat_state import HISTORY_TURNS, OWNER_HISTORY_CHARACTERS, OWNER_HISTORY_TURNS
 
 
 CLOUD_REQUEST_LIMIT = 32_768
 CLOUD_RESPONSE_LIMIT = 4_096
+LOCAL_CONTEXT_RESPONSE_LIMIT = 131_072
+IDENTITY_FRAME_LENGTH = 12_000
 CLOUD_SOCKET = "cloud.sock"
+CHARACTER_MOODS = frozenset(("happy", "affection", "shy", "sad", "curious", "surprised", "pout", "angry", "tired"))
 # DeskPet allows the assistant 300 s, then answers within its 30 s socket margin.
 PRIVATE_REPLY_TIMEOUT = 335
 # A group turn may search the web; DeskPet allows it 120 s.
@@ -98,19 +101,26 @@ def cloud_request_from_bytes(raw):
                     or not 1 <= len(request["ownerName"]) <= 80 or not request["ownerName"].isprintable()):
         raise ValueError("Invalid cloud reply speaker.")
     fields = set(request) - speaker - {"quote", "dailyDigests", "friendId"} if isinstance(request, dict) else set()
+    local = required | {"contextOnly", "localModel"}
+    local_result = local | {"localResult"}
     if (not isinstance(request, dict) or fields not in (
-            required, required | {"contextOnly", "localModel"}, required | {"ownerCommand"},
+            required, local, local_result, required | {"ownerCommand"},
             required | {"readTool"}, required | {"article"}, required | {"rich"},
             required | {"stickerSelection", "reply", "sticker"})
-            or ("quote" in request and (fields not in (required, required | {"contextOnly", "localModel"})
+            or ("quote" in request and (fields not in (required, local, local_result)
                 or not valid_quote_excerpt(request["quote"])))
             or ("dailyDigests" in request and (fields != required or request['target'] != 'private'
                 or not valid_daily_digests(request['dailyDigests'])))
-            or (request.get('target') == 'friend' and (fields not in (required, required | {'contextOnly', 'localModel'})
+            or (request.get('target') == 'friend' and (fields not in (required, local, local_result)
                 or request.get('split') is not False or request.get('stickers') is not False))
             or (request.get('target') != 'friend' and 'friendId' in request)
             or ("contextOnly" in request and (request["contextOnly"] is not True
                 or not isinstance(request["localModel"], str) or not 1 <= len(request["localModel"]) <= 160))
+            or ("localResult" in request and (not isinstance(request["localResult"], dict)
+                or set(request["localResult"]) != {"reply", "mood"}
+                or not valid_reply(request["localResult"]["reply"])
+                or (request["localResult"]["mood"] is not None and
+                    (not isinstance(request["localResult"]["mood"], str) or request["localResult"]["mood"] not in CHARACTER_MOODS))))
             or ("ownerCommand" in request and request["ownerCommand"] is not True)
             or ("readTool" in request and request["readTool"] is not True)
             or ("article" in request and (request["target"] != "private" or request["history"] != []
@@ -138,10 +148,12 @@ def cloud_request_from_bytes(raw):
                 and not any(0xD800 <= ord(character) <= 0xDFFF for character in value))
 
     history = request["history"]
-    if (not valid_text(request["text"]) or not isinstance(history, list) or len(history) > HISTORY_TURNS * 2
+    turns = OWNER_HISTORY_TURNS if target == "private" else HISTORY_TURNS
+    if (not valid_text(request["text"]) or not isinstance(history, list) or len(history) > turns * 2
             or len(history) % 2 or any(not isinstance(entry, dict) or set(entry) != {"role", "text"}
             or entry["role"] != ("assistant" if index % 2 else "user") or not valid_text(entry["text"])
-            for index, entry in enumerate(history))):
+            for index, entry in enumerate(history))
+            or sum(len(entry["text"]) for entry in history) > OWNER_HISTORY_CHARACTERS):
         raise ValueError("Invalid cloud reply context.")
     return request
 
@@ -194,19 +206,38 @@ def knowledge_reply_current(runtime, binding, token):
 def local_reply_context(runtime, request, model):
     try:
         value = _host_reply(runtime, {**request, "contextOnly": True, "localModel": model},
-                            timeout=4, response_limit=65_536)
+                            timeout=4, response_limit=LOCAL_CONTEXT_RESPONSE_LIMIT)
     except (OSError, ValueError):
         return None
-    if (not isinstance(value, dict) or set(value) not in ({"persona", "memories"}, {"name", "persona", "memories"})
+    if (not isinstance(value, dict) or not {"persona", "memories"} <= set(value)
+            or set(value) - {"name", "persona", "memories", "identity", "recent", "mood"}
             or ("name" in value and (not isinstance(value["name"], str) or not 1 <= len(value["name"]) <= 40
                                      or value["name"] != value["name"].strip() or not value["name"].isprintable()))
             or (value["persona"] is not None and (not isinstance(value["persona"], str) or len(value["persona"]) > 11_000))
             or not isinstance(value["memories"], list) or len(value["memories"]) > 4
-            or any(not isinstance(item, str) or len(item) > 500 for item in value["memories"])):
+            or any(not isinstance(item, str) or len(item) > 500 for item in value["memories"])
+            or ("identity" in value and (not isinstance(value["identity"], list) or len(value["identity"]) > 2
+                or any(not isinstance(item, str) or not item.strip() or len(item.encode("utf-16-le", errors="surrogatepass")) // 2 > IDENTITY_FRAME_LENGTH
+                       for item in value["identity"])))
+            or ("recent" in value and (not isinstance(value["recent"], str) or not 1 <= len(value["recent"]) <= 800))
+            or ("mood" in value and (not isinstance(value["mood"], str) or value["mood"] not in CHARACTER_MOODS))):
+        return None
+    if request.get('target') != 'private' and (value['memories'] or 'identity' in value or 'recent' in value):
         return None
     if request.get('target') == 'friend' and (value['memories'] or value['persona'] is not None):
         return None
-    return value if value.get("name") or value["persona"] or value["memories"] else None
+    return value if value.get("name") or value["persona"] or value["memories"] or value.get("identity") else None
+
+
+def report_local_reply(runtime, request, model, plan, *, wait_hook=None):
+    """Report a generated reply while the listener can still verify the pending event."""
+    try:
+        _host_reply(runtime, {**request, "contextOnly": True, "localModel": model,
+                    "localResult": {"reply": plan["reply"], "mood": plan.get("mood")}},
+                    timeout=4, response_limit=512, wait_hook=wait_hook)
+    except (OSError, ValueError):
+        # A closed host app cannot learn from this reply. Local delivery is still independent.
+        return
 
 
 def doctor_checkup_command(text):
@@ -318,16 +349,17 @@ def cloud_reply_plan(runtime, request, fingerprint, *, wait_hook=None):
     assistant = isinstance(value, dict) and value.get("format") == "assistant"
     if assistant:
         value = {name: item for name, item in value.items() if name != "format"}
-    if (not isinstance(value, dict) or not required <= set(value) <= required | {"stickerAsset", "knowledgeReplyToken"}
+    if (not isinstance(value, dict) or not required <= set(value) <= required | {"stickerAsset", "knowledgeReplyToken", "privateContext"}
             or value["routeFingerprint"] != fingerprint or (request['target'] == 'friend' and assistant)
             or not (valid_assistant_reply(value["reply"]) if assistant else valid_reply(value["reply"]))
             or type(value["sticker"]) is not bool or (value["sticker"] and not request["stickers"])
             or ("stickerAsset" in value and (not value["sticker"] or not isinstance(value["stickerAsset"], str)
                 or not SHA256.fullmatch(value["stickerAsset"])))
             or ("knowledgeReplyToken" in value and (not private or not assistant
-                or not isinstance(value["knowledgeReplyToken"], str) or not SHA256.fullmatch(value["knowledgeReplyToken"])))):
+                or not isinstance(value["knowledgeReplyToken"], str) or not SHA256.fullmatch(value["knowledgeReplyToken"])))
+            or ("privateContext" in value and (not private or value["privateContext"] is not True))):
         raise ValueError("Cloud reply bridge returned an unavailable or invalid result.")
-    plan = {field: value[field] for field in ("reply", "sticker", "stickerAsset", "knowledgeReplyToken") if field in value}
+    plan = {field: value[field] for field in ("reply", "sticker", "stickerAsset", "knowledgeReplyToken", "privateContext") if field in value}
     return {**plan, "assistant": True} if assistant else plan
 
 
@@ -385,7 +417,10 @@ class DeskPet:
         reply = response.get("reply")
         if response.get("id") != event_id or response.get("ok") is not True or not valid_reply(reply):
             raise ui.TestError("DeskPet 未生成可发送的单行回复。")
-        return {"reply": reply, "sticker": response.get("sticker") is True}
+        mood = response.get("mood")
+        if mood is not None and (not isinstance(mood, str) or mood not in CHARACTER_MOODS):
+            raise ui.TestError("DeskPet 返回了无效的心情标签。")
+        return {"reply": reply, "sticker": response.get("sticker") is True, **({"mood": mood} if mood else {})}
 
     def cancel(self):
         self.process.terminate()

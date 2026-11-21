@@ -40,6 +40,8 @@ export const wechatChannelBindingId = (binding: string): string => uuid('binding
  * archived or deleted conversation gives way to the next candidate. */
 export const wechatAssistantSessionIds = (binding: string): string[] =>
   Array.from({ length: 64 }, (_, index) => uuid('assistant-session', `${digest.parse(binding)}:${index}`));
+export const wechatLightweightMessageId = (binding: string, id: string, role: 'user' | 'assistant'): string =>
+  uuid('lightweight-message', `${binding}:${id}:${role}`);
 const wechatMessageId = ({ id, binding, role }: Item): string => uuid('message', `${binding}:${id}:${role}`);
 
 interface TranscriptSource {

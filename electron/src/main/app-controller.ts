@@ -6,6 +6,8 @@ import type { ResearchExecutionControl } from './domain/research-task-service';
 import { isResearchArtifactPath } from '../shared/research-tasks';
 import type { ResearchTask, ResearchTaskInput, ResearchBinding, ResearchExecutionResult } from '../shared/research-tasks';
 import { MemorySleepService } from './domain/memory-sleep';
+import { CompanionRecentService, recentPrompt } from './domain/companion-recent-service';
+import { recentForDestination, recentTraceAllowed } from './domain/companion-recent-state';
 import { AutoMemoryService } from './domain/auto-memory';
 import { MediaLibraryService } from './media/media-library';
 import type { ChatImageAttachment, MediaImportResult } from '../shared/media';
@@ -87,11 +89,11 @@ import { AppSettingsService } from './app-settings';
 import { AutoLaunchService } from './auto-launch';
 import { ProfileBackupService, refreshPendingRestoreProof } from './profile-backup';
 import { runtimeIdentity } from './runtime-identity';
-import { isIsolatedProfile } from './profile-location';
+import { isIsolatedProfile, wechatWorkerSwitch } from './profile-location';
 import { WeChatChannel } from './channels/wechat/wechat-channel';
 import { AppHeartbeat } from './channels/wechat/app-heartbeat';
 import { WeChatCloud } from './channels/wechat/wechat-cloud';
-import type { WeChatAssistantReply, WeChatCloudRequest } from './channels/wechat/wechat-cloud';
+import type { WeChatAssistantReply, WeChatCloudRequest, WeChatReplyCompletion } from './channels/wechat/wechat-cloud';
 import { WECHAT_GROUP_REPLY_LIMIT, wechatAssistantDeliveryId, wechatAssistantText, wechatScheduledReplyText } from './channels/wechat/wechat-assistant';
 import { groupRulesPrompt } from './channels/wechat/wechat-group-rules';
 import { withWeChatQuote, publicPersona, type WeChatDailyDigests } from './channels/wechat/wechat-context';
@@ -123,7 +125,7 @@ import { runWeChatScheduledTask } from './channels/wechat/wechat-task-runner';
 import { WeChatStickerLibrary } from './channels/wechat/wechat-sticker-library';
 import { OpenAICompatibleAdapter } from './providers/openai-compatible';
 import { wechatReplyContext } from './channels/wechat/wechat-context';
-import { wechatAssistantSessionIds, WeChatTranscript } from './channels/wechat/wechat-transcript';
+import { wechatAssistantSessionIds, wechatLightweightMessageId, WeChatTranscript } from './channels/wechat/wechat-transcript';
 import { contentSecurityPolicy } from './content-security-policy';
 import { MinecraftService } from './minecraft';
 import { MinecraftCompanionService } from './minecraft/companion-service';
@@ -313,6 +315,8 @@ export class AppController {
   readonly #consolidation: ConsolidationService;
   readonly #sleep: MemorySleepService;
   readonly #autoMemory: AutoMemoryService;
+  readonly #recent: CompanionRecentService;
+  readonly #standaloneWeChat = isIsolatedProfile() && process.argv.includes(wechatWorkerSwitch);
   #proactiveTimer: NodeJS.Timeout | null = null;
   #careTimer: NodeJS.Timeout | null = null;
   readonly #careMoments = new CareMoments();
@@ -629,10 +633,19 @@ export class AppController {
     this.#jobs = new BackgroundJobService(this.#repository, this.#providers, () => { this.windows.send('console', 'jobs:changed', undefined); this.windows.send('console', 'delegations:changed', undefined); this.windows.send('console', 'consolidation:changed', undefined); this.#automaticTasks?.changed(); }, () => !this.#closing && !this.#profileMaintenance, (job, phase) => this.#automaticTasks.assertJob(job, phase));
     this.#autoMemory = new AutoMemoryService(this.#repository, {
       available: () => !this.#closing && !this.#profileMaintenance && !this.#suspended && this.#chatStarts.size === 0 && this.#chatRuns.size === 0,
-      captureBinding: (id, model) => this.#providers.captureBinding(id, model),
+      captureBinding: (id, model) => this.#autoMemoryBinding(id, model),
       channelSessionAllowed: sessionId => sessionId === this.#qq.bindingSessionId() || sessionId === this.#telegram.currentAuthority()?.sessionId,
       diaryRetained: this.#diaryRetained,
       saved: () => this.windows.send('console', 'memory:changed', this.#memory.list()),
+    });
+    this.#recent = new CompanionRecentService(this.#repository, {
+      available: () => !this.#standaloneWeChat && !this.#closing && !this.#profileMaintenance && !this.#suspended
+        && !this.#chatRuns.size && !this.#chatStarts.size && !this.#wechatAssistantLive.size,
+      capture: async () => {
+        const provider = this.#activeProvider();
+        return provider ? this.#providers.captureBinding(provider.id, provider.model, provider) : null;
+      },
+      changed: () => this.windows.send('console', 'companion-recent:changed', null),
     });
     this.#sleep = new MemorySleepService(this.#repository, {
       available: () => !this.#closing && !this.#profileMaintenance && !this.#suspended && !this.#jobs.active && !this.#autoMemory.active
@@ -1121,6 +1134,7 @@ export class AppController {
     this.#careTimer = setInterval(() => {
       void this.#sleep.tick().then(() => this.#writeDiary()).then(() => { this.#diarySchedulerErrorAt = null; }).catch(() => { this.#diarySchedulerErrorAt = new Date().toISOString(); });
       void this.#autoMemory.tick().catch(() => undefined);
+      void this.#recent.tick().catch(() => undefined);
       void this.#qq.offerPrivateCare().catch(() => undefined);
       void this.#offerCareMoment().catch(() => { this.#proactiveError = 'proactive.schedulerFailed'; this.#proactiveFailureAt = new Date().toISOString(); });
     }, 30_000);
@@ -1475,11 +1489,19 @@ export class AppController {
       bindings: () => wechat.cloudBindings(),
       authorize: input => wechat.authorizeCloud(input),
       knowledgePolicyToken: () => this.#knowledge.policyToken(),
-      context: (input, destination) => wechatReplyContext({
-        ...input, destination, persona: this.#persona.get(), character: this.#characterSheet.profile(), memories: this.#memory.list(),
-        suppressed: id => this.#repository.isMemoryRecallSuppressed(id),
-      }),
+      context: (input, destination) => {
+        const recent = input.target === 'private' ? recentForDestination(this.#repository.snapshot(), 'remote') : null;
+        const mood = this.#sharedMood();
+        return wechatReplyContext({
+          ...input, destination, persona: this.#persona.get(), character: this.#characterSheet.profile(), memories: this.#memory.list(),
+          suppressed: id => this.#repository.isMemoryRecallSuppressed(id),
+          ...(recent && !recent.localOnly ? { recent: recent.text } : {}),
+          ...(mood ? { mood } : {}),
+        });
+      },
       friendName: () => this.#persona.get().name,
+      mood: () => this.#sharedMood(),
+      completed: (input, result) => this.#recordWeChatReply(input, result),
       ownerCommand: async (input, guard) => {
         if (followupCommand.test(input.text.trim())) {
           return await this.#wechatFollowup?.command(input.binding, input.text, guard.assertCurrent) ?? '目前没有待跟进事项。';
@@ -2429,7 +2451,7 @@ export class AppController {
       };
     });
 
-    this.#ipc.register('character:get-state', both, () => this.#character.getState());
+    this.#ipc.register('character:get-state', both, async () => ({ ...(await this.#character.getState()), mood: this.#characterSheet.state().mood }));
     this.#ipc.register('character:get-preview', consoleOnly, async () => {
       const state = await this.#character.getState();
       return state.modelState === 'ready' ? this.windows.captureCompanionPreview() : null;
@@ -2564,6 +2586,9 @@ export class AppController {
     this.#ipc.register('delegations:cancel-batch', consoleOnly, ({ id }) => this.#jobs.cancelDelegation(id));
     this.#ipc.register('delegations:cancel-child', consoleOnly, (payload) => this.#jobs.cancelDelegationChild(payload));
     this.#ipc.register('delegations:replace', consoleOnly, (payload) => this.#jobs.replaceDelegation(payload));
+    this.#ipc.register('companion-recent:status', consoleOnly, () => this.#recent.status());
+    this.#ipc.register('companion-recent:clear', consoleOnly, () => this.#recent.clear());
+    this.#ipc.register('companion-recent:local-only', consoleOnly, ({ localOnly }) => this.#recent.setLocalOnly(localOnly));
     this.#ipc.register('auto-memory:status', consoleOnly, () => this.#autoMemory.status());
     this.#ipc.register('auto-memory:configure', consoleOnly, ({ enabled }) => this.#autoMemory.configure(enabled));
     this.#ipc.register('memory-sleep:status', consoleOnly, () => this.#sleep.status());
@@ -2583,7 +2608,11 @@ export class AppController {
     this.#ipc.register('jobs:list', consoleOnly, async () => (await this.#jobs.list()).filter((job) => job.automaticTriggerId === undefined));
     this.#ipc.register('jobs:get', consoleOnly, async ({ id }) => { const job = await this.#jobs.get(id); if (job.automaticTriggerId) throw new Error('automation.useHistoryEntry'); return job; });
     this.#ipc.register('jobs:cancel', consoleOnly, ({ id }) => this.#jobs.cancel(id));
-    this.#ipc.register('chat:send', consoleOnly, async (payload) => this.#startDesktopChat(payload.sessionId, payload.content, payload.providerId, payload.model));
+    this.#ipc.register('chat:send', consoleOnly, async ({ sessionId, content, providerId, model, workerIdentity }) => {
+      if (workerIdentity === undefined) return this.#startDesktopChat(sessionId, content, providerId, model);
+      if (!this.#standaloneWeChat) throw new Error('wechat.unavailable');
+      return this.#startChat(sessionId, content, providerId, randomUUID(), false, undefined, model, DESKTOP_CHANNEL, workerIdentity);
+    });
     this.#ipc.register('chat:get-interaction', consoleOnly, ({ sessionId }) => { this.#chat.listMessages(sessionId); return this.#chatInteractions.get(sessionId); });
     this.#ipc.register('chat:followup', consoleOnly, (input) => {
       if (this.#closing) throw new Error('chat.interrupted');
@@ -2919,6 +2948,79 @@ export class AppController {
     }
   }
 
+  async #autoMemoryBinding(id: string, model: string): Promise<Pick<CapturedProviderBinding, 'provider' | 'model' | 'inspection' | 'adapter'>> {
+    const { provider } = wechatLocalEvidenceRoute(model);
+    if (id !== provider.id) return this.#providers.captureBinding(id, model);
+    const current = async () => {
+      const state = await this.#wechatChannel?.getState();
+      if (this.#closing || this.#profileMaintenance || !state?.configured || state.paused || state.stale || state.reply.model !== model) {
+        throw new Error('wechat.unavailable');
+      }
+    };
+    await current();
+    const adapter = new OpenAICompatibleAdapter({ config: provider, apiKey: null });
+    const inspection = await adapter.inspectModel(model, AbortSignal.timeout(5_000));
+    if (inspection.localGguf !== true || inspection.executionDestination === 'remote') throw new Error('provider.notLocal');
+    return {
+      provider, model, inspection,
+      adapter: {
+        listModels: () => adapter.listModels(),
+        streamChat: async function* (request, signal, controls) {
+          await current();
+          await controls?.validateBeforeSend?.();
+          controls?.assertCurrent?.();
+          yield* adapter.streamChat(request, signal);
+        },
+      },
+    };
+  }
+
+  #sharedMood(): CharacterMood | null {
+    const mood = this.#characterSheet.state().mood;
+    return mood && Date.now() - Date.parse(mood.at) <= 24 * 60 * 60_000 ? mood.name : null;
+  }
+
+  async #recordWeChatReply(input: WeChatCloudRequest, result: WeChatReplyCompletion): Promise<void> {
+    if (this.#closing || this.#profileMaintenance) return;
+    if (result.mood) {
+      await this.#characterSheet.noteMood(result.mood).catch(() => undefined);
+      this.windows.send('overlay', 'character:reaction', { id: randomUUID(), mood: result.mood, phase: 'finished' });
+    }
+    if (input.target !== 'private') return;
+    const now = new Date().toISOString();
+    const checked = await this.#wechatOwnerTarget?.binding().catch(() => null);
+    if (checked !== input.binding || this.#closing || this.#profileMaintenance) return;
+    const session = await this.#chat.ensureSession(wechatAssistantSessionIds(input.binding),
+      this.#resolvedLocale() === 'zh-CN' ? '微信私聊助手' : 'WeChat assistant');
+    const id = wechatLightweightMessageId(input.binding, input.eventId, 'user');
+    const replyId = wechatLightweightMessageId(input.binding, input.eventId, 'assistant');
+    const text = input.text.replace(/\n\n（这条会用微信语音条回复：请用口语短句，60 字以内，不要表情、符号、链接和格式。）$/u, '');
+    const saved = await this.#repository.transaction(state => {
+      const conversation = state.chatSessions.find(item => item.id === session.id);
+      if (!conversation || conversation.archivedAt || conversation.deletedAt || conversation.companionScope === 'group'
+        || state.chatMessages.some(item => item.id === id) || this.#closing || this.#profileMaintenance) return false;
+      conversation.companionScope = 'owner';
+      conversation.updatedAt = now;
+      const common = { sessionId: session.id, createdAt: now, status: 'complete' as const, errorCode: null };
+      const privacy = result.destination === 'local' || conversation.historyPrivacy === 'local-only' ? 'local-only' as const : 'cloud-allowed' as const;
+      state.chatMessages.push({
+        ...common, id, role: 'user', content: text, companionSource: 'wechat',
+        contextTrace: { version: 1, historyMessageIds: [], memoryReferences: [], privacy, scope: { kind: 'session', sessionId: session.id }, lineage: 'complete' },
+      }, { ...common, id: replyId, role: 'assistant', content: result.reply });
+      return true;
+    });
+    this.#noteWeChatHandled(input.eventId);
+    if (!saved) return;
+    await this.#characterSheet.noteOwnerTurn().catch(() => undefined);
+    await this.#recent.note('wechat', session.id, [id]);
+    this.windows.send('console', 'chat:sessions-changed', null);
+    const route = result.route ?? (result.localModel ? {
+      providerId: wechatLocalEvidenceRoute(result.localModel).provider.id, model: result.localModel,
+    } : null);
+    if (route) this.#autoMemory.note(session.id, { ...route, destination: result.destination, source: 'wechat' });
+    void this.#recent.tick().catch(() => undefined);
+  }
+
   /** The owner's private WeChat message through the chat loop. The listener
    * sends the returned text (and optional sticker) through the WeChat window. */
   async #runWeChatAssistant(input: WeChatCloudRequest, route: WeChatCloudRoute, settings: WeChatAssistant,
@@ -2971,7 +3073,9 @@ export class AppController {
       if (!message || !reply) throw new Error('reply.invalid');
       const knowledgePolicyToken = message.contextTrace?.knowledgePolicyToken;
       const noteAuthority = knowledgePolicyToken === undefined ? {} : { knowledgePolicyToken };
+      const recentRevision = message.contextTrace?.recentRevision;
       const assertReplyCurrent = (): void => {
+        if (recentRevision && !recentTraceAllowed(this.#repository.snapshot(), recentRevision, 'remote')) throw new Error('reply.invalid');
         if (knowledgePolicyToken !== undefined && (message.contextTrace?.privacy === 'local-only' || this.#knowledge.policyToken() !== knowledgePolicyToken)) {
           throw new Error('reply.invalid');
         }
@@ -2979,15 +3083,16 @@ export class AppController {
       await guard.assertCurrent();
       assertReplyCurrent();
       const decision = this.#wechatAssistantRuns.get(runId)?.decision;
+      const privateContext = recentRevision ? { privateContext: true as const } : {};
       // Stickers follow social replies; long answers stay text only.
-      if (!input.stickers || !decision || decision.mode === 'text' || [...reply].length > 120) return { reply, sticker: false, ...noteAuthority, assertCurrent: assertReplyCurrent };
+      if (!input.stickers || !decision || decision.mode === 'text' || [...reply].length > 120) return { reply, sticker: false, ...noteAuthority, ...privateContext, assertCurrent: assertReplyCurrent };
       const scene = decision.scene;
       const select = () => stickers.select({ target: group ? 'group' : 'private', groupId: group?.id ?? null, eventId: input.eventId,
         text: input.text, reply, scene, assertCurrent: guard.assertCurrent }).catch(() => null);
       const { available } = this.#media.autoStickerStatus(scene);
       const stickerAsset = await selectReplySticker({ private: !group, available, select, draw: () => this.#drawWeChatSticker(scene),
         assertCurrent: async () => { guard.signal.throwIfAborted(); await guard.assertCurrent(); } });
-      return { reply, sticker: Boolean(stickerAsset), ...(stickerAsset ? { stickerAsset } : {}), ...noteAuthority, assertCurrent: assertReplyCurrent };
+      return { reply, sticker: Boolean(stickerAsset), ...(stickerAsset ? { stickerAsset } : {}), ...noteAuthority, ...privateContext, assertCurrent: assertReplyCurrent };
     } finally {
       guard.signal.removeEventListener('abort', cancel);
       this.#wechatAssistantRuns.delete(runId);
@@ -3283,6 +3388,7 @@ export class AppController {
   #assertQqReplyDisclosure(message: ChatMessage, state: ReturnType<DomainRepository['snapshot']>, sessionId: string, channel: ChannelContext): void {
     if (!isQqChannel(channel)) throw new Error('qq.disclosureBlocked');
     this.#assertChannelLive(channel, sessionId);
+    if (message.contextTrace?.recentRevision && !recentTraceAllowed(state, message.contextTrace.recentRevision, 'remote')) throw new Error('qq.disclosureBlocked');
     assertDeliverableToQq(message, state, sessionId, id => this.#repository.isMemoryRecallSuppressed(id), this.#knowledge.policyToken(),
       isOwnerDiaryChannel(channel) ? ref => this.#diaryInChatHistory(channel, state, ref) : undefined);
   }
@@ -3459,6 +3565,7 @@ export class AppController {
     if (!config?.ownerName || chat.username !== config.ownerName) return;
     const instruction = minecraftGameInstruction(chat.message, config.username);
     if (instruction === null || this.#closing || this.#profileMaintenance) return;
+    await this.#recent.noteMinecraft(randomUUID(), instruction, Date.now()).catch(() => undefined);
     const zh = this.#resolvedLocale() === 'zh-CN';
     const say = async (text: string): Promise<void> => {
       for (const line of minecraftGameReplyLines(text)) await this.#minecraftCompanion.say(line).catch(() => undefined);
@@ -3544,7 +3651,10 @@ export class AppController {
         : await this.#startDesktopChat(sessionId, content, provider.id);
       await this.#chatRuns.get(runId)?.catch(() => undefined);
       const reply = this.#repository.snapshot().chatMessages.filter(message => message.sessionId === sessionId && message.role === 'assistant').at(-1);
-      if (reply?.status === 'complete' && reply.content.trim()) await say(reply.content);
+      if (reply?.status === 'complete' && reply.content.trim()) {
+        if (reply.contextTrace?.recentRevision && !recentTraceAllowed(this.#repository.snapshot(), reply.contextTrace.recentRevision, 'remote')) return;
+        await say(reply.content);
+      }
       else if (reply?.status === 'cancelled') await say(zh ? '这条指令已停止。' : 'That request was stopped.');
       else await say((zh ? '这条指令没有完成：' : 'That request did not finish: ') + (reply?.errorCode ?? 'chat.runFailed'));
     } catch (error) {
@@ -3790,9 +3900,10 @@ export class AppController {
     } finally { release(); }
   }
 
-  async #startChat(sessionId: string, content: string, providerId: string, runId: string = randomUUID(), waitForCompletion = false, retryMessageId?: string, requestedModel?: string, channel: ChannelContext = DESKTOP_CHANNEL): Promise<{ runId: string }> {
+  async #startChat(sessionId: string, content: string, providerId: string, runId: string = randomUUID(), waitForCompletion = false, retryMessageId?: string, requestedModel?: string, channel: ChannelContext = DESKTOP_CHANNEL, workerIdentity?: string[]): Promise<{ runId: string }> {
     if (this.#closing) throw new Error('chat.interrupted');
     const source = this.#repository.snapshot().chatSessions.find(value => value.id === sessionId)?.channelBindingId;
+    const fromMinecraft = this.#minecraftGameRun?.sessionId === sessionId;
     assertSessionChannel(source, channel);
     this.#assertChannelLive(channel, sessionId);
     const managedMinecraft = this.#minecraftManagedTurns.has(runId);
@@ -3809,17 +3920,20 @@ export class AppController {
     }
     const abort=()=>this.#agent.cancel(runId);lease?.signal.addEventListener('abort',abort,{once:true});
     // The owner's own turns teach the profile; schedules, research and analysis runs do not.
-    const learn = !managedMinecraft && !this.#cronContexts.has(runId) && !this.#researchContexts.has(runId) && !lease;
+    const learn = !fromMinecraft && !managedMinecraft && !this.#cronContexts.has(runId) && !this.#researchContexts.has(runId) && !lease;
     const cleanup=():void=>{
       const done = this.#workContexts.get(runId);
       // Any finished owner turn, on any private channel, is when they last talked with her.
       if (learn && done && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) void this.#characterSheet.noteOwnerTurn().catch(() => undefined);
-      if (learn && done && done.destination !== 'unknown' && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) this.#autoMemory.note(sessionId, { providerId: done.providerId, model: done.model, destination: done.destination });
+      if (learn && done && done.destination !== 'unknown' && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) {
+        this.#autoMemory.note(sessionId, { providerId: done.providerId, model: done.model, destination: done.destination, source: done.channel.origin });
+      }
+      if (learn) void this.#recent.tick().catch(() => undefined);
       lease?.signal.removeEventListener('abort',abort);lease?.release();this.#reaChatGuards.delete(runId);this.#workContexts.delete(runId);this.#notesScopes.delete(runId);this.#skillTools.release(runId);this.#qqWebBudget.release(runId);};
     let release: () => void;
     try {this.#assertReaChat(runId);release = this.#chat.beginTurn(sessionId);}
     catch (error) {cleanup();throw error;}
-    const request = this.#performChat(sessionId, content, providerId, runId, waitForCompletion, retryMessageId, requestedModel, channel);
+    const request = this.#performChat(sessionId, content, providerId, runId, waitForCompletion, retryMessageId, requestedModel, channel, workerIdentity);
     this.#chatStarts.add(request);
     void request.then(({ runId: startedRun }) => {
       const completion = this.#chatRuns.get(startedRun);
@@ -3839,6 +3953,7 @@ export class AppController {
     retryMessageId?: string,
     requestedModel?: string,
     channel: ChannelContext = DESKTOP_CHANNEL,
+    workerIdentity?: string[],
   ): Promise<{ runId: string }> {
     const routing = this.#routedTurns.get(runId);
     const research = this.#researchContexts.get(runId);
@@ -3883,8 +3998,10 @@ export class AppController {
     if (this.#closing) throw new Error('chat.interrupted');
     const displayContent = research ? research.task.input.goal + (research.task.input.material ? '\n\n' + research.task.input.material : '') : content;
     const turnUserMessageIds = retry === null
-      ? [(await this.#chat.addMessage({ sessionId, role: 'user', content:displayContent, status: 'complete', errorCode: null,
-})).id]
+      ? [(await this.#chat.addMessage({ sessionId, role: 'user', content: displayContent, status: 'complete', errorCode: null,
+        ...(!scheduled && !research && !analysisSession && !managedMinecraft && this.#minecraftGameRun?.sessionId !== sessionId
+          && (channel.origin === 'telegram' || isOwnerDiaryChannel(channel)) ? { companionSource: channel.origin } : {}),
+      })).id]
       : retry.userMessageIds;
     const assistant = retry === null
       ? await this.#chat.addMessage({ sessionId, role: 'assistant', content: '', status: 'streaming', errorCode: null })
@@ -3905,6 +4022,7 @@ export class AppController {
       this.#chatInteractions.signal(runId).throwIfAborted();
       if (binding && this.#repository.snapshot().chatSessions.find(item => item.id === sessionId)?.knowledgeLocalOnly
         && (channel.origin !== 'desktop' || !localNotesBinding(binding))) throw new Error('provider.contextPrivacyBlocked');
+      if (workerIdentity !== undefined && (!binding || provider.kind !== 'ollama' || provider.supportsTools || !localNotesBinding(binding))) throw new Error('provider.contextPrivacyBlocked');
       if (routing?.destination === 'local' && binding?.inspection.executionDestination === 'remote') throw new Error('provider.contextPrivacyBlocked');
       if (routing?.destination === 'cloud' && this.#repository.snapshot().chatSessions.find(item => item.id === sessionId)?.historyPrivacy === 'local-only') throw new Error('provider.contextPrivacyBlocked');
     } catch (error) {
@@ -3973,6 +4091,7 @@ export class AppController {
     const allowWeChatDigestContext = channel.origin === 'wechat' && !channel.group && !scheduled && !research;
     const directHistory = analysisSession ? [] : selectAllowedHistory({ sessionId, history, memories: projectContextMemories(this.#memory.list().filter((memory) => !this.#repository.isMemoryRecallSuppressed(memory.id) && channelMemoryAllowed(memory)), sessionId, historyDestination), destination: historyDestination,
       allowWeChatDigestContext,
+      recentAllowed: revision => isOwnerDiaryChannel(channel) && recentTraceAllowed(historyState, revision, historyDestination),
       ...(!scheduled && (channel.origin === 'desktop' || channel.origin === 'telegram' || (channel.origin === 'wechat' && !channel.group)) ? { knowledgePolicyToken: this.#knowledge.policyToken() } : {}),
       diaryAllowed: reference => this.#diaryInChatHistory(channel, historyState, reference),
       ...(currentSession.historyPrivacy === undefined ? {} : { historyPrivacy: currentSession.historyPrivacy }) });
@@ -4291,15 +4410,25 @@ export class AppController {
         if (dailyDigests && dailyDigests.expiresAt * 1000 <= Date.now()) throw new Error('chat.contextStale');
         const chatTurn = wechatStickerRun?.quote || dailyDigests
           ? withWeChatQuote(turnMessages, wechatStickerRun?.quote, dailyDigests) : turnMessages;
+        const sharedMoodTags = !research && !analysisSession && channel.origin !== 'telegram'
+          && (!managedMinecraft || minecraftReason === 'player_chat');
+        const stickerInstruction = (wechatStickerPrompt ? WECHAT_STICKER_REPLY_INSTRUCTION : QQ_STICKER_REPLY_INSTRUCTION)
+          + (sharedMoodTags ? '在表情标记之后、正文之前另起一行写心情标签，如 [mood:happy]。' : '');
         const requiredMessages = wrapUp ? [{ role: 'system' as const, content: STEP_LIMIT_PROMPT }, ...chatTurn]
-          : stickerPrompt && round === 0 ? [{ role: 'system' as const, content: wechatStickerPrompt ? WECHAT_STICKER_REPLY_INSTRUCTION : QQ_STICKER_REPLY_INSTRUCTION }, ...chatTurn] : chatTurn;
+          : stickerPrompt && round === 0 ? [{ role: 'system' as const, content: stickerInstruction }, ...chatTurn] : chatTurn;
         const localToolIds = new Set(messages.flatMap((message) => message.toolCalls ?? [])
           .filter((call) => { let input: unknown; try { input = JSON.parse(call.argumentsJson); } catch { input = null; } return privateToolCall(call.name, input); }).map((call) => call.id));
         const requiredPrivacy = analysisSession || knowledgeLocalResult || (!workStartedPrivate && this.#repository.snapshot().chatWorkTasks.some(v=>v.runId===runId && v.privacy==='local-only')) || messages.some((message) => message.role === 'tool' && message.toolCallId !== undefined && localToolIds.has(message.toolCallId)
           && message.hostToolResult !== 'safe-error' && message.hostToolResult !== 'skipped')
           ? 'local-only' as const : 'cloud-allowed' as const;
         // Her own self and this moment go only to the owner's private conversations, never to groups.
-        const ownerChannel = !managedMinecraft && !research && !analysisSession && channel.origin !== 'telegram' && !isQqGroupChannel(channel) && !(channel.origin === 'wechat' && channel.group);
+        const gameChat = minecraftReason === 'player_chat' || this.#minecraftGameRun?.sessionId === sessionId;
+        const ownerChannel = !managedMinecraft && !research && !analysisSession && isOwnerDiaryChannel(channel);
+        const recentOwner = !this.#standaloneWeChat && !research && !analysisSession && !scheduled
+          && (ownerChannel || minecraftReason === 'player_chat' || (!managedMinecraft && gameChat));
+        const recentDestination = gameChat ? 'remote' : workContext.destination;
+        const recent = recentOwner ? recentForDestination(state, recentDestination) : null;
+        const recentAllowed = (revision: string) => recentOwner && recentTraceAllowed(state, revision, recentDestination);
         const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         const diaryDestination = channel.origin === 'desktop' && historyDestination === 'local' ? 'local' : 'remote';
         const diaryAllowed = (reference: NonNullable<ContextTrace['diaryReferences']>[number]): boolean => this.#journal.referenceCurrent(reference, state,
@@ -4310,8 +4439,12 @@ export class AppController {
             const diary = this.#journal.chatContext(channel, state, diaryDestination, id => this.#repository.isMemoryRecallSuppressed(id));
             return { character: { profile, today: localDay(now, timeZone) }, moment: momentPrompt({ now, timeZone, state: this.#characterSheet.state(), profile,
               addressUser: this.#persona.get().addressUser }), ...(diary ? { diary } : {}) };
-          })() : {}), sessionId, persona: managedMinecraft || research || analysisSession || channel.origin === 'telegram' ? null
-          : (channel.origin === 'wechat' && channel.group) || isQqGroupChannel(channel) ? publicPersona(this.#persona.get()) : this.#persona.get(), moodTags: !managedMinecraft && !research && !analysisSession && channel.origin === 'desktop', history: managedMinecraft || research || analysisSession ? [] : channel.origin === 'telegram' || channel.origin === 'wechat' ? directHistory : history, ...(managedMinecraft || research || channel.origin !== 'desktop' ? {} : { consolidationState: state }), memories: managedMinecraft || research || analysisSession ? [] : state.memories.filter((memory) => !this.#repository.isMemoryRecallSuppressed(memory.id) && channelMemoryAllowed(memory)), query: messages.filter((item) => item.role === 'user').map((item) => item.content).join('\n'), locale: this.#resolvedLocale(),
+          })() : sharedMoodTags && this.#sharedMood() ? { moment: `Your last stated mood was ${this.#sharedMood()}.` } : {}), ...(workerIdentity ? { identityOverride: workerIdentity } : {}),
+          ...(recent && recentAllowed(recent.revision) ? { recent: { prompt: recentPrompt(recent.text), revision: recent.revision, privacy: recent.localOnly ? 'local-only' as const : 'cloud-allowed' as const } } : {}),
+          recentAllowed,
+          ...(channel.origin === 'wechat' && !channel.group ? { historyLimit: { messages: 16, characters: 6_000 } } : {}),
+          sessionId, persona: managedMinecraft || research || analysisSession || channel.origin === 'telegram' ? null
+          : (channel.origin === 'wechat' && channel.group) || isQqGroupChannel(channel) ? publicPersona(this.#persona.get()) : this.#persona.get(), moodTags: sharedMoodTags && !(stickerPrompt && !wrapUp && round === 0), history: managedMinecraft || research || analysisSession ? [] : channel.origin === 'telegram' || channel.origin === 'wechat' ? directHistory : history, ...(managedMinecraft || research || channel.origin !== 'desktop' ? {} : { consolidationState: state }), memories: managedMinecraft || research || analysisSession ? [] : state.memories.filter((memory) => !this.#repository.isMemoryRecallSuppressed(memory.id) && channelMemoryAllowed(memory)), query: messages.filter((item) => item.role === 'user').map((item) => item.content).join('\n'), locale: this.#resolvedLocale(),
           speakingStyle: research || analysisSession || (channel.origin !== 'desktop' && channel.origin !== 'wechat') ? null : state.activeSpeakingStyle, binding: contextBinding, requiredMessages, requiredPrivacy,
           allowWeChatDigestContext,
           ...(!managedMinecraft && !research && !analysisSession && (channel.origin === 'desktop' || (channel.origin === 'wechat' && !channel.group)) ? {memoryRecall:this.#memoryRecall.retrieve({sessionId,destination:workContext.destination,query:messages.filter(item => item.role === 'user').map(item => item.content).join('\n'),memories:state.memories.filter(memory => !this.#repository.isMemoryRecallSuppressed(memory.id) && channelMemoryAllowed(memory)),signal})} : {}),
@@ -4374,11 +4507,9 @@ export class AppController {
         signal.throwIfAborted();this.#assertReaChat(runId);this.#assertChannelLive(channel, sessionId);this.#skillTools.assertCurrent(runId);
         modelCallHadOutput = false;
         const moodTag = new MoodTagFilter();
-        let moodNoted = false;
         const stickerTag = qqSemanticStickers || wechatStickerPrompt ? new QqStickerReplyFilter() : null;
         const showText = (visible: string): void => {
           if (moodTag.mood !== null) reactions.state(moodTag.mood);
-          if (moodTag.mood !== null && !moodNoted) { moodNoted = true; void this.#characterSheet.noteMood(moodTag.mood).catch(() => undefined); }
           if (visible === '') return;
           firstTextMs ??= Date.now() - started;
           text += visible;
@@ -4418,7 +4549,7 @@ export class AppController {
           }
           if (event.type === 'text' || event.type === 'tool-call' || event.type === 'tool-thought' || event.type === 'response-items') modelCallHadOutput = true;
           if (event.type === 'text') {
-            showText(stickerTag ? stickerTag.push(event.text) : moodTag.push(event.text));
+            showText(moodTag.push(stickerTag ? stickerTag.push(event.text) : event.text));
           } else if (event.type === 'tool-call') {
             if (wrapUp) continue;
             if (illustrative) throw new ToolFailure('tool.notRequested');
@@ -4448,7 +4579,9 @@ export class AppController {
           throw error;
         }
         if (releaseOllama) this.#embeddings.expectChatRelease(model);
-        showText(stickerTag ? stickerTag.flush() : moodTag.flush());
+        if (stickerTag) showText(moodTag.push(stickerTag.flush()));
+        showText(moodTag.flush());
+        if (moodTag.mood && sharedMoodTags && calls.length === 0) await this.#characterSheet.noteMood(moodTag.mood).catch(() => undefined);
         qqStickerReply.decision = stickerPrompt && !wrapUp && round === 0 && calls.length === 0
           ? stickerTag?.decision ?? null : null;
         if (wechatStickerRun) wechatStickerRun.decision = qqStickerReply.decision;
@@ -4654,6 +4787,12 @@ export class AppController {
         this.windows.send('console', 'chat:sessions-changed', null);
         if (trackWork) await this.#chatWork.finish(runId,message.status==='cancelled'?'cancelled':result.status==='failed'?'failed':result.limitReached?'interrupted':'completed',message.content.slice(0,8000));
         reactions.finish(message.status === 'complete' ? message.content : null);
+        if (!this.#standaloneWeChat && !managedMinecraft && this.#minecraftGameRun?.sessionId !== sessionId
+          && !scheduled && !research && !analysisSession && isOwnerDiaryChannel(channel) && message.status === 'complete') {
+          const source = channel.origin;
+          if (source !== 'telegram') await this.#recent.note(source, sessionId, [...turnUserMessageIds,
+            ...this.#chatInteractions.consumedFollowupIds(runId)]).catch(() => undefined);
+        }
         if (spokenAloud && message.status === 'complete' && this.#settings.get().overlayVisible) {
           await this.#speak(message.content);
         }
@@ -4834,6 +4973,7 @@ export class AppController {
     await this.#automaticTasks.flush();
     await this.#imports.shutdown();
     await this.#autoMemory.shutdown();
+    await this.#recent.stop();
     await this.#sleep.shutdown();
     await this.#wechatTranscript?.drain();
     this.#profileMaintenance = true;
@@ -4904,7 +5044,7 @@ export class AppController {
     const externalMinecraftBusy = () => !this.#minecraftDedicatedCompanion.ownsHelper()
       && !['stopped', 'error'].includes(this.#minecraftCompanion.getState().runtimeState);
     if (externalMinecraftBusy()) throw new Error('backup.error.busy');
-    if (this.#profileMaintenance || this.#research.active || this.#memoryRecallService.active || this.#artifacts.active || this.#mediaOperations.size > 0 || this.#chatCron.active || this.#proactive.active || this.#imports.active || this.#autoMemory.active || this.#sleep.active || this.#jobs.active || this.#chatStarts.size > 0 || this.#chatRuns.size > 0 || this.#agent.activeRuns > 0 || this.#schedulerTicking || this.#focusTicking || this.#timerTicking || (await this.#character.getState()).modelState === 'loading') throw new Error('backup.error.busy');
+    if (this.#profileMaintenance || this.#research.active || this.#memoryRecallService.active || this.#artifacts.active || this.#mediaOperations.size > 0 || this.#chatCron.active || this.#proactive.active || this.#imports.active || this.#autoMemory.active || this.#recent.active || this.#sleep.active || this.#jobs.active || this.#chatStarts.size > 0 || this.#chatRuns.size > 0 || this.#agent.activeRuns > 0 || this.#schedulerTicking || this.#focusTicking || this.#timerTicking || (await this.#character.getState()).modelState === 'loading') throw new Error('backup.error.busy');
     if (this.#jobs.active) throw new Error('backup.error.busy');
     // Recheck after character loading's await: no new game operation can enter
     // between this synchronous guard and acquiring profile maintenance.

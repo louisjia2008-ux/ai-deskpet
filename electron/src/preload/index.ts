@@ -214,6 +214,12 @@ const api: DeskPetApi = {
     replace: (input) => invoke('delegations:replace', input),
     onChanged: (listener) => on('delegations:changed', listener),
   },
+  companionRecent: {
+    status: () => invoke('companion-recent:status', {}),
+    clear: () => invoke('companion-recent:clear', {}),
+    onChanged: (listener) => on<null>('companion-recent:changed', listener),
+    setLocalOnly: (localOnly) => invoke('companion-recent:local-only', { localOnly }),
+  },
   autoMemory: {
     status: () => invoke('auto-memory:status', {}),
     configure: (input) => invoke('auto-memory:configure', input),

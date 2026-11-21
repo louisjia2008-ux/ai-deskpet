@@ -4,7 +4,9 @@ import { projectContextMemories } from '../../domain/chat-context-policy';
 import { rankRelevantMemories } from '../../domain/memory-retrieval';
 import { wechatSessionId } from './wechat-transcript';
 import { companionName } from '../../../../wechat-runtime/reply_policy.cjs';
-import { characterPrompt } from '../../../shared/character';
+import { localDay } from '../../../shared/character';
+import { companionIdentity } from '../../domain/chat-context';
+import type { CharacterMood } from '../../../shared/character-reactions';
 import type { ModelTurnMessage } from '../../runtime';
 import type { CharacterProfile } from '../../../shared/character';
 import { z } from 'zod';
@@ -34,7 +36,12 @@ export function withWeChatQuote(messages: readonly ModelTurnMessage[], quote?: s
   ];
 }
 
-export type WeChatReplyContext = { name: string; persona: string | null; memories: string[] };
+export type WeChatReplyContext = {
+  name: string; persona: string | null; memories: string[];
+  identity?: string[];
+  recent?: string;
+  mood?: CharacterMood;
+};
 
 /** The character as a group sees it: style only, no names, private framing, role-play or examples. */
 export const publicPersona = (persona: Persona): Persona => ({ ...persona, addressUser: '', identity: '', personality: '', examples: '', boundaries: '', catchphrases: [], tapLines: [] });
@@ -43,21 +50,23 @@ export function wechatReplyContext(input: {
   target: 'private' | 'group'; binding: string; text: string; destination: 'local' | 'remote';
   persona: Persona; memories: readonly MemoryItem[]; suppressed(id: string): boolean;
   character?: CharacterProfile;
+  now?: Date;
+  recent?: string;
+  mood?: CharacterMood;
 }): WeChatReplyContext {
-  // Cloud persona context follows the existing owner opt-in. In a group, keep
-  // only the public-facing style, without private names, role-play or examples.
-  const persona = input.destination === 'local' || input.persona.shareStyleWithCloud
-    ? personaPrompt(input.target === 'private' ? input.persona : publicPersona(input.persona)) : null;
-  const character = input.character && input.target === 'private' && (input.destination === 'local' || input.persona.shareStyleWithCloud)
-    ? characterPrompt(input.character, { name: input.persona.name, addressUser: input.persona.addressUser, today: new Date().toISOString().slice(0, 10) }) : null;
-  const identity = [character, persona].filter(Boolean).join('\n\n');
-  const boundedPersona = identity ? Array.from(identity).slice(0, 11_000).join('') : null;
+  // Group replies keep the public-facing style and its existing cloud opt-in.
+  const mood = input.mood ? { mood: input.mood } : {};
   const name = companionName(input.persona.name);
-  if (input.target === 'group') return { name, persona: boundedPersona, memories: [] };
+  if (input.target === 'group') {
+    const persona = input.destination === 'local' || input.persona.shareStyleWithCloud ? personaPrompt(publicPersona(input.persona)) : null;
+    return { name, persona, memories: [], ...mood };
+  }
+  const today = localDay(input.now ?? new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const identity = companionIdentity(input.persona, input.character ? { profile: input.character, today } : null);
   const sessionId = wechatSessionId(input.binding);
   const eligible = projectContextMemories(input.memories.filter(memory => memory.contextMetadata?.wechatAllowed === true
     && memory.contextMetadata.scope.kind === 'global' && !input.suppressed(memory.id)), sessionId, input.destination);
   const memories = rankRelevantMemories(eligible, input.text, { sessionId, destination: input.destination, includeProfile: false })
     .slice(0, 4).map(memory => Array.from(memory.text).slice(0, 500).join(''));
-  return { name, persona: boundedPersona, memories };
+  return { name, persona: null, identity, memories, ...mood, ...(input.recent ? { recent: input.recent } : {}) };
 }

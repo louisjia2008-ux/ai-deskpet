@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChatMessage, ChatSession, ContextTrace, MemoryItem } from '../../shared';
 import { prepareChatContext } from '../domain/chat-context';
 import { historyLookupReference } from '../domain/chat-history-lineage';
+import { defaultCompanionRecent, recentDigest } from '../domain/companion-recent-state';
 import { telegramResultNeedsApproval, assertDeliverableToQq, qqMemoryAllowed } from './channel-disclosure-policy';
 
 const metadata = (patch: Record<string, unknown>) => ({
@@ -55,6 +56,29 @@ describe('qq delivery disclosure gate', () => {
     expect(() => assertDeliverableToQq(message, state, 'qq')).toThrow();
     shared.contextMetadata!.revision = 1; shared.contextMetadata!.qqAllowed = false;
     expect(() => assertDeliverableToQq(message, state, 'qq')).toThrow();
+  });
+
+  it('rechecks a recent summary inherited through an ancestor before QQ delivery', () => {
+    const at = new Date().toISOString(), revision = recentDigest('synthetic revision');
+    const owner = { id: 'qq', companionScope: 'owner' } as ChatSession;
+    const desktop = { id: 'desktop', companionScope: 'owner' } as ChatSession;
+    const source: ChatMessage = { id: 'source', sessionId: desktop.id, role: 'user', content: 'Synthetic source', status: 'complete', errorCode: null, createdAt: at };
+    const ancestor: ChatMessage = { id: 'ancestor', sessionId: owner.id, role: 'assistant', content: 'Synthetic descendant',
+      status: 'complete', errorCode: null, createdAt: at, contextTrace: { ...trace('cloud-allowed'), recentRevision: revision } };
+    const state = { chatSessions: [owner, desktop], chatMessages: [source, ancestor], memories: [],
+      companionRecent: { ...defaultCompanionRecent(),
+        entries: [{ source: 'desktop' as const, id: source.id, sessionId: desktop.id, at, sha: recentDigest(source.content) }],
+        summary: { revision, text: source.content, updatedAt: at, refs: [source.id], localOnly: false },
+      },
+    };
+    const message = { contextTrace: { ...trace('cloud-allowed'), historyMessageIds: [ancestor.id] } };
+    expect(() => assertDeliverableToQq(message, state, owner.id)).not.toThrow();
+    expect(() => telegramResultNeedsApproval(message, state, owner.id, false, () => false)).toThrow('telegram.disclosureBlocked');
+    owner.companionScope = 'group';
+    expect(() => assertDeliverableToQq(message, state, owner.id)).toThrow('qq.disclosureBlocked');
+    owner.companionScope = 'owner';
+    desktop.historyPrivacy = 'local-only';
+    expect(() => assertDeliverableToQq(message, state, owner.id)).toThrow('qq.disclosureBlocked');
   });
 
   it('walks ancestors and rejects cross-session, missing, cyclic or newly private history', () => {

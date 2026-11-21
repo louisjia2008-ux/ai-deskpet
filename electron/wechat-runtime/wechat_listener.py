@@ -40,7 +40,7 @@ from wechat_group_policy import (
 from wechat_messages import MessageSnapshot, VisibleMessage, bubble_boxes, key, native_group_mention, new_messages, select_quote, share_vertical_shift
 from wechat_replies import (
     CLOUD_REQUEST_LIMIT, DeskPet, ReplyRejected, ReplyYielded, article_reply_plan, cloud_reply_plan, cloud_request_from_bytes, local_reply_context, log,
-    ephemeral_owner_reply, knowledge_reply_current, owner_command_candidate, owner_command_plan, read_tool_candidate, read_tool_plan, reply_bubbles, rich_reply_plan, select_reply_sticker, sticker_mode,
+    ephemeral_owner_reply, knowledge_reply_current, owner_command_candidate, owner_command_plan, read_tool_candidate, read_tool_plan, reply_bubbles, report_local_reply, rich_reply_plan, select_reply_sticker, sticker_mode,
     sticker_command, thread_snapshot,
 )
 from wechat_reply_settings import DEFAULT_REPLY, list_models, read_cloud_route, read_reply_settings, write_reply_settings
@@ -1842,7 +1842,7 @@ def authorize_cloud_request(state, settings, runtime, request):
             or rich != (event.observation.get("rich") if quote is None else None)
             or request.get("quote") != expected_quote
             or (article is None and rich is None and not (command or read_tool or sticker)
-                and state.history(binding, for_cloud=not local) != request["history"])):
+                and state.history(binding, for_cloud=not local, owner=target == "private") != request["history"])):
         return None
     if "database" in event.observation and not database_event_allowed(state, settings, runtime, event):
         return None
@@ -2108,7 +2108,8 @@ def run(state, settings, path, runtime, *, state_path=None):
                             candidate_command = (target == "private" and not voice_requested
                                                  and owner_command_candidate(event.observation["text"]))
                             try:
-                                history = state.history(binding, for_cloud=fingerprint is not None)
+                                owner = target == "private"
+                                history = state.history(binding, for_cloud=fingerprint is not None, owner=owner)
                                 request = {"target": target, "groupId": group_id, "binding": binding,
                                            "eventId": event.id, "text": asked, "history": history,
                                            "split": preferences["split"], "stickers": preferences["stickers"],
@@ -2116,6 +2117,7 @@ def run(state, settings, path, runtime, *, state_path=None):
                                 context = None
                                 plan = None
                                 command = False
+                                local_result_request = None
                                 if heard and not heard.get("heard"):
                                     # Nothing to answer: ask again rather than guess at what was said.
                                     plan = {"reply": VOICE_UNHEARD_REPLY, "sticker": False}
@@ -2143,6 +2145,7 @@ def run(state, settings, path, runtime, *, state_path=None):
                                     context = local_reply_context(runtime, context_request, preferences["model"])
                                     model_input = {**preferences, **reference_context, **({"context": context} if context else {})}
                                     plan = model.reply_plan(event.id, target, model_text, history, model_input)
+                                    local_result_request = context_request
                                 elif plan is None:
                                     plan = cloud_reply_plan(runtime, {**request, **reference_context, "text": model_text}, fingerprint)
                             except ReplyRejected:
@@ -2172,7 +2175,8 @@ def run(state, settings, path, runtime, *, state_path=None):
                                         presentation["stickerAsset"] = digest
                                 except (OSError, ValueError, subprocess.SubprocessError):
                                     presentation["sticker"] = False
-                            if command or (fingerprint is None and (context or state.history(binding, for_cloud=True) != history)):
+                            if (command or plan.get("privateContext")
+                                    or (fingerprint is None and (context or state.history(binding, for_cloud=True, owner=owner) != history))):
                                 presentation["localContext"] = True
                             if command and target == "private" and ephemeral_owner_reply(event.observation["text"]):
                                 presentation["ephemeralReply"] = True
@@ -2185,6 +2189,8 @@ def run(state, settings, path, runtime, *, state_path=None):
                             if not reply_route_matches(runtime, target, active_settings, presentation, binding=binding):
                                 statuses[entry] = "model_route_changed"
                                 continue
+                            if local_result_request is not None and (owner or plan.get("mood")):
+                                report_local_reply(runtime, local_result_request, preferences["model"], plan)
                             if not state.prepare(event.id, plan["reply"], presentation=presentation):
                                 raise StateConflict("Prepared occurrence changed.")
                             event = state.pending(binding)[0]

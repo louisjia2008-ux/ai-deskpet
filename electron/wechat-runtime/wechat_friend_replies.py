@@ -12,7 +12,7 @@ import vm_console as ui
 from wechat_db_channel import DatabaseUnavailable
 from wechat_db_intake import DbIntake, DbScope
 from wechat_friends import enrolled_friends, friend_binding_key, settings_for_friend, verify_friend
-from wechat_replies import DeskPet, ReplyRejected, ReplyYielded, cloud_reply_plan, local_reply_context, log, owner_command_candidate
+from wechat_replies import DeskPet, ReplyRejected, ReplyYielded, cloud_reply_plan, local_reply_context, log, owner_command_candidate, report_local_reply
 from wechat_reply_settings import read_cloud_route, read_reply_settings
 from wechat_rich_message import chat_quote_excerpt
 from wechat_service import is_paused
@@ -63,7 +63,7 @@ def authorize_friend(state, settings, runtime, request):
     local = request.get('contextOnly') is True
     allowed = {'target', 'groupId', 'friendId', 'binding', 'eventId', 'text', 'history', 'split', 'stickers', 'quote'}
     if local:
-        allowed |= {'contextOnly', 'localModel'}
+        allowed |= {'contextOnly', 'localModel', 'localResult'}
     if set(request) - allowed or request.get('split') is not False or request.get('stickers') is not False:
         return None
     try:
@@ -153,6 +153,8 @@ def plan_reply(state, friend, binding, event, runtime, model, priority):
             if 'quote' in request:
                 options['quote'] = request['quote']
             planned = model.reply_plan(event.id, 'friend', text, request['history'], options, wait_hook=priority)
+            if planned.get('mood'):
+                report_local_reply(runtime, request, prefs['model'], planned, wait_hook=priority)
     except ReplyRejected:
         return PRIVATE_REPLY_REJECTED, presentation, model
     except (ReplyYielded, *FRIEND_ERRORS):

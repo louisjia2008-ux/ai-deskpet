@@ -8,6 +8,7 @@ import { ChatService } from './chat-service';
 import { ChatWorkService } from './chat-work-service';
 import { DomainRepository } from './repository';
 import { historyLookupReference } from './chat-history-lineage';
+import { recentDigest } from './companion-recent-state';
 import { prepareChatContext } from './chat-context';
 import { mergeTurnContextTrace } from '../providers/chat-request-policy';
 import { chatWorkTaskSchema } from './chat-work-schemas';
@@ -222,6 +223,33 @@ describe('literal history lookup and durable provenance', () => {
     expect(f.work.current(f.runId)).toMatchObject({ privacy: 'local-only', historyLookupReferences: [historyLookupReference(source)] });
     expect(f.repository.snapshot().chatSessions.find((session) => session.id === f.session.id)?.historyPrivacy).toBe('local-only');
     await expect(f.chat.prepareRequest(f.assistant.id, preparation(trace(f.session.id, { historyLookupReferences: [historyLookupReference(source)] }), f.runId, f.question.id))).rejects.toThrow('chat.contextStale');
+  });
+
+  it('withdraws rolling-summary descendants from cross-session lookup and prepared requests', async () => {
+    const f = await fixture();
+    const original = await f.saved('Original chat continuity fact.');
+    const answer = await f.saved('Continuity answer in another conversation.', { role: 'assistant' });
+    const descendant = await f.saved('Continuity descendant after reading history.', { role: 'assistant' });
+    const revision = recentDigest('synthetic recent summary version');
+    await f.repository.transaction(state => {
+      state.companionRecent.entries = [{ source: 'desktop', id: original.id, sessionId: original.sessionId, at: original.createdAt, sha: recentDigest(original.content) }];
+      state.companionRecent.summary = { text: original.content, revision, updatedAt: original.createdAt, localOnly: false, refs: [original.id] };
+      state.chatMessages.find(item => item.id === answer.id)!.contextTrace = trace(answer.sessionId, { recentRevision: revision });
+      state.chatMessages.find(item => item.id === descendant.id)!.contextTrace = trace(descendant.sessionId, { historyLookupReferences: [historyLookupReference(answer)] });
+    });
+    const remote = { sessionId: f.session.id, destination: 'remote' as const };
+    expect(f.work.readHistory(remote, { messageId: answer.id })?.text).toBe(answer.content);
+    expect(f.work.readHistory(remote, { messageId: descendant.id })?.text).toBe(descendant.content);
+    const receipt = await f.chat.prepareRequest(f.assistant.id, preparation(trace(f.session.id, {
+      historyLookupReferences: [historyLookupReference(descendant)],
+    }), f.runId, f.question.id));
+    expect(() => f.chat.assertPreparedRequest(f.assistant.id, receipt.requestId)).not.toThrow();
+    await f.repository.transaction(state => {
+      state.chatSessions.find(item => item.id === original.sessionId)!.historyPrivacy = 'local-only';
+    });
+    expect(f.work.searchHistory(remote, { query: 'Continuity' }).items).toEqual([]);
+    expect(f.work.readHistory(remote, { messageId: descendant.id })).toBeNull();
+    expect(() => f.chat.assertPreparedRequest(f.assistant.id, receipt.requestId)).toThrow('chat.contextStale');
   });
 
   it('checks memory revisions, recall suppression and session scope through every source ancestor', async () => {

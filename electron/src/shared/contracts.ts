@@ -17,7 +17,7 @@ import type { WeChatInboxAPI } from './wechat-inbox';
 import type { WeChatDigestsAPI } from './wechat-digests';
 import type { WeChatFollowupAPI } from './wechat-followup';
 import type { Persona } from './persona';
-import type { CharacterProfile } from './character';
+import type { CharacterProfile, CharacterState as CompanionCharacterState } from './character';
 import type { AttentionAPI } from './attention';
 import type { AutomationAPI, UsageAPI } from './automation';
 import type { ConsolidationApplyInput, ConsolidationBatch, ConsolidationEditInput, ConsolidationPreviewInput, ConsolidationSource, MemoryRepresentationTrace } from './consolidation';
@@ -29,6 +29,7 @@ import type { ProactiveConfig, ProactiveState } from './proactive';
 import type { MinecraftConnectionConfig, MinecraftControlAction, MinecraftSnapshot } from './minecraft';
 import type { MinecraftCompanionConfig, MinecraftCompanionSnapshot, MinecraftCompanionTaskInput } from './minecraft-companion';
 import type { MinecraftDedicatedIdentity, MinecraftDedicatedSettings, MinecraftDedicatedSnapshot } from './minecraft-dedicated';
+import type { CompanionRecentAPI } from './companion-recent';
 import type { CharacterReaction, CompanionPointer } from './character-reactions';
 import type { VoiceChunk, VoiceStatus } from './voice';
 import type { SpeechInputAPI } from './speech-input';
@@ -116,6 +117,7 @@ export interface DiagnosticSnapshot {
 }
 
 export interface CharacterState {
+  mood?: CompanionCharacterState['mood'];
   coreState: 'missing' | 'ready' | 'invalid';
   modelState: 'missing' | 'loading' | 'ready' | 'invalid';
   coreUrl: string | null;
@@ -187,6 +189,7 @@ export interface ChatMessage {
   status: 'streaming' | 'complete' | 'cancelled' | 'failed';
   errorCode: string | null;
   wechatSender?: string | undefined;
+  companionSource?: 'desktop' | 'qq' | 'wechat' | 'telegram' | undefined;
   /** A delivered summary in the local-only WeChat transcript mirror. */
   wechatDigest?: true | undefined;
   /** Read-only WeChat friend transcript excluded from the owner's memory and context. */
@@ -336,6 +339,8 @@ export interface MemoryContextMetadata {
 }
 
 export interface ContextTrace {
+  /** Version of the owner-only rolling summary that informed this context. */
+  recentRevision?: string | undefined;
   /** Opaque vault approval identity for messages derived from a notes tool. */
   knowledgePolicyToken?: string | undefined;
   /** Private WeChat digest context and its derivatives expire at this instant. */
@@ -576,6 +581,7 @@ export interface DeskPetApi {
     resume(id: string): Promise<CodingTask>;
   };
   autoMemory: AutoMemoryAPI;
+  companionRecent: CompanionRecentAPI;
   speech?: SpeechInputAPI;
   journal?: CompanionJournalAPI;
   memorySleep: MemorySleepAPI;
@@ -717,7 +723,7 @@ export interface DeskPetApi {
     removeSession(id: string): Promise<ChatSession>;
     restoreSession(id: string): Promise<ChatSession>;
     listMessages(sessionId: string): Promise<ChatMessage[]>;
-    send(input: { sessionId: string; content: string; providerId: string; model?: string }): Promise<{ runId: string }>;
+    send(input: { sessionId: string; content: string; providerId: string; model?: string; workerIdentity?: string[] }): Promise<{ runId: string }>;
     getInteraction(sessionId: string): Promise<ChatInteractionState | null>;
     followup(input: { runId: string; sessionId: string; operationId: string; content: string }): Promise<ChatMessage>;
     resolveApproval(input: { runId: string; sessionId: string; approvalId: string; decision: ChatApprovalDecision }): Promise<void>;

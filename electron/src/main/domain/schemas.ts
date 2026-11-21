@@ -15,6 +15,8 @@ import { MAX_OUTPUT_TOKENS } from '../../shared/output-limits';
 import { chatImageAttachmentSchema, defaultMediaLibrary, mediaLibrarySchema } from '../../shared/media';
 import { defaultWeChatOwnerCommands, wechatOwnerCommandsSchema } from '../channels/wechat/wechat-owner-command-schema';
 
+import { companionRecentSchema, defaultCompanionRecent } from './companion-recent-state';
+
 const id = z.string().uuid();
 export const defaultMemorySleep = () => ({ settings: { enabled: true, hour: 3, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
   lastDay: null as string | null, lastRunAt: null as string | null, reports: [] as never[], recallReplacements: {} });
@@ -24,6 +26,7 @@ export const memoryReferenceSchema = z.object({ id, revision: z.number().int().m
 export const contextTraceSchema = z.object({
   knowledgePolicyToken: sha256.optional(),
   wechatDigestUntil: timestamp.optional(),
+  recentRevision: sha256.optional(),
   diaryReferences: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u), revision: z.number().int().positive(), summarySHA256: sha256 }).strict()).max(366).optional(),
   version: z.literal(1),
   representationReferences: z.array(z.object({ batchId: id, candidateVersion: z.number().int().positive() }).strict()).max(300).optional(),
@@ -157,6 +160,7 @@ export const chatMessageSchema = z
     status: z.enum(['streaming', 'complete', 'cancelled', 'failed']),
     errorCode: z.string().max(240).nullable(),
     wechatSender: z.string().max(160).optional(),
+    companionSource: z.enum(['desktop', 'qq', 'wechat', 'telegram']).optional(),
     wechatDigest: z.literal(true).optional(),
     wechatFriend: z.literal(true).optional(),
     automationTriggerId: id.optional(),
@@ -361,6 +365,7 @@ export const persistentStateSchema = z
       }).strict()).max(64) }).strict()).max(30),
     }).strict().default(defaultMemorySleep),
     autoMemory: z.object({ enabled: z.boolean(), cursors: z.record(id, id) }).strict().default(() => ({ enabled: true, cursors: {} })),
+    companionRecent: companionRecentSchema.default(defaultCompanionRecent),
     consolidationBatches: z.array(consolidationBatchSchema).max(300).default([]),
     consolidationSelections: z.array(consolidationSelectionSchema).default([]),
     delegationBatches: z.array(delegationBatchSchema).max(300).default([]),
@@ -426,6 +431,7 @@ export const createDefaultState = (): PersistentState => ({
   nightlyMemory: defaultNightlyStore(),
   autoMemory: { enabled: true, cursors: {} },
   memorySleep: defaultMemorySleep(),
+  companionRecent: defaultCompanionRecent(),
   consolidationBatches: [],
   consolidationSelections: [],
   delegationBatches: [],

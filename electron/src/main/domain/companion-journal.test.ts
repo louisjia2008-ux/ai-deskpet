@@ -17,6 +17,7 @@ import { assertProactiveContext, proactiveContext } from './proactive-context';
 import { ChatService } from './chat-service';
 import { DomainRepository } from './repository';
 import { createHistoryLookupResolver, historyLookupReference } from './chat-history-lineage';
+import { recentDigest } from './companion-recent-state';
 import { MemorySleepService } from './memory-sleep';
 import { MemoryService } from './memory-service';
 import { assertDeliverableToQq } from '../security/channel-disclosure-policy';
@@ -186,6 +187,25 @@ it('withdraws even edited local summaries when a source is deleted or made priva
   const f = await fixture(); await f.journal.tick(f.input); await f.journal.edit({ date, revision: 1, text: 'edited' });
   f.session.deletedAt = stamp;
   expect(f.journal.context(f.state, 'local', () => false).summaries).toEqual([]);
+});
+
+it('withdraws retained diary material when a rolling-summary dependency is cleared', async () => {
+  const f = await fixture();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(f.input.now);
+  try {
+    await f.journal.tick(f.input);
+    // Simulate an already-retained diary source with a valid summary dependency.
+    const original = { ...f.message, id: randomUUID(), content: 'Synthetic continuity source.' };
+    const revision = recentDigest('diary retained fixture revision');
+    f.state.chatMessages.push(original);
+    f.state.companionRecent.entries = [{ source: 'desktop', id: original.id, sessionId: original.sessionId,
+      at: stamp, sha: recentDigest(original.content) }];
+    f.state.companionRecent.summary = { revision, text: original.content, updatedAt: stamp, refs: [original.id], localOnly: false };
+    f.message.contextTrace!.recentRevision = revision;
+    expect(f.journal.context(f.state, 'remote', () => false).summaries).toHaveLength(1);
+    f.state.companionRecent.summary = null;
+    expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
+  } finally { clock.mockRestore(); }
 });
 
 it('puts diary summaries in the moment before the current turn and carries revocable provenance through history and tool rounds', async () => {

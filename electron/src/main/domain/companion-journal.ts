@@ -10,6 +10,7 @@ import type { PersistentState } from './schemas';
 import type { ContextTrace } from '../../shared';
 import { projectContextMemories, selectAllowedHistory } from './chat-context-policy';
 import { isExcludedFromMemory } from './context-provenance';
+import { recentTraceAllowed } from './companion-recent-state';
 import { proactiveDayKey, proactiveMinuteOfDay } from './proactive-policy';
 
 const provenanceSchema = diaryEntrySchema.pick({ sources: true, memories: true, revision: true });
@@ -67,7 +68,8 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
     const message = messages.get(id);
     const session = message && sessions.get(message.sessionId);
     if (!message || isExcludedFromMemory(message) || !session || session.deletedAt || session.historyPrivacy === 'local-only'
-      || message.contextTrace?.privacy !== 'cloud-allowed' || (owner && session.companionScope !== 'owner')) return 'withdrawn';
+      || message.contextTrace?.privacy !== 'cloud-allowed' || (owner && session.companionScope !== 'owner')
+      || (message.contextTrace.recentRevision !== undefined && !recentTraceAllowed(state, message.contextTrace.recentRevision, 'remote'))) return 'withdrawn';
     if (seenMessages.has(id)) continue;
     seenMessages.add(id);
     if (session.archivedAt || session.analysisSource) retired = true;
