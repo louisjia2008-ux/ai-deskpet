@@ -64,13 +64,14 @@ const FRAME_OBSIDIAN = 10;
 const FRAME_CORNERS = 4;
 // A station farther off than this is behind the bot: another goes down beside it.
 const STATION_REACH = 32;
+const { gatherWood } = require('../adaptation-strategies');
 const POOL_COOLDOWN_MS = 10 * 60_000;
 const POOL_FAILURE_WINDOW_MS = 30 * 60_000;
 const samePool = (a, b) => Math.abs(a.y - b.y) <= 4 && Math.hypot(a.x - b.x, a.z - b.z) <= 10;
 
 function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint = null, stations = {},
   skills = defaultSkills, actions = defaultActions, kb = KNOWLEDGE, maxExploreStreak = 20, carry = () => false, reserved = {}, countWorn = false,
-  searchRadius = null, maxSearchStreak = 8 } = {}) {
+  searchRadius = null, maxSearchStreak = 8, adaptationAnchor = chest } = {}) {
   if (!chest || ![chest.x, chest.y, chest.z].every(Number.isInteger)) throw new TypeError('chest must have integer x, y, z');
   if (!requirements === !blueprint) throw new TypeError('give either requirements or a blueprint');
   for (const r of requirements || []) {
@@ -192,14 +193,49 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
   }
 
   // A staircase starts at least this far from the chest, so home is never undermined.
+  const diamondArea = { position: adaptationAnchor };
   async function mine(ctx, step, dropMatch) {
+    if (ctx.adapt && step.key === 'diamond') {
+      return ctx.adapt.run('diamond', diamondArea, async (method) => {
+        const previousMine = memory.mine;
+        const mode = ['sealed_mine', 'different_region', 'move_to_fresh_area'].includes(method) ? 'sealed' : 'normal';
+        if (previousMine && (method !== 'current_mine' && previousMine.adaptMethod !== method
+          || ctx.adapt.avoids('mine_danger', previousMine.entrance))) {
+          if (!previousMine.retiring) mining.coolEntrance(bot, ctx, previousMine.entrance, 'adaptation_new_entrance');
+          previousMine.retiring = true;
+        }
+        const result = await mineOnce(ctx, step, dropMatch, { method, closed: mode === 'sealed', far: ['different_region', 'move_to_fresh_area'].includes(method) });
+        if (memory.mine && !memory.mine.retiring) memory.mine.adaptMethod = method;
+        if (previousMine?.retiring && result.reason === 'mine_exhausted') return { ok: true, progress: false };
+        return ['liquid', 'cave', 'gravity'].includes(result.turned) ? { ...result, adaptFailure: result.turned } : result;
+      });
+    }
+    return mineOnce(ctx, step, dropMatch);
+  }
+
+  async function mineOnce(ctx, step, dropMatch, { method = 'current_mine', closed = false, far = false } = {}) {
     let start = null;
+    if (memory.mine) {
+      if (bot.entity.position.y >= memory.mine.surfaceY - 1 && memory.mine.safetyRetreat) {
+        if (memory.mine.retiring) {
+          mining.coolEntrance(bot, ctx, memory.mine.entrance, 'mine_hazard');
+          memory.mine = null;
+          return { ok: true, progress: false };
+        }
+        const state = ctx.perceive();
+        if (state.health < (closed ? 17 : 13) || state.food < 8) return { ok: true, waited: true, reason: 'recover_before_mining',
+          retryAt: Date.now() + 30_000 };
+        memory.mine.safetyRetreat = null;
+      }
+    }
     if (!memory.mine) {
       const at = bot.entity.position.floored();
       const allowed = (p) => Math.hypot(p.x - chest.x, p.z - chest.z) >= MINE_FROM_HOME
-        && !bot.companionNearPlayerBuild?.(p) && !bot.companionHomeSite?.(p) && !mining.entranceCooling(bot, p);
+        && (!far || Math.hypot(p.x - chest.x, p.z - chest.z) >= 72)
+        && !bot.companionNearPlayerBuild?.(p) && !bot.companionHomeSite?.(p) && !mining.entranceCooling(bot, p)
+        && !ctx.adapt?.avoids('mine_danger', p) && !ctx.adapt?.avoids('hard_route', p);
       if (!allowed(at)) {
-        const reach = MINE_FROM_HOME + 4 + Math.min(5, memory.barrenMines || 0) * 8;
+        const reach = (far ? 80 : MINE_FROM_HOME + 4) + Math.min(5, memory.barrenMines || 0) * 8;
         const candidates = [reach, reach + 8, reach + 16].flatMap((r) => SIDES.map((_, i) => SIDES[((memory.mineDir ?? 0) + i) % 4])
           .map(([sx, sz]) => new Vec3(chest.x + sx * r, chest.y, chest.z + sz * r)));
         const away = candidates.find(allowed);
@@ -215,6 +251,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         }
       }
       start = bot.entity.position.floored();
+      if (ctx.adapt?.avoids('mine_danger', start)) return { ok: false, reason: 'mine_region_avoided' };
     }
     // An unlit tunnel fills with monsters: carry torches while there is coal for them.
     const have = (n) => countKey(n, ctx.perceive().inventory, kb);
@@ -223,8 +260,12 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       if (!made.ok) blacklist.add('torch', made.reason, 60000);
     }
     const m = memory.mine;
+    if (m && ctx.adapt) bot.companionMineRoute = m;
     if (m?.junction && !m.depot && m.y === step.mineY && step.mineY <= DEPOT_BELOW) return buildDepot(ctx);
-    const result = await mining.mineStep(bot, ctx, memory, { blocks: step.blocks, dropMatch, y: step.mineY, blacklist, start, actions, skills });
+    const result = await mining.mineStep(bot, ctx, memory, { blocks: step.blocks, dropMatch, y: step.mineY, blacklist, start, actions, skills, closed });
+    if (memory.mine && !memory.mine.adaptMethod && method !== 'current_mine') ctx.record('adaptation_use', {
+      task: 'diamond', method, position: memory.mine.entrance,
+    });
     if (result.reason === 'mine_exhausted') memory.barrenMines = (memory.barrenMines || 0) + 1;
     return result;
   }
@@ -329,7 +370,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     if (typeof actions.surface !== 'function' || blacklist.has('surface')) return null;
     const result = await actions.surface(bot, ctx);
     if (result) ctx.record('surface', { ok: result.ok });
-    if (result && !result.ok) blacklist.add('surface', result.reason, 60000);
+    if (result && !result.ok && !result.adaptationSwitched) blacklist.add('surface', result.reason, 60000);
     return result;
   }
 
@@ -380,7 +421,10 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         if (step.dimension === 'the_nether' && step.key === 'quartz') return netherTrip(ctx, step.count);
         if (step.dimension && step.dimension !== nether.dimension(bot)) return { ok: false, reason: `needs_dimension:${step.dimension}` };
         const dropMatch = kb[step.key].match;
+        if (ctx.adapt && step.key === 'log') return gatherWood({ bot, ctx, skills, actions, memory, anchor: adaptationAnchor,
+          blocks: step.blocks, dropMatch, blacklist });
         const deep = Number.isFinite(step.mineY);
+        if (ctx.adapt && step.key === 'diamond') return mine(ctx, step, dropMatch);
         // Ore that needs a mine is mined from the tunnel once there is one.
         if (deep && memory.mine) return mine(ctx, step, dropMatch);
         // Elsewhere only ore in the open (surface, cave mouths): never a
@@ -405,12 +449,19 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         const isLava = step.liquid === 'lava';
         const now = Date.now();
         if (isLava) lavaPools = lavaPools.filter((pool) => pool.until ? pool.until > now : pool.last > now - POOL_FAILURE_WINDOW_MS);
-        const exclude = (p) => isLava && lavaPools.some((pool) => pool.until > Date.now() && samePool(p, pool.position));
+        const avoidLearned = (p) => ctx.adapt?.avoids('lava_pool', p);
+        const exclude = (p) => isLava && (avoidLearned(p) || lavaPools.some((pool) => pool.until > Date.now() && samePool(p, pool.position)));
         const args = { liquid: step.liquid, blacklist, exclude };
         let result = await skills.fillBucket(bot, ctx, args);
         if (result.reason === 'no_target_in_range') result = await skills.fillBucket(bot, ctx, { ...args, radius: 128 });
         if (result.reason === 'no_target_in_range') return explore(ctx, step.key);
-        if (isLava && result.ok) lavaPools = lavaPools.filter((pool) => pool.until);
+        if (isLava && result.ok) {
+          if (memory.lavaAlternate) {
+            ctx.record('adaptation_use', { task: 'lava_pool', method: 'different_pool', ok: true, result: 'lava_bucket' });
+            memory.lavaAlternate = false;
+          }
+          lavaPools = lavaPools.filter((pool) => pool.until);
+        }
         if (isLava && result.sourcePosition && !result.ok && result.reason !== 'aborted' && !ctx.signal?.aborted) {
           const p = result.sourcePosition;
           let pool = lavaPools.find((entry) => samePool(entry.position, p));
@@ -419,6 +470,15 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
             lavaPools = [...lavaPools.slice(-15), pool];
           }
           pool.last = Date.now();
+          if (ctx.adapt) {
+            const plan = ctx.adapt.plan('lava_pool', { position: pool.position });
+            const outcome = ctx.adapt.outcome(plan, result, { learn: { kind: 'lava_pool', radius: 10 } });
+            if (outcome.adaptationSwitched) {
+              pool.until = pool.last + POOL_COOLDOWN_MS;
+              memory.lavaAlternate = true;
+            }
+            return outcome;
+          }
           pool.failures = pool.failures.filter((at) => at > pool.last - POOL_FAILURE_WINDOW_MS);
           pool.failures.push(pool.last);
           if (pool.failures.length >= 3) {
@@ -579,6 +639,10 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       }
       if (!belowSurface || outOfPicks) {
         const kit = belowSurface ? [{ key: 'stone_pickaxe', count: SPARE_PICKS }] : supplies(step);
+        if (ctx.adapt && step.key === 'diamond' && ['sealed_mine', 'different_region', 'move_to_fresh_area'].includes(
+          ctx.adapt.plan('diamond', diamondArea).method) && !belowSurface) {
+          kit.unshift({ key: 'water_bucket', count: 1 });
+        }
         step = plan(ctx, { requirements: [...kit, ...reqs], inventory, stations: placedStations() }) || step;
       }
     }
@@ -607,7 +671,14 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     name: 'gather_materials',
     // The trip owns temporary movement overrides, even when its parent stops
     // before the bot returns through the portal. Keep its remembered portals.
-    dispose() { return memory.trip?.dispose?.(); },
+    dispose() {
+      // Keep the route descriptor for the next autonomous action until the
+      // body is actually out. Permanent retreat checks its dimension and depth.
+      if (bot.companionMineRoute === memory.mine && bot.entity.position.y >= (memory.mine?.surfaceY ?? Infinity) - 1) {
+        bot.companionMineRoute = null;
+      }
+      return memory.trip?.dispose?.();
+    },
     noProgressLimit: 40,
     maxRecoveries: 6,
     recover() {

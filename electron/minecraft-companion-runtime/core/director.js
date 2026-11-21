@@ -69,6 +69,7 @@ function createDirector({
   waitBudgetMs = MINUTE,
   yieldCooldownMs = 30_000,
   onOverworldDeath = () => {},
+  adaptation = null,
 } = {}) {
   if (!brain || typeof perceive !== 'function') throw new TypeError('brain and perceive are required');
   for (const card of cards) validateCard(card);
@@ -91,6 +92,7 @@ function createDirector({
     own = null;
     if (expedition) memory.homePending = true;
     if (type === 'goal_done') {
+      adaptation?.progress();
       if (id === 'wheat_farm') {
         memory.wheatFarmDone = true;
         memory.wheatPlots = memory.wheatFarm?.memory.plots;
@@ -109,11 +111,30 @@ function createDirector({
     emit('autonomy_cooldown', { card: id, count, until: now() + delay, reasons: event.reasons });
   }
 
-  function governor(card) {
+  function governor(card, definition) {
     let waits = 0, waitMs = 0, streak = null, failures = 0;
     const byReason = failureWindows.get(card) || new Map();
     failureWindows.set(card, byReason);
+    const generic = (state) => adaptation?.plan('goal', { position: state?.position, target: card });
+    let recoveredRevision = null;
     return {
+      adapt: adaptation && ((valid) => adaptation.scope(valid)),
+      async before(ctx) {
+        const p = generic(ctx.perceive());
+        if (!p) return null;
+        if (p.method === 'recover' && recoveredRevision !== `${p.key}:${p.revision}`) {
+          if (typeof definition.recover === 'function') {
+            recoveredRevision = `${p.key}:${p.revision}`;
+            ctx.record('adaptation_use', { task: 'goal', method: 'recover', card });
+            await definition.recover();
+            return null;
+          }
+          adaptation.promote('goal', p, 'other_work', 'no_recovery_available');
+          return adaptation.defer(generic(ctx.perceive()));
+        }
+        if (['other_work', 'do_other_work'].includes(p.method)) return adaptation.defer(p);
+        return null;
+      },
       stepBlocked(kind, item) {
         const key = stepKey(kind, item);
         const until = blockedSteps.get(key);
@@ -142,6 +163,10 @@ function createDirector({
           return null;
         }
         waits = 0;
+        if (adaptation && !result?.sourceHandled && result?.reason !== 'aborted') {
+          const p = generic(perceive());
+          adaptation.scope(() => true).outcome(p, result?.ok ? { ...result, progress: false } : result);
+        }
         if (result?.ok !== false || !result.reason || result.reason === 'aborted') return null;
         for (const [reason, times] of byReason) if (times.at(-1) <= at - FAILURE_WINDOW) byReason.delete(reason);
         const times = (byReason.get(result.reason) || []).filter((t) => t > at - FAILURE_WINDOW);
@@ -175,6 +200,7 @@ function createDirector({
     },
     tick() {
       if (!enabled) return null;
+      if (!playerActive) adaptation?.poll();
       if (brain.status().goal) { idleSince = null; return null; }
       // A player goal can also end without an event (stop, clear).
       if (playerActive) { playerActive = false; pausedUntil = now() + resumeDelayMs; }
@@ -211,7 +237,7 @@ function createDirector({
       lastIdle = null;
       const goal = choice.card.create(memory);
       emit('autonomy_choice', { card: choice.card.id, goal: goal.name, stage, scores: choice.scores });
-      const generation = brain.setGoal(goal, { autonomy: governor(choice.card.id) });
+      const generation = brain.setGoal(goal, { autonomy: governor(choice.card.id, goal) });
       own = { id: choice.card.id, goal: goal.name, generation, expedition: choice.card.expedition, stage: choice.card.budgetStage ?? choice.card.stage, cardStage: choice.card.stage,
         safeReturn: choice.card.safeReturn };
       idleSince = null;

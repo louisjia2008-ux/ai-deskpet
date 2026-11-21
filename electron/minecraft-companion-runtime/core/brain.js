@@ -220,14 +220,19 @@ function createBrain({
     const autonomous = behavior.goalEntry?.autonomy;
     if (autonomous) {
       behavior.goalEntry.startedAt = now();
+      ctx.adapt = autonomous.adapt?.(() => running === entry && isCurrent() && !controller.signal.aborted);
       ctx.stepBlocked = autonomous.stepBlocked;
       ctx.stepOutcome = (step, result) => {
         if (isCurrent() && !controller.signal.aborted) autonomous.stepOutcome(step, result, ctx.record);
       };
     }
     entry.promise = Promise.resolve()
-      .then(() => controller.signal.aborted || !isCurrent()
-        ? { ok: false, reason: 'aborted' } : behavior.run(ctx))
+      .then(async () => {
+        if (controller.signal.aborted || !isCurrent()) return { ok: false, reason: 'aborted' };
+        const early = autonomous?.before && await autonomous.before(ctx);
+        if (controller.signal.aborted || !isCurrent()) return { ok: false, reason: 'aborted' };
+        return early || behavior.run(ctx);
+      })
       .then(normalizeResult, (error) => ({ ok: false, reason: describe(error) }))
       .then(async (result) => {
         try {

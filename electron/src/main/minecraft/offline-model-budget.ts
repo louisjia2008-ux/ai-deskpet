@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { localDay } from '../../shared/character';
 import { AtomicJsonStore } from '../persistence';
 
-export type MinecraftModelReason = 'player_chat' | 'task_completed' | 'death' | 'task_failure';
+export type MinecraftModelReason = 'player_chat' | 'task_completed' | 'death' | 'task_failure' | 'stuck';
 export type MinecraftModelPresence = 'online' | 'offline' | 'unavailable';
 
 interface ModelContext {
@@ -34,7 +34,7 @@ export class MinecraftOfflineModelBudget {
   denial({ presence, reason, limit }: ModelContext): string | null {
     if (presence === 'online') return null;
     if (presence === 'unavailable') return 'world_unavailable';
-    if (reason !== 'death' && reason !== 'task_failure') return 'owner_offline';
+    if (reason !== 'death' && reason !== 'task_failure' && reason !== 'stuck') return 'owner_offline';
     if (this.#usage === null) return 'quota_unavailable';
     return this.used() >= limit ? 'daily_limit' : null;
   }

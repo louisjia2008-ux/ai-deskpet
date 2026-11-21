@@ -58,6 +58,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
   }
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const homes = createHomeStore(path.join(dataDir, 'homes.json'));
+  const adaptationStore = createHomeStore(path.join(dataDir, 'adaptation.json'));
   let bot = null;
   let companion = null;
   let disposeSurveyPlan = null;
@@ -327,6 +328,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
             coreEvent(payload, epoch);
           },
           home: homes(worldKey(nextConfig.host, next)) || null,
+          adaptationStore: managed ? adaptationStore(worldKey(nextConfig.host, next)) : null,
         });
         clearTimeout(timer); timer = null;
         setConnection('ready');
@@ -443,6 +445,12 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
   async function execute(message, request) {
     if (closed) throw problem('disposed', 'Host is permanently closed');
     if (message.type === 'tool') return tool(message, request);
+    if (message.type === 'adaptation_reply') {
+      if (!managedWorldAutonomy || !isLocalOffline(config) || survey || connection.state !== 'ready' || message.connectionGeneration !== generation) {
+        return { accepted: false };
+      }
+      return { accepted: companion?.adaptationReply?.(message.requestId, message.choice) === true };
+    }
     if (message.type === 'connect' || message.type === 'reconnect') {
       const nextConfig = message.config === undefined && message.type === 'reconnect' && config ? config : validateConfig(message.config);
       if (bot && message.type === 'connect') throw problem('already_connected', 'Use reconnect explicitly to replace a connection');
@@ -464,11 +472,17 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
   function validateMessage(message) {
     if (!message || typeof message !== 'object' || Array.isArray(message) || message.version !== 1) throw problem('invalid_request', 'Expected a version 1 object');
     if (typeof message.id !== 'string' || !message.id.trim() || message.id.length > 128) throw problem('invalid_request', 'id must be 1..128 characters');
-    if (!['connect', 'reconnect', 'disconnect', 'tool', 'say', 'shutdown'].includes(message.type)) throw problem('unsupported_type', 'Unsupported core message type');
-    const fields = ['version', 'id', 'type', ...(message.type === 'tool' ? ['name', 'arguments', 'replaceCurrent'] : message.type === 'say' ? ['text'] : ['config'])];
+    if (!['connect', 'reconnect', 'disconnect', 'tool', 'say', 'shutdown', 'adaptation_reply'].includes(message.type)) throw problem('unsupported_type', 'Unsupported core message type');
+    const fields = ['version', 'id', 'type', ...(message.type === 'tool' ? ['name', 'arguments', 'replaceCurrent'] : message.type === 'say' ? ['text']
+      : message.type === 'adaptation_reply' ? ['requestId', 'choice', 'connectionGeneration'] : ['config'])];
     if (Object.keys(message).some((key) => !fields.includes(key))) throw problem('invalid_request', 'Unexpected envelope field');
     if (message.replaceCurrent !== undefined && typeof message.replaceCurrent !== 'boolean') throw problem('invalid_request', 'replaceCurrent must be boolean');
     if (message.type === 'tool') validateTool(message.name, message.arguments);
+    if (message.type === 'adaptation_reply' && (typeof message.requestId !== 'string' || !/^[a-f0-9-]{36}$/.test(message.requestId)
+      || !Number.isInteger(message.connectionGeneration)
+      || (message.choice !== null && (typeof message.choice !== 'string' || !/^[a-z_]{1,60}$/.test(message.choice))))) {
+      throw problem('invalid_request', 'Invalid adaptation decision');
+    }
     // Plain chat only: a leading slash would run a server command as the bot.
     if (message.type === 'say' && (typeof message.text !== 'string' || !message.text.trim() || message.text.length > 256
         || /[\r\n]/.test(message.text) || message.text.trimStart().startsWith('/'))) throw problem('invalid_request', 'say text must be one plain line of 1..256 characters');

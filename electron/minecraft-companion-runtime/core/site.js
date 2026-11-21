@@ -28,12 +28,13 @@ function groundAt(blockAt, x, z, top, bottom) {
   return { missing: true };
 }
 
-function evaluateSite(blockAt, corner, around) {
+function evaluateSite(blockAt, corner, around, { variant = 'starter', protectedCell = () => false } = {}) {
+  const size = variant === 'starter' ? SIZE : 5;
   const heights = [];
-  for (let dx = -1; dx <= SIZE; dx += 1) {
-    for (let dz = -1; dz <= SIZE; dz += 1) {
+  for (let dx = -1; dx <= size; dx += 1) {
+    for (let dz = -1; dz <= size; dz += 1) {
       const ground = groundAt(blockAt, corner.x + dx, corner.z + dz, around.y + 10, around.y - 12);
-      const inside = dx >= 0 && dz >= 0 && dx < SIZE && dz < SIZE;
+      const inside = dx >= 0 && dz >= 0 && dx < size && dz < size;
       if (ground.y === undefined) {
         if (inside || ground.liquid) return null; // water next to the walls floods the door
         continue;
@@ -52,7 +53,8 @@ function evaluateSite(blockAt, corner, around) {
     else if (h !== mode) return null;
   }
   const anchor = { x: corner.x, y: mode + 1, z: corner.z };
-  const house = createStarterHouse(anchor);
+  const house = createStarterHouse(anchor, { variant });
+  if ([...house.clearance, ...house.foundation, ...house.torchSupports, house.entrance].some(protectedCell)) return null;
   // Every solid block left in the shell's space is digging work too.
   digs = 0;
   for (const p of house.clearance) {
@@ -64,8 +66,9 @@ function evaluateSite(blockAt, corner, around) {
   // Under a closed canopy (dark oak, pale garden) it is dark enough for
   // monsters all day: move on to open ground instead.
   let covered = 0;
-  for (const dx of [0, 3, 6]) {
-    for (const dz of [0, 3, 6]) {
+  const samples = [0, Math.floor(size / 2), size - 1];
+  for (const dx of samples) {
+    for (const dz of samples) {
       for (let dy = WALL_HEIGHT + 2; dy <= 16; dy += 1) {
         const above = blockAt(anchor.x + dx, anchor.y + dy, anchor.z + dz);
         if (above && (above.name.endsWith('_leaves') || TREE(above.name))) { covered += 1; break; }
@@ -76,8 +79,8 @@ function evaluateSite(blockAt, corner, around) {
   // Rock overhead is a cave floor, not open ground: a house begun at y22 under
   // the hills was where the creepers and skeletons came from.
   let roofed = 0;
-  for (const dx of [0, 3, 6]) {
-    for (const dz of [0, 3, 6]) {
+  for (const dx of samples) {
+    for (const dz of samples) {
       for (let dy = WALL_HEIGHT + 2; dy <= 40; dy += 1) {
         const above = blockAt(anchor.x + dx, anchor.y + dy, anchor.z + dz);
         if (above && isSolid(above) && !TREE(above.name)) { roofed += 1; break; }
@@ -91,23 +94,59 @@ function evaluateSite(blockAt, corner, around) {
     if (!isSoft(below) || !isSolid(blockAt(p.x, p.y - 2, p.z))) return null;
     fills += 1;
   }
-  const distance = Math.hypot(corner.x + SIZE / 2 - around.x, corner.z + SIZE / 2 - around.z);
-  return { anchor, fills, digs, cost: digs + fills * 2 + distance * 0.1 };
+  const distance = Math.hypot(corner.x + size / 2 - around.x, corner.z + size / 2 - around.z);
+  return { anchor, fills, digs, variant, cost: digs + fills * 2 + distance * 0.1 };
 }
 
 /** Best nearby site within `radius` of `around`, or null. */
-function chooseSite(blockAt, around, { radius = 32, step = 3, maxWork = 12, avoid = () => false } = {}) {
+function chooseSite(blockAt, around, { radius = 32, step = 3, maxWork = 12, avoid = () => false, variant = 'starter', protectedCell } = {}) {
   let best = null;
   const center = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
   for (let dx = -radius; dx <= radius; dx += step) {
     for (let dz = -radius; dz <= radius; dz += step) {
-      const corner = { x: center.x + dx - Math.floor(SIZE / 2), z: center.z + dz - Math.floor(SIZE / 2) };
-      const site = evaluateSite(blockAt, corner, center);
+      const half = variant === 'starter' ? Math.floor(SIZE / 2) : 2;
+      const corner = { x: center.x + dx - half, z: center.z + dz - half };
+      const site = evaluateSite(blockAt, corner, center, { variant, protectedCell });
       if (!site || site.fills + site.digs > maxWork || avoid(site.anchor)) continue;
       if (!best || site.cost < best.cost) best = site;
     }
   }
   return best;
+}
+
+const caveRock = (b) => b && /^(stone|andesite|diorite|granite|deepslate|sandstone|dirt)$/.test(b.name);
+const NEIGHBORS = [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]];
+function safeCaveDig(blockAt, p) {
+  return NEIGHBORS.every(([dx, dy, dz]) => {
+    const b = blockAt(p.x + dx, p.y + dy, p.z + dz);
+    return b && !LIQUID.has(b.name) && !/^(sand|red_sand|gravel|.*concrete_powder)$/.test(b.name);
+  });
+}
+
+function chooseHillside(blockAt, around, { avoid = () => false, protectedCell = () => false } = {}) {
+  const x0 = Math.floor(around.x), y0 = Math.floor(around.y), z0 = Math.floor(around.z);
+  const read = (p) => blockAt(p.x, p.y, p.z);
+  for (const distance of [0, 4, 8, 12, 16, 20, 24]) {
+    for (let dx = -distance; dx <= distance; dx += 2) for (let dz = -distance; dz <= distance; dz += 2) {
+      if (Math.max(Math.abs(dx), Math.abs(dz)) !== distance) continue;
+      for (const dy of [0, -1, 1, -2, 2, -3, 3]) {
+        const anchor = { x: x0 + dx - 2, y: y0 + dy, z: z0 + dz + 1 };
+        if (avoid(anchor)) continue;
+        const house = createStarterHouse(anchor, { variant: 'hillside' });
+        const e = house.entrance;
+        if (![read(e), read({ ...e, y: e.y + 1 })].every((b) => b && isSoft(b))
+          || !house.foundation.every((p) => isSolid(read(p))) || !house.torchSupports.every((p) => isSolid(read(p)))) continue;
+        if (house.blocks.filter((b) => b.family === 'cave_wall').some((b) => !caveRock(read(b.position)))) continue;
+        if ([...house.clearance, ...house.foundation, ...house.torchSupports, e].some(protectedCell)) continue;
+        if (!house.clearance.every((p) => {
+          const b = read(p);
+          return b && (isSoft(b) || caveRock(b)) && safeCaveDig(blockAt, p);
+        })) continue;
+        return { anchor, variant: 'hillside', fills: 0, digs: house.clearance.filter((p) => caveRock(read(p))).length };
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -132,4 +171,4 @@ function siteWork(blockAt, house, isCorrect) {
   return { digs, fills };
 }
 
-module.exports = { chooseSite, evaluateSite, siteWork, groundAt, isAir, isSoft, isSolid, WALL_HEIGHT };
+module.exports = { chooseSite, chooseHillside, safeCaveDig, evaluateSite, siteWork, groundAt, isAir, isSoft, isSolid, WALL_HEIGHT };

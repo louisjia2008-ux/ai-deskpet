@@ -21,31 +21,33 @@
 const SIZE = 7;
 const WALL_HEIGHT = 2;
 
-function createStarterHouse(anchor) {
+function createStarterHouse(anchor, { variant = 'starter' } = {}) {
   if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isInteger)) {
     throw new TypeError('anchor must have integer x, y, z (floor level, north-west corner)');
   }
   const at = (dx, dy, dz) => ({ x: anchor.x + dx, y: anchor.y + dy, z: anchor.z + dz });
+  const size = variant === 'starter' ? SIZE : 5;
+  const mid = Math.floor(size / 2);
   const blocks = [];
   const add = (dx, dy, dz, family, phase, extra = {}) => blocks.push({ position: at(dx, dy, dz), family, phase, ...extra });
 
-  const door = { dx: 3, dz: 0 };
+  const door = { dx: mid, dz: 0 };
   for (let dy = 0; dy < WALL_HEIGHT; dy += 1) {
-    for (let dx = 0; dx < SIZE; dx += 1) {
-      for (let dz = 0; dz < SIZE; dz += 1) {
-        const edge = dx === 0 || dz === 0 || dx === SIZE - 1 || dz === SIZE - 1;
+    for (let dx = 0; dx < size; dx += 1) {
+      for (let dz = 0; dz < size; dz += 1) {
+        const edge = dx === 0 || dz === 0 || dx === size - 1 || dz === size - 1;
         if (!edge) continue;
         if (dx === door.dx && dz === door.dz && dy < 2) continue;
-        add(dx, dy, dz, 'cobblestone', 'walls');
+        add(dx, dy, dz, variant === 'hillside' && dz > 0 ? 'cave_wall' : variant === 'starter' ? 'cobblestone' : 'shelter_wall', 'walls');
       }
     }
   }
   // Roof: the ring over the walls first (supported from below), then inwards.
-  const ring = (dx, dz) => Math.min(dx, dz, SIZE - 1 - dx, SIZE - 1 - dz);
+  const ring = (dx, dz) => Math.min(dx, dz, size - 1 - dx, size - 1 - dz);
   const roof = [];
-  for (let dx = 0; dx < SIZE; dx += 1) for (let dz = 0; dz < SIZE; dz += 1) roof.push({ dx, dz, ring: ring(dx, dz) });
+  for (let dx = 0; dx < size; dx += 1) for (let dz = 0; dz < size; dz += 1) roof.push({ dx, dz, ring: ring(dx, dz) });
   roof.sort((a, b) => a.ring - b.ring);
-  for (const cell of roof) add(cell.dx, WALL_HEIGHT, cell.dz, 'planks', 'roof');
+  for (const cell of roof) add(cell.dx, WALL_HEIGHT, cell.dz, variant === 'hillside' ? 'cave_wall' : 'planks', 'roof');
 
   const furniture = {
     crafting_table: { position: at(1, 0, 5), family: 'crafting_table' },
@@ -57,22 +59,30 @@ function createStarterHouse(anchor) {
     torches: [at(1, 0, 1), at(5, 0, 5), at(2, 0, -1), at(4, 0, -1)],
     door: { position: at(door.dx, 0, door.dz), upper: at(door.dx, 1, door.dz), family: 'door' },
   };
+  if (size < SIZE) Object.assign(furniture, {
+    crafting_table: { position: at(1, 0, 3), family: 'crafting_table' },
+    furnace: { position: at(2, 0, 3), family: 'furnace' },
+    chest: { position: at(1, 0, 2), family: 'chest' },
+    bed: { position: at(3, 0, 2), head: at(3, 0, 1), stand: at(3, 0, 3), family: 'bed' },
+    guestBed: { position: at(2, 0, 2), head: at(2, 0, 1), stand: at(2, 0, 3), family: 'bed' },
+    torches: [at(1, 0, 1), at(1, 0, -1)],
+  });
 
   // The first roof ring sits on the wall tops, whose upper faces are above eye
   // level from the floor. One step in the middle of the room lets the bot see
   // them from above; it exists only while the roof is laid and is then removed
   // like any other obstacle inside the shell.
-  const scaffold = [at(3, 0, 3)];
+  const scaffold = variant === 'hillside' ? [] : [at(mid, 0, mid)];
 
   // Everything inside the shell and one block of headroom above the roof must be clear.
   const clearance = [];
-  for (let dx = 0; dx < SIZE; dx += 1) {
-    for (let dz = 0; dz < SIZE; dz += 1) {
-      for (let dy = 0; dy <= WALL_HEIGHT + 1; dy += 1) clearance.push(at(dx, dy, dz));
+  for (let dx = 0; dx < size; dx += 1) {
+    for (let dz = 0; dz < size; dz += 1) {
+      for (let dy = 0; dy <= WALL_HEIGHT + (variant === 'hillside' ? 0 : 1); dy += 1) clearance.push(at(dx, dy, dz));
     }
   }
   const foundation = [];
-  for (let dx = 0; dx < SIZE; dx += 1) for (let dz = 0; dz < SIZE; dz += 1) foundation.push(at(dx, -1, dz));
+  for (let dx = 0; dx < size; dx += 1) for (let dz = 0; dz < size; dz += 1) foundation.push(at(dx, -1, dz));
   // And under the doorstep: a pit there (a creeper crater, a cave) leaves the
   // bot shut in the house with no path out.
   foundation.push(at(door.dx, -1, -1));
@@ -80,7 +90,8 @@ function createStarterHouse(anchor) {
 
   return {
     anchor: { ...anchor },
-    size: SIZE,
+    size,
+    variant,
     blocks,
     furniture,
     scaffold,
@@ -89,7 +100,7 @@ function createStarterHouse(anchor) {
     torchSupports,
     // Doorstep outside the door; the bot must be able to reach it.
     entrance: at(door.dx, 0, -1),
-    interiorCenter: at(3, 0, 3),
+    interiorCenter: at(mid, 0, mid),
     materials() {
       const totals = {};
       for (const block of blocks) totals[block.family] = (totals[block.family] || 0) + 1;

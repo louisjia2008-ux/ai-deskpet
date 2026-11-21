@@ -150,7 +150,8 @@ function configureMovements(bot) {
  * `home`: { load(), save(value) } for this world's house across connections
  * (core-host keeps one per world), or null to remember it only while connected.
  */
-function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = false, retirementTimeoutMs = 20000, ownerName = null, home = null, autonomyRange = 'nether' } = {}) {
+function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = false, retirementTimeoutMs = 20000, ownerName = null,
+  home = null, adaptationStore = null, autonomyRange = 'nether' } = {}) {
   if (!bot) throw new TypeError('bot is required');
   if (!Number.isFinite(retirementTimeoutMs) || retirementTimeoutMs <= 0 || retirementTimeoutMs > 2147483647) {
     throw new TypeError('retirementTimeoutMs must be a positive timer duration');
@@ -182,6 +183,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   let retiring = 0;
   let retirementFailed = false;
   let survey = null;
+  const adaptation = autonomy ? require('./adaptation').createAdaptation({ store: adaptationStore, onEvent }) : null;
   const policy = { risk: 'normal', guard: 'self_first' };
   let goalOwner = null;
   // The connection owns this evidence even while a cached goal is retired.
@@ -228,7 +230,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     surveyArea: () => survey?.area ?? null,
     suppressDeathDrops: () => surveyDeathEpoch === bodyLifeEpoch,
     home: () => (director ? homeOf(director.memory)?.centre || null : null) }), ...recovery.behaviors,
-    nightRest, homeMaintenance, ...createEndHazards({ bot, onEvent: (event) => onEvent(event) })];
+    nightRest, homeMaintenance, ...createEndHazards({ bot, onEvent: (event) => onEvent(event) }),
+    ...(adaptation ? [require('./behaviors/mineRetreat').createMineRetreat({ bot, adaptation,
+      enabled: () => !survey && director?.ownsGoal() })] : [])];
   const usedGoals = new Set();
   function retireGoal(owner) {
     if (!owner || owner.retiring) return retirement;
@@ -260,7 +264,8 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   function rememberHome() {
     const memory = director?.memory.homestead?.memory;
     if (!home || !memory?.house) return;
-    const value = { anchor: memory.house.anchor, established: memory.established === true, pinned: memory.pinned === true, verified: { ...memory.verified },
+    const value = { anchor: memory.house.anchor, variant: memory.house.variant, established: memory.established === true,
+      pinned: memory.pinned === true, verified: { ...memory.verified },
       ...(autonomy ? { progression: Object.fromEntries(progressionFields.filter((key) => director.memory[key] !== undefined)
         .map((key) => [key, director.memory[key]])) } : {}) };
     const text = JSON.stringify(value);
@@ -344,7 +349,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   }
   // Its goals go through useGoal too, so an autonomous ranch also spares its herd.
   const directorBrain = { status: () => brain.status(), setGoal: useGoal, clearGoal: (reason) => brain.clearGoal(reason) };
-  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, stageOf, scope: range, onEvent,
+  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, stageOf, scope: range, onEvent, adaptation,
     onOverworldDeath(death, deaths, memory) {
       if (!memory.cautiousAfterDeath) {
         setRisk('cautious');
@@ -353,6 +358,15 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       }
       const goal = memory.homestead;
       const anchor = goal?.memory.house?.anchor;
+      const mine = bot.companionMineRoute;
+      const downMine = death.position && mine && death.position.y < mine.surfaceY - 1
+        && (Math.hypot(death.position.x - mine.front.x, death.position.z - mine.front.z) < 32
+          || require('./mining').knownOpen(mine, death.position));
+      if (death.position && (death.card === 'diamond_tools' || downMine)) {
+        adaptation?.teach('mine_danger', death.position, 'overworld', 'death_in_mine', 64);
+        if (downMine) adaptation?.teach('mine_danger', mine.entrance, 'overworld', 'death_in_mine', 64);
+        if (death.card === 'diamond_tools' && anchor) adaptation?.promote('diamond', { position: anchor }, 'different_region', 'death_in_mine');
+      }
       if (!anchor || !death.position || goal.memory.established || goal.memory.pinned) return;
       const near = (d) => d.position && Math.hypot(d.position.x - anchor.x, d.position.z - anchor.z) <= 40;
       if (near(death) && deaths.filter((d) => !d.expedition && d.dimension === 'overworld' && death.at - d.at < 60 * 60_000 && near(d)).length >= 2) {
@@ -363,8 +377,10 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   let savedHome = null;
   try { savedHome = home?.load() ?? null; } catch { /* a home store that cannot be read is no home */ }
   const corner = savedHome?.anchor;
-  if (corner && [corner.x, corner.y, corner.z].every(Number.isInteger)) {
-    const goal = createHomesteadGoal({ bot, anchor: corner });
+  if (corner && [corner.x, corner.y, corner.z].every(Number.isInteger)
+    && (savedHome.established || savedHome.pinned !== false || !adaptation?.avoids('rejected_site', corner))) {
+    const variant = ['compact', 'hillside'].includes(savedHome.variant) ? savedHome.variant : 'starter';
+    const goal = createHomesteadGoal({ bot, anchor: corner, variant, autonomous: autonomy && savedHome.pinned === false });
     goal.memory.established = savedHome.established === true;
     // A site the bot chose itself may still be given up, as before the reconnect.
     goal.memory.pinned = savedHome.pinned !== false;
@@ -379,7 +395,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       director.memory[key] = savedHome.progression[key];
     }
     if (!director.memory.wheatPlots?.length) director.memory.wheatFarmDone = false;
-    director.memory.homePending = Boolean(corner);
+    director.memory.homePending = Boolean(director.memory.homestead);
     if (director.memory.cautiousAfterDeath) setRisk('cautious');
     if (director.memory.endPortal) bot.companionEndPortal = director.memory.endPortal;
     director.enable();
@@ -425,6 +441,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     }
     bodyLifeEpoch += 1;
     surveyDeathEpoch = null;
+    bot.companionMineRoute = null;
     if (bot.entity?.effects) bot.entity.effects = {};
     haltBody(bot);
     brain.interrupt('death').catch(() => {});
@@ -615,6 +632,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   return {
     brain,
     director,
+    adaptationReply: (requestId, choice) => !disposed && !survey && director.isEnabled() && Boolean(adaptation?.reply(requestId, choice)),
     ...tasks,
     /** Built-in, data-only dispatch. Resolves at dispatch, not task completion. */
     async submitTask(name, args = {}, metadata = {}) {

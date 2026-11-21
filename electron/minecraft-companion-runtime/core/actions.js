@@ -167,6 +167,25 @@ async function goToOnce(bot, ctx, goal, { timeoutMs = 30000, arrived } = {}) {
 }
 
 async function goNear(bot, ctx, position, range = 2, options = {}) {
+  if (!ctx.adapt || options.skipAdaptation || String(bot.game?.dimension || '').replace('minecraft:', '') !== 'overworld'
+    || bot.entity.position.distanceTo(position) <= range + 1.5) return goNearOnce(bot, ctx, position, range, options);
+  const task = { position, target: 'walk' };
+  const plan = ctx.adapt.plan('route', task);
+  // An alternate-target response is a failed approach, not a successful walk:
+  // the caller can then blacklist this exact tree, mob, entrance or cell.
+  if (ctx.adapt.avoids('hard_route', position)) return fail('route_region_avoided');
+  return ctx.adapt.run('route', task, (method) => {
+    if (method === 'avoid_region') {
+      ctx.adapt.teach('hard_route', position, 'overworld', plan.explanation, 6);
+      return fail('route_region_avoided');
+    }
+    if (method === 'alternate_target') return fail('choose_another_target');
+    return goNearOnce(bot, ctx, position, range, { ...options,
+      lateral: method === 'waypoint' ? (plan.failures % 2 === 0 ? 1 : -1) : 0 });
+  }).then(result => result.waited ? fail('route_region_avoided') : result);
+}
+
+async function goNearOnce(bot, ctx, position, range, options) {
   if (ctx.signal?.aborted) throw abortError(ctx.signal);
   // One original action budget, including direct, waypoint and final approach.
   // A native path_timeout must not create a fresh budget for each fallback.
@@ -192,6 +211,19 @@ async function goNear(bot, ctx, position, range = 2, options = {}) {
       arrived: (at) => at.distanceTo(position) <= range + 1.5,
     });
   try {
+    if (options.lateral) {
+      const here = bot.entity.position;
+      const dx = position.x - here.x, dz = position.z - here.z;
+      const length = Math.hypot(dx, dz);
+      if (length > 2) {
+        const step = Math.min(10, length / 2) / length;
+        const side = options.lateral * 6 / length;
+        const intermediate = new goals.GoalNearXZ(here.x + dx * step - dz * side, here.z + dz * step + dx * side, 2);
+        const moved = await attempt(intermediate, { timeoutMs: Math.min(12000, remaining()), retryNoProgress: false });
+        if (!moved.ok) return moved;
+      }
+      return await direct();
+    }
     // Reserve room for existing 16-block legs on a long trip; close trips keep
     // their full direct budget. 20s is the existing waypoint attempt cap.
     const far = Math.hypot(position.x - bot.entity.position.x, position.z - bot.entity.position.z) > 20;
@@ -730,7 +762,10 @@ async function unstick(bot, ctx) {
   if (await stepOutOfPool(bot, ctx)) return { ok: true, moved: 'out_of_pool' };
   if (await drainPocket(bot, ctx)) return { ok: true, moved: 'drained_pocket' };
   const pit = shallowPitTarget(bot);
-  if (pit && await climbPitDirectly(bot, ctx, pit)) return { ok: true, moved: 'pit_pillar' };
+  if (pit && ctx.adapt) {
+    const up = await surface(bot, ctx, { targetY: pit });
+    if (up) return up;
+  } else if (pit && await climbPitDirectly(bot, ctx, pit)) return { ok: true, moved: 'pit_pillar' };
   if (await nudge(bot, ctx)) return { ok: true, moved: 'nudged' };
   const start = bot.entity.position.clone();
   const movements = bot.pathfinder.movements;
@@ -1151,7 +1186,20 @@ async function surface(bot, ctx, { targetY = bot.companionSurfaceY } = {}) {
   if (!Number.isFinite(targetY)) targetY = rim;
   if (!Number.isFinite(targetY) || bot.entity.position.y >= targetY - 1) return null;
   if (!underground(bot)) return null;
-  const target = Math.floor(targetY);
+  const target = Math.floor(rim && ctx.adapt ? rim : targetY);
+  if (rim && ctx.adapt) {
+    const start = bot.entity.position.floored();
+    return ctx.adapt.run('pit', { position: start.offset(0, rim - start.y, 0) }, async (method) => {
+      if (method === 'pathfinder') {
+        await withClimbing(bot, target + 4, () => goTo(bot, ctx, new goals.GoalY(target), { timeoutMs: 12000, retryNoProgress: false }));
+      } else if (method === 'direct_pillar') {
+        await climbPitDirectly(bot, ctx, Math.min(rim, target));
+      } else {
+        await digStairsUp(bot, ctx, target, { maxSteps: Math.min(10, target - start.y + 4) });
+      }
+      return bot.entity.position.y >= target - 0.1 ? { ok: true, surfaced: true } : fail('still_below_surface');
+    }, { threshold: 1 });
+  }
   await withClimbing(bot, target + 4, () => goTo(bot, ctx, new goals.GoalY(target), { timeoutMs: 30000, arrived: () => true }));
   // The pathfinder found no way up in time: dig a staircase the rest of the way.
   if (bot.entity.position.y < target - 1) {

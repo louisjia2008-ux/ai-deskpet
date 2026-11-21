@@ -9,6 +9,8 @@ import type { MinecraftAutonomyRange } from '../../shared/minecraft-dedicated';
 import type { MinecraftCompanionConfig, MinecraftCompanionEngine, MinecraftCompanionObservation, MinecraftCompanionPolicy, MinecraftCompanionSnapshot, MinecraftCompanionTask, MinecraftCompanionTaskInput } from '../../shared/minecraft-companion';
 import { minecraftAutonomyRangeSchema, minecraftAutonomyStatusSchema, minecraftSurveyPlanStatusSchema } from '../../shared/minecraft-dedicated';
 import type { MinecraftSurveyPlanStatus } from '../../shared/minecraft-dedicated';
+import { adaptationHelpSchema } from './adaptation-choice';
+import type { MinecraftAdaptationHelp } from './adaptation-choice';
 
 const MAX_LINE_BYTES = 1024 * 1024;
 const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'unknown']);
@@ -45,6 +47,7 @@ export interface MinecraftCompanionServiceOptions {
   onTaskFinished?(task: MinecraftCompanionTask): void;
   onSurveyPlan?(event: { worldId: string; initial: boolean; plan: MinecraftSurveyPlanStatus | null }): void;
   onManagedReview?(event: { reason: 'death' | 'task_failure'; detail: string }): void;
+  onAdaptationHelp?(request: MinecraftAdaptationHelp): Promise<string | null>;
   requestTimeoutMs?: number;
   readyTimeoutMs?: number;
   shutdownTimeoutMs?: number;
@@ -409,6 +412,22 @@ export class MinecraftCompanionService {
     } else if (event.type === 'core' && event.connectionGeneration === this.#state.connectionGeneration) {
       const payload = record(event.payload); const kind = text(payload?.type, 80);
       if (kind) this.#event(kind, text(payload?.reason, 500) ?? text(payload?.milestone, 80) ?? kind, text(event.taskId, 128));
+      if (managed && kind === 'adaptation_help' && this.#state.connectionState === 'ready') {
+        const parsed = adaptationHelpSchema.safeParse(payload);
+        if (parsed.success) {
+          const { data: request } = parsed;
+          const generation = this.#generation;
+          const epoch = this.#state.connectionGeneration;
+          const current = () => generation === this.#generation && epoch === this.#state.connectionGeneration
+            && this.#state.connectionState === 'ready' && Date.now() < request.deadline;
+          void Promise.resolve().then(() => current() ? this.#options.onAdaptationHelp?.(request) ?? null : null)
+            .catch(() => null).then(choice => {
+              if (!current()) return;
+              return this.#request({ type: 'adaptation_reply', requestId: request.requestId, connectionGeneration: epoch,
+                choice: choice && request.choices.includes(choice) ? choice : null }, undefined, randomUUID(), 2000);
+            }).catch(() => undefined);
+        }
+      }
     } else if (managed && ['connecting', 'ready'].includes(this.#state.connectionState) && event.connectionGeneration === this.#state.connectionGeneration) {
       if (event.type === 'survey_plan_status') {
         const worldId = text(event.worldId, 128);

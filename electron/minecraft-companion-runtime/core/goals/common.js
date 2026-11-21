@@ -17,6 +17,8 @@ async function runPlanned(ctx, step, execute) {
   const until = ctx.stepBlocked?.(step.kind, step.key || step.station);
   if (until) return { ok: true, waited: true, reason: 'planning_source_blocked', retryAt: until };
   const result = await execute();
+  if (ctx.adapt && result?.ok && !result.waited && !result.transit && !result.moved && !result.skipped
+    && !result.idle && result.progress !== false && !result.sourceHandled) ctx.adapt.progress();
   if (!result?.transit && !result?.sourceHandled) ctx.stepOutcome?.(step, result);
   return result;
 }

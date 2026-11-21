@@ -13,7 +13,7 @@ it('enforces a persistent daily allowance across concurrent provider attempts an
   paths.push(directory);
   const path = join(directory, 'usage.json');
   let day = new Date(2026, 10, 20, 12);
-  const offline = () => ({ presence: 'offline' as const, reason: 'task_failure' as const, limit: 20 });
+  const offline = () => ({ presence: 'offline' as const, reason: 'stuck' as const, limit: 20 });
   const budget = new MinecraftOfflineModelBudget(path, () => day);
   await budget.initialize();
   const attempts = await Promise.allSettled(Array.from({ length: 25 }, () => budget.reserve(offline)));

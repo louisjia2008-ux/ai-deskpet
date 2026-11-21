@@ -177,6 +177,8 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
       (m) => harvest(m), { score: 30, maintenance: true }),
     card('guest_bed', 1, (s, m) => inOverworld() && m.homestead?.wantsGuestBed?.(s),
       (m) => m.homestead.guestBedGoal(), { score: 25, maintenance: true }),
+    card('primary_bed', 1, (s, m) => inOverworld() && m.homestead?.wantsPrimaryBed?.(s),
+      (m) => m.homestead.primaryBedGoal(), { score: 31, maintenance: true }),
     card('return_home', 0, (s, m) => inOverworld() && Boolean(m.homestead?.memory.established)
       && (m.homePending || VALUABLES.some((item) => (s.inventory[item] || 0) > 0 && (item !== 'diamond' || holds(s, DIAMOND)))),
       (m) => { m.homePending = true; return homeStep(m); }, { score: 100, safeReturn: true }),

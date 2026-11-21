@@ -94,7 +94,7 @@ function inspectStep(blockAt, from, dir, { descend = false, surfaceY = Infinity,
     if (!block) return fail('unloaded');
     if (LIQUID.test(block.name)) return fail('liquid');
     if (isPassable(block)) {
-      if (cell.y < surfaceY && !known(cell)) return fail('cave');
+      if (cell.y < surfaceY && !known(cell)) return { ...fail('cave'), opening: cell };
       continue;
     }
     if (GRAVITY.has(block.name)) return fail('gravity');
@@ -110,7 +110,7 @@ function inspectStep(blockAt, from, dir, { descend = false, surfaceY = Infinity,
       if (!block) return fail('unloaded');
       if (LIQUID.test(block.name)) return fail('liquid');
       if (fy === 1 && GRAVITY.has(block.name)) return fail('gravity');
-      if (isPassable(block) && near.y < surfaceY && !known(near)) return fail('cave');
+      if (isPassable(block) && near.y < surfaceY && !known(near)) return { ...fail('cave'), opening: near };
     }
   }
   return { ok: true, target, dig };
@@ -191,7 +191,7 @@ async function tossRubble(bot, ctx) {
  * Does one thing towards ore of `blocks` at height `y`: mine a visible ore,
  * walk back to the tunnel front, or dig one more block of tunnel.
  */
-async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, start = null, actions = defaultActions, skills = defaultSkills }) {
+async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, start = null, closed = false, actions = defaultActions, skills = defaultSkills }) {
   const feet = bot.entity.position.floored();
   if (memory.mine?.floorRepair) return repairFloor(bot, ctx, memory.mine, skills);
   if (memory.mine?.retiring) {
@@ -218,7 +218,11 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
   if (memory.mine) {
     const wanted = (name) => blocks(name) || LOOT_ORES.has(name);
     const ore = visibleOre(bot, wanted, bot.entity.position)
-      .filter((b) => !blacklist.has(posKey(b.position)) && harvestable(bot, b))[0];
+      .filter((b) => !blacklist.has(posKey(b.position)) && harvestable(bot, b)
+        && (!closed || (actions.withinReach(bot, b.position) && FACES.every(([dx, dy, dz]) => {
+          const p = b.position.offset(dx, dy, dz), adjacent = bot.blockAt(p);
+          return adjacent && !LIQUID.test(adjacent.name) && (!isPassable(adjacent) || knownOpen(memory.mine, p));
+        }))))[0];
     if (ore) {
       // An ore under a recorded walking cell is part of the route home. Take
       // it only when the hole can be filled again, and confirm that repair
@@ -257,6 +261,8 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
     ctx.record('mine_start', { at: posKey(from), y });
   }
   const mine = memory.mine;
+  if (closed) mine.closed = true;
+  if (ctx.adapt) bot.companionMineRoute = mine;
   if (mine.exhausted) {
     const out = await leaveMine(bot, ctx, memory, actions);
     if (out?.ok) { mine.exitFailures = 0; return out; }
@@ -334,7 +340,26 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
   // A packet that has not arrived is not a geological dead end. Keep the
   // attempt available, with the normal bounded stall/recovery budget.
   if (step.reason === 'unloaded') return fail('mine_chunk_unloaded');
-  if (!step.ok) return blocked(step.reason);
+  if (!step.ok) {
+    if (closed && step.opening) {
+      const p = new Vec3(step.opening.x, step.opening.y, step.opening.z);
+      const air = bot.blockAt(p);
+      const fill = (n) => ['cobblestone', 'cobbled_deepslate', 'dirt'].includes(n);
+      if (/^(air|cave_air)$/.test(air?.name || '') && actions.withinReach(bot, p) && !bot.companionNearPlayerBuild?.(p)
+        && bot.inventory.items().some((item) => fill(item.name))
+        && FACES.every(([dx, dy, dz]) => {
+          const b = bot.blockAt(p.offset(dx, dy, dz));
+          return b && !LIQUID.test(b.name) && !GRAVITY.has(b.name);
+        })) {
+        const placed = await skills.placeAt(bot, ctx, p, fill, { requireAir: true });
+        if (placed.ok) {
+          ctx.record('mine_cave_sealed', { at: posKey(p) });
+          return { ok: true, progress: false, sealed: true };
+        }
+      }
+    }
+    return blocked(step.reason);
+  }
 
   if (step.dig.some((cell) => bot.companionPlayerBlock?.(cell))) return blocked('protected_player_block');
   for (const cell of step.dig) {

@@ -49,7 +49,7 @@ function avoidFor(memory, home, self) {
 function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = FOOD_TARGET, progression = false } = {}) {
   // One homestead for the whole run: it holds the chosen site and which
   // furniture has been used, so every later pick continues the same house.
-  const home = (memory) => (memory.homestead ||= createHomesteadGoal({ bot, ...homestead }));
+  const home = (memory) => (memory.homestead ||= createHomesteadGoal({ bot, autonomous: progression, ...homestead }));
 
   const cards = [
     {
@@ -61,7 +61,7 @@ function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = 
     },
     {
       id: 'stock_food',
-      stage: 1,
+      stage: progression ? 0 : 1,
       risk: 'medium', // walks far after animals
       need: (state) => {
         const food = countKey('food', state.inventory, kb);

@@ -29,7 +29,7 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () 
   const ids = Object.values(bot.registry.blocksByName).filter((b) => blocks(b.name)).map((b) => b.id);
   if (ids.length === 0) return fail('unknown_block');
   const here = bot.entity.position;
-  const candidates = bot.findBlocks({ matching: ids, maxDistance: radius, count: 64 })
+  const candidates = bot.findBlocks({ matching: ids, maxDistance: radius, count: radius > 48 && ctx.adapt ? 160 : 64 })
     .filter((p) => !blacklist.has(posKey(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p))
     .map((p) => bot.blockAt(p))
     // Digging next to water or lava floods the pit the bot is standing in.
@@ -869,7 +869,7 @@ async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48, exclude = 
   ctx.record('target_selected', { block: liquid, position: key, options: sources.length });
   const centre = target.position.offset(0.5, 0.5, 0.5);
   if (!actions.withinReach(bot, target.position, 4)) {
-    const moved = await actions.goNear(bot, ctx, target.position.offset(0.5, 1, 0.5), 2, { timeoutMs: 45000 });
+    const moved = await actions.goNear(bot, ctx, target.position.offset(0.5, 1, 0.5), 2, { timeoutMs: 45000, skipAdaptation: liquid === 'lava' });
     if (!moved.ok && !actions.withinReach(bot, target.position, 4.5)) {
       blacklist.add(key, moved.reason);
       return { ...moved, sourcePosition: target.position };
