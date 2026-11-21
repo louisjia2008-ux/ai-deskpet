@@ -8,6 +8,7 @@
 // With no house and nothing to do (a task just ended), it digs in where it is.
 
 const { Vec3 } = require('vec3');
+const { goals } = require('mineflayer-pathfinder');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
 const { BAND } = require('../brain');
@@ -20,14 +21,15 @@ const dimensionOf = (bot) => String(bot?.game?.dimension || 'overworld').replace
 const NEAR_BED = 16;
 
 /**
- * `home()` returns { bed, centre } once the house is finished (bed null if it
- * is gone), { bed: null, centre: null } to dig in where the bot stands, or null.
+ * `home()` returns { bed, centre, inside? } once the house is finished (bed
+ * null if it is gone), { bed: null, centre: null } to dig in in place, or null.
  */
-function createNightRest({ bot, home, actions = defaultActions, skills = defaultSkills, now = Date.now,
+function createNightRest({ bot, home, shelterDoor = null, actions = defaultActions, skills = defaultSkills, now = Date.now,
   farDistance = 64, retryBedMs = 20000 } = {}) {
   if (!bot || typeof home !== 'function') throw new TypeError('bot and home are required');
   let bunker = null;
   let bedRefusedUntil = 0;
+  let shutForSleep = false;
 
   const where = () => {
     try { return home(); } catch { return null; }
@@ -37,14 +39,22 @@ function createNightRest({ bot, home, actions = defaultActions, skills = default
     name: 'night_rest',
     band: BAND.MAINTENANCE,
     want(state) {
+      if (dimensionOf(bot) !== 'overworld') return 0;
       if (bunker) return 0.8;
-      if (state.isDay !== false || state.sheltered || dimensionOf(bot) !== 'overworld') return 0;
-      if (!where()) return 0;
-      if (typeof actions.underground === 'function' && actions.underground(bot)) return 0;
+      if (shutForSleep && state.isDay === true) return 0.8;
+      if (state.isDay !== false || state.sheltered) return 0;
+      const spot = where();
+      if (!spot) return 0;
+      // The house roof also looks like "underground" to terrain detection.
+      if (!spot.inside && typeof actions.underground === 'function' && actions.underground(bot)) return 0;
       return 0.8;
     },
     async run(ctx) {
       const state = ctx.perceive();
+      if (shutForSleep && state.isDay === true) {
+        shutForSleep = false;
+        return await shelterDoor?.(ctx, true) || { ok: true };
+      }
       if (bunker) {
         // Dug in only for want of anything to do: a task given meanwhile (the
         // owner asking to be followed) digs it out. It had sat sealed in while
@@ -95,15 +105,26 @@ function createNightRest({ bot, home, actions = defaultActions, skills = default
         bedRefusedUntil = now() + retryBedMs;
       }
       const centre = new Vec3(spot.centre.x + 0.5, spot.centre.y, spot.centre.z + 0.5);
+      if (spot.inside === false) {
+        ctx.record('night_rest', { action: 'shelter' });
+        return actions.goTo(bot, ctx, new goals.GoalBlock(spot.centre.x, spot.centre.y, spot.centre.z), { timeoutMs: 40000 });
+      }
       if (bot.entity.position.distanceTo(centre) > 2) {
         ctx.record('night_rest', { action: 'shelter' });
         return actions.goNear(bot, ctx, centre, 1, { timeoutMs: 40000 });
+      }
+      if (shelterDoor && !shutForSleep) {
+        const shut = await shelterDoor(ctx, false);
+        if (shut) {
+          shutForSleep = shut.ok;
+          return shut;
+        }
       }
       await sleep(3000, ctx.signal);
       return { ok: true, waited: true };
     },
   };
-  const onDeath = () => { bunker = null; };
+  const onDeath = () => { bunker = null; shutForSleep = false; };
   bot.on?.('death', onDeath);
   behavior.dispose = () => bot.removeListener?.('death', onDeath);
   return behavior;

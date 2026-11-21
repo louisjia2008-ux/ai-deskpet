@@ -62,6 +62,27 @@ test('with no house and no task the bot digs in where it stands at night', async
   rest.dispose();
 });
 
+test('the finished roof does not suppress night rest; shut the shelter and open it at dawn', async () => {
+  const centre = new Vec3(5, 70, 5);
+  const bot = { entity: { position: centre.offset(0.5, 0, 0.5) }, game: { dimension: 'overworld' } };
+  const door = [];
+  let inside = false;
+  let isDay = false;
+  const perceive = () => ({ isDay });
+  const rest = createNightRest({ bot, home: () => ({ bed: null, centre, inside }),
+    actions: { underground: () => true },
+    shelterDoor: async (_ctx, open) => { door.push(open); return { ok: true }; } });
+  assert.equal(rest.want(perceive()), 0); // ordinary underground mining
+  inside = true;
+  assert.equal(rest.want(perceive()), 0.8);
+  await rest.run({ perceive });
+  isDay = true;
+  assert.equal(rest.want(perceive()), 0.8);
+  await rest.run({ perceive });
+  assert.deepEqual(door, [false, true]);
+  assert.equal(rest.want(perceive()), 0);
+});
+
 test('holding ground (owner first) takes on worse odds, and leaves before one more round of hits could kill', () => {
   const s = createStance({ now: () => 0 });
   const sword = { stone_sword: 1 };

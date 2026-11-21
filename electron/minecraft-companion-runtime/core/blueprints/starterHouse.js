@@ -46,7 +46,8 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
   const ring = (dx, dz) => Math.min(dx, dz, size - 1 - dx, size - 1 - dz);
   const roof = [];
   for (let dx = 0; dx < size; dx += 1) for (let dz = 0; dz < size; dz += 1) roof.push({ dx, dz, ring: ring(dx, dz) });
-  roof.sort((a, b) => a.ring - b.ring);
+  roof.sort((a, b) => variant === 'compact' && (a.ring === mid || b.ring === mid)
+    ? b.ring - a.ring : a.ring - b.ring);
   for (const cell of roof) add(cell.dx, WALL_HEIGHT, cell.dz, variant === 'hillside' ? 'cave_wall' : 'planks', 'roof');
 
   const furniture = {
@@ -72,7 +73,7 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
   // level from the floor. One step in the middle of the room lets the bot see
   // them from above; it exists only while the roof is laid and is then removed
   // like any other obstacle inside the shell.
-  const scaffold = variant === 'hillside' ? [] : [at(mid, 0, mid)];
+  const scaffold = variant === 'hillside' ? [] : [at(mid, 0, mid), ...(variant === 'compact' ? [at(mid, 1, mid)] : [])];
 
   // Everything inside the shell and one block of headroom above the roof must be clear.
   const clearance = [];

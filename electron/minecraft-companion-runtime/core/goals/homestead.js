@@ -421,7 +421,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (!hs.placed.crafting_table) piece('crafting_table', f.crafting_table.position, 'crafting_table', (n) => n === 'crafting_table');
     // The top wall row and the roof are laid from the stair.
     if (memory.scaffoldActive) {
-      for (const p of memory.house.scaffold) {
+      // The upper compact step is made by jumping onto it, not by blocking
+      // headroom before the bot can climb the first step.
+      const steps = memory.house.variant === 'compact' ? memory.house.scaffold.slice(0, 1) : memory.house.scaffold;
+      for (const p of steps) {
         if (!FILLERS.has(nameAt(p))) tasks.push({ what: 'scaffold', position: p, material: 'dirt',
           match: (n) => FILLERS.has(n), options: { faces: DOWN }, batch: 1 });
       }
@@ -429,8 +432,15 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const walls = hs.missing.filter((b) => b.phase === 'walls');
     for (const b of walls) tasks.push({ what: 'wall', position: b.position, material: b.family,
       match: (n) => matches(b.family, n), batch: Math.min(walls.length, BATCH) });
-    if (!walls.length && !hs.placed.door) piece('door', f.door.position, 'door', (n) => matches('door', n),
-      { faces: DOWN, verify: () => matches('door', nameAt(f.door.upper)), alsoClear: [f.door.upper] });
+    const roof = hs.missing.filter((b) => b.phase === 'roof');
+    const roofing = !walls.length ? roof.map((b) => ({ what: 'roof', position: b.position, material: b.family,
+      match: (n) => matches(b.family, n), batch: Math.min(roof.length, BATCH) })) : [];
+    // Leave the doorway and floor clear while accessing the compact roof.
+    if (memory.house.variant === 'compact' && !memory.established && roofing.length) return [...tasks, ...roofing];
+    const addDoor = () => piece('door', f.door.position, 'door', (n) => matches('door', n),
+      { faces: DOWN, verify: () => matches('door', nameAt(f.door.upper)), alsoClear: [f.door.upper],
+        ...(memory.house.variant === 'compact' && !memory.established ? { stand: memory.house.interiorCenter } : {}) });
+    if (!walls.length && !hs.placed.door && memory.house.variant !== 'compact') addDoor();
     for (const torch of hs.torches) piece('torch', torch, 'torch', (n) => n === 'torch', { faces: DOWN, requireAir: memory.established });
     if (!hs.placed.chest) piece('chest', f.chest.position, 'chest', (n) => n === 'chest');
     for (const id of autonomous ? [] : ['bed']) {
@@ -441,11 +451,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           requireAir: memory.established && id === 'guestBed' });
     }
     if (!hs.placed.furnace) piece('furnace', f.furnace.position, 'furnace', (n) => n === 'furnace');
-    const roof = hs.missing.filter((b) => b.phase === 'roof');
-    if (!walls.length) {
-      for (const b of roof) tasks.push({ what: 'roof', position: b.position, material: b.family,
-        match: (n) => matches(b.family, n), batch: Math.min(roof.length, BATCH) });
-    }
+    if (!walls.length && !hs.placed.door && memory.house.variant === 'compact' && !hs.torches.length
+      && hs.placed.furnace && hs.placed.chest && hs.placed.crafting_table) addDoor();
+    tasks.push(...roofing);
     return tasks;
   }
 
@@ -510,7 +518,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       ctx.adapt.outcome(p, { ok: false, reason });
     }
     ctx.record('site_abandoned', { anchor, reason, built: memory.houseBuilt || 0 });
-    memory.abandonedSites = [...(memory.abandonedSites || []), anchor].slice(-16);
+    // Autonomous goals use the expiring, world-persistent rejected_site lesson.
+    if (!ctx.adapt) memory.abandonedSites = [...(memory.abandonedSites || []), anchor].slice(-16);
     const movements = bot.pathfinder?.movements;
     if (movements && memory.protect) movements.exclusionAreasBreak = movements.exclusionAreasBreak.filter((f) => f !== memory.protect);
     if (bot.companionProtectBlock === memory.protectBlock) bot.companionProtectBlock = null;
@@ -591,11 +600,15 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (bedPlan.method === 'sheep' && !bedPlan.failures && ctx.adapt.avoids('no_sheep', area.position)) {
       ctx.adapt.promote('bed', area, 'spider_string', 'known_no_sheep');
     }
-    if (ctx.adapt.plan('bed', area).method === 'shelter_first') {
-      await ctx.adapt.run('bed', area, () => {
-        ctx.record('adaptation_use', { task: 'bed', method: 'shelter_first', anchor: area.position });
-        return { ok: true, progress: false, reason: 'bed_deferred' };
-      });
+    const current = ctx.adapt.plan('bed', area);
+    if (current.method === 'shelter_first') {
+      if (memory.bedDeferral !== current.revision) {
+        await ctx.adapt.run('bed', area, () => {
+          ctx.record('adaptation_use', { task: 'bed', method: 'shelter_first', anchor: area.position });
+          memory.bedDeferral = current.revision;
+          return { ok: true, progress: false, reason: 'bed_deferred' };
+        });
+      }
       return null; // still craft/place it if materials later arrive naturally
     }
     return ctx.adapt.run('bed', area, async (method) => {
@@ -707,6 +720,61 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     return result;
   }
 
+  async function placeCompactRoof(ctx, position, match, options) {
+    const [base, upper] = memory.house.scaffold;
+    const peak = new Vec3(upper.x, upper.y + 1, upper.z);
+    const centreTile = position.x === peak.x && position.z === peak.z;
+    const pillarUp = require('../end').pillarUp;
+    const stop = () => {
+      const p = bot.entity.position.floored();
+      return p.x !== peak.x || p.z !== peak.z || bot.companionPlayerBlock?.(upper) || bot.companionPlayerBlock?.(peak);
+    };
+    if (centreTile && bot.entity.position.y < peak.y + 0.9) {
+      const feet = nameAt(upper) && FILLERS.has(nameAt(upper)) ? peak : peak.offset(0, -1, 0);
+      const onStep = new goals.GoalBlock(feet.x, feet.y, feet.z);
+      if (!FILLERS.has(nameAt(base)) || bot.companionPlayerBlock?.(upper) || bot.companionPlayerBlock?.(peak)) {
+        return { ok: false, reason: 'roof_step_unavailable' };
+      }
+      if (!onStep.isEnd(bot.entity.position.floored())) {
+        const moved = await actions.goTo(bot, ctx, onStep, { timeoutMs: 10000, retryNoProgress: false });
+        if (!moved.ok) {
+          ctx.record('roof_step_failed', { reason: moved.reason, at: posKey(bot.entity.position.floored()), target: posKey(feet) });
+          return moved;
+        }
+      }
+      if (feet.y < peak.y) {
+        if (!/^(air|cave_air)$/.test(nameAt(upper) || '') || bot.inventory.items().every((item) => !FILLERS.has(item.name))) {
+          return { ok: false, reason: 'roof_step_needs_filler' };
+        }
+        await actions.recentre(bot, ctx);
+        await pillarUp(bot, ctx, peak.y, { maxSteps: 2, blocks: { test: (name) => FILLERS.has(name) }, stop });
+        if (!FILLERS.has(nameAt(upper)) || bot.entity.position.y < peak.y - 0.1) return { ok: false, reason: 'roof_step_unconfirmed' };
+      }
+      // The centre is a permanent tile at the top of the temporary step.
+      // Work from above its plane rather than losing sight of the remaining
+      // wall tops behind adjacent finished roof blocks.
+      await pillarUp(bot, ctx, peak.y + 1, { maxSteps: 2, blocks: { test: match }, stop });
+      const placed = match(nameAt(peak)) && bot.entity.position.y >= peak.y + 0.9;
+      ctx.record('roof_work_step', { at: posKey(bot.entity.position.floored()), position: posKey(position), ok: placed });
+      return placed ? { ok: true } : { ok: false, reason: 'roof_step_unconfirmed' };
+    }
+    const placed = await skills.placeAt(bot, ctx, position, match, options);
+    if (placed.ok || centreTile || !['not_arrived', 'NoPath', 'Timeout', 'no_progress'].includes(placed.reason)) return placed;
+    if (bot.entity.position.y < peak.y + 0.9) return placed;
+    // An occluded corner may be visible from another roof panel after the
+    // inner tiles connect the deck. Move on the finished panels, not off it.
+    const adjacent = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => new Vec3(position.x + dx, position.y, position.z + dz))
+      .filter((p) => matches('planks', nameAt(p))).sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b));
+    for (const panel of adjacent.slice(0, 2)) {
+      const stand = panel.offset(0, 1, 0);
+      const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(stand.x, stand.y, stand.z), { timeoutMs: 5000, retryNoProgress: false });
+      if (!moved.ok) continue;
+      const retry = await skills.placeAt(bot, ctx, position, match, options);
+      if (retry.ok) return retry;
+    }
+    return placed;
+  }
+
   async function placeRecorded(ctx, position, match, what, options) {
     const up = await surfaceFirst(ctx);
     if (up) return up;
@@ -723,7 +791,12 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       }
     }
     memory.siteAccessFailures = 0;
-    const result = await skills.placeAt(bot, ctx, position, match, options);
+    const result = what === 'roof' && memory.house.variant === 'compact' && !memory.established
+      ? await placeCompactRoof(ctx, position, match, options)
+      : await skills.placeAt(bot, ctx, position, match, options);
+    if (ctx.adapt && !memory.pinned && !memory.established && result.ok && !result.already && memory.searchOrigin) {
+      ctx.adapt.outcome(ctx.adapt.plan('home_site', { position: memory.searchOrigin }), result);
+    }
     // A mob in the way moves on quickly; other failures wait a little longer.
     if (!result.ok) blacklist.add(`build:${posKey(position)}`, result.reason, result.reason === 'cell_occupied_by_entity' ? 4000 : 15000);
     if (ctx.adapt && !memory.pinned && !memory.established && !result.ok && memory.searchOrigin
@@ -903,6 +976,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     guestBedGoal,
     wantsPrimaryBed,
     primaryBedGoal,
+    isInside: () => Boolean(memory.established && insideRoom(bot.entity.position.floored())),
+    shelterDoor: (ctx, open) => memory.established && insideRoom(bot.entity.position.floored()) ? setDoor(ctx, open) : null,
     isDone: (state) => complete(state),
     progress: () => memory.steps,
     async run(ctx) {
@@ -929,6 +1004,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
 
   async function runOnce(ctx) {
     const state = ctx.perceive();
+    if (ctx.adapt && !memory.pinned && !memory.established && memory.house && !memory.searchOrigin) {
+      const { x, y, z } = memory.house.anchor;
+      memory.searchOrigin = new Vec3(x, y, z);
+    }
     if (memory.relocate && memory.house && !memory.pinned && !memory.established) return abandonSite(ctx, 'repeated_nearby_deaths');
     if (!memory.house) {
       if (memory.bunker && state.isDay !== false) {
@@ -961,7 +1040,12 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           if (method === 'relocate' || method === 'move_to_fresh_area') {
             const up = await surfaceFirst(ctx);
             if (up) return up;
-            const moved = await outwardLeg(bot, ctx, actions, memory.homesteadRoute ||= {}, origin, { distance: 28 });
+            const route = (memory.homesteadRoute ||= {});
+            if (route.method !== method) {
+              route.heading = method === 'move_to_fresh_area' ? 2 : 0;
+              route.method = method;
+            }
+            const moved = await outwardLeg(bot, ctx, actions, route, origin, { distance: method === 'relocate' ? 28 : 40 });
             if (moved.ok && Math.hypot(bot.entity.position.x - origin.x, bot.entity.position.z - origin.z) >= 200) {
               memory.searchOrigin = null;
               memory.homesteadRoute = {};

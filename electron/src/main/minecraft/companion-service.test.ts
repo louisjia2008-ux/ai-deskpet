@@ -8,6 +8,7 @@ import { PassThrough, Writable } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MinecraftCompanionConfig } from '../../shared/minecraft-companion';
 import { MinecraftCompanionService } from './companion-service';
+import type { MinecraftAdaptationHelp } from './adaptation-choice';
 
 type Message = Record<string, unknown>;
 const enqueue = (callback: () => void): void => { void Promise.resolve().then(callback); };
@@ -59,7 +60,8 @@ const config: MinecraftCompanionConfig = { host: '127.0.0.1', port: 25565, usern
 const directories: string[] = [];
 const services: MinecraftCompanionService[] = [];
 async function fixture(options: { ready?: boolean; requestTimeoutMs?: number; statusTimeoutMs?: number; shutdownTimeoutMs?: number; onChanged?: () => void;
-  onTaskFinished?: (task: unknown) => void; onSurveyPlan?: (event: unknown) => void; onManagedReview?: (event: unknown) => void } = {}) {
+  onTaskFinished?: (task: unknown) => void; onSurveyPlan?: (event: unknown) => void; onManagedReview?: (event: unknown) => void;
+  onAdaptationHelp?: (request: MinecraftAdaptationHelp) => Promise<string | null> } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'deskpet-companion-')); directories.push(root);
   const workers: Worker[] = []; const captured: Array<{ executable: string; args: string[]; options: SpawnOptionsWithoutStdio }> = [];
   const service = new MinecraftCompanionService({
@@ -70,6 +72,7 @@ async function fixture(options: { ready?: boolean; requestTimeoutMs?: number; st
     ...(options.onTaskFinished ? { onTaskFinished: options.onTaskFinished } : {}),
     ...(options.onSurveyPlan ? { onSurveyPlan: options.onSurveyPlan } : {}),
     ...(options.onManagedReview ? { onManagedReview: options.onManagedReview } : {}),
+    ...(options.onAdaptationHelp ? { onAdaptationHelp: options.onAdaptationHelp } : {}),
     spawnRuntime(executable, args, spawnOptions) {
       captured.push({ executable, args, options: spawnOptions }); const worker = new Worker(); workers.push(worker);
       if (options.ready !== false) enqueue(() => worker.send({ version: 1, type: 'ready', engine: 'core', capabilities: { taskLifecycle: true } }));
@@ -89,6 +92,37 @@ afterEach(async () => {
 });
 
 describe('independent core Companion service', () => {
+  it('dispatches only the current managed Core request and sends a fixed ID or null', async () => {
+    const onAdaptationHelp = vi.fn().mockResolvedValueOnce('move_to_fresh_area').mockResolvedValueOnce('run_anything');
+    const { service, workers, root } = await fixture({ onAdaptationHelp });
+    await service.connect(config, undefined, { dataDirectory: join(root, 'managed-core'), execute: false });
+    const worker = workers[0]!;
+    worker.handler = message => {
+      if (message.type !== 'adaptation_reply') return false;
+      worker.reply(message, { accepted: true });
+      return true;
+    };
+    worker.world();
+    const requestId = '2a8ab7ca-9da3-4987-98eb-514f2226c86c';
+    const otherId = '495ea5eb-d882-4da9-9adf-61962b4f0f39';
+    const payload = { requestId, type: 'adaptation_help', task: 'wood', trigger: 'ladder_exhausted',
+      current: 'do_other_work', choices: ['move_to_fresh_area', 'do_other_work'],
+      summary: { reason: 'not_arrived', failures: 3, tried: ['near_tree', 'wider_heading', 'different_biome'] },
+      deadline: Date.now() + 5000 };
+    const event = { type: 'core', connectionGeneration: worker.generation, payload };
+    worker.event({ ...event, connectionGeneration: 0 });
+    worker.event({ ...event, payload: { ...payload, deadline: Date.now() - 1000 } });
+    worker.event(event);
+    worker.event({ ...event, payload: { ...payload, requestId: otherId } });
+    await vi.waitFor(() => {
+      expect(worker.writes.filter(write => write.type === 'adaptation_reply')).toEqual([
+        expect.objectContaining({ requestId, choice: 'move_to_fresh_area', connectionGeneration: 1 }),
+        expect.objectContaining({ requestId: otherId, choice: null, connectionGeneration: 1 }),
+      ]);
+    });
+    expect(onAdaptationHelp).toHaveBeenCalledTimes(2);
+  });
+
   it('reads a managed survey snapshot before world readiness and excludes stale and non-current status from the panel', async () => {
     const onSurveyPlan = vi.fn(); const onManagedReview = vi.fn();
     const { service, workers, captured, root } = await fixture({ onSurveyPlan, onManagedReview });

@@ -6,16 +6,19 @@ const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 const { EventEmitter } = require('node:events');
+const { randomUUID } = require('node:crypto');
 const { Vec3 } = require('vec3');
 const { createCoreHost } = require('../core-host');
 const { createAdaptation } = require('../core/adaptation');
+const { sendPlanMessage } = require('../core/survey-plan-receiver');
 
 // One connection on a fresh host (an app restart): the home store the companion is given.
-async function connect(dataDir, { port, spawn, managed = false }) {
+async function connect(dataDir, { port, spawn, managed = false, worldId = null }) {
   let home;
   let adaptationStore;
   const bot = Object.assign(new EventEmitter(), { username: 'DeskPetCore', chat: () => {}, waitForChunksToLoad: async () => {},
     spawnPoint: spawn && new Vec3(...spawn) });
+  if (worldId) bot._client = Object.assign(new EventEmitter(), { registerChannel() {}, writeChannel() {}, write() {} });
   const host = createCoreHost({ dataDir, createBot: () => bot, managedWorldAutonomy: managed,
     createCompanion: (options) => {
       home = options.home;
@@ -23,6 +26,8 @@ async function connect(dataDir, { port, spawn, managed = false }) {
       return { status: () => ({}), dispose: async () => {} };
     } });
   await host.handle({ version: 1, id: 'connect', type: 'connect', config: { host: '127.0.0.1', port, username: 'DeskPetCore', auth: 'offline' } });
+  if (worldId) sendPlanMessage({ write: (_, { channel, data }) => bot._client.emit(channel, data) },
+    { type: 'hello', protocol: 2, worldId });
   bot.emit('spawn');
   while (host.status().connection.state !== 'ready') await new Promise((resolve) => setImmediate(resolve));
   await host.close();
@@ -50,16 +55,16 @@ for (const [kind, elapsed] of [['no_sheep', 45], ['mine_danger', 1440]]) {
   test(`${kind} survives a managed Core restart only for that world, then expires`, async (t) => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'core-adaptation-'));
     t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
-    const config = { port: 28000, spawn: [64, 80, -59], managed: true };
+    const config = { port: 28000, spawn: [64, 80, -59], worldId: randomUUID(), managed: true };
     let at = 10_000;
     const position = { x: 96, y: 65, z: 55 };
     const reopen = async (args) => createAdaptation({ now: () => at, store: await connect(dataDir, args) });
     const first = await reopen(config);
     first.teach(kind, position, 'overworld', 'fixture_failure', 40);
     assert.equal(fs.statSync(path.join(dataDir, 'adaptation.json')).mode & 0o777, 0o600);
-    const restarted = await reopen({ ...config, port: 28002 });
+    const restarted = await reopen({ ...config, port: 28002, spawn: [40, 70, 40] });
     assert.equal(restarted.avoids(kind, position), true);
-    assert.equal((await reopen({ ...config, spawn: [40, 70, 40] })).avoids(kind, position), false);
+    assert.equal((await reopen({ ...config, worldId: randomUUID() })).avoids(kind, position), false);
     at += elapsed * 60_000 + 1;
     assert.equal((await reopen(config)).avoids(kind, position), false);
   });

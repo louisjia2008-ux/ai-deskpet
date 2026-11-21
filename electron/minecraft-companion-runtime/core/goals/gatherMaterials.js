@@ -204,7 +204,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
           if (!previousMine.retiring) mining.coolEntrance(bot, ctx, previousMine.entrance, 'adaptation_new_entrance');
           previousMine.retiring = true;
         }
-        const result = await mineOnce(ctx, step, dropMatch, { method, closed: mode === 'sealed', far: ['different_region', 'move_to_fresh_area'].includes(method) });
+        const distance = method === 'move_to_fresh_area' ? 116 : method === 'different_region' ? 72 : 0;
+        const result = await mineOnce(ctx, step, dropMatch, { method, closed: mode === 'sealed', distance });
         if (memory.mine && !memory.mine.retiring) memory.mine.adaptMethod = method;
         if (previousMine?.retiring && result.reason === 'mine_exhausted') return { ok: true, progress: false };
         return ['liquid', 'cave', 'gravity'].includes(result.turned) ? { ...result, adaptFailure: result.turned } : result;
@@ -213,7 +214,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     return mineOnce(ctx, step, dropMatch);
   }
 
-  async function mineOnce(ctx, step, dropMatch, { method = 'current_mine', closed = false, far = false } = {}) {
+  async function mineOnce(ctx, step, dropMatch, { method = 'current_mine', closed = false, distance = 0 } = {}) {
     let start = null;
     if (memory.mine) {
       if (bot.entity.position.y >= memory.mine.surfaceY - 1 && memory.mine.safetyRetreat) {
@@ -231,12 +232,13 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     if (!memory.mine) {
       const at = bot.entity.position.floored();
       const allowed = (p) => Math.hypot(p.x - chest.x, p.z - chest.z) >= MINE_FROM_HOME
-        && (!far || Math.hypot(p.x - chest.x, p.z - chest.z) >= 72)
+        && Math.hypot(p.x - chest.x, p.z - chest.z) >= distance
         && !bot.companionNearPlayerBuild?.(p) && !bot.companionHomeSite?.(p) && !mining.entranceCooling(bot, p)
         && !ctx.adapt?.avoids('mine_danger', p) && !ctx.adapt?.avoids('hard_route', p);
       if (!allowed(at)) {
-        const reach = (far ? 80 : MINE_FROM_HOME + 4) + Math.min(5, memory.barrenMines || 0) * 8;
-        const candidates = [reach, reach + 8, reach + 16].flatMap((r) => SIDES.map((_, i) => SIDES[((memory.mineDir ?? 0) + i) % 4])
+        const reach = (distance ? distance + 8 : MINE_FROM_HOME + 4) + Math.min(5, memory.barrenMines || 0) * 8;
+        const turn = method === 'move_to_fresh_area' ? 1 : 0;
+        const candidates = [reach, reach + 8, reach + 16].flatMap((r) => SIDES.map((_, i) => SIDES[((memory.mineDir ?? 0) + turn + i) % 4])
           .map(([sx, sz]) => new Vec3(chest.x + sx * r, chest.y, chest.z + sz * r)));
         const away = candidates.find(allowed);
         if (!away) {

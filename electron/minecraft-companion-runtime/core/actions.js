@@ -175,14 +175,12 @@ async function goNear(bot, ctx, position, range = 2, options = {}) {
   // the caller can then blacklist this exact tree, mob, entrance or cell.
   if (ctx.adapt.avoids('hard_route', position)) return fail('route_region_avoided');
   return ctx.adapt.run('route', task, (method) => {
-    if (method === 'avoid_region') {
-      ctx.adapt.teach('hard_route', position, 'overworld', plan.explanation, 6);
-      return fail('route_region_avoided');
-    }
+    if (method === 'avoid_region') return fail('route_region_avoided');
     if (method === 'alternate_target') return fail('choose_another_target');
     return goNearOnce(bot, ctx, position, range, { ...options,
       lateral: method === 'waypoint' ? (plan.failures % 2 === 0 ? 1 : -1) : 0 });
-  }).then(result => result.waited ? fail('route_region_avoided') : result);
+  }, plan.method === 'avoid_region' ? { threshold: 1, learn: { kind: 'hard_route', radius: 6 } } : undefined)
+    .then(result => result.waited ? fail('route_region_avoided') : result);
 }
 
 async function goNearOnce(bot, ctx, position, range, options) {

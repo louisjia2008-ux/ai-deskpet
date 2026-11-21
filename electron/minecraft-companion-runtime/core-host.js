@@ -208,6 +208,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
     const current = () => !closed && epoch === generation && bot === next;
     const managed = managedWorldAutonomy && isLocalOffline(nextConfig);
     const observe = observeSurveyPlans && isLocalOffline(nextConfig);
+    let managedWorldId = null;
     let deathReported = false;
     const review = (reason, detail) => event({ type: 'managed_world_review', connectionGeneration: epoch, reason, detail });
     const lost = (code, message) => {
@@ -222,6 +223,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
         ledgerDir: path.join(dataDir, 'survey-plan-grants'),
         onEvent(payload) {
           if (!current()) return;
+          if (managed && payload.type === 'hello') managedWorldId = payload.worldId;
           if (payload.type === 'status') {
             const { worldId, initial, current: selected, plan } = payload;
             if (selected !== false) surveyStatus = clone({ worldId, plan });
@@ -328,7 +330,7 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
             coreEvent(payload, epoch);
           },
           home: homes(worldKey(nextConfig.host, next)) || null,
-          adaptationStore: managed ? adaptationStore(worldKey(nextConfig.host, next)) : null,
+          adaptationStore: managed ? adaptationStore(managedWorldId ? `mod:${managedWorldId}` : worldKey(nextConfig.host, next)) : null,
         });
         clearTimeout(timer); timer = null;
         setConnection('ready');

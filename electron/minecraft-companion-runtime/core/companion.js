@@ -214,11 +214,15 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   }
   // Nights: home to bed once the house is done, dug in where it stands before
   // that (see nightShelter).
-  const nightRest = createNightRest({ bot, home: () => {
-    const built = director?.memory.homestead?.memory;
-    return nightShelter(bot, { house: built?.established ? built.house : null,
-      goal: brain?.status().goal?.name || null, hunt: bot.companionNightHunt });
-  } });
+  const nightRest = createNightRest({ bot,
+    shelterDoor: (ctx, open) => director?.memory.homestead?.shelterDoor?.(ctx, open),
+    home: () => {
+      const homestead = director?.memory.homestead;
+      const built = homestead?.memory;
+      const spot = nightShelter(bot, { house: built?.established ? built.house : null,
+        goal: brain?.status().goal?.name || null, hunt: bot.companionNightHunt });
+      return spot?.centre ? { ...spot, inside: homestead.isInside() } : spot;
+    } });
   const homeMaintenance = createHomeMaintenance({ bot, home: () => director?.memory.homestead,
     activeGoal: () => brain?.status().goal?.name });
   const behaviors = [...createSurvivalBehaviors({ bot, spare: (entity) => spare(entity),
