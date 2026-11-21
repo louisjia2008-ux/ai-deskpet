@@ -701,5 +701,6 @@ test('only the exact build reviewed with an owner-enabled diary may keep it', as
   assert.equal(reviewedDiary({ sourceSHA256: 'ac688d9806c1ff5383c3dfc2990aba7bd58adbe1e625ba65e03634f123592751', mainSHA256: 'bb0602405e9b10448d6260b9df407119d90640792a2bfaebd36e1a3e1b2bfa26', asarSHA256: '2962c2e1cd39739828413b7d7bfff114cbf28fa5e9010645575dc4db75456743' }), true);
   assert.equal(reviewedDiary({ sourceSHA256: '5f92f348e3ec9573cc606c01c727f502a705a493a6e7e820d17a440cc960034b', mainSHA256: 'a27031d9231af0d1cc62e848b24a5c06fcde91e439a093952c83d29f6366d5f0', asarSHA256: '5a5608877086fad515877421f04c6d037f0c50e97422e362fb020f8331ee69eb' }), true);
   assert.equal(reviewedDiary({ sourceSHA256: 'ef1fce4de3b18e9de6f85a201f912f8f5ea65b6d185ea22cd59ea494559acf78', mainSHA256: 'c16f742b61c59e7fa705fc478fa7862a4f8fb549bab3789606d93c9ed8e211a9', asarSHA256: '1c22b8c40a4cd5eb94270f666f53573c09d60a163de2764753569b7b9bade464' }), true);
+  assert.equal(reviewedDiary({ sourceSHA256: '47c02aa7f1619d93ad3a11ebf6b96f282a506a04abadfb70a344ca4b0780e7c4', mainSHA256: '223e58c28f2f14e3ea9b25b9fe5e5df1c8db89a5d30518394cdb5920a9880a0c', asarSHA256: '763b6fbe2b7621f709ccc5e603973cc8994e7eb4726130eb396c383a47d5b37d' }), true);
   assert.equal(reviewedDiary({}), false);
 });

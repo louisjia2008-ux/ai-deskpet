@@ -393,6 +393,11 @@ const modelFollowMomentsRuntime = {
   mainSHA256: 'c16f742b61c59e7fa705fc478fa7862a4f8fb549bab3789606d93c9ed8e211a9',
   asarSHA256: '1c22b8c40a4cd5eb94270f666f53573c09d60a163de2764753569b7b9bade464',
 };
+const momentsDiagnosticsRuntime = {
+  sourceSHA256: '47c02aa7f1619d93ad3a11ebf6b96f282a506a04abadfb70a344ca4b0780e7c4',
+  mainSHA256: '223e58c28f2f14e3ea9b25b9fe5e5df1c8db89a5d30518394cdb5920a9880a0c',
+  asarSHA256: '763b6fbe2b7621f709ccc5e603973cc8994e7eb4726130eb396c383a47d5b37d',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -508,6 +513,8 @@ const reviewedRuntimeManifest = [
   { runtime: sameSelfDoctorV3Runtime, previous: minecraftProxyDownloadRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   // Feature models follow service defaults and owner WeChat desktop operations queue ahead of polling, over the shared-self build, diary still on (2026-11-21).
   { runtime: modelFollowMomentsRuntime, previous: sameSelfDoctorV3Runtime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Moments step diagnostics and reply-control cleanup over the model-follow build, diary still on (2026-11-21).
+  { runtime: momentsDiagnosticsRuntime, previous: modelFollowMomentsRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
