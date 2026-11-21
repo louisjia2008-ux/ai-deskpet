@@ -18,7 +18,7 @@ const batchFrom = (input: DelegationSubmit): DelegationBatch => ({
   createdAt: '2026-10-28T00:00:00.000Z', cancelRequestedAt: null, historicalAt: null, status: 'active',
   budget: { maxEstimatedTokens: input.budget?.maxEstimatedTokens ?? 0, maxRequests: input.children.length, settledTokens: 0, outstandingTokens: 2000 * input.children.length, releasedTokens: 0, reservedRequests: input.children.length },
   children: input.children.map((child, index) => ({ id: `child-${index + 1}`, jobId: `job-${index + 1}`, sessionId: `independent-session-${index + 1}`,
-    instruction: child.instruction, providerName: providers.find((provider) => provider.id === child.providerId)?.name ?? 'Unknown', model: child.model,
+    instruction: child.instruction, providerName: providers.find((provider) => provider.id === child.providerId)?.name ?? 'Unknown', model: child.model ?? child.reviewedDefaultModel ?? 'fixture-model',
     status: 'queued', completionReason: null, finishReason: null, checks: child.requirements.map((rule) => ({ id: rule.id, kind: rule.kind, status: 'unchecked' })),
     factVerification: 'unverified', reservation: { reservedTokens: 2000, chargedTokens: 0, state: 'reserved', reportedTokens: null },
   })),
@@ -78,7 +78,8 @@ describe('controlled delegation UI', () => {
     expect(screen.getByRole('textbox', { name: 'Child 1 selected material (paste text)' })).toHaveAttribute('maxlength', '16000');
     expect(screen.getByRole('button', { name: 'Submit delegation' })).toBeDisabled();
     fillChild(1); fireEvent.click(screen.getByRole('button', { name: 'Add child' })); fillChild(2, 1);
-    expect(screen.getByRole('combobox', { name: 'Child 2 model' })).toHaveValue('model-b');
+    expect(screen.getByRole('combobox', { name: 'Child 2 model' })).toHaveValue('');
+    expect(screen.getByRole('option', { name: 'Follow service default (model-b)' })).toHaveProperty('selected', true);
     fireEvent.click(screen.getByRole('checkbox', { name: 'Child 1 Exact full-text requirement' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Child 1 expected full text' }), { target: { value: 'EXACT_RESULT' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Child 2 English word-count requirement' }));
@@ -89,8 +90,8 @@ describe('controlled delegation UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit delegation' }));
     await waitFor(() => expect(f.submit).toHaveBeenCalledOnce());
     const payload = f.submit.mock.calls[0]![0];
-    expect(payload.children).toHaveLength(2); expect(payload.children[0]).toMatchObject({ material: 'CHILD_1_ONLY_MATERIAL', providerId: providers[0]!.id, model: 'model-a', privacy: 'local-only' });
-    expect(payload.children[1]).toMatchObject({ material: 'CHILD_2_ONLY_MATERIAL', providerId: providers[1]!.id, model: 'model-b', privacy: 'local-only' });
+    expect(payload.children).toHaveLength(2); expect(payload.children[0]).toMatchObject({ material: 'CHILD_1_ONLY_MATERIAL', providerId: providers[0]!.id, model: null, reviewedDefaultModel: 'model-a', privacy: 'local-only' });
+    expect(payload.children[1]).toMatchObject({ material: 'CHILD_2_ONLY_MATERIAL', providerId: providers[1]!.id, model: null, reviewedDefaultModel: 'model-b', privacy: 'local-only' });
     expect(payload.children[0]?.requirements[0]).toMatchObject({ kind: 'exact-text', expected: 'EXACT_RESULT' });
     expect(payload.children[1]?.requirements.map((rule) => rule.kind)).toEqual(['english-word-count', 'unimplemented']);
     expect(payload).not.toHaveProperty('budget'); expect(f.getResult).not.toHaveBeenCalled();
@@ -117,7 +118,7 @@ describe('controlled delegation UI', () => {
     await waitFor(() => expect(within(firstPicker).getByRole('option', { name: /^child-special/u })).toBeInTheDocument());
     await waitFor(() => expect(within(secondPicker).getByRole('option', { name: /^child-b-special/u })).toBeInTheDocument());
     fireEvent.change(firstPicker, { target: { value: 'child-special' } });
-    expect(secondPicker).toHaveValue('model-b'); expect(providers[0]!.model).toBe('model-a');
+    expect(secondPicker).toHaveValue(''); expect(providers[0]!.model).toBe('model-a');
     fireEvent.change(secondPicker, { target: { value: 'child-b-special' } });
     expect(firstPicker).toHaveValue('child-special'); expect(f.setModel).not.toHaveBeenCalled();
     expect(f.submit).not.toHaveBeenCalled();

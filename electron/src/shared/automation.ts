@@ -62,7 +62,7 @@ export interface ReplySegment { id: string; text: string; expression: 'neutral' 
 
 export type CalendarRule = { kind: 'once'; at: string } | { kind: 'daily'; time: string } | { kind: 'weekly'; time: string; weekday: number };
 export interface PersistentSchedule {
-  id: string; title: string; instruction: string; material: string; privacy: ContextPrivacy; providerId: string; model: string;
+  id: string; title: string; instruction: string; material: string; privacy: ContextPrivacy; providerId: string; model: string | null;
   rule: CalendarRule; timezone: string; missedPolicy: 'skip' | 'run-once'; enabled: boolean;
   revision: number; createdAt: string; updatedAt: string; nextRunAt: string | null; cancelledAt: string | null;
 }
@@ -79,7 +79,7 @@ export type ProactiveEventKind = 'task-completed' | 'focus-completed' | 'explici
 export interface ProactivePolicy {
   enabled: boolean; mode?: ProactiveMode | undefined; revision: number; eventKinds: ProactiveEventKind[];
   quietStart: string; quietEnd: string; timezone: string; cooldownMinutes: number; dailyLimit: number;
-  topics: string[]; privacy: ContextPrivacy; providerId: string | null; model: string;
+  topics: string[]; privacy: ContextPrivacy; providerId: string | null; model: string | null;
 }
 export type ProactivePolicyInput = Omit<ProactivePolicy, 'revision'>;
 export interface ProactiveEvent {

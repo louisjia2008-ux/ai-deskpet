@@ -60,8 +60,8 @@ export function canReleaseOllamaForVaultTools(config: ProviderConfig, tools: Pro
   return base.protocol === 'http:' && base.port === '11434' && (base.pathname === '/' || base.pathname === '/v1');
 }
 
-/** Binds dispatch policy to the exact credentials configuration and actual model. */
-export const providerBindingFingerprint = (config: ProviderConfig, model: string): string => createHash('sha256').update(JSON.stringify({
+/** Binds the provider configuration to an exact model or a persisted follow selection. Wire requests use an exact model. */
+export const providerBindingFingerprint = (config: ProviderConfig, model: string | null): string => createHash('sha256').update(JSON.stringify({
   version: 1,
   providerId: config.id,
   kind: config.kind,

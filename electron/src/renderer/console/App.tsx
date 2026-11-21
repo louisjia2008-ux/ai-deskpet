@@ -223,7 +223,7 @@ const MainConsoleApp = (): JSX.Element => {
     if (feature === 'asr') openCompanion('voice');
     else if (feature === 'diary') openCompanion('diary');
     else if (feature === 'proactive') openCompanion('care');
-    else if (feature === 'auto-memory' || feature === 'memory-sleep') setView('memory');
+    else if (feature === 'auto-memory' || feature === 'companion-recent' || feature === 'memory-sleep') setView('memory');
     else if (feature === 'schedules') setView('schedules');
     else if (feature === 'wechat-moments' || feature === 'wechat-cron' || feature === 'wechat-group-digest' || feature === 'wechat-official-brief' || feature === 'wechat-friends-moments' || feature === 'wechat-friend-reply' || feature === 'wechat-followup') { setSettingsTab('wechat'); setView('settings'); }
     else { setSettingsTab(feature); setView('settings'); }
@@ -494,8 +494,11 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
   const messageList = useRef<ComponentRef<'div'> | null>(null);
   const followOutput = useRef(true);
   const completedRuns = useRef(new Set<string>());
-  const provider = snapshot.providers.find((item) => item.id === snapshot.app.activeProviderId && item.enabled) ?? snapshot.providers.find((item) => item.enabled);
   const selectedConversation = snapshot.sessions.find((session) => session.id === sessionId);
+  const modelSelection = selectedConversation?.modelSelection;
+  const activeProvider = snapshot.providers.find(item => item.id === snapshot.app.activeProviderId && item.enabled) ?? snapshot.providers.find(item => item.enabled);
+  const provider = modelSelection ? snapshot.providers.find(item => item.id === modelSelection.providerId && item.enabled) : activeProvider;
+  const effectiveChatProvider = provider && modelSelection?.model ? { ...provider, model: modelSelection.model } : provider;
   const archived = Boolean(selectedConversation?.archivedAt);
   const wechatTranscript = selectedConversation?.wechatTranscript;
   useEffect(() => { onBusyChange(submitting || running !== null || restoringInteraction); }, [submitting, running, restoringInteraction, onBusyChange]);
@@ -726,7 +729,7 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
         const review = await window.deskpet.delegations.openDraft({ sessionId: activeSession, command: content });
         setDelegationDraft(review); setDelegationsOpen(true); return;
       }
-      const result = await window.deskpet.chat.send({ sessionId: activeSession, content, providerId: provider!.id, model: provider!.model });
+      const result = await window.deskpet.chat.send({ sessionId: activeSession, content });
       // A fast provider can finish before the IPC send promise resolves.
       if (!completedRuns.current.has(result.runId)) { activeRun.current = result.runId; setRunning(result.runId); }
       const loaded = await window.deskpet.chat.listMessages(activeSession);
@@ -828,8 +831,11 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
             </div>
           </div>
         </form>
-        <ChatModelPicker providers={snapshot.providers} provider={provider} running={submitting || running !== null || restoringInteraction} t={t} refresh={refresh} onSavingChange={setModelSaving} />
-        <ChatCapabilitySummary key={`${sessionId}:${provider?.id}:${provider?.model}`} provider={provider} privateConversation={snapshot.sessions.find(item => item.id === sessionId)?.historyPrivacy === 'local-only'} locale={snapshot.app.resolvedLocale} refresh={refresh} />
+        {!archived && !selectedConversation?.analysisSource && !selectedConversation?.channelBindingId &&
+          <ChatModelPicker providers={snapshot.providers} provider={provider} selection={modelSelection}
+            onSelect={async selection => window.deskpet.chat.setModelSelection(await ensureSession(snapshot.app.resolvedLocale === 'zh-CN' ? '新对话' : 'New conversation'), selection)}
+            running={submitting || running !== null || restoringInteraction} t={t} refresh={refresh} onSavingChange={setModelSaving} />}
+        <ChatCapabilitySummary key={`${sessionId}:${effectiveChatProvider?.id}:${effectiveChatProvider?.model}`} provider={effectiveChatProvider} privateConversation={selectedConversation?.historyPrivacy === 'local-only'} locale={snapshot.app.resolvedLocale} refresh={refresh} />
         </>}
       </div>
     </div>

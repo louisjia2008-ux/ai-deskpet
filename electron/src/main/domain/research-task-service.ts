@@ -122,7 +122,7 @@ export class ResearchTaskService {
     await this.#authority();
     const old = this.repository.snapshot().researchTasks.find(task => task.operationId === input.operationId);
     if (old) {
-      if (old.specDigest !== digest) throw new Error('research.operationConflict');
+      if (old.specDigest !== digest && specDigest(old.input) !== digest) throw new Error('research.operationConflict');
       this.#kick(); return this.get(old.id);
     }
     const binding = await this.#binding(input), id = randomUUID(), at = now();
@@ -130,7 +130,7 @@ export class ResearchTaskService {
       if (!this.#available()) throw new Error('research.unavailable');
       const duplicate = state.researchTasks.find(task => task.operationId === input.operationId);
       if (duplicate) {
-        if (duplicate.specDigest !== digest) throw new Error('research.operationConflict');
+        if (duplicate.specDigest !== digest && specDigest(duplicate.input) !== digest) throw new Error('research.operationConflict');
         return structuredClone(this.#owned(state, duplicate.id));
       }
       if (state.researchTasks.some(task => task.resumeOperationIds.includes(input.operationId))) throw new Error('research.operationConflict');

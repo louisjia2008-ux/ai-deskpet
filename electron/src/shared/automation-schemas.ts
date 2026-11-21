@@ -12,7 +12,7 @@ export const calendarRuleSchema = z.discriminatedUnion('kind', [
 ]);
 export const persistentScheduleInputSchema = z.object({
   id, title: z.string().trim().min(1).max(240), instruction: z.string().trim().min(1).max(32_000), material: z.string().max(32_000),
-  privacy: z.enum(['local-only', 'cloud-allowed']), providerId: id, model: z.string().min(1).max(240),
+  privacy: z.enum(['local-only', 'cloud-allowed']), providerId: id, model: z.string().min(1).max(240).nullable().default(null),
   rule: calendarRuleSchema, timezone: timezoneSchema, missedPolicy: z.enum(['skip', 'run-once']), enabled: z.boolean(),
 }).strict();
 export const persistentScheduleSchema = persistentScheduleInputSchema.extend({ revision: z.number().int().positive(), createdAt: timestamp, updatedAt: timestamp, nextRunAt: timestamp.nullable(), cancelledAt: timestamp.nullable() }).strict();
@@ -27,12 +27,12 @@ const proactivePolicyBaseSchema = z.object({
   quietStart: time, quietEnd: time, timezone: timezoneSchema,
   cooldownMinutes: z.number().int().min(1).max(10080), dailyLimit: z.number().int().min(1).max(12),
   topics: z.array(z.string().trim().min(1).max(120)).max(8).transform((v) => [...new Set(v)]),
-  privacy: z.enum(['local-only', 'cloud-allowed']), providerId: z.string().min(1).max(128).nullable(), model: z.string().trim().max(240),
+  privacy: z.enum(['local-only', 'cloud-allowed']), providerId: z.string().min(1).max(128).nullable(), model: z.string().trim().max(240).nullable(),
 }).strict();
 const consistentProactiveMode = (value: { enabled: boolean; mode?: 'off' | 'observe' | 'auto' | undefined }): boolean => value.mode === undefined || value.enabled === (value.mode === 'auto');
 export const proactivePolicyInputSchema = proactivePolicyBaseSchema
   .refine(consistentProactiveMode, 'Only auto mode may enable model execution.')
-  .refine((value) => proactiveMode(value) !== 'auto' || (value.providerId !== null && value.model.length > 0 && value.eventKinds.length > 0), 'Choose events and a provider/model before enabling auto mode.')
+  .refine((value) => proactiveMode(value) !== 'auto' || (value.providerId !== null && value.model !== '' && value.eventKinds.length > 0), 'Choose events and a provider before enabling auto mode.')
   .refine((value) => proactiveMode(value) !== 'observe' || value.eventKinds.length > 0, 'Choose at least one app event to observe.');
 export const proactivePolicySchema = proactivePolicyBaseSchema.extend({revision:z.number().int().positive()}).strict().refine(consistentProactiveMode, 'Inconsistent proactive execution mode.');
 export const defaultAutomationProactive = (): ProactivePolicy => ({ enabled: false, revision: 1, eventKinds: [], quietStart: '23:00', quietEnd: '08:00', timezone: 'UTC', cooldownMinutes: 120, dailyLimit: 2, topics: [], privacy: 'local-only', providerId: null, model: '' });

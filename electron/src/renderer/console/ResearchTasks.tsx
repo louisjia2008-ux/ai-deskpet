@@ -59,7 +59,7 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
 }): JSX.Element => {
   const text = copy[locale], enabled = providers.filter(provider => provider.enabled);
   const [goal, setGoal] = useState(''), [material, setMaterial] = useState('');
-  const [providerId, setProviderId] = useState(enabled[0]?.id ?? ''), [model, setModel] = useState(enabled[0]?.model ?? '');
+  const [providerId, setProviderId] = useState(enabled[0]?.id ?? ''), [model, setModel] = useState('');
   const [allowRemote, setAllowRemote] = useState(false), [maxMinutes, setMaxMinutes] = useState(10), [maxToolCalls, setMaxToolCalls] = useState(20);
   const [tasks, setTasks] = useState<ResearchTask[]>([]), [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState(false), [submissionError, setSubmissionError] = useState<'uncertain' | 'rejected' | null>(null);
@@ -87,8 +87,8 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault(); if (submitting.current) return;
     const input = submission.current ?? { operationId: crypto.randomUUID(), goal: goal.trim(), material,
-      providerId, model: model.trim(), allowRemote, maxMinutes, maxToolCalls };
-    if (!input.goal || !input.providerId || !input.model) return;
+      providerId, model: model.trim() || null, allowRemote, maxMinutes, maxToolCalls };
+    if (!input.goal || !input.providerId) return;
     submission.current = input; submitting.current = true; setBusy(true); setSubmissionError(null); setActionError('');
     try {
       await api.submit(input); submission.current = null;
@@ -123,9 +123,10 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
         <label>{text.material}<textarea maxLength={64000} value={material} disabled={frozen} onChange={event => setMaterial(event.target.value)} /></label>
         <div className="background-job-binding">
           <label>{text.provider}<select value={providerId} disabled={frozen} onChange={event => {
-            setProviderId(event.target.value); setModel(enabled.find(item => item.id === event.target.value)?.model ?? ''); setAllowRemote(false);
+            setProviderId(event.target.value); setModel(''); setAllowRemote(false);
           }}>{!enabled.length && <option value="">{text.noProvider}</option>}{enabled.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label>{text.model}<input value={model} maxLength={240} required disabled={frozen} onChange={event => setModel(event.target.value)} /></label>
+          <label>{text.model}<input value={model} maxLength={240}
+            placeholder={locale === 'zh-CN' ? '跟随服务默认模型' : 'Follow provider default'} disabled={frozen} onChange={event => setModel(event.target.value)} /></label>
         </div>
         <div className="background-job-binding">
           <label>{text.minutes}<input type="number" min={2} max={30} step={1} required value={maxMinutes} disabled={frozen} onChange={event => setMaxMinutes(Number(event.target.value))} /></label>
@@ -134,11 +135,11 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
         <label className="background-job-privacy"><input type="checkbox" checked={allowRemote} disabled={frozen} onChange={event => setAllowRemote(event.target.checked)} />{text.remote}</label>
         <p className="background-job-note">{text.local}</p>
         <details className="background-job-preview" open><summary>{text.preview}</summary><dl>
-          <dt>{text.provider}</dt><dd>{provider?.name ?? text.noProvider}</dd><dt>{text.model}</dt><dd>{model}</dd>
+          <dt>{text.provider}</dt><dd>{provider?.name ?? text.noProvider}</dd><dt>{text.model}</dt><dd>{model.trim() || provider?.model}</dd>
           <dt>{text.minutes}</dt><dd>{maxMinutes}</dd><dt>{text.calls}</dt><dd>{maxToolCalls}</dd><dt>{text.output}</dt><dd>{text.location}</dd>
         </dl><pre>{goal}{material ? `\n\n${material}` : ''}</pre></details>
         <p className="background-job-note">{text.lifecycle}</p>
-        <div><button type="submit" className="primary" disabled={busy || !provider || !goal.trim() || !model.trim() || maxMinutes < 2 || maxMinutes > 30 || maxToolCalls < 4 || maxToolCalls > 40}>
+        <div><button type="submit" className="primary" disabled={busy || !provider || !goal.trim() || maxMinutes < 2 || maxMinutes > 30 || maxToolCalls < 4 || maxToolCalls > 40}>
           {busy ? text.saving : submission.current ? text.recover : text.run}</button></div>
       </form>
       {submissionError && <p role="alert">{text[submissionError]}</p>}
@@ -150,7 +151,7 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
       {!tasks.length && !loadError && <p>{text.empty}</p>}
       {tasks.map(task => <article className="panel" key={task.id} aria-label={task.input.goal}>
         <h2>{task.input.goal}</h2><strong role="status">{text.statuses[task.status]}</strong>
-        <p className="background-job-note">{task.input.model} · {task.input.maxMinutes} min · {task.input.maxToolCalls} {locale === 'zh-CN' ? '次工具调用上限' : 'tool calls maximum'}</p>
+        <p className="background-job-note">{task.input.model ?? (locale === 'zh-CN' ? '跟随服务默认模型' : 'Follow provider default')} · {task.input.maxMinutes} min · {task.input.maxToolCalls} {locale === 'zh-CN' ? '次工具调用上限' : 'tool calls maximum'}</p>
         {task.summary && <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', font: 'inherit' }}>{task.summary}</pre>}
         {task.errorCode === 'research.bindingChanged' && <p>{text.bindingChanged}</p>}
         <code className="background-job-id">{task.reportPath}</code>

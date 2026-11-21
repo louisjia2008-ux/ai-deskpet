@@ -28,7 +28,7 @@ it('keeps the displayed saved status until the one host policy save succeeds, wi
   expect(api.configureProactive).not.toHaveBeenCalled(); expect(api.explicitCheckIn).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Save check-in policy' }));
   expect(screen.getByText('Saved policy: Off')).toBeVisible(); expect(screen.getByRole('button', { name: 'Save check-in policy' })).toBeDisabled();
-  expect(api.configureProactive).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, eventKinds: ['task-completed'], topics: ['reading', 'small victories'], privacy: 'local-only', providerId: 'provider', model: 'synthetic' }));
+  expect(api.configureProactive).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, eventKinds: ['task-completed'], topics: ['reading', 'small victories'], privacy: 'local-only', providerId: 'provider', model: null }));
   finish(); await screen.findByText('Saved policy: Automatic check-ins');
 });
 

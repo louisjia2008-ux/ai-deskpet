@@ -1,3 +1,4 @@
+import { WeChatDigestModel } from './WeChatDigestModel';
 import { useEffect, useId, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
 import type { ResolvedLocale } from '../../shared';
@@ -35,10 +36,6 @@ const copy = {
   },
 };
 
-const routeKey = (route: WeChatFriendsMomentsSettings['provider']): string =>
-  route === null ? '' : `${route.providerId}\n${route.model}`;
-const routeOf = (provider: WeChatFriendsMomentsState['providers'][number]) =>
-  ({ providerId: provider.id, model: provider.model });
 
 export function WeChatFriendsMomentsSettingsPanel({ api, locale, disabled = false }: {
   api: Pick<WeChatDigestsAPI, 'getFriendsMomentsSettings' | 'setFriendsMomentsSettings'>;
@@ -99,7 +96,6 @@ export function WeChatFriendsMomentsSettingsPanel({ api, locale, disabled = fals
 
   const available = state?.available === true;
   const providers = state?.providers ?? [];
-  const provider = routeKey(draft.provider);
   return <section className="wechat-policy" aria-labelledby={id}>
     <h3 id={id}>{t.title}</h3>
     <p>{t.scope}</p>
@@ -126,15 +122,8 @@ export function WeChatFriendsMomentsSettingsPanel({ api, locale, disabled = fals
             onChange={event => update({ cloud: event.target.checked })} /><span>{t.cloud}</span>
         </label>
         <small id={`${id}-cloud`} className="muted">{t.cloudInfo}</small>
-        {draft.cloud && <label>{t.provider}<select value={provider} disabled={!available} onChange={event => {
-          const selected = providers.find(item => routeKey(routeOf(item)) === event.target.value);
-          update({ provider: selected ? routeOf(selected) : null });
-        }}>
-          <option value="">{t.privateRoute}</option>
-          {draft.provider && !providers.some(item => routeKey(routeOf(item)) === provider) &&
-            <option value={provider}>{t.missingProvider}</option>}
-          {providers.map(item => <option value={routeKey(routeOf(item))} key={routeKey(routeOf(item))}>{item.name} · {item.model}</option>)}
-        </select></label>}
+        {draft.cloud && <WeChatDigestModel locale={locale} label={t.provider} inherited={t.privateRoute} unavailable={t.missingProvider}
+          providers={providers} value={draft.provider} disabled={!available} change={provider => update({ provider })} />}
       </fieldset>}
       <div className="button-row">
         {state && <button type="submit" disabled={locked || unchanged}>{saving ? t.saving : t.save}</button>}

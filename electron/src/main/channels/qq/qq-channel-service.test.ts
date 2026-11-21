@@ -99,6 +99,21 @@ describe('durable private QQ message queue', () => {
     return { ...f, runMessage, started, finish, start };
   };
 
+  it('preserves undispatched messages when migrating the selected service default', async () => {
+    const f = await heldFixture(), providerId = randomUUID(), model = 'synthetic-default';
+    await f.service.configure({ providerId, model });
+    const running = f.start(); await f.started.promise;
+    await f.service.handleInbound(message('second-id', 'owner-1', 'second'));
+    const before = await readFile(f.path, 'utf8');
+    expect(await f.service.followModel({ providerId, model: 'another-model' }, true)).toBe(false);
+    expect(await readFile(f.path, 'utf8')).toBe(before);
+    expect(await f.service.followModel({ providerId, model }, true)).toBe(true);
+    expect(f.store.snapshot().inboundQueue.map(item => [item.status, item.model])).toEqual([['running', model], ['queued', null]]);
+    f.finish.resolve(); await running;
+    expect(f.runMessage.mock.calls.map(([input]) => input.model)).toEqual([model, null]);
+    expect(f.service.status()).toMatchObject({ model: null, bound: true });
+  });
+
   it('persists busy messages and receipts together, deduplicates redelivery, then executes FIFO with original reply targets', async () => {
     const f = await heldFixture(), running = f.start(); await f.started.promise;
     const second = message('second-id', 'owner-1', 'second');

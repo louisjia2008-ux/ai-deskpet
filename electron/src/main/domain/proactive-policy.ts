@@ -82,7 +82,7 @@ export const evaluateProactiveAdmission = ({ policy, event, triggers, environmen
   }
   if (!environment.visible) return no('hidden');
   if (environment.busy) return no('busy');
-  if (purpose === 'execute' && (policy.providerId === null || !policy.model)) return no('no-provider');
+  if (purpose === 'execute' && (policy.providerId === null || policy.model === '')) return no('no-provider');
   const reservations = triggers.filter((trigger) => trigger.kind === 'proactive' && trigger.id !== excludeTriggerId);
   const today = proactiveDayKey(now, policy.timezone);
   // Reservation counts survive cancellation/failure and app restarts. Usage is

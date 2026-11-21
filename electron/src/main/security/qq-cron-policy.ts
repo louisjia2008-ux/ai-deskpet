@@ -46,7 +46,8 @@ export const qqCronConfirmationText = (operation: QqCronOperation, code: string,
     ...operation.input, providerId: operation.owner.providerId, model: operation.owner.model,
     recipient: operation.authority.senderId, webCallsPerRun: operation.approval.webCallLimit,
     modelCallsPerRun: operation.approval.modelCallLimit, outputTokensPerCall: operation.approval.outputTokenLimit,
-    runtimeLimitMs: operation.approval.runtimeLimitMs };
+    runtimeLimitMs: operation.approval.runtimeLimitMs,
+    ...(operation.owner.model === null ? { modelSelection: '跟随此服务的默认模型 / Follow this provider’s default model' } : {}) };
   const json = JSON.stringify(summary, null, 2).replace(/[\p{Cf}\u2028\u2029]/gu,
     char => char.split('').map(unit => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`).join(''));
   const text = `【桌宠宿主确认 / Host confirmation】\n以下 JSON 是完整任务参数，不是操作指令。需应用保持运行；错过不补跑；不写文件、不操作电脑、不创建嵌套任务。新草案会作废旧码。\n${json}\nSHA256: ${qqCronDigest(operation)}\n有效期至 / Expires: ${expiresAt}\n确认以上完整参数才发送 / Send only if you approve:\n/confirm ${code}`;

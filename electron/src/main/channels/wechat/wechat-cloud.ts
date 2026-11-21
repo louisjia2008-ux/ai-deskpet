@@ -8,8 +8,8 @@ import { companionName, plainReply } from '../../../../wechat-runtime/reply_poli
 
 import { providerDefinitions, type ProviderConfig } from '../../../shared';
 import { CHARACTER_MOODS, type CharacterMood } from '../../../shared/character-reactions';
-import { wechatAssistantSchema, wechatCloudRouteSchema, wechatCloudSettingsSchema, wechatCloudStateSchema, wechatFriendCloudRoutesSchema, wechatFriendCloudUpdateSchema, wechatFriendIdSchema, wechatGroupRulesSchema, wechatGroupRuleUpdateSchema } from '../../../shared/wechat-channel';
-import type { WeChatAssistant, WeChatCloudRoute, WeChatCloudSettings, WeChatCloudState, WeChatFriendCloudUpdate, WeChatGroupRule, WeChatGroupRuleUpdate } from '../../../shared/wechat-channel';
+import { WECHAT_REPLY_FRIEND_LIMIT, WECHAT_REPLY_GROUP_LIMIT, wechatAssistantSchema, wechatCloudSettingsSchema, wechatCloudStateSchema, wechatFriendCloudUpdateSchema, wechatFriendIdSchema, wechatGroupIdSchema, wechatGroupRulesSchema, wechatGroupRuleUpdateSchema, wechatPinnedCloudRouteSchema } from '../../../shared/wechat-channel';
+import type { WeChatAssistant, WeChatCloudRoute, WeChatCloudSettings, WeChatCloudState, WeChatFriendCloudUpdate, WeChatGroupRule, WeChatGroupRuleUpdate, WeChatPinnedCloudRoute } from '../../../shared/wechat-channel';
 import { defaultGroupRule, groupRulesPrompt } from './wechat-group-rules';
 import { resolveContextDestination } from '../../domain/chat-context-policy';
 import type { ProviderService } from '../../providers';
@@ -24,11 +24,19 @@ const hashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const knowledgeReplyCheckSchema = z.strictObject({ binding: hashSchema, validateKnowledgeReply: hashSchema });
 const knowledgeReplyToken = (binding: string, policyToken: string): string => digest(['knowledge-reply', binding, policyToken]);
 const scopeSchema = z.string().regex(/^(?:private|legacy|[a-f0-9]{32})$/u);
-const settingsSchema = wechatCloudSettingsSchema.extend({ destinations: z.record(scopeSchema, hashSchema).optional() });
+// For a following route, the stored model anchors the existing destination
+// approval. Only Electron resolves the effective model at dispatch time.
+const listenerRouteSchema = wechatPinnedCloudRouteSchema.extend({ follow: z.literal(true).optional() });
+type ListenerRoute = z.infer<typeof listenerRouteSchema>;
+const settingsSchema = wechatCloudSettingsSchema.extend({
+  private: listenerRouteSchema.nullable(),
+  groups: z.record(wechatGroupIdSchema, listenerRouteSchema).refine(groups => Object.keys(groups).length <= WECHAT_REPLY_GROUP_LIMIT),
+  destinations: z.record(scopeSchema, hashSchema).optional(),
+});
 const friendKey = (id: string): string => `friend:${id}`;
 const friendScopeSchema = z.string().regex(/^friend:[a-f0-9]{32}$/u);
 const friendSettingsSchema = z.strictObject({
-  friends: wechatFriendCloudRoutesSchema,
+  friends: z.record(wechatFriendIdSchema, listenerRouteSchema).refine(friends => Object.keys(friends).length <= WECHAT_REPLY_FRIEND_LIMIT),
   destinations: z.record(friendScopeSchema, hashSchema),
 }).refine(({ friends, destinations }) => Object.keys(friends).length === Object.keys(destinations).length
   && Object.keys(friends).every(id => Object.hasOwn(destinations, friendKey(id))));
@@ -86,7 +94,7 @@ export type WeChatCloudRequest = Request;
 export interface WeChatReplyCompletion {
   reply: string;
   mood: CharacterMood | null;
-  route: WeChatCloudRoute | null;
+  route: WeChatPinnedCloudRoute | null;
   localModel: string | null;
   destination: 'local' | 'remote';
 }
@@ -102,10 +110,13 @@ const assistantBudgetMs = 300_000;
 // A group turn may search the web a few times; the listener waits 150 s for groups.
 const groupBudgetMs = 120_000;
 const emptyPublic = (): WeChatCloudSettings => ({ private: null, groups: {} });
-const scopes = (value: WeChatCloudSettings): [string, WeChatCloudRoute][] => [
-  ...(value.private ? [['private', value.private] as [string, WeChatCloudRoute]] : []),
+const scopes = <Route>(value: { private: Route | null; groups: Record<string, Route> }): [string, Route][] => [
+  ...(value.private ? [['private', value.private] as [string, Route]] : []),
   ...Object.entries(value.groups),
 ];
+const selection = (route: ListenerRoute): WeChatCloudRoute => ({ providerId: route.providerId, model: route.follow ? null : route.model });
+const fingerprint = (route: ListenerRoute, pin: string) => digest([route.providerId, route.model, pin, ...(route.follow ? [true] : [])]);
+export const wechatModelBindingId = (scope: string): string => `wechat:${scope}`;
 const destination = (provider: ProviderConfig, model: string, binding: string) =>
   digest([providerBindingFingerprint(provider, model), binding]);
 
@@ -113,21 +124,24 @@ interface Controls {
   bindings(): Promise<Record<string, string>>;
   authorize(input: Request): Promise<string>;
   active(): boolean;
+  settingsActive?(): boolean;
   knowledgePolicyToken?(): string | null;
   context?(input: OwnerOrGroupRequest, destination: 'local' | 'remote'): WeChatReplyContext;
   friendName?(): string;
   mood?(): CharacterMood | null;
   /** A reply was generated under the live route. No delivery receipt is implied. */
   completed?(input: Request, result: WeChatReplyCompletion): Promise<void> | void;
+  modelFailed?(scope: string, route: WeChatPinnedCloudRoute, error: unknown): void;
+  modelSucceeded?(scope: string, route: WeChatPinnedCloudRoute): void;
   ownerCommand?(input: Request, guard: WeChatArticleGuard): Promise<string | null>;
   article?(input: Request & { article: NonNullable<Request['article']> }, guard: WeChatArticleGuard): Promise<string>;
   rich?(input: OwnerOrGroupRequest & { rich: NonNullable<Request['rich']> }, guard: WeChatArticleGuard): Promise<string>;
   readTool?(input: Request, guard: { signal: AbortSignal; assertCurrent: () => Promise<void> }): Promise<string>;
   selectSticker?(input: OwnerOrGroupRequest & { reply: string }, guard: { signal: AbortSignal; assertCurrent: () => Promise<void> }): Promise<string | null>;
   /** Owner private chat through DeskPet's chat loop with the pinned route. */
-  assistant?(input: Request, route: WeChatCloudRoute, settings: WeChatAssistant, guard: { signal: AbortSignal; assertCurrent: () => Promise<void> }): Promise<WeChatAssistantReply>;
+  assistant?(input: Request, route: WeChatPinnedCloudRoute, settings: WeChatAssistant, guard: { signal: AbortSignal; assertCurrent: () => Promise<void> }): Promise<WeChatAssistantReply>;
   /** A bound group through the chat loop in group mode, under that group's rule. */
-  groupAssistant?(input: Request, route: WeChatCloudRoute, rule: WeChatGroupRule, guard: { signal: AbortSignal; assertCurrent: () => Promise<void> }): Promise<WeChatAssistantReply>;
+  groupAssistant?(input: Request, route: WeChatPinnedCloudRoute, rule: WeChatGroupRule, guard: { signal: AbortSignal; assertCurrent: () => Promise<void> }): Promise<WeChatAssistantReply>;
 }
 
 function remoteProvider(provider: ProviderConfig): boolean {
@@ -135,7 +149,7 @@ function remoteProvider(provider: ProviderConfig): boolean {
     providerBindingFingerprint(provider, provider.model);
     const needsKey = providerDefinitions.find(value => value.kind === provider.kind)?.apiKeyRequired === true;
     return provider.enabled && provider.secretState !== 'unavailable' && (!needsKey || provider.secretState === 'configured')
-      && wechatCloudRouteSchema.safeParse({ providerId: provider.id, model: provider.model }).success
+      && wechatPinnedCloudRouteSchema.safeParse({ providerId: provider.id, model: provider.model }).success
       && resolveContextDestination({ providerId: provider.id, kind: provider.kind, baseUrl: provider.baseUrl,
         model: provider.model, localExecutionConfirmed: provider.localExecutionConfirmed === true }) === 'remote';
   } catch {
@@ -309,7 +323,7 @@ export class WeChatCloud {
     }
   }
 
-  async #writePrivate(path: string, value: unknown): Promise<void> {
+  async #writePrivate(path: string, value: unknown, active = () => this.controls.active()): Promise<void> {
     const temp = join(this.#runtime, '.wechat-settings-' + randomUUID());
     try {
       const file = await open(temp, 'wx', 0o600);
@@ -317,7 +331,7 @@ export class WeChatCloud {
         await file.writeFile(JSON.stringify(value));
         await file.sync();
       } finally { await file.close(); }
-      if (!this.controls.active()) throw Error('wechat.unavailable');
+      if (!active()) throw Error('wechat.unavailable');
       await rename(temp, path);
     } finally {
       await unlink(temp).catch(() => undefined);
@@ -329,16 +343,69 @@ export class WeChatCloud {
     try {
       const [stored, assistant, rules, bindings] = await Promise.all([this.#read(), this.assistantSettings(), this.#readGroupRules(), this.controls.bindings()]);
       const providers = this.providers.list().filter(remoteProvider).slice(0, 64).map(({ id, name, model }) => ({ id, name, model }));
-      const groups = Object.fromEntries(Object.entries(stored.groups).filter(([id]) => Object.hasOwn(bindings, id)));
+      const groups = Object.fromEntries(Object.entries(stored.groups).filter(([id]) => Object.hasOwn(bindings, id)).map(([id, route]) => [id, selection(route)]));
       const groupRules = Object.fromEntries(Object.entries(rules).filter(([id]) => id !== 'private' && Object.hasOwn(bindings, id)));
       const friendSettings = Object.keys(bindings).some(scope => friendScopeSchema.safeParse(scope).success)
         ? await this.#readFriends().catch(() => null) : null;
-      const friends = friendSettings ? Object.fromEntries(Object.entries(friendSettings.friends).filter(([id]) => Object.hasOwn(bindings, friendKey(id)))) : undefined;
+      const friends = friendSettings ? Object.fromEntries(Object.entries(friendSettings.friends)
+        .filter(([id]) => Object.hasOwn(bindings, friendKey(id))).map(([id, route]) => [id, selection(route)])) : undefined;
       return wechatCloudStateSchema.parse({ available: await this.start(), assistant, groupRules, providers,
-        settings: { private: stored.private, groups, ...(friends === undefined ? {} : { friends }) } });
+        settings: { private: stored.private && selection(stored.private), groups, ...(friends === undefined ? {} : { friends }) } });
     } catch {
       return unavailable();
     }
+  }
+
+  resolveProvider(route: WeChatCloudRoute): ProviderConfig | undefined {
+    const configured = this.providers.list().find(value => value.id === route.providerId);
+    if (!configured) return undefined;
+    const provider = route.model === null || configured.model === route.model ? configured : { ...configured, model: route.model };
+    return remoteProvider(provider) ? provider : undefined;
+  }
+
+  async modelRoutes(): Promise<[string, WeChatCloudRoute][]> {
+    if (!this.#settingsActive()) return [];
+    const [stored, friends] = await Promise.allSettled([this.#read(), this.#readFriends()]);
+    return [
+      ...(stored.status === 'fulfilled' ? scopes(stored.value).map(([scope, route]): [string, WeChatCloudRoute] => [scope, selection(route)]) : []),
+      ...(friends.status === 'fulfilled' ? Object.entries(friends.value.friends)
+        .map(([id, route]): [string, WeChatCloudRoute] => [friendKey(id), selection(route)]) : []),
+    ];
+  }
+
+  #settingsActive = (): boolean => this.controls.settingsActive?.() ?? this.controls.active();
+
+  /** Keep the destination approval anchored to its original model and endpoint. */
+  async followModel(scope: string, expected: WeChatPinnedCloudRoute): Promise<boolean> {
+    if (!this.#settingsActive() || this.#updating) return false;
+    this.#updating = true;
+    const matches = (route: ListenerRoute | null | undefined): route is ListenerRoute =>
+      !!route && !route.follow && route.providerId === expected.providerId && route.model === expected.model;
+    try {
+      if (friendScopeSchema.safeParse(scope).success) {
+        const id = scope.slice('friend:'.length);
+        const stored = await this.#readFriends();
+        const route = stored.friends[id];
+        if (!matches(route) || !stored.destinations[scope]) return false;
+        stored.friends[id] = { ...route, follow: true };
+        await this.#writePrivate(this.#friendSettings, stored, this.#settingsActive);
+      } else {
+        const stored = await this.#read();
+        const route = scope === 'private' ? stored.private : stored.groups[scope];
+        if (!matches(route)) return false;
+        if (scope === 'private') stored.private = { ...route, follow: true };
+        else stored.groups[scope] = { ...route, follow: true };
+        await this.#writePrivate(this.#settings, stored, this.#settingsActive);
+      }
+      return true;
+    } finally {
+      this.#updating = false;
+    }
+  }
+
+  #approvedProvider(route: ListenerRoute, pin: string, binding: string): ProviderConfig | undefined {
+    const provider = this.resolveProvider(selection(route));
+    return provider && destination(provider, route.model, binding) === pin ? provider : undefined;
   }
 
   // An absent selection is local. An invalid cloud pin must never fall back.
@@ -355,9 +422,9 @@ export class WeChatCloud {
       if (pin) throw Error('wechat.unavailable');
       return null;
     }
-    const provider = this.providers.list().find(value => value.id === route.providerId && value.model === route.model && remoteProvider(value));
-    if (!pin || !provider || destination(provider, route.model, binding) !== pin) throw Error('wechat.unavailable');
-    return { provider, routeFingerprint: digest([route.providerId, route.model, pin]) };
+    const provider = pin && this.#approvedProvider(route, pin, binding);
+    if (!pin || !provider) throw Error('wechat.unavailable');
+    return { provider, routeFingerprint: fingerprint(route, pin) };
   }
 
   async configure(input: WeChatCloudSettings): Promise<WeChatCloudState> {
@@ -366,21 +433,26 @@ export class WeChatCloud {
     try {
       await this.#privateRuntime();
       const [bindings, previous] = await Promise.all([this.controls.bindings(), this.#read()]);
-      const providers = this.providers.list();
+      const routes: Settings = empty();
       const pins: [string, string][] = [];
       for (const [scope, route] of scopes(input)) {
         const old = scope === 'private' ? previous.private : previous.groups[scope];
         const previousPin = previous.destinations?.[scope];
-        if (old?.providerId === route.providerId && old.model === route.model && previousPin) {
+        let stored: ListenerRoute;
+        if (old?.providerId === route.providerId && selection(old).model === route.model && previousPin) {
+          stored = old;
           pins.push([scope, previousPin]);
-          continue;
+        } else {
+          const binding = hashSchema.parse(bindings[scope]);
+          const provider = this.resolveProvider(route);
+          if (!provider) throw Error('wechat.modelUnavailable');
+          stored = { providerId: provider.id, model: provider.model, ...(route.model === null ? { follow: true as const } : {}) };
+          pins.push([scope, destination(provider, provider.model, binding)]);
         }
-        const binding = hashSchema.parse(bindings[scope]);
-        const provider = providers.find(value => value.id === route.providerId && value.model === route.model && remoteProvider(value));
-        if (!provider) throw Error('wechat.modelUnavailable');
-        pins.push([scope, destination(provider, route.model, binding)]);
+        if (scope === 'private') routes.private = stored;
+        else routes.groups[scope] = stored;
       }
-      await this.#writePrivate(this.#settings, { ...input, destinations: Object.fromEntries(pins) });
+      await this.#writePrivate(this.#settings, settingsSchema.parse({ ...routes, destinations: Object.fromEntries(pins) }));
       return await this.state();
     } finally {
       this.#updating = false;
@@ -400,10 +472,10 @@ export class WeChatCloud {
       const friends = Object.fromEntries(Object.entries(previous.friends).filter(([id]) => Object.hasOwn(bindings, friendKey(id)) && id !== friendId));
       const destinations = Object.fromEntries(Object.entries(previous.destinations).filter(([key]) => Object.hasOwn(bindings, key) && key !== scope));
       if (route) {
-        const provider = this.providers.list().find(value => value.id === route.providerId && value.model === route.model && remoteProvider(value));
+        const provider = this.resolveProvider(route);
         if (!provider) throw Error('wechat.modelUnavailable');
-        friends[friendId] = route;
-        destinations[scope] = destination(provider, route.model, hashSchema.parse(binding));
+        friends[friendId] = { providerId: provider.id, model: provider.model, ...(route.model === null ? { follow: true } : {}) };
+        destinations[scope] = destination(provider, provider.model, hashSchema.parse(binding));
       }
       if ((await this.controls.bindings())[scope] !== binding) throw Error('wechat.friendNotFound');
       await this.#writePrivate(this.#friendSettings, friendSettingsSchema.parse({ friends, destinations }));
@@ -483,6 +555,7 @@ export class WeChatCloud {
   async #reply(value: unknown, signal: AbortSignal): Promise<object> {
     if (this.#running || !this.controls.active()) return { error: 'cloud_model_unavailable' };
     this.#running = true;
+    let dispatched: { scope: string; route: WeChatPinnedCloudRoute } | undefined;
     try {
       const input = requestSchema.parse(value);
       const contextFor = (destination: 'local' | 'remote'): WeChatReplyContext | null => {
@@ -555,7 +628,7 @@ export class WeChatCloud {
       }
       if (input.localModel !== undefined) throw Error('wechat.unavailable');
       const scope = input.friendId === undefined ? input.groupId ?? 'private' : friendKey(input.friendId);
-      let selected: { route: WeChatCloudRoute | null | undefined; pin: string | undefined };
+      let selected: { route: ListenerRoute | null | undefined; pin: string | undefined };
       if (input.friendId !== undefined) {
         const stored = await this.#readFriends();
         selected = { route: stored.friends[input.friendId], pin: stored.destinations[scope] };
@@ -563,11 +636,12 @@ export class WeChatCloud {
         const stored = await this.#read();
         selected = { route: scope === 'private' ? stored.private : stored.groups[scope], pin: stored.destinations?.[scope] };
       }
-      const { route, pin } = selected;
-      if (!route || !pin) throw Error('wechat.unavailable');
-      const provider = this.providers.list().find(value => value.id === route.providerId && value.model === route.model && remoteProvider(value));
-      if (!provider || destination(provider, route.model, input.binding) !== pin) throw Error('wechat.unavailable');
-      const routeFingerprint = digest([route.providerId, route.model, pin]);
+      const { route: storedRoute, pin } = selected;
+      if (!storedRoute || !pin) throw Error('wechat.unavailable');
+      const provider = this.#approvedProvider(storedRoute, pin, input.binding);
+      if (!provider) throw Error('wechat.unavailable');
+      const route = { providerId: provider.id, model: provider.model };
+      const routeFingerprint = fingerprint(storedRoute, pin);
       const groupAssistant = input.target === 'group' && input.groupId !== null && this.controls.groupAssistant !== undefined;
       const replyBudget = input.target === 'private' ? assistantBudgetMs : groupAssistant ? groupBudgetMs : 85_000;
       const remaining = input.dailyDigests ? input.dailyDigests.expiresAt * 1_000 - Date.now() : replyBudget;
@@ -577,8 +651,8 @@ export class WeChatCloud {
         budget.throwIfAborted();
         if (input.dailyDigests && input.dailyDigests.expiresAt * 1_000 <= Date.now()) throw Error('wechat.unavailable');
         if (!this.controls.active()) throw Error('wechat.unavailable');
-        const latest = this.providers.list().find(value => value.id === route.providerId && value.model === route.model && remoteProvider(value));
-        if (!latest || destination(latest, route.model, input.binding) !== pin) throw Error('wechat.unavailable');
+        const latest = this.#approvedProvider(storedRoute, pin, input.binding);
+        if (!latest || latest.model !== route.model) throw Error('wechat.unavailable');
       };
       const contextKey = (context: WeChatReplyContext | null): string => JSON.stringify(context && { ...context, mood: undefined });
       let expectedContext: string | undefined;
@@ -590,6 +664,7 @@ export class WeChatCloud {
         assertCurrent();
       };
       await authorize();
+      dispatched = { scope, route };
       if (groupAssistant) {
         let reply: WeChatAssistantReply;
         try {
@@ -666,6 +741,7 @@ export class WeChatCloud {
           throw Error('wechat.unavailable');
         assertCurrent();
         if (!complete) return { error: 'reply.invalid' };
+        this.controls.modelSucceeded?.(scope, route);
         const result = visibleReply(text, input, context?.name ?? 'DeskPet');
         if (result) {
           const { reply, sticker, mood } = result;
@@ -674,6 +750,9 @@ export class WeChatCloud {
         }
       }
       return { error: 'reply.invalid' };
+    } catch (error) {
+      if (dispatched) this.controls.modelFailed?.(dispatched.scope, dispatched.route, error);
+      throw error;
     } finally {
       this.#running = false;
     }

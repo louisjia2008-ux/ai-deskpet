@@ -1,5 +1,6 @@
 """Deliver host-generated notices to the verified WeChat owner."""
 
+from contextlib import nullcontext
 from hashlib import sha256
 import hmac
 import json
@@ -103,7 +104,7 @@ def receipt_for_pin(pin):
 
     return database_receipt({"account_id": pin.account_id, "conversation_id": pin.conversation_id})
 
-def _deliver_text(settings, runtime, state_path, request, *, allow_send=None):
+def _deliver_text(settings, runtime, state_path, request, *, allow_send=None, desktop_operation=None, window_failure="retry"):
     from wechat_listener import owner_record, private_binding_key, verify_owner
 
     def binding_matches():
@@ -122,7 +123,8 @@ def _deliver_text(settings, runtime, state_path, request, *, allow_send=None):
     digest = sha256((prefix + text).encode("utf-8")).hexdigest()
     attempted = False
     try:
-        with ui.vm_operation(wait=30), WeChatState(state_path) as state, TemporaryDirectory(prefix="deskpet-wechat-notice-") as tmp:
+        operation = desktop_operation if desktop_operation is not None else ui.vm_operation(wait=30)
+        with operation, WeChatState(state_path) as state, TemporaryDirectory(prefix="deskpet-wechat-notice-") as tmp:
             ledger = OwnerDeliveryLedger(state.db)
             previous = ledger.previous(delivery_id, binding, digest)
             if previous is not None:
@@ -135,7 +137,10 @@ def _deliver_text(settings, runtime, state_path, request, *, allow_send=None):
             if pin is None and (request.get("voice") is not True or binding in DbIntake.pins(state)):
                 return "binding_invalid"
             path = Path(tmp) / "screen.png"
-            ui.open_target(settings, path, "private")
+            try:
+                ui.open_target(settings, path, "private")
+            except (ui.TestError, OSError, ValueError, subprocess.SubprocessError):
+                return window_failure
             verify_owner(settings, path, runtime)
 
             def before_send():
@@ -275,6 +280,12 @@ def owner_deliver(settings, runtime, state_path, request):
         return "uncertain" if attempted else "retry"
 
 
+def deliver_moment_preview_text(settings, runtime, state_path, request):
+    """Send the preview text under the caller's existing desktop reservation."""
+    return _deliver_text(settings, runtime, state_path, request, desktop_operation=nullcontext(),
+                         window_failure="window_error")
+
+
 def owner_delivery_control(settings, runtime, state_path):
     raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
     try:
@@ -296,4 +307,5 @@ def deliver_watchdog_notice(settings, runtime, state_path, delivery_id, text, al
     except (OSError, KeyError, ValueError, ui.TestError):
         return 'binding_invalid'
     return _deliver_text(settings, runtime, state_path,
-                         {'id': delivery_id, 'binding': binding, 'text': text, 'recordTranscript': False}, allow_send=allow_send)
+                         {'id': delivery_id, 'binding': binding, 'text': text, 'recordTranscript': False},
+                         allow_send=allow_send, desktop_operation=ui.vm_operation())

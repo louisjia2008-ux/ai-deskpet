@@ -12,6 +12,7 @@ import { defaultProactiveRecord, proactiveRecordSchema } from '../../shared/proa
 import { speakingStyleSchema } from '../../shared/conversation-import';
 import { contextPrivacySchema, contextScopeSchema } from '../../shared/schemas';
 import { MAX_OUTPUT_TOKENS } from '../../shared/output-limits';
+import { modelBindingFailureSchema, modelBindingSelectionSchema } from '../../shared/model-bindings';
 import { chatImageAttachmentSchema, defaultMediaLibrary, mediaLibrarySchema } from '../../shared/media';
 import { defaultWeChatOwnerCommands, wechatOwnerCommandsSchema } from '../channels/wechat/wechat-owner-command-schema';
 
@@ -147,6 +148,7 @@ export const chatSessionSchema = z
     deletedAt: timestamp.nullable().optional(),
     historyPrivacy: contextPrivacySchema.optional(),
     knowledgeLocalOnly: z.literal(true).optional(),
+    modelSelection: z.object({ providerId: id, model: z.string().trim().min(1).max(240).nullable() }).strict().optional(),
   })
   .strict();
 export const chatMessageSchema = z
@@ -297,6 +299,7 @@ export const delegationBatchSchema = z.object({
     checks: z.array(checkResultSchema).max(10), reservation: delegationReservationSchema }).strict()).min(1).max(3),
 }).strict();
 export const delegationIntentSchema = z.object({ sessionId: id, version: z.number().int().positive(), currentBatchId: id.nullable(), draftGoal: z.string().max(4000),
+  childModelSelections: z.array(chatSessionSchema.shape.modelSelection.unwrap()).max(3).optional(),
   operations: z.array(z.object({ operationId: id, digest: sha256, version: z.number().int().positive(), goal: z.string().max(4000) }).strict()).max(1000) }).strict();
 
 export const consolidationSourceSchema = z.object({ id, revision: z.number().int().positive(), fingerprint: sha256, text: z.string().max(32000), tags: z.array(z.string().max(64)).max(32),
@@ -372,6 +375,8 @@ export const persistentStateSchema = z
     delegationIntents: z.array(delegationIntentSchema).default([]),
     backgroundJobs: z.array(backgroundJobSchema).max(1000).default([]),
     providerCredentialRefs: z.record(id, id).default({}),
+    modelFollowMigration: z.union([z.literal(true), z.array(modelBindingSelectionSchema)]).optional(),
+    modelBindingFailures: z.array(modelBindingFailureSchema).max(200).optional(),
     chatSessions: z.array(chatSessionSchema),
     chatMessages: z.array(chatMessageSchema),
     tasks: z.array(taskSchema),

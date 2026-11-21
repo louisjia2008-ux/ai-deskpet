@@ -340,6 +340,8 @@ class FriendReplyLane:
                 except ReplyYielded:
                     # The local helper has been shut down before the owner can use the model.
                     return None if model is not None and model.process.poll() is not None else model
+                except ui.OwnerOperationPending:
+                    self._status[key] = 'checking'
                 except FRIEND_ERRORS:
                     if model is not None and model.process.poll() is not None:
                         model = None

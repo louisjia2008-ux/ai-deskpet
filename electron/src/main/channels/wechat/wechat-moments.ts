@@ -1,3 +1,4 @@
+import { providerFailureCode } from '../../../shared/provider-errors';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
@@ -22,7 +23,17 @@ const stateSchema = z.strictObject({
 });
 export type WeChatMomentsState = z.infer<typeof stateSchema>;
 export type WeChatMomentDraft = z.infer<typeof draftSchema>;
-type PostOutcome = 'posted' | 'uncertain' | 'retry' | 'busy' | 'paused' | 'conflict' | 'invalid_payload';
+export const WECHAT_MOMENT_WINDOW_FAILURES = ['busy', 'paused', 'window_error'] as const;
+type WindowFailure = typeof WECHAT_MOMENT_WINDOW_FAILURES[number];
+export type MomentPostOutcome = 'posted' | 'uncertain' | 'retry' | 'conflict' | 'invalid_payload' | WindowFailure;
+export type MomentPreviewOutcome = 'sent' | 'retry' | 'uncertain' | WindowFailure;
+const windowFailures = {
+  busy: { code: 'wechat.momentWindowBusy', text: '微信窗口还被其他操作占着。' },
+  paused: { code: 'wechat.momentListenerPaused', text: '微信监听已暂停。' },
+  window_error: { code: 'wechat.momentWindowError', text: '打开微信窗口时出了错。' },
+} as const;
+const windowFailure = (outcome: MomentPostOutcome | MomentPreviewOutcome) =>
+  WECHAT_MOMENT_WINDOW_FAILURES.find(reason => reason === outcome);
 
 export interface WeChatMomentsHost {
   read(): Promise<string | null>;
@@ -36,8 +47,8 @@ export interface WeChatMomentsHost {
   rewrite?(input: { text: string; imageIdea: string; instruction: string }): Promise<{ text: string; imageIdea: string }>;
   draw(imageIdea: string): Promise<{ assetId: string }>;
   image(assetId: string): Promise<{ full: Buffer; preview: Buffer }>;
-  preview(input: { id: string; text: string; image: Buffer }): Promise<'sent' | 'retry' | 'uncertain'>;
-  post(input: { id: string; text: string; visibility: 'all' | 'private'; images: Buffer[] }): Promise<PostOutcome>;
+  preview(input: { id: string; text: string; image: Buffer }): Promise<MomentPreviewOutcome>;
+  post(input: { id: string; text: string; visibility: 'all' | 'private'; images: Buffer[] }): Promise<MomentPostOutcome>;
   notify(text: string): Promise<void>;
   record(text: string): Promise<void>;
   wait(ms: number): Promise<void>;
@@ -66,7 +77,7 @@ const phrases = {
   preview: ['我想发这条朋友圈，配图也挑好了，帮我看看好不好？', '刚想了条朋友圈，想先给你看看呀。', '这条朋友圈我挺喜欢的，你看这样行不行？'],
   posting: ['好呀，我去发，发好了回来告诉你。', '嗯，这就去发，等我一下呀。', '那我去发啦，发完跟你说。'],
   posted: ['发好啦，朋友圈里能看到了。', '朋友圈发出去啦，来跟你报个信。', '好啦，已经发到朋友圈了。'],
-  failed: ['这次没发出去，微信窗口一直忙或暂停；这份草稿作废了，想发的话我们重新来。', '没能发成呀，微信窗口一直忙或暂停，草稿已经作废了。'],
+  failed: ['这次没发出去，草稿已经作废。想发的话我们重新来。', '没能发成呀，草稿已经作废了。'],
   uncertain: ['我没能确认，可能已经发了。请在手机上看一眼，别重复发呀。', '这次可能已经发出去了，但我没能确认。请在手机上看一眼，先别重复发。'],
   discard: ['好呀，那这条就不发了。', '嗯，听你的，这条不发啦。'],
 } as const;
@@ -110,10 +121,10 @@ export class WeChatMoments {
     return choices[index]!;
   }
 
-  async #preview(state: WeChatMomentsState, draft: WeChatMomentDraft): Promise<'sent' | 'retry' | 'uncertain'> {
+  async #preview(state: WeChatMomentsState, draft: WeChatMomentDraft): Promise<MomentPreviewOutcome> {
     let intro = '';
     try { intro = momentText(await this.host.previewIntro?.(draft) ?? '').replace(/\n/gu, ' '); }
-    catch { this.failed('wechat.momentPreviewFallback'); }
+    catch (error) { this.failed(providerFailureCode(error, 'wechat.momentPreviewFallback')); }
     if (!intro || [...intro].length > 100) intro = this.#phrase(state, 'preview');
     // The original draft is not silently truncated. The listener's text path accepts 500 printable characters.
     const notice = `${intro} ${draft.text.replace(/\n+/gu, ' / ')}${state.hintsShown ? '' : ` ${hint}`}`;
@@ -125,6 +136,9 @@ export class WeChatMoments {
       state.hintsShown = true;
       draft.previewedAt = this.host.now();
       await this.host.write(state);
+    } else {
+      const reason = windowFailure(sent);
+      if (reason) this.failed(windowFailures[reason].code);
     }
     return sent;
   }
@@ -135,7 +149,7 @@ export class WeChatMoments {
   }
 
   /** Draws the picture for a draft and sends the owner its preview. */
-  async propose(input: { text: string; imageIdea: string }): Promise<{ status: 'preview_sent' | 'preview_unconfirmed' | 'busy' | 'posting'; id: string | null }> {
+  async propose(input: { text: string; imageIdea: string }): Promise<{ status: 'preview_sent' | 'preview_unconfirmed' | 'busy' | 'posting'; id: string | null; reason?: string }> {
     const text = momentText(input.text), imageIdea = momentText(input.imageIdea).replace(/\n/gu, ' ');
     if (!text || [...text].length > WECHAT_MOMENT_TEXT_LIMIT || !imageIdea || [...imageIdea].length > 300) throw new Error('wechat.momentInvalid');
     const current = await this.state();
@@ -151,7 +165,9 @@ export class WeChatMoments {
       await this.host.write({ ...state, draft });
       const sent = await this.#preview({ ...state, draft }, draft);
       await this.host.record(`（朋友圈草稿）${text}\n配图：${imageIdea}`);
-      return { status: sent === 'sent' ? 'preview_sent' as const : 'preview_unconfirmed' as const, id };
+      const reason = windowFailure(sent);
+      return { status: sent === 'sent' ? 'preview_sent' as const : 'preview_unconfirmed' as const, id,
+        ...(reason ? { reason: windowFailures[reason].text } : {}) };
     })();
     this.#busy = work;
     try { return await work; } finally { this.#busy = null; }
@@ -194,8 +210,13 @@ export class WeChatMoments {
         state.draft = next;
         const sent = await this.#preview(state, next);
         await this.host.record(`（修改后的朋友圈草稿）${value}`);
+        const reason = windowFailure(sent);
+        if (reason) return `改好啦。${windowFailures[reason].text}新的预览还没确认完整送到，我先不发。`;
         return sent === 'sent' ? '改好啦，新的草稿给你看了，等你点头再发。' : '改好了，但新的预览没确认送达，先别发，等我再给你看。';
-      } catch { this.failed('wechat.momentRewriteFailed'); return '这次没改好，旧草稿还留着，我没有发布。我们再试一下好不好？'; }
+      } catch (error) {
+        this.failed(providerFailureCode(error, 'wechat.momentRewriteFailed'));
+        return '这次没改好，旧草稿还留着，我没有发布。我们再试一下好不好？';
+      }
     }
     if (answer === 'discard') {
       draft.status = 'discarded';
@@ -232,6 +253,8 @@ export class WeChatMoments {
     state.draft = next;
     try {
       const sent = await this.#preview(state, next);
+      const reason = windowFailure(sent);
+      if (reason) return `${windowFailures[reason].text}预览还没确认完整送到，我先不发这条。`;
       return sent === 'sent' ? '刚才那份预览我没确认送到，配图可能也没发出去。我重新发了一遍，你看完图再回我「发」。'
         : '预览还是没能确认送到，我先不发。你在手机上看看收到图没有，等我再试一次。';
     } catch {
@@ -243,25 +266,31 @@ export class WeChatMoments {
   async #publish(id: string): Promise<void> {
     // The listener is still sending the acknowledgement; give it the desktop first.
     await this.host.wait(15_000);
-    let outcome: PostOutcome = 'retry';
+    let outcome: MomentPostOutcome = 'retry';
     for (let attempt = 0; attempt < 12; attempt++) {
       const state = await this.state();
       const draft = state.draft;
       if (!draft || draft.id !== id || draft.status !== 'posting') return;
       const { full } = await this.host.image(draft.imageAssetId);
       outcome = await this.host.post({ id, text: draft.text, visibility: draft.visibility ?? 'all', images: [full] }).catch(() => 'retry' as const);
-      if (!['retry', 'busy', 'paused'].includes(outcome)) break;
+      // The worker already waited for the window. Repeating a lock timeout
+      // here would make the owner wait one full lock budget for each retry.
+      if (outcome !== 'retry' && outcome !== 'paused' && outcome !== 'window_error') break;
       await this.host.wait(20_000);
     }
     const state = await this.state();
     const draft = state.draft;
     if (!draft || draft.id !== id) return;
-    draft.status = outcome === 'posted' ? 'posted' : ['retry', 'busy', 'paused'].includes(outcome) ? 'failed' : 'uncertain';
-    if (draft.status === 'posted') state.posted = [...state.posted, { id, text: draft.text, at: this.host.now() }].slice(-30);
-    this.#lastError = draft.status === 'posted' ? null : `wechat.moment${draft.status === 'failed' ? 'Failed' : 'Uncertain'}`;
-    if (draft.status === 'posted') this.#lastSuccessAt = new Date(this.host.now()).toISOString();
-    else this.#lastFailureAt = new Date(this.host.now()).toISOString();
-    const notice = this.#phrase(state, draft.status);
+    const reason = windowFailure(outcome);
+    draft.status = outcome === 'posted' ? 'posted' : reason || outcome === 'retry' ? 'failed' : 'uncertain';
+    if (draft.status === 'posted') {
+      state.posted = [...state.posted, { id, text: draft.text, at: this.host.now() }].slice(-30);
+      this.#lastError = null;
+      this.#lastSuccessAt = new Date(this.host.now()).toISOString();
+    } else {
+      this.failed(reason ? windowFailures[reason].code : draft.status === 'failed' ? 'wechat.momentFailed' : 'wechat.momentUncertain');
+    }
+    const notice = reason ? `${windowFailures[reason].text}这次没发出去，草稿已经作废了。` : this.#phrase(state, draft.status);
     await this.host.write(state);
     await this.host.notify(notice);
   }

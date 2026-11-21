@@ -137,7 +137,7 @@ export class QqChannelService {
       online: () => this.#connection === 'online' && !this.#revoked, flush: () => this.#flush() });
   }
 
-  async initialize(): Promise<void> {
+  async initialize({ deferConnection = false } = {}): Promise<void> {
     await this.#store.initialize();
     await this.#store.update(draft => {
       if (draft.profileId !== this.#deps.profileId()) {
@@ -174,9 +174,28 @@ export class QqChannelService {
         for (const group of draft.groups) if (legacyGroups.some(legacy => legacy.id === group.id)) group.titleMigrated = true;
       });
     }
+    if (!deferConnection) await this.startConnection();
+  }
+
+  async startConnection(): Promise<void> {
     this.#revoked = false;
     await this.#syncConnection(this.#generation);
     void this.#drainPrivateQueue().catch(() => undefined);
+  }
+
+  async followModel(expected: { providerId: string; model: string }, preserveQueued: boolean): Promise<boolean> {
+    const changed = await this.#store.update(draft => {
+      if (draft.config.providerId !== expected.providerId || draft.config.model !== expected.model) return false;
+      draft.config.model = null;
+      if (preserveQueued) {
+        for (const item of draft.inboundQueue) {
+          if ((item.status === 'queued' || item.status === 'paused') && item.providerId === expected.providerId && item.model === expected.model) item.model = null;
+        }
+      }
+      return true;
+    });
+    if (changed) this.#changed();
+    return changed;
   }
 
   status(): QqChannelStatus {
@@ -351,6 +370,7 @@ export class QqChannelService {
         // Toggling the channel preserves undispatched work in a paused state.
         // A different model, endpoint, transport or other policy revokes it.
         this.#invalidate(draft, Object.keys(patch).every(key => key === 'enabled'));
+        if (patch.providerId !== undefined && patch.providerId !== draft.config.providerId && patch.model === undefined) draft.config.model = null;
         Object.assign(draft.config, Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)));
         // A different bot or transport is a different identity space for senderId.
         const before = this.#store.snapshot().config;
@@ -366,7 +386,7 @@ export class QqChannelService {
 
   /** The owner's own switch from QQ. Unlike configure it keeps the connection and the
    * pairing; a message already queued for the earlier model is declined at its turn. */
-  async #selectModel(authority: QqAuthority, providerId: string, model: string): Promise<void> {
+  async #selectModel(authority: QqAuthority, providerId: string, model: string | null): Promise<void> {
     await this.#store.update(draft => {
       this.assertAuthorized(authority);
       draft.config.providerId = providerId; draft.config.model = model;

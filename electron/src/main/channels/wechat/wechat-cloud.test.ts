@@ -6,6 +6,7 @@ import { createConnection } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ProviderConfig } from '../../../shared';
+import { providerFailureCode } from '../../../shared/provider-errors';
 import { defaultPersona, personaPrompt } from '../../../shared/persona';
 import type { ProviderAdapter, ProviderChatRequest, ProviderStreamEvent } from '../../providers/types';
 import { providerBindingFingerprint } from '../../providers/request-budget';
@@ -66,7 +67,7 @@ function send(socketPath: string, value: unknown): Promise<unknown> {
   });
 }
 
-async function fixture(extensions: Partial<Pick<Controls, 'readTool' | 'selectSticker' | 'article' | 'ownerCommand' | 'assistant' | 'groupAssistant' | 'context' | 'friendName' | 'knowledgePolicyToken' | 'completed' | 'mood'>> = {},
+async function fixture(extensions: Partial<Pick<Controls, 'readTool' | 'selectSticker' | 'article' | 'ownerCommand' | 'assistant' | 'groupAssistant' | 'context' | 'friendName' | 'knowledgePolicyToken' | 'completed' | 'mood' | 'modelFailed' | 'modelSucceeded'>> = {},
   includeFriends = false, transport?: (provider: ProviderConfig) => ProviderAdapter) {
   const root = await mkdtemp('/private/tmp/wechat-cloud-');
   const runtime = join(root, 'listener');
@@ -97,7 +98,7 @@ async function fixture(extensions: Partial<Pick<Controls, 'readTool' | 'selectSt
       if (input.contextOnly && !saved) return 'local';
       const pin = value?.destinations[scope];
       if (!saved || !pin) throw Error('wechat.unavailable');
-      return digest([saved.providerId, saved.model, pin]);
+      return digest([saved.providerId, saved.model, pin, ...(saved.follow ? [true] : [])]);
     }
     if (input.readTool) return 'read-tool';
     if (input.stickerSelection) return 'sticker-selection';
@@ -108,7 +109,7 @@ async function fixture(extensions: Partial<Pick<Controls, 'readTool' | 'selectSt
     if (input.contextOnly && input.localModel === local.model && !saved) return 'local';
     const pin = state?.destinations?.[scope];
     if (!saved || !pin) throw Error('wechat.unavailable');
-    return digest([saved.providerId, saved.model, pin]);
+    return digest([saved.providerId, saved.model, pin, ...(saved.follow ? [true] : [])]);
   });
   const streamChat: ProviderAdapter['streamChat'] = async function* (input, signal, options) {
     await options?.validateBeforeSend?.();
@@ -132,7 +133,8 @@ async function fixture(extensions: Partial<Pick<Controls, 'readTool' | 'selectSt
   return { bridge, socket, settingsPath, friendSettingsPath, route, remote, inputs, captureBinding, authorize,
     removeBinding: (scope: string) => { delete bindings[scope]; },
     pause: (value: boolean) => { paused = value; },
-    replaceEndpoint: () => { current = { ...remote, baseUrl: 'https://changed.example.test/v1' }; },
+    changeDefault: (model: string) => { current = { ...current, model }; },
+    replaceEndpoint: () => { current = { ...current, baseUrl: 'https://changed.example.test/v1' }; },
     changeEvents: (value: ProviderStreamEvent[]) => { events = value; },
     afterDispatch: (callback: () => void) => { afterDispatch = callback; },
     rotateCredential: () => { currentCredential = 'rotated-fixture-credential'; },
@@ -656,6 +658,66 @@ it('keeps endpoint consent pinned until the old route is removed and explicitly 
   expect(JSON.parse(await readFile(f.settingsPath, 'utf8')).destinations.private).not.toBe(oldPin);
   expect(await send(f.socket, request())).toMatchObject({ reply: '你好！ 今天怎么样？' });
   expect(f.captureBinding).toHaveBeenCalledOnce();
+});
+
+it('follows the default for private, group and friend cloud replies while repairing a distinct unavailable pin', async () => {
+  const models: string[] = [];
+  const loopback = createServer((incoming, response) => {
+    const chunks: Buffer[] = [];
+    incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
+    incoming.on('end', () => {
+      const { model } = JSON.parse(Buffer.concat(chunks).toString()) as { model: string };
+      models.push(model);
+      if (model === 'gpt-6.1-sol') {
+        response.writeHead(404, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ error: { code: 'model_not_found', message: 'private upstream detail' } }));
+      } else {
+        response.writeHead(200, { 'content-type': 'text/event-stream' }).end(
+          'data: {"choices":[{"index":0,"delta":{"content":"收到啦。"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => { loopback.once('error', reject); loopback.listen(0, '127.0.0.1', resolve); });
+  cleanup.push(() => new Promise<void>((resolve, reject) => loopback.close(error => error ? reject(error) : resolve())));
+  const address = loopback.address();
+  if (!address || typeof address === 'string') throw Error('Missing loopback port');
+  const failed = vi.fn((...args: Parameters<NonNullable<Controls['modelFailed']>>) => ({ scope: args[0], route: args[1],
+    code: providerFailureCode(args[2], 'provider.failed') }));
+  const succeeded = vi.fn();
+  const f = await fixture({ modelFailed: failed, modelSucceeded: succeeded }, true,
+    config => new OpenAICompatibleAdapter({ config, apiKey: 'synthetic-loopback-fixture' }, (input, init) => {
+      const url = new URL(String(input));
+      if (url.origin !== new URL(endpoint).origin) throw Error('Unexpected model endpoint in synthetic fixture');
+      return fetch(new URL(url.pathname, `http://127.0.0.1:${address.port}`), init);
+    }));
+  const follow = { providerId: f.route.providerId, model: null };
+  const old = { providerId: f.route.providerId, model: 'gpt-6.1-sol' };
+  await f.bridge.configure({ private: f.route, groups: { [groupId]: follow } });
+  await f.bridge.configureFriend({ friendId, route: follow });
+  const originalPin = JSON.parse(await readFile(f.settingsPath, 'utf8')).destinations.private;
+  expect(await f.bridge.followModel('private', f.route)).toBe(true);
+  const converted = await readFile(f.settingsPath, 'utf8');
+  expect(JSON.parse(converted)).toMatchObject({ private: { ...f.route, follow: true }, groups: { [groupId]: { ...f.route, follow: true } },
+    destinations: { private: originalPin } });
+  expect(await f.bridge.followModel('private', f.route)).toBe(false);
+  expect(await readFile(f.settingsPath, 'utf8')).toBe(converted);
+  f.changeDefault('gpt-6.2-sol');
+  expect(await f.bridge.state()).toMatchObject({ settings: { private: follow, groups: { [groupId]: follow }, friends: { [friendId]: follow } } });
+  const group = request({ target: 'group', groupId, binding: groupBinding });
+  const friend = request({ target: 'friend', friendId, binding: friendBinding, stickers: false });
+  expect(await send(f.socket, request())).toMatchObject({ reply: '收到啦。' });
+  expect(await send(f.socket, friend)).toMatchObject({ reply: '收到啦。' });
+  expect(await send(f.socket, group)).toMatchObject({ reply: '收到啦。' });
+  await f.bridge.configure({ private: follow, groups: { [groupId]: old } });
+  expect(await send(f.socket, group)).toEqual(failure);
+  expect(failed).toHaveReturnedWith({ scope: groupId, route: old, code: 'provider.modelUnavailable' });
+  expect(await f.bridge.followModel(groupId, old)).toBe(true);
+  expect(await send(f.socket, group)).toMatchObject({ reply: '收到啦。' });
+  expect(succeeded).toHaveBeenCalledWith(groupId, { ...old, model: 'gpt-6.2-sol' });
+  expect(models).toEqual(['gpt-6.2-sol', 'gpt-6.2-sol', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.2-sol']);
+  f.replaceEndpoint();
+  expect(await send(f.socket, group)).toEqual(failure);
+  expect(models).toHaveLength(5);
 });
 
 it('checks channel authorization again before returning a generated result', async () => {

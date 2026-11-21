@@ -51,7 +51,9 @@ test('secondary-account OneBot pairing, replies and stop run over a real local W
   const texts = () => sent.map(item => item.message.map(segment => segment.data.text).join(''));
   const exam = '我明天要考试';
   const examSummary = '主人明天要考试';
-  const wires: Array<{ messages: Array<{ role: string; content: string }>; tools?: unknown[] }> = [];
+  const unavailableModel = 'gpt-6.1-sol', nextDefault = 'gpt-6.2-sol';
+  const wires: Array<{ model: string; messages: Array<{ role: string; content: string }>;
+    tools?: Array<{ function: { name: string; description: string } }> }> = [];
   const model = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -59,8 +61,29 @@ test('secondary-account OneBot pairing, replies and stop run over a real local W
       if (request.url?.endsWith('/models')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"data":[{"id":"qq-fixture-model"}]}'); return; }
       const body = JSON.parse(Buffer.concat(chunks).toString()) as typeof wires[number];
       wires.push(body);
+      if (body.model === unavailableModel) {
+        response.writeHead(404, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { code: 'model_not_found', message: 'Synthetic upstream details must stay local' } }));
+        return;
+      }
       const input = body.messages.filter(message => message.role === 'user').at(-1)?.content;
-      const content = body.messages[0]?.content.startsWith('Summarize the owner') ? JSON.stringify({ summary: examSummary })
+      const report = input?.match(/Save the verified report to (research\/[a-f0-9-]+\/report\.md)\./u)?.[1];
+      if (report && body.model === nextDefault && !body.messages.some(message => message.role === 'tool')) {
+        const write = body.tools?.find(tool => tool.function.description.startsWith('Write workspace file.'));
+        if (write) {
+          response.writeHead(200, { 'content-type': 'text/event-stream' });
+          const toolCall = { index: 0, id: 'write-synthetic-report', type: 'function',
+            function: { name: write.function.name, arguments: JSON.stringify({ path: report, content: '# Synthetic model follow report' }) } };
+          response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [toolCall] }, finish_reason: 'tool_calls' }] })}
+
+data: [DONE]
+
+`);
+          return;
+        }
+      }
+      const content = report && body.model === nextDefault ? 'The synthetic report was written.'
+        : body.messages[0]?.content.startsWith('Summarize the owner') ? JSON.stringify({ summary: examSummary })
         : input === exam ? '[mood:happy] 加油。' : reply;
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
@@ -170,6 +193,86 @@ test('secondary-account OneBot pairing, replies and stop run over a real local W
     await testInfo.attach('same-self-wire', { body: JSON.stringify({ desktop: desktopWire, qqPrivate: qqPrivateWire, qqGroup: wires[before] }), contentType: 'application/json' });
     expect((wires[before] as { tools?: unknown[] }).tools ?? []).toHaveLength(4);
     expect((wires[before] as { messages: Array<{ content: string }> }).messages.some(message => message.content.includes('hello before desktop confirmation'))).toBe(false);
+
+    await expect.poll(state).toMatchObject({ providerId: provider.id, model: null });
+    expect(qqPrivateWire?.model).toBe(provider.model);
+    const researchGoal = 'Verify the synthetic default model selection';
+    const researchRequests = (start: number, goal = researchGoal) => wires.slice(start).filter(wire =>
+      wire.messages.some(message => message.role === 'user' && message.content.includes(goal))).map(wire => wire.model);
+    const submitResearch = (goal: string, selection: string | null) => page.evaluate(({ id, goal, selection }) =>
+      window.deskpet.research!.submit({ operationId: crypto.randomUUID(), goal, material: '', providerId: id, model: selection,
+        allowRemote: true, maxMinutes: 2, maxToolCalls: 4 }), { id: provider.id, goal, selection });
+    const waitResearch = (id: string, errorCode: string) => expect.poll(() =>
+      page.evaluate(taskId => window.deskpet.research!.get(taskId), id), { timeout: 20_000 }).toMatchObject({ status: 'failed', errorCode });
+    const waitCompletedResearch = (task: { id: string; reportPath: string }) => expect.poll(() =>
+      page.evaluate(taskId => window.deskpet.research!.get(taskId), task.id), { timeout: 25_000 }).toMatchObject({
+        status: 'completed', errorCode: null, artifacts: expect.arrayContaining([expect.objectContaining({ path: task.reportPath })]),
+      });
+    await page.evaluate(() => window.deskpet.permissions.request({ capabilityId: 'workspace.write', duration: 'always' }));
+    const researchStart = wires.length;
+    const research = await submitResearch(researchGoal, null);
+    // The fake writes no report. The incomplete round can be explicitly resumed.
+    await waitResearch(research.id, 'research.incomplete');
+    expect(researchRequests(researchStart)).toContain(provider.model);
+
+    const updated = await page.evaluate(({ id, model }) => window.deskpet.providers.setModel(id, model), { id: provider.id, model: nextDefault });
+    expect(updated.modelChange?.followers).toBeGreaterThanOrEqual(2);
+    const resumeStart = wires.length;
+    await page.evaluate(id => window.deskpet.research!.resume({ id, operationId: crypto.randomUUID() }), research.id);
+    await waitCompletedResearch(research);
+    expect(researchRequests(resumeStart)).toContain(nextDefault);
+    expect(researchRequests(resumeStart).every(model => model === nextDefault)).toBe(true);
+
+    const privateModel = (text: string) => wires.find(wire => wire.messages.some(message => message.role === 'user' && message.content === text))?.model;
+    const followText = 'Exercise QQ following the new default';
+    const beforeFollowReply = sent.length;
+    event(followText);
+    await expect.poll(() => privateModel(followText)).toBe(nextDefault);
+    await expect.poll(() => sent.length).toBe(beforeFollowReply + paragraphs.length);
+
+    await page.evaluate(model => window.deskpet.qq.configure({ model }), unavailableModel);
+    await expect.poll(state).toMatchObject({ connection: 'online', bound: true, model: unavailableModel });
+    const oldText = 'Exercise QQ model unavailable';
+    const beforeFailureReply = sent.length;
+    event(oldText);
+    await expect.poll(() => privateModel(oldText)).toBe(unavailableModel);
+    await expect.poll(() => texts().slice(beforeFailureReply)).toEqual(['这一轮没有完成，请在桌面查看错误详情后重试。']);
+
+    const pinnedResearchGoal = 'Verify synthetic research model repair';
+    const pinnedResearch = await submitResearch(pinnedResearchGoal, unavailableModel);
+    await waitResearch(pinnedResearch.id, 'provider.modelUnavailable');
+    const issues = () => page.evaluate(async () => (await window.deskpet.attention.doctor!()).modelIssues ?? []);
+    const issueIds = ['qq:channel', `research:${pinnedResearch.id}`];
+    await expect.poll(async () => (await issues()).filter(issue => issueIds.includes(issue.id))).toEqual(expect.arrayContaining(
+      issueIds.map(id => expect.objectContaining({ id, providerId: provider.id, model: unavailableModel, followModel: nextDefault, code: 'provider.pinnedModelUnavailable' })),
+    ));
+
+    for (const id of issueIds) {
+      await page.evaluate(input => window.deskpet.attention.followDefaultModel!(input), { id, providerId: provider.id, model: unavailableModel });
+    }
+    await expect.poll(async () => (await issues()).filter(issue => issueIds.includes(issue.id))).toEqual([]);
+    await expect.poll(state).toMatchObject({ model: null, bound: true });
+    const repairedText = 'Exercise the repaired QQ route';
+    const beforeRepairReply = sent.length;
+    event(repairedText);
+    await expect.poll(() => privateModel(repairedText)).toBe(nextDefault);
+    await expect.poll(() => texts().slice(beforeRepairReply)).toEqual(paragraphs);
+
+    const repairedResearchStart = wires.length;
+    await page.evaluate(id => window.deskpet.research!.resume({ id, operationId: crypto.randomUUID() }), pinnedResearch.id);
+    await waitCompletedResearch(pinnedResearch);
+    expect(researchRequests(repairedResearchStart, pinnedResearchGoal)).toContain(nextDefault);
+    const evidence = {
+      qq: { original: qqPrivateWire?.model, following: privateModel(followText), unavailable: privateModel(oldText), repaired: privateModel(repairedText), genericFailureReply: true },
+      research: { original: researchRequests(researchStart)[0], following: researchRequests(resumeStart)[0], unavailable: unavailableModel,
+        repaired: researchRequests(repairedResearchStart, pinnedResearchGoal)[0], reportWritten: true },
+      doctor: { issuesBeforeRepair: 2, issuesAfterRepair: 0 },
+    };
+    await testInfo.attach('model-follow-wire', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' });
+    if (process.env.DESKPET_QQ_EVIDENCE) {
+      await mkdir(process.env.DESKPET_QQ_EVIDENCE, { recursive: true });
+      await writeFile(join(process.env.DESKPET_QQ_EVIDENCE, 'model-follow-wire.json'), JSON.stringify(evidence, null, 2), { mode: 0o600 });
+    }
 
     await page.locator('nav').getByRole('button', { name: 'Memory', exact: true }).click();
     const memory = page.getByRole('region', { name: 'Recent conversations with you' });

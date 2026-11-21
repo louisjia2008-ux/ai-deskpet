@@ -13,11 +13,13 @@ export const modelPriceLabel = (model: ProviderModel | undefined, locale: string
   return `${price.currency} ${text('provider.priceInput')} ${number(price.inputPerMillion, unknown)} / ${text('provider.priceOutput')} ${number(price.outputPerMillion, unknown)} · ${text('provider.priceUnit')}`;
 };
 
-export const ModelSelect = ({ models, value, onChange, label, locale = 'en', disabled = false, loading = false, failed = false,
+export const ModelSelect = ({ models, value, onChange, label, locale = 'en', disabled = false, loading = false, failed = false, followDefault, defaultModel,
   onRefresh, refreshLabel, manualLabel, manualIdLabel, manualUseLabel, catalogKey = '', showNotice = true, failureMessage }: {
   models: ProviderModel[]; value: string; onChange(value: string): void; label: string; locale?: string; disabled?: boolean; loading?: boolean; failed?: boolean;
   onRefresh?(): void; refreshLabel?: string; manualLabel?: string; manualIdLabel?: string; manualUseLabel?: string; catalogKey?: string; showNotice?: boolean;
   failureMessage?: string | undefined;
+  followDefault?: string | undefined;
+  defaultModel?: string | undefined;
 }): JSX.Element => {
   const text = providerSetupText(locale);
   const [search, setSearch] = useState(''), [manual, setManual] = useState('');
@@ -28,7 +30,8 @@ export const ModelSelect = ({ models, value, onChange, label, locale = 'en', dis
     if (value && !seen.has(value)) seen.set(value, { id: value, displayName: value, contextWindow: null, supportsTools: false });
     return [...seen.values()];
   }, [models, value]);
-  const selected = choices.find((model) => model.id === value);
+  const displayedModel = value || defaultModel;
+  const selected = choices.find((model) => model.id === displayedModel);
   const needle = search.toLocaleLowerCase().trim();
   const filtered = choices.filter((model) => model.id === value || !needle || `${model.id} ${model.displayName}`.toLocaleLowerCase().includes(needle));
   const validManual = manual.trim().length > 0 && manual.trim().length <= 240 && ![...manual].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
@@ -36,12 +39,12 @@ export const ModelSelect = ({ models, value, onChange, label, locale = 'en', dis
     <div className="model-select-controls">
       <label>{text('provider.modelSearch')}<input type="search" aria-label={`${label} ${text('provider.modelSearch')}`} value={search} disabled={disabled} onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault(); }} onChange={(event) => setSearch(event.target.value)} /></label>
       <label>{label}<select aria-label={label} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
-        {!value && <option value="">{text('provider.modelChoose')}</option>}
+        {(followDefault || !value) && <option value="">{followDefault ?? text('provider.modelChoose')}</option>}
         {filtered.map((model) => <option key={model.id} value={model.id}>{model.displayName === model.id ? model.id : `${model.displayName} (${model.id})`} · {modelPriceLabel(model, locale)}</option>)}
       </select></label>
       {onRefresh && <button type="button" className="secondary" disabled={disabled || loading} onClick={onRefresh}>{loading ? text('provider.loadingModels') : refreshLabel ?? text('provider.loadModels')}</button>}
     </div>
-    {value && <div className="model-price-detail" data-model-price={value}>
+    {displayedModel && <div className="model-price-detail" data-model-price={displayedModel}>
       <strong>{modelPriceLabel(selected, locale)}</strong>
       {selected?.pricing && <><small>{text(selected.pricing.source === 'provider-api' ? 'provider.priceAPI' : 'provider.priceReference')} · {text('provider.priceChecked')}: {selected.pricing.checkedAt}</small>
         <small className="model-price-source">{selected.pricing.sourceUrl}</small>{selected.pricing.note && <small>{selected.pricing.note}</small>}</>}
@@ -59,8 +62,9 @@ export const ModelSelect = ({ models, value, onChange, label, locale = 'en', dis
 };
 
 /** Each bound picker owns its catalog; it never changes a provider's saved model. */
-export const BoundModelSelect = ({ provider, value, onChange, label, locale, disabled = false }: {
+export const BoundModelSelect = ({ provider, value, onChange, label, locale, disabled = false, followDefault }: {
   provider: ProviderConfig | undefined; value: string; onChange(value: string): void; label: string; locale: string; disabled?: boolean;
+  followDefault?: string | undefined;
 }): JSX.Element => {
   const [catalog, setCatalog] = useState<{ key: string; models: ProviderModel[] }>({ key: '', models: [] });
   const [loading, setLoading] = useState(false), [failed, setFailed] = useState(false), [revision, setRevision] = useState(0);
@@ -89,5 +93,5 @@ export const BoundModelSelect = ({ provider, value, onChange, label, locale, dis
     return () => { active = false; };
   }, [id, key, revision]);
   return <ModelSelect models={catalog.key === key ? catalog.models : []} value={value} onChange={onChange} label={label} locale={locale} disabled={disabled || !provider} loading={loading} failed={failed}
-    onRefresh={() => setRevision((current) => current + 1)} catalogKey={key} />;
+    onRefresh={() => setRevision((current) => current + 1)} catalogKey={key} followDefault={followDefault} />;
 };

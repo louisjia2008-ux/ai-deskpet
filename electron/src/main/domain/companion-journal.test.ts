@@ -150,7 +150,7 @@ it('rechecks at the actual request boundary and discards a revoked in-flight dia
     f.session.historyPrivacy = 'local-only'; expect(assertCurrent).toThrow('diary.contextChanged');
     return { text: 'must not persist', summary: 'must not persist' };
   } });
-  expect(f.journal.list()).toEqual([]); expect(f.journal.status().errorCode).toBe('diary.failed');
+  expect(f.journal.list()).toEqual([]); expect(f.journal.status().errorCode).toBe('diary.contextChanged');
 });
 
 it('edits with CAS, encrypts, persists, restricts edited text to local models, invalidates old references, and deletes', async () => {

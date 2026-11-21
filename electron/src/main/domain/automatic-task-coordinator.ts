@@ -33,11 +33,14 @@ export class AutomaticTaskCoordinator implements AutomaticTaskPort {
     if (trigger.kind === 'schedule') {
       const schedule = s.automationSchedules.find((v) => v.id === trigger.sourceId);
       if (!schedule || !schedule.enabled || schedule.cancelledAt || schedule.revision !== trigger.policyRevision) throw new Error('automation.scheduleChanged');
-      if (schedule.providerId !== job.binding.provider.id || schedule.model !== job.binding.model || schedule.privacy !== job.source.privacy) throw new Error('automation.bindingChanged');
+      if (schedule.providerId !== job.binding.provider.id || (schedule.model !== null && schedule.model !== job.binding.model) || schedule.privacy !== job.source.privacy) throw new Error('automation.bindingChanged');
     } else {
       const decision = this.dependencies.proactiveAdmission(trigger, phase);
       if (!decision.allowed) throw new Error('automation.proactiveBlocked');
-      if (s.proactivePolicy.providerId !== job.binding.provider.id || s.proactivePolicy.model !== job.binding.model || s.proactivePolicy.privacy !== job.source.privacy) throw new Error('automation.bindingChanged');
+      const model = s.proactivePolicy.model ?? (phase === 'publish' ? job.binding.model
+        : s.providers.find(provider => provider.id === s.proactivePolicy.providerId && provider.enabled)?.model);
+      if (s.proactivePolicy.providerId !== job.binding.provider.id || model !== job.binding.model
+        || s.proactivePolicy.privacy !== job.source.privacy) throw new Error('automation.bindingChanged');
       this.dependencies.proactiveContext?.(job);
     }
   }

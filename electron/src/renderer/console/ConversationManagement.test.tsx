@@ -18,7 +18,7 @@ beforeEach(() => {
   api = {
     openSession: vi.fn(), onOpenRequested: () => () => undefined,
     getInteraction: vi.fn(async () => null), followup: vi.fn(), resolveApproval: vi.fn(),
-    listSessions: vi.fn(async () => [session]), createSession: vi.fn(), listMessages: vi.fn(), send: vi.fn(), retry: vi.fn(), forgetMemory: vi.fn(), editMemory: vi.fn(), cancel: vi.fn(),
+    listSessions: vi.fn(async () => [session]), createSession: vi.fn(), setModelSelection: vi.fn(), listMessages: vi.fn(), send: vi.fn(), retry: vi.fn(), forgetMemory: vi.fn(), editMemory: vi.fn(), cancel: vi.fn(),
     renameSession: vi.fn(async (id, title) => ({ ...session, id, title })),
     setPinned: vi.fn(), setArchived: vi.fn(), removeSession: vi.fn(async () => ({ ...session, deletedAt: '2026-10-23T00:00:00Z' })), restoreSession: vi.fn(),
     onEvent: () => () => undefined, onSessionsChanged: () => () => undefined,

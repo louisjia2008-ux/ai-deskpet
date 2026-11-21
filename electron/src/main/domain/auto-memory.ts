@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { backgroundFailureCode } from './background-failure';
 import type { ChatMessage } from '../../shared';
 import type { HealthItem } from '../../shared/attention';
 import type { AutoMemoryStatus } from '../../shared/auto-memory';
@@ -85,12 +86,15 @@ export class AutoMemoryService {
     const [sessionId, turn] = due;
     this.#pending.delete(sessionId);
     const controller = new AbortController();
-    const promise = this.#extract(sessionId, turn, controller.signal).then(({ hasMore, asked }) => {
-      if (asked) Object.assign(this.#attempts, { lastSuccessAt: new Date(this.#now()).toISOString(), errorCode: null, failures: 0 });
+    const promise = this.#extract(sessionId, turn, controller.signal).then(({ hasMore, asked, invalidResult }) => {
+      if (invalidResult) this.#failed('autoMemory.invalidResult');
+      else if (asked) Object.assign(this.#attempts, { lastSuccessAt: new Date(this.#now()).toISOString(), errorCode: null, failures: 0 });
       if (hasMore && !controller.signal.aborted && !this.#pending.has(sessionId)) this.#pending.set(sessionId, { ...turn, at: this.#now(), attempts: 0 });
     }).catch((error: unknown) => {
-      const code = error instanceof Error && /^[a-zA-Z]+(?:\.[a-zA-Z]+)+$/u.test(error.message) ? error.message : 'autoMemory.failed';
-      if (!controller.signal.aborted && !benign.has(code)) Object.assign(this.#attempts, { lastFailureAt: new Date(this.#now()).toISOString(), errorCode: code, failures: this.#attempts.failures + 1 });
+      const code = backgroundFailureCode(error, 'autoMemory.failed', [
+        'autoMemory.sourceChanged', 'autoMemory.invalidResult', 'autoMemory.incomplete', 'repository.commitUncertain',
+      ]);
+      if (!controller.signal.aborted && !benign.has(code)) this.#failed(code);
       // A provider that is briefly down gets one more try after the next quiet period.
       if (!controller.signal.aborted && turn.attempts < 1 && !this.#pending.has(sessionId)) this.#pending.set(sessionId, { ...turn, at: this.#now(), attempts: turn.attempts + 1 });
     });
@@ -101,6 +105,9 @@ export class AutoMemoryService {
   async shutdown(): Promise<void> { this.#closed = true; this.#pending.clear(); this.#run?.controller.abort(); await this.#run?.promise; }
 
   #now(): number { return this.deps.now?.() ?? Date.now(); }
+  #failed(code: string): void {
+    Object.assign(this.#attempts, { lastFailureAt: new Date(this.#now()).toISOString(), errorCode: code, failures: this.#attempts.failures + 1 });
+  }
 
   #collect(state: PersistentState, sessionId: string, destination: ContextDestination, through?: string): Batch | null {
     const session = state.chatSessions.find((item) => item.id === sessionId);
@@ -158,13 +165,13 @@ export class AutoMemoryService {
     if (!current || JSON.stringify({ ...current, hasMore: false }) !== JSON.stringify({ ...batch, hasMore: false })) throw new Error('autoMemory.sourceChanged');
   }
 
-  async #extract(sessionId: string, turn: AutoMemoryTurn, signal: AbortSignal): Promise<{ hasMore: boolean; asked: boolean }> {
+  async #extract(sessionId: string, turn: AutoMemoryTurn, signal: AbortSignal): Promise<{ hasMore: boolean; asked: boolean; invalidResult?: boolean }> {
     const binding = await this.deps.captureBinding(turn.providerId, turn.model);
     const destination = resolveContextDestination({ providerId: binding.provider.id, kind: binding.provider.kind, baseUrl: binding.provider.baseUrl,
       model: binding.model, localExecutionConfirmed: binding.provider.localExecutionConfirmed === true, serviceExecution: binding.inspection.executionDestination });
     const batch = binding.provider.enabled ? this.#collect(this.repository.snapshot(), sessionId, destination) : null;
     if (!batch) return { hasMore: false, asked: false };
-    let found: z.infer<typeof outputSchema>['memories'] = [], asked = false;
+    let found: z.infer<typeof outputSchema>['memories'] = [], asked = false, invalidResult = false;
     if (batch.sources.reduce((total, item) => total + item.text.trim().length, 0) >= 4) {
       const combined = AbortSignal.any([signal, AbortSignal.timeout(180_000)]);
       const assertCurrent = () => this.#assertCurrent(this.repository.snapshot(), batch, destination, combined);
@@ -181,7 +188,8 @@ export class AutoMemoryService {
       if (!finished) throw new Error('autoMemory.incomplete');
       asked = true;
       // A reply that is not the requested JSON is skipped for good; asking again would not change it.
-      try { found = outputSchema.parse(JSON.parse(output.trim().replace(/^```(?:json)?\s*/u, '').replace(/\s*```$/u, ''))).memories; } catch { found = []; }
+      try { found = outputSchema.parse(JSON.parse(output.trim().replace(/^```(?:json)?\s*/u, '').replace(/\s*```$/u, ''))).memories; }
+      catch { invalidResult = true; }
     }
     const byNumber = new Map(batch.sources.map((item) => [item.n, item]));
     const accepted = found.filter((item) => item.evidence.every((n) => byNumber.has(n)) && !sensitive.test(item.text) && !/[?？\r\n]/u.test(item.text)).slice(0, PER_RUN);
@@ -210,6 +218,6 @@ export class AutoMemoryService {
       return count;
     });
     if (saved) this.deps.saved?.(saved);
-    return { hasMore: batch.hasMore, asked };
+    return { hasMore: batch.hasMore, asked, invalidResult };
   }
 }

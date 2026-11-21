@@ -37,7 +37,7 @@ describe('chat commands', () => {
     expect(await run('/model')).toBe('当前：Ollama · kitty-qwen-27b');
     expect(await run('/provider')).toBe('当前：Ollama · kitty-qwen-27b\n1. Ollama · kitty-qwen-27b（当前）\n2. OpenAI · gpt-6.1-sol');
     expect(await run('/provider 2')).toBe('已切换：OpenAI · gpt-6.1-sol');
-    expect(state).toEqual({ providerId: 'cloud', model: 'gpt-6.1-sol' });
+    expect(state).toEqual({ providerId: 'cloud', model: null });
     expect(await run('/model')).toBe('当前：OpenAI · gpt-6.1-sol');
   });
 
@@ -58,7 +58,7 @@ describe('chat commands', () => {
     expect(await run('/model claude')).toContain('没有这个模型');
     expect(await run('/model 9')).toContain('没有这个模型');
     expect(await run('/provider nobody')).toContain('没有这个模型服务');
-    expect(state).toEqual({ providerId: 'cloud', model: 'gpt-6.1-sol' });
+    expect(state).toEqual({ providerId: 'cloud', model: null });
     const offline = setup(true);
     expect(await offline.run('/model qwen3.5:0.8b')).toContain('没有切换');
     expect(offline.state).toEqual({ providerId: null, model: null });

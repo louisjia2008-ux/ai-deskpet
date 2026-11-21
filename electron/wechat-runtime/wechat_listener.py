@@ -1697,6 +1697,8 @@ def reconcile_conversation_sends(state, settings, path, runtime, groups, binding
                         if ui.active_window_id() == window:
                             visual_matches = {event.id for event, proof in pending
                                               if visual_send_matches(event, proof, messages, active, path, target)}
+            except ui.OwnerOperationPending:
+                pass
             except (ui.TestError, OSError, ValueError, subprocess.SubprocessError) as error:
                 log_failure("waiting", error, "receipt_reconciliation")
 
@@ -1991,6 +1993,7 @@ def run(state, settings, path, runtime, *, state_path=None):
                 stage = "database_observation"
                 statuses = observe_database(state, settings, path, runtime, groups, bindings, reader)
                 delay = ACTIVE_POLL
+                desktop_yielded = False
                 for entry, binding in bindings.items():
                     head = None
                     escaped = False
@@ -2206,6 +2209,12 @@ def run(state, settings, path, runtime, *, state_path=None):
                                                       base_settings=settings, report_failure=report_send_failure)
                         log("delivery", target=target, outcome=statuses[entry])
                         eligible_after[binding] = time.monotonic() + (20 if target == "group" else 8)
+                    except ui.OwnerOperationPending:
+                        # Database intake already committed. Leave this queue head
+                        # and its retry budget untouched until owner work clears.
+                        escaped = True
+                        desktop_yielded = True
+                        break
                     except (ui.OperationBusy, BlockingIOError, ui.WindowCaptureError):
                         # The desktop itself is busy or lost: every conversation waits for the recovery below.
                         escaped = True
@@ -2220,7 +2229,7 @@ def run(state, settings, path, runtime, *, state_path=None):
                             send_failures.pop(entry, None)
                         if head is not None and not escaped:
                             guard.settle(state, binding, target, head, statuses[entry], eligible_after)
-                if not owner_turn_waiting(state, bindings['private']) and not is_paused(runtime):
+                if not desktop_yielded and not owner_turn_waiting(state, bindings['private']) and not is_paused(runtime):
                     priority = owner_priority_check(state, settings, runtime, bindings['private'], reader)
                     model = friend_lane.step(state, settings, path, runtime, reader, model, priority)
                 group_statuses = {group_id: {"status": statuses[group_id],
@@ -2712,7 +2721,7 @@ def main():
         return
     if args.action == "recover-window":
         try:
-            with ui.vm_operation(), tempfile.TemporaryDirectory(prefix="deskpet-wechat-recover-") as temporary:
+            with ui.vm_operation(wait=CONTROL_VM_WAIT), tempfile.TemporaryDirectory(prefix="deskpet-wechat-recover-") as temporary:
                 outcome = ui.recover_window(settings, Path(temporary) / "screen.png")
         except ui.OperationBusy:
             control_error("busy")
@@ -2723,7 +2732,7 @@ def main():
     if args.action == "arm-enrollment":
         if (runtime / "owner.json").exists():
             raise ui.TestError("主号已经绑定。")
-        with ui.vm_operation(), tempfile.TemporaryDirectory(prefix="deskpet-wechat-enroll-") as temporary:
+        with ui.vm_operation(wait=CONTROL_VM_WAIT), tempfile.TemporaryDirectory(prefix="deskpet-wechat-enroll-") as temporary:
             path = Path(temporary) / "screen.png"
             ui.open_target(settings, path, "private")
             fingerprint = owner_fingerprint(settings, path)
@@ -2777,7 +2786,7 @@ def main():
 
     signal.signal(signal.SIGTERM, stop)
     if args.action == "enroll":
-        with ui.vm_operation(), WeChatState(args.state) as state, tempfile.TemporaryDirectory(prefix="deskpet-wechat-enroll-") as tmp:
+        with ui.vm_operation(wait=CONTROL_VM_WAIT), WeChatState(args.state) as state, tempfile.TemporaryDirectory(prefix="deskpet-wechat-enroll-") as tmp:
             if not enroll(state, settings, Path(tmp) / "screen.png", runtime, enrollment_digest(args.challenge)):
                 raise ui.TestError("私聊中尚未出现当前一次性口令。")
             (runtime / "pending-enrollment.json").unlink(missing_ok=True)

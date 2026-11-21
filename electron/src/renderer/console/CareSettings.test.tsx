@@ -22,7 +22,7 @@ it('turns everything on in one step, after asking for the permission', async () 
   fireEvent.click(await toggle());
   await waitFor(() => expect(f.configureProactive).toHaveBeenCalledOnce());
   expect(f.requestPermission).toHaveBeenCalledOnce();
-  expect(f.configureProactive.mock.calls[0]![0]).toMatchObject({ enabled: true, mode: 'auto', providerId: 'p1', model: 'model-1', quietStart: '23:00', quietEnd: '08:00', dailyLimit: 2 });
+  expect(f.configureProactive.mock.calls[0]![0]).toMatchObject({ enabled: true, mode: 'auto', providerId: 'p1', model: null, quietStart: '23:00', quietEnd: '08:00', dailyLimit: 2 });
   expect(f.configureProactive.mock.calls[0]![0].eventKinds).toContain('explicit-check-in');
   await waitFor(async () => expect((await toggle()).checked).toBe(true));
   fireEvent.click(screen.getByRole('button', { name: '现在问候一次' }));

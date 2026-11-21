@@ -29,6 +29,7 @@ POST_ID = re.compile(r"[0-9a-f]{64}\Z")
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_TEXT = 1000
 MAX_IMAGES = 9
+MOMENTS_LOCK_WAIT = 60
 GUEST_DIR = "$HOME/.local/state/deskpet-wechat/moments"
 # Offsets measured on WeChat 4.1.13 (English UI) relative to the window origins.
 SIDEBAR_MOMENTS = (31, 258)
@@ -43,6 +44,10 @@ LABELS = {
     "post": ("Post", "发表"),
     "discard": ("Discard", "不保留", "不保存"),
 }
+
+
+class MomentWindowError(ui.TestError):
+    """The official client or its Moments window could not be opened."""
 
 
 class MomentLedger:
@@ -208,8 +213,11 @@ def close_moments(settings, path):
 
 def publish(settings, path, request, guest_paths, *, before_post):
     left, top, _, _ = map(int, settings["window"])
-    ui.guest(f"xdotool mousemove {left + SIDEBAR_MOMENTS[0]} {top + SIDEBAR_MOMENTS[1]} click 1")
-    _, m_left, m_top, m_width, m_height = wait_window("Moments")
+    try:
+        ui.guest(f"xdotool mousemove {left + SIDEBAR_MOMENTS[0]} {top + SIDEBAR_MOMENTS[1]} click 1")
+        _, m_left, m_top, m_width, m_height = wait_window("Moments")
+    except (ui.TestError, OSError, ValueError, subprocess.SubprocessError) as error:
+        raise MomentWindowError("无法打开朋友圈窗口。") from error
     region = (m_left, m_top, m_width, m_height)
     ui.guest(f"xdotool mousemove {m_left + MOMENTS_CAMERA[0]} {m_top + MOMENTS_CAMERA[1]} click 1")
     wait_window("Select File")
@@ -270,7 +278,7 @@ def post_moment(settings, runtime, state_path, request):
     digest = post_digest(request)
     attempted = False
     try:
-        with ui.vm_operation(), WeChatState(state_path) as state, TemporaryDirectory(prefix="deskpet-wechat-moment-") as tmp:
+        with ui.vm_operation(wait=MOMENTS_LOCK_WAIT), WeChatState(state_path) as state, TemporaryDirectory(prefix="deskpet-wechat-moment-") as tmp:
             ledger = MomentLedger(state.db)
             previous = ledger.previous(request["id"], digest)
             if previous is not None:
@@ -279,9 +287,12 @@ def post_moment(settings, runtime, state_path, request):
                 return "paused"
             path = Path(tmp) / "screen.png"
             # An interrupted earlier attempt may have left the Moments window open.
-            close_moments(settings, path)
+            try:
+                close_moments(settings, path)
+                ui.open_target(settings, path, "private")
+            except (ui.TestError, OSError, ValueError, subprocess.SubprocessError):
+                return "window_error"
             ui.guest(f'mkdir -p "{GUEST_DIR}" && chmod 700 "{GUEST_DIR}" && rm -f "{GUEST_DIR}"/*.png')
-            ui.open_target(settings, path, "private")
             stem = request["id"][:16]
             for index, image in enumerate(request["images"]):
                 ui.guest(f'cat > "{GUEST_DIR}/{stem}-{index}.png"', image)
@@ -295,8 +306,12 @@ def post_moment(settings, runtime, state_path, request):
                 attempted = ledger.begin(request["id"], digest)
                 return attempted
 
+            window_failed = False
             try:
                 posted = publish(settings, path, request, guest_paths, before_post=before_post)
+            except MomentWindowError:
+                posted = False
+                window_failed = True
             except (ui.TestError, OSError, ValueError, subprocess.SubprocessError):
                 posted = False
             finally:
@@ -304,17 +319,22 @@ def post_moment(settings, runtime, state_path, request):
                     close_moments(settings, path)
                 except (ui.TestError, OSError, ValueError, subprocess.SubprocessError):
                     pass
-                ui.guest(f'rm -f "{GUEST_DIR}"/*.png')
+                try:
+                    ui.guest(f'rm -f "{GUEST_DIR}"/*.png')
+                except (ui.TestError, OSError, ValueError, subprocess.SubprocessError):
+                    pass
                 try:
                     ui.open_target(settings, path, "private")
-                except ui.TestError:
+                except (ui.TestError, OSError, ValueError, subprocess.SubprocessError):
                     pass
             if attempted:
                 ledger.finish(request["id"], "posted" if posted else "uncertain")
                 return "posted" if posted else "uncertain"
-            return "paused" if is_paused(runtime) else "retry"
+            if is_paused(runtime):
+                return "paused"
+            return "window_error" if window_failed else "retry"
     except ui.OperationBusy:
-        return "busy"
+        return "paused" if is_paused(runtime) else "busy"
     except (ui.TestError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
         return "uncertain" if attempted else "retry"
 
@@ -347,43 +367,52 @@ def parse_preview(raw):
 def send_preview(settings, runtime, state_path, request):
     """The draft text through the owner notice path, then its picture as one image."""
     from wechat_listener import verify_owner
-    from wechat_owner_delivery import OwnerDeliveryLedger, owner_deliver, owner_delivery_pin, receipt_for_pin
+    from wechat_owner_delivery import OwnerDeliveryLedger, deliver_moment_preview_text, owner_delivery_pin, receipt_for_pin
 
-    status = owner_deliver(settings, runtime, state_path, {"id": request["id"], "binding": request["binding"], "text": request["text"]})
-    if status != "sent":
-        return status
     image_id = sha256(f"{request['id']}:image".encode()).hexdigest()
     digest = sha256(request["image"]).hexdigest()
     attempted = False
     try:
-        with ui.vm_operation(), WeChatState(state_path) as state, TemporaryDirectory(prefix="deskpet-wechat-preview-") as tmp:
-            ledger = OwnerDeliveryLedger(state.db)
-            previous = ledger.previous(image_id, request["binding"], digest)
-            if previous is not None:
-                return previous
-            pin = owner_delivery_pin(state, settings, runtime, request["binding"])
-            if pin is None:
-                return "binding_invalid"
-            path = Path(tmp) / "screen.png"
-            ui.open_target(settings, path, "private")
-            verify_owner(settings, path, runtime)
+        with ui.vm_operation(wait=MOMENTS_LOCK_WAIT):
+            status = deliver_moment_preview_text(settings, runtime, state_path,
+                                                 {"id": request["id"], "binding": request["binding"], "text": request["text"]})
+            if status != "sent":
+                return status
+            with WeChatState(state_path) as state, TemporaryDirectory(prefix="deskpet-wechat-preview-") as tmp:
+                ledger = OwnerDeliveryLedger(state.db)
+                previous = ledger.previous(image_id, request["binding"], digest)
+                if previous is not None:
+                    return previous
+                if is_paused(runtime):
+                    return "paused"
+                pin = owner_delivery_pin(state, settings, runtime, request["binding"])
+                if pin is None:
+                    return "binding_invalid"
+                path = Path(tmp) / "screen.png"
+                try:
+                    ui.open_target(settings, path, "private")
+                except (ui.TestError, OSError, ValueError, subprocess.SubprocessError):
+                    return "window_error"
+                verify_owner(settings, path, runtime)
 
-            def before_send():
-                nonlocal attempted
-                if is_paused(runtime) or owner_delivery_pin(state, settings, runtime, request["binding"]) != pin:
-                    return False
-                attempted = ledger.begin(image_id, request["binding"], digest)
-                return attempted
+                def before_send():
+                    nonlocal attempted
+                    if is_paused(runtime) or owner_delivery_pin(state, settings, runtime, request["binding"]) != pin:
+                        return False
+                    attempted = ledger.begin(image_id, request["binding"], digest)
+                    return attempted
 
-            def receipt():
-                return ledger.finish(image_id, "sent", lambda: state.record_moment_preview(
-                    request["id"], request["binding"], time.time()))
+                def receipt():
+                    return ledger.finish(image_id, "sent", lambda: state.record_moment_preview(
+                        request["id"], request["binding"], time.time()))
 
-            ui.run_sticker("private", settings, path, request["image"], before_send=before_send,
-                           receipt=receipt, database_receipt=receipt_for_pin(pin))
-            return "sent"
+                ui.run_sticker("private", settings, path, request["image"], before_send=before_send,
+                               receipt=receipt, database_receipt=receipt_for_pin(pin))
+                if attempted:
+                    return ledger.previous(image_id, request["binding"], digest)
+                return "paused" if is_paused(runtime) else "retry"
     except ui.OperationBusy:
-        return "busy"
+        return "paused" if is_paused(runtime) else "busy"
     except (ui.TestError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
         return "uncertain" if attempted else "retry"
 

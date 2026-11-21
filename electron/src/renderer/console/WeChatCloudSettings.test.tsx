@@ -12,6 +12,9 @@ const group: WeChatChannelState['groups'][number] = {
   id: groupId, title: '合成测试群', policy: { mode: 'mentions', sender: null }, status: 'ready', pending: 0, uncertain: 0,
 };
 const cloudRoute = { providerId: provider.id, model: provider.model };
+const followRoute = { providerId: provider.id, model: null };
+const followLabel = '云端 · 合成云端服务 · 跟随服务默认模型 (fixture-model)';
+const consent = /允许将这个会话/u;
 
 function fixture(state: WeChatCloudState, friends: WeChatReplyFriend[] = []) {
   const api = {
@@ -55,11 +58,11 @@ it('starts each friend local and requires independent consent for that friend’
   fireEvent.change(second.getByRole('combobox'), { target: { value: route } });
   expect(save).toBeDisabled();
   expect(first.getByText(/这位好友的当前消息/u)).toBeVisible();
-  fireEvent.click(first.getByRole('checkbox'));
+  fireEvent.click(first.getByRole('checkbox', { name: consent }));
   expect(second.getByRole('button', { name: '保存这位好友的回复来源' })).toBeDisabled();
   fireEvent.click(save);
   expect(await first.findByText('好友回复来源已保存。')).toBeVisible();
-  expect(api.configureFriendCloud).toHaveBeenCalledExactlyOnceWith({ friendId: a.id, route: cloudRoute });
+  expect(api.configureFriendCloud).toHaveBeenCalledExactlyOnceWith({ friendId: a.id, route: followRoute });
   expect(api.configureCloud).not.toHaveBeenCalled();
   expect(second.getByText('本机 · qwen3.5:0.8b')).toBeVisible();
   fireEvent.change(source, { target: { value: '' } });
@@ -86,23 +89,23 @@ it('requires independent consent for private and group cloud routes before savin
   expect(owner.getByText('本机 · qwen3.5:0.8b')).toBeVisible();
   expect(owner.queryByText('云端 · 合成云端服务 · fixture-model')).not.toBeInTheDocument();
   expect(owner.getByText(/同一会话的少量近期记录/u)).toBeVisible();
-  fireEvent.click(owner.getByRole('checkbox'));
+  fireEvent.click(owner.getByRole('checkbox', { name: consent }));
   expect(save).toBeDisabled();
   expect(api.configureCloud).not.toHaveBeenCalled();
-  fireEvent.click(member.getByRole('checkbox'));
+  fireEvent.click(member.getByRole('checkbox', { name: consent }));
   fireEvent.click(save);
-  await waitFor(() => expect(api.configureCloud).toHaveBeenCalledExactlyOnceWith({ private: cloudRoute, groups: { [groupId]: cloudRoute } }));
+  await waitFor(() => expect(api.configureCloud).toHaveBeenCalledExactlyOnceWith({ private: followRoute, groups: { [groupId]: followRoute } }));
   expect(await screen.findByText('云端回复设置已保存。')).toBeVisible();
-  expect(owner.getByText('云端 · 合成云端服务 · fixture-model')).toBeVisible();
-  expect(member.getByText('云端 · 合成云端服务 · fixture-model')).toBeVisible();
+  expect(owner.getByText(followLabel)).toBeVisible();
+  expect(member.getByText(followLabel)).toBeVisible();
 
   fireEvent.change(ownerService, { target: { value: '' } });
-  expect(owner.getByText('云端 · 合成云端服务 · fixture-model')).toBeVisible();
+  expect(owner.getByText(followLabel)).toBeVisible();
   expect(owner.queryByRole('checkbox')).not.toBeInTheDocument();
   fireEvent.click(save);
-  await waitFor(() => expect(api.configureCloud).toHaveBeenNthCalledWith(2, { private: null, groups: { [groupId]: cloudRoute } }));
+  await waitFor(() => expect(api.configureCloud).toHaveBeenNthCalledWith(2, { private: null, groups: { [groupId]: followRoute } }));
   expect(await owner.findByText('本机 · qwen3.5:0.8b')).toBeVisible();
-  expect(member.getByText('云端 · 合成云端服务 · fixture-model')).toBeVisible();
+  expect(member.getByText(followLabel)).toBeVisible();
 });
 
 it('allows an unavailable saved cloud model to be turned off without offering new unlisted services', async () => {
@@ -114,6 +117,24 @@ it('allows an unavailable saved cloud model to be turned off without offering ne
   fireEvent.change(owner.getByRole('combobox'), { target: { value: '' } });
   fireEvent.click(screen.getByRole('button', { name: '保存云端回复设置' }));
   await waitFor(() => expect(api.configureCloud).toHaveBeenCalledExactlyOnceWith({ private: null, groups: {} }));
+});
+
+it('lets the owner explicitly name a model on the selected service', async () => {
+  const api = fixture({ available: true, assistant: { enabled: true, memories: 'all', moments: false }, groupRules: {},
+    providers: [provider], settings: { private: null, groups: {} } });
+  const owner = within(await screen.findByRole('group', { name: '主人私聊' }));
+  fireEvent.change(owner.getByRole('combobox', { name: '回复服务' }), { target: { value: provider.id } });
+  const follow = owner.getByRole('checkbox', { name: '跟随服务默认模型' });
+  expect(follow).toBeChecked();
+  fireEvent.click(follow);
+  const model = owner.getByRole('textbox', { name: '模型名称' });
+  expect(model).toHaveValue(provider.model);
+  fireEvent.change(model, { target: { value: 'fixture-alternate' } });
+  fireEvent.click(owner.getByRole('checkbox', { name: consent }));
+  fireEvent.click(screen.getByRole('button', { name: '保存云端回复设置' }));
+  await waitFor(() => expect(api.configureCloud).toHaveBeenCalledExactlyOnceWith({
+    private: { providerId: provider.id, model: 'fixture-alternate' }, groups: {},
+  }));
 });
 
 it('rejects arbitrary cloud-route keys and credentials in IPC input', () => {

@@ -19,7 +19,8 @@ export const wechatModelSchema = z.string().min(1).max(160).regex(/^[A-Za-z0-9][
 export const wechatReplySchema = z.object({ model: wechatModelSchema, split: z.boolean(), stickers: z.boolean() }).strict();
 export const wechatGroupUpdateSchema = z.object({ groupId: wechatGroupIdSchema, policy: wechatGroupPolicySchema }).strict();
 const cloudModelSchema = z.string().trim().min(1).max(240).refine(value => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value));
-export const wechatCloudRouteSchema = z.object({ providerId: z.string().uuid(), model: cloudModelSchema }).strict();
+export const wechatPinnedCloudRouteSchema = z.strictObject({ providerId: z.string().uuid(), model: cloudModelSchema });
+export const wechatCloudRouteSchema = wechatPinnedCloudRouteSchema.extend({ model: cloudModelSchema.nullable().default(null) });
 export const wechatCloudSettingsSchema = z.object({
   private: wechatCloudRouteSchema.nullable(),
   groups: z.record(wechatGroupIdSchema, wechatCloudRouteSchema).refine(groups => Object.keys(groups).length <= 12),
@@ -90,6 +91,7 @@ export type WeChatReply = z.infer<typeof wechatReplySchema>;
 export type WeChatGroupUpdate = z.infer<typeof wechatGroupUpdateSchema>;
 export type WeChatWindow = z.infer<typeof wechatWindowSchema>;
 export type WeChatCloudRoute = z.infer<typeof wechatCloudRouteSchema>;
+export type WeChatPinnedCloudRoute = z.infer<typeof wechatPinnedCloudRouteSchema>;
 export type WeChatCloudSettings = z.infer<typeof wechatCloudSettingsSchema>;
 export type WeChatCloudState = z.infer<typeof wechatCloudStateSchema>;
 export type WeChatAssistant = z.infer<typeof wechatAssistantSchema>;

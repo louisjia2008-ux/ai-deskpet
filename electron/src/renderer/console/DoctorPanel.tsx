@@ -3,6 +3,7 @@ import type { JSX } from 'react';
 import type { AttentionAPI } from '../../shared/attention';
 import { DOCTOR_REPAIR_ACTIONS, DOCTOR_SELF_TEST_STAGES, DOCTOR_SELF_TEST_STAGE_LABELS, describeDoctorCase, type DoctorCase, type DoctorStatus } from '../../shared/doctor';
 import './attention-center.css';
+import { ModelBindingIssues } from './ModelBindingIssues';
 
 type Locale = 'en' | 'zh-CN';
 const copy = {
@@ -92,6 +93,7 @@ export const DoctorPanel = ({ api, locale }: { api: AttentionAPI; locale: string
           </li>)}</ul> : <p>{text.noRepairs}</p>}
       </article>
       <div className="attention-overview"><strong>{status.open || '✓'}</strong><span>{text.open(status.open)}</span></div>
+      <ModelBindingIssues issues={status.modelIssues ?? []} api={api} locale={lang} refresh={() => run(() => api.doctor!())} />
       {outage && <article className="attention-card">
         <h2>{lang === 'zh-CN' ? '最近一次桌宠无响应' : 'Latest DeskPet outage'}</h2>
         <p>{lang === 'zh-CN' ? '最后心跳：' : 'Last heartbeat: '}{epoch(outage.startedAt)}</p>
@@ -112,7 +114,8 @@ export const DoctorPanel = ({ api, locale }: { api: AttentionAPI; locale: string
         <p className="attention-note">{time(status.vm.latest.at)} · {status.vm.failures ? (lang === 'zh-CN' ? '最近采样失败' : 'Latest sample failed') : '✓'}</p></article>}
       {providerTest && <article className="attention-card"><h2>{lang === 'zh-CN' ? '聊天模型自检' : 'Chat model self-test'}</h2>
         <p>{time(providerTest.at)} · {providerTest.status} · {providerTest.durationMs} ms · <code>{providerTest.code}</code></p></article>}
-      {status.cases.length ? <div className="attention-list">{status.cases.slice(0, 50).map(card)}</div> : <p className="muted">{text.empty}</p>}
+      {status.cases.length ? <div className="attention-list">{status.cases.slice(0, 50).map(card)}</div>
+        : !status.modelIssues?.length && <p className="muted">{text.empty}</p>}
     </>}
   </section>;
 };

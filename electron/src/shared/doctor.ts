@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ModelBindingIssue } from './model-bindings';
 import { describeWeChatSendDiagnostics } from './wechat-send-diagnostics';
 
 /** One problem the doctor noticed. Codes, counts and times only: never message content, names or who sent anything. */
@@ -147,11 +148,12 @@ export interface DoctorStatus {
   runbooks: Record<string, DoctorRunbookEntry>;
   providerTests: DoctorProviderTestRecord[];
   appOutage?: AppOutage | null;
+  modelIssues?: ModelBindingIssue[];
 }
 
 export const DOCTOR_FEATURES: Record<string, string> = {
   asr: '本地语音识别', diary: '日记', proactive: '主动消息', 'wechat-moments': '朋友圈', 'wechat-cron': '微信定时投递', 'wechat-group-digest': '群聊每日精华', 'wechat-followup': '等你处理', 'wechat-official-brief': '公众号简报', 'wechat-friends-moments': '好友朋友圈摘要', 'wechat-friend-reply': '微信好友回复',
-  'auto-memory': '自动记忆', 'memory-sleep': '夜间记忆整理', schedules: '定时任务', wechat: '微信', qq: 'QQ', telegram: 'Telegram',
+  'auto-memory': '自动记忆', 'companion-recent': '最近对话摘要', 'memory-sleep': '夜间记忆整理', schedules: '定时任务', wechat: '微信', qq: 'QQ', telegram: 'Telegram',
   knowledge: '知识库', minecraft: 'Minecraft 专用服', system: '系统', app: '桌宠', provider: '聊天模型',
 };
 export const DOCTOR_CODES: Record<string, string> = {
@@ -178,6 +180,9 @@ export const DOCTOR_CODES: Record<string, string> = {
   'wechat.vmUnreachable': '连续两次读不到微信虚拟机的体检数据。',
   'wechat.uncertain': '有回复不确定是否发出去了，请在微信核对。',
   'wechat.cronDeliveryFailed': '定时回复投递失败。', 'wechat.cronDeliveryUncertain': '定时回复可能已发送，请在微信确认。',
+  'wechat.momentWindowBusy': '微信窗口被其他操作占用，朋友圈操作未完成。',
+  'wechat.momentListenerPaused': '微信监听已暂停，朋友圈操作未完成。',
+  'wechat.momentWindowError': '打开微信窗口时出错，朋友圈操作未完成。',
   'wechat.momentFailed': '朋友圈请求失败。', 'wechat.momentUncertain': '朋友圈可能已经发了，请在手机核对，不要重复发。',
   'wechat.momentPublishUnconfirmed': '无法确认朋友圈是否发布，请在手机核对。',
   'qq.offline': 'QQ 连接断开了。', 'qq.deliveryFailed': '有 QQ 消息发送失败。', 'qq.uncertain': '有 QQ 消息不确定是否送达。',
@@ -191,6 +196,15 @@ export const DOCTOR_CODES: Record<string, string> = {
   'knowledge.embeddingModelMissing': '本机 Ollama 缺少知识库选用的嵌入模型。',
   'knowledge.indexRepeatedFailures': '知识库索引连续失败，可在运行状态查看上次错误码。',
   'diary.failed': '日记写入失败。', 'diary.storage': '加密日记读取失败（原文件没有覆盖）。',
+  'diary.noCloud': '日记需要当前选中的云端模型服务。',
+  'diary.contextChanged': '对话或角色设置已变更，日记停止写入。',
+  'diary.interrupted': '日记写入中断。', 'diary.disabled': '生成期间关闭了日记。',
+  'diary.invalid': '模型返回的日记格式无效。', 'diary.tooLarge': '模型返回的日记太长。',
+  'diary.incomplete': '模型未完整返回日记。',
+  'recent.failed': '最近对话摘要生成失败。', 'recent.incomplete': '模型未完整返回最近对话摘要。',
+  'recent.invalidResult': '模型返回的最近对话摘要无法使用。',
+  'chat.contextStale': '生成期间对话资料已变更。', 'autoMemory.invalidResult': '模型返回的自动记忆格式无效。',
+  'sleep.invalidResult': '模型返回的夜间记忆整理格式无效。',
   'minecraft.gaveUp': '本地专用服重启次数用完，服务器已停止。',
   'asr.worker': '本地语音识别进程停止了。', 'asr.runtime': '离线语音文件夹缺失或不完整。', 'asr.permission': '麦克风权限被拒绝。',
   'proactive.pausedByError': '主动消息多次失败，已暂停。', 'proactive.deliveryFailed': '主动消息未确认送达。',
@@ -214,6 +228,14 @@ export const DOCTOR_CODES: Record<string, string> = {
   'provider.regionRestricted': '模型服务在当前地区不可用。',
   'diary.schedulerFailed': '日记调度失败。', 'autoMemory.failed': '自动记忆提取失败。',
   'proactive.screenUnknown': '暂时无法确认屏幕状态。', 'proactive.speechBusy': '语音任务繁忙，主动消息已让路。',
+  'proactive.schedulerFailed': '主动消息调度失败。', 'proactive.wechatUnbound': '请先绑定主人微信私聊。',
+  'proactive.privateResult': '仅本地的主动消息不能发到微信。', 'proactive.contextStale': '生成主动消息期间，授权资料已变更。',
+  'proactive.deliveryUncertain': '主动消息可能已发送，请在微信核对。',
+  'proactive.eventConflict': '同一主动消息事件的记录不一致。', 'proactive.eventCapacity': '主动消息事件记录已满。',
+  'proactive.triggerCapacity': '主动消息运行记录已满。',
+  'repository.commitUncertain': '尚不能确认资料是否保存，请刷新后核对。',
+  'automation.permissionRequired': '自动执行权限未授予。', 'automation.unavailable': '自动执行暂不可用。',
+  'automation.cancelled': '自动执行已取消。', 'job.privacyBlocked': '当前隐私设置禁止把资料发给所选模型服务。',
 };
 const KINDS: Record<string, string> = {
   text: '太长的文字', image: '图片', voice: '没转成文字的语音', card: '卡片', video: '视频', location: '位置', link: '链接',

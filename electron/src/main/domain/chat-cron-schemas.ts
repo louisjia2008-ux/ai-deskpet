@@ -14,7 +14,7 @@ export const chatCronInputSchema = z.object({
 }).strict();
 export const chatCronUpdateSchema = chatCronInputSchema.partial().extend({ allowedCapabilities: chatCronCapabilitiesSchema }).strict();
 export const chatCronScheduleSchema = chatCronInputSchema.extend({
-  id, sessionId: id, providerId: id, model: z.string().min(1).max(240), enabled: z.boolean(), revision: z.number().int().positive(),
+  id, sessionId: id, providerId: id, model: z.string().min(1).max(240).nullable(), enabled: z.boolean(), revision: z.number().int().positive(),
   nextRunAt: timestamp.nullable(), createdAt: timestamp, updatedAt: timestamp, cancelledAt: timestamp.nullable(),
   telegramDelivery: z.object({ bindingId: id, revision: z.number().int().positive(), grantedAt: timestamp }).strict().optional(),
   qqDelivery: z.object({ bindingId: id, revision: z.number().int().positive(), grantedAt: timestamp }).strict().optional(),

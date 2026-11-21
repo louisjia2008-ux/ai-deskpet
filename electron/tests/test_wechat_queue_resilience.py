@@ -1,9 +1,12 @@
 """One message that keeps failing must not hold its conversation, or any other."""
 
 from contextlib import ExitStack
+import fcntl
 from pathlib import Path
 import sys
 import tempfile
+import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -23,7 +26,8 @@ class QueueGuardTest(unittest.TestCase):
     def setUp(self):
         root = tempfile.TemporaryDirectory()
         self.addCleanup(root.cleanup)
-        self.state = WeChatState(Path(root.name) / "ledger.db")
+        self.root = Path(root.name)
+        self.state = WeChatState(self.root / "ledger.db")
         self.addCleanup(self.state.db.close)
         owner = DbScope(OWNER, "private", CONTACT, display_name="主号")
         room = DbScope(ROOM, "group", GROUP, policy=ALL)
@@ -132,6 +136,89 @@ class QueueGuardTest(unittest.TestCase):
         count, at = listener.dropped_summary(self.state)
         self.assertEqual(count, 1)
         self.assertIsInstance(at, float)
+
+    def test_owner_desktop_reservation_defers_delivery_without_losing_database_intake(self):
+        ui = listener.ui
+        (self.root / 'owner.json').touch(mode=0o600)
+        polls = 0
+        replies = []
+        message = 'fixture message received during the owner operation'
+        waiting = threading.Event()
+        finished = threading.Event()
+        lock_path = self.root / 'desktop.lock'
+        lock_path.touch(mode=0o600)
+        original_acquire = ui._acquire_desktop
+
+        def signal_waiting(lock, operation, deadline, **options):
+            original_acquire(lock, operation, deadline, **options)
+            if operation == fcntl.LOCK_SH:
+                waiting.set()
+
+        def publish():
+            with ui.vm_operation(wait=3):
+                finished.set()
+
+        def observe(*_args):
+            nonlocal polls
+            if polls == 0:
+                self.assertFalse(finished.is_set())
+                self.admit(row(created=int(time.time()), body=message))
+            polls += 1
+            return {'private': 'ready'}
+
+        def deliver(state, _binding, _target, event, *_args, **_options):
+            with ui.vm_operation():
+                self.assertTrue(state.mark_attempted(event.id))
+                self.assertTrue(state.mark_sent(event.id))
+                replies.append(event.id)
+                return 'ready'
+
+        values = {
+            'is_paused': False, 'enrolled_groups': {}, 'enrolled_bindings': {'private': OWNER},
+            'transcript_scopes': {OWNER: ('private', 'Fixture owner')}, 'database_event_allowed': True,
+            'read_reply_settings': {**listener.DEFAULT_REPLY}, 'read_cloud_route': 'route', 'reply_route_matches': True,
+            'cloud_reply_plan': {'reply': 'fixture reply', 'sticker': False},
+        }
+        with ExitStack() as stack, lock_path.open('rb') as desktop:
+            stack.enter_context(patch.object(ui, 'VM_LOCK_PATH', lock_path))
+            stack.enter_context(patch.object(ui, '_acquire_desktop', side_effect=signal_waiting))
+            fcntl.flock(desktop, fcntl.LOCK_EX)
+            owner = threading.Thread(target=publish)
+            owner.start()
+
+            def next_poll(_delay):
+                if polls == 1:
+                    event, = self.state.pending(OWNER)
+                    self.assertEqual(event.status, 'prepared')
+                    self.assertEqual(event.observation['text'], message)
+                    self.assertFalse(self.state.dropped_since(0))
+                    fcntl.flock(desktop, fcntl.LOCK_UN)
+                    owner.join(3)
+                    self.assertTrue(finished.is_set())
+                else:
+                    raise StopIteration
+
+            for key, value in values.items():
+                stack.enter_context(patch.object(listener, key, return_value=value))
+            stack.enter_context(patch.object(listener, 'observe_database', side_effect=observe))
+            stack.enter_context(patch.object(listener, 'deliver', side_effect=deliver))
+            stack.enter_context(patch.object(listener.FriendReplyLane, 'step', return_value=None))
+            stack.enter_context(patch.object(listener, 'time',
+                                            SimpleNamespace(time=time.time, monotonic=time.monotonic, sleep=next_poll)))
+            status = stack.enter_context(patch.object(listener, 'write_status'))
+            try:
+                self.assertTrue(waiting.wait(2))
+                with self.assertRaises(StopIteration):
+                    listener.run(self.state, {'account_name': 'Fixture bot'}, self.root / 'screen.png', self.root)
+            finally:
+                fcntl.flock(desktop, fcntl.LOCK_UN)
+                owner.join(3)
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(self.state.pending(OWNER), ())
+        self.assertEqual(self.state.history(OWNER, owner=True)[-2]['text'], message)
+        self.assertFalse(self.state.dropped_since(0))
+        self.assertEqual([call.args[1] for call in status.call_args_list], ['running', 'running'])
+        self.assertEqual([call.kwargs['pending'] for call in status.call_args_list], [1, 0])
 
 
 class ConversationIsolationTest(unittest.TestCase):

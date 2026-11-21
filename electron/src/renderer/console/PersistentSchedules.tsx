@@ -23,6 +23,7 @@ export const PersistentSchedules = ({ api, providers, locale }: AutomationUIProp
   const [weekday, setWeekday] = useState(1);
   const [timezone, setTimezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   const [providerId, setProviderId] = useState(enabledProviders[0]?.id ?? '');
+  const [model, setModel] = useState('');
   const [instruction, setInstruction] = useState('');
   const [material, setMaterial] = useState('');
   const [privacy, setPrivacy] = useState<PersistentScheduleInput['privacy']>('local-only');
@@ -44,7 +45,7 @@ export const PersistentSchedules = ({ api, providers, locale }: AutomationUIProp
   const edit = (item: PersistentSchedule | null): void => {
     setEditing(item); setTitle(item?.title ?? ''); setInstruction(item?.instruction ?? ''); setMaterial(item?.material ?? '');
     setPrivacy(item?.privacy ?? 'local-only'); setMissedPolicy(item?.missedPolicy ?? 'skip'); setEnabled(item?.enabled ?? true);
-    setTimezone(item?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC'); setProviderId(item?.providerId ?? enabledProviders[0]?.id ?? '');
+    setTimezone(item?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC'); setProviderId(item?.providerId ?? enabledProviders[0]?.id ?? ''); setModel(item?.model ?? '');
     setKind(item?.rule.kind ?? 'daily'); if (item?.rule.kind === 'once') setAt(item.rule.at); else setTime(item?.rule.time ?? '09:00');
     setWeekday(item?.rule.kind === 'weekly' ? item.rule.weekday : 1); setPreview([]);
   };
@@ -54,7 +55,7 @@ export const PersistentSchedules = ({ api, providers, locale }: AutomationUIProp
     event.preventDefault(); const provider = enabledProviders.find((item) => item.id === providerId);
     if (!provider || !title.trim() || !instruction.trim()) { setError(true); return; }
     await perform(async () => { await api.scheduleUpsert({ id: editing?.id ?? crypto.randomUUID(), title: title.trim(), instruction: instruction.trim(), material,
-      privacy, providerId: provider.id, model: provider.model, rule: rule(), timezone, missedPolicy, enabled }); edit(null); setFormOpen(false); });
+      privacy, providerId: provider.id, model: model.trim() || null, rule: rule(), timezone, missedPolicy, enabled }); edit(null); setFormOpen(false); });
   };
   const date = (value: string): string => {
     try { return new Intl.DateTimeFormat(locale === 'zh-CN' ? 'zh-CN' : 'en', { dateStyle: 'medium', timeStyle: 'long', timeZone: timezone }).format(new Date(value)); }
@@ -73,8 +74,11 @@ export const PersistentSchedules = ({ api, providers, locale }: AutomationUIProp
       {kind === 'weekly' && <label>{copy.day}<select aria-label={copy.day} disabled={busy} value={weekday} onChange={(event) => { setWeekday(Number(event.target.value)); setPreview([]); }}>{copy.weekdays.map((name, index) => <option key={name} value={index}>{name}</option>)}</select></label>}
       </div>
       <label>{copy.instruction}<textarea aria-label={copy.instruction} required maxLength={4000} disabled={busy} value={instruction} onChange={(event) => setInstruction(event.target.value)} /></label>
-      <label>{copy.provider}<select aria-label={copy.provider} disabled={busy} value={providerId} required onChange={(event) => setProviderId(event.target.value)}><option value="">{copy.needProvider}</option>{enabledProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}</select></label>
+      <label>{copy.provider}<select aria-label={copy.provider} disabled={busy} value={providerId} required onChange={(event) => { setProviderId(event.target.value); setModel(''); }}><option value="">{copy.needProvider}</option>{enabledProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}</select></label>
       <details className="settings-more"><summary>{copy.moreOptions}</summary><div className="stack-form">
+      <label>{locale === 'zh-CN' ? '模型' : 'Model'}<input maxLength={240} disabled={busy} value={model}
+        placeholder={locale === 'zh-CN' ? '跟随服务默认模型' : 'Follow provider default'}
+        onChange={event => setModel(event.target.value)} /></label>
       <label>{copy.zone}<input aria-label={copy.zone} required maxLength={128} disabled={busy} value={timezone} onChange={(event) => { setTimezone(event.target.value); setPreview([]); }} /></label>
       <label>{copy.missed}<select aria-label={copy.missed} disabled={busy} value={missedPolicy} onChange={(event) => setMissedPolicy(event.target.value as PersistentScheduleInput['missedPolicy'])}><option value="skip">{copy.skip}</option><option value="run-once">{copy.catchup}</option></select></label>
       <p className="muted">{copy.dst}</p>

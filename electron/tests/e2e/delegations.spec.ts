@@ -214,7 +214,8 @@ for (const scenario of scenarios) {
         current = (await batches())[0]!; expect(current.children).toHaveLength(2);
         await page!.evaluate((id) => window.deskpet.providers.setModel(id, 'front-model'), providerIds[0]!);
     await page!.locator('.chat-model-picker > summary').click();
-        await expect(page!.getByRole('combobox', { name: 'Chat model', exact: true })).toHaveValue('front-model');
+        await expect(page!.getByRole('combobox', { name: 'Chat model', exact: true })
+          .getByRole('option', { name: 'Follow service default (front-model)' })).toHaveJSProperty('selected', true);
         await page!.locator('.composer textarea').fill(chatTag); await page!.locator('.composer textarea').press('Enter');
         reply(held.get('child-0')!, resultTags[0]!); held.delete('child-0');
         current = await waitStatuses(current.id, ['succeeded', 'succeeded']); await waitChatComplete();

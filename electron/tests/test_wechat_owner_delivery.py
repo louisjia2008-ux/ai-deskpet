@@ -15,6 +15,7 @@ import wechat_listener as listener
 import wechat_moments as moments
 import wechat_owner_delivery as delivery
 from wechat_db_intake import DbIntake, DbScope
+from wechat_reply_settings import read_cloud_route
 import wechat_voice_send
 import wechat_voice_synthesis
 from wechat_state import WeChatState, digest_day_end
@@ -180,6 +181,32 @@ class OwnerDeliveryTest(unittest.TestCase):
                 self.assertIsNotNone(listener.authorize_cloud_request(state, self.settings, self.root, {**request, 'text': asked}))
                 self.assertIsNone(listener.authorize_cloud_request(state, self.settings, self.root, {**request, 'text': model_text + 'extra'}))
                 self.assertIsNone(listener.authorize_cloud_request(state, self.settings, self.root, {**request, 'binding': '0' * 64}))
+
+    def test_following_cloud_routes_keep_bound_fingerprints_for_all_scopes(self):
+        pin = 'd' * 64
+        group = 'a' * 32
+        friend = 'b' * 32
+        pinned = {'providerId': 'fixture', 'model': 'm1'}
+        following = {**pinned, 'follow': True}
+
+        def install(private):
+            self.write('cloud-settings.json', {'private': private, 'groups': {group: following},
+                                                 'destinations': {'private': pin, group: pin}})
+            self.write('friend-cloud-settings.json', {'friends': {friend: following},
+                                                        'destinations': {f'friend:{friend}': pin}})
+
+        original = sha256(json.dumps(['fixture', 'm1', pin], separators=(',', ':')).encode()).hexdigest()
+        updated = sha256(json.dumps(['fixture', 'm1', pin, True], separators=(',', ':')).encode()).hexdigest()
+        install(pinned)
+        self.assertEqual(read_cloud_route(self.root, 'private', None), original)
+        install(following)
+        self.assertEqual(read_cloud_route(self.root, 'private', None), updated)
+        self.assertEqual(read_cloud_route(self.root, 'group', group), updated)
+        self.assertEqual(read_cloud_route(self.root, 'friend', friend), updated)
+        for invalid in (False, 1, None, 'true'):
+            install({**pinned, 'follow': invalid})
+            with self.assertRaises(ValueError):
+                read_cloud_route(self.root, 'private', None)
 
     def test_article_authority_is_bound_to_the_persisted_private_card(self):
         url = 'https://mp.weixin.qq.com/s/0123456789ab'

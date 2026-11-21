@@ -1,7 +1,10 @@
 import base64
 import json
+import multiprocessing
+import os
 import sqlite3
 import sys
+import time
 import unittest
 from contextlib import nullcontext
 from io import BytesIO
@@ -28,6 +31,22 @@ def request(**changes):
              "images": [base64.b64encode(png()).decode()]}
     value.update(changes)
     return json.dumps(value, ensure_ascii=False).encode()
+
+
+def busy_listener(lock_path, pipe, rounds):
+    """One fake-background process repeatedly occupies the real desktop lock."""
+    ui.VM_LOCK_PATH = lock_path
+    with pipe:
+        attempt = 0
+        while attempt < rounds:
+            try:
+                with ui.vm_operation():
+                    pipe.send(attempt)
+                    time.sleep(2.0)
+                    attempt += 1
+            except ui.OperationBusy:
+                pass
+            time.sleep(0.3)
 
 
 class ParseTest(unittest.TestCase):
@@ -59,12 +78,12 @@ class PostTest(unittest.TestCase):
         self.state = self.root / "listener.db"
         self.request = moments.parse_post(request())
 
-    def post(self, publish):
+    def post(self, publish, *, open_target=None, paused=False, lock=None, guest=None):
         with (
-            patch.object(moments.ui, "vm_operation", side_effect=nullcontext),
-            patch.object(moments, "is_paused", return_value=False),
-            patch.object(moments.ui, "open_target"),
-            patch.object(moments.ui, "guest", return_value=b"/home/agent"),
+            patch.object(moments.ui, "vm_operation", side_effect=lock or (lambda **_: nullcontext())),
+            patch.object(moments, "is_paused", return_value=paused),
+            patch.object(moments.ui, "open_target", side_effect=open_target),
+            patch.object(moments.ui, "guest", return_value=b"/home/agent", side_effect=guest),
             patch.object(moments, "close_moments"),
             patch.object(moments, "publish", side_effect=publish),
         ):
@@ -100,6 +119,90 @@ class PostTest(unittest.TestCase):
         self.assertEqual(self.post(unconfirmed), "uncertain")
         with sqlite3.connect(self.state) as db:
             self.assertEqual(db.execute("SELECT status FROM wechat_moment_posts").fetchall(), [("uncertain",)])
+
+    def test_busy_paused_and_window_error_have_distinct_pre_publish_outcomes(self):
+        def forbidden(*_args, **_kwargs):
+            self.fail("the composer must not publish")
+
+        def locked(**_options):
+            raise ui.OperationBusy("fixture busy")
+
+        def moments_window_missing(*_args, **_kwargs):
+            raise moments.MomentWindowError("fixture Moments window")
+
+        with self.subTest("busy"):
+            self.assertEqual(self.post(forbidden, lock=locked), "busy")
+        with self.subTest("paused"):
+            self.assertEqual(self.post(forbidden, paused=True), "paused")
+            self.assertEqual(self.post(forbidden, lock=locked, paused=True), "paused")
+        with self.subTest("window error"):
+            self.assertEqual(self.post(forbidden, open_target=ui.TestError("fixture window")), "window_error")
+            self.assertEqual(self.post(moments_window_missing), "window_error")
+        with sqlite3.connect(self.state) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM wechat_moment_posts").fetchone()[0], 0)
+
+    def test_post_setup_error_is_kept_when_guest_cleanup_also_fails(self):
+        def failed_window(*_args, **_kwargs):
+            raise moments.MomentWindowError("fixture Moments window")
+
+        def guest(command, *_args):
+            if command.startswith("rm -f"):
+                raise OSError("fixture cleanup failure")
+            return b"/home/agent"
+
+        self.assertEqual(self.post(failed_window, guest=guest,
+                                   open_target=[None, OSError("fixture restore failure")]), "window_error")
+
+    def test_twenty_posts_against_a_high_frequency_cross_process_listener(self):
+        rounds = 20
+        os.chmod(self.root, 0o700)
+        lock_path = self.root / "desktop.lock"
+        ctx = multiprocessing.get_context("spawn")
+        receiver, writer = ctx.Pipe(duplex=False)
+        worker = ctx.Process(target=busy_listener, args=(lock_path, writer, rounds), daemon=True)
+        worker.start()
+        writer.close()
+        durations = []
+        started = None
+
+        def publish(_settings, _path, _request, _paths, *, before_post):
+            durations.append(time.monotonic() - started)
+            self.assertTrue(before_post())
+            return True
+
+        outcomes = []
+        try:
+            with (
+                receiver,
+                patch.object(ui, "VM_LOCK_PATH", lock_path),
+                patch.object(moments, "MOMENTS_LOCK_WAIT", 5),
+                patch.object(ui, "open_target"),
+                patch.object(ui, "guest", return_value=b"/home/fixture"),
+                patch.object(moments, "close_moments"),
+                patch.object(moments, "publish", side_effect=publish),
+            ):
+                for attempt in range(rounds):
+                    self.assertTrue(receiver.poll(6), f"listener did not start poll {attempt}")
+                    self.assertEqual(receiver.recv(), attempt)
+                    started = time.monotonic()
+                    payload = {**self.request, "id": f"{attempt:064x}"}
+                    outcomes.append(moments.post_moment({}, self.root, self.state, payload))
+                    self.assertEqual(outcomes[-1], "posted")
+        finally:
+            worker.join(3)
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(3)
+        self.assertEqual(worker.exitcode, 0)
+        self.assertEqual(len(durations), rounds)
+        self.assertTrue(all(0 < seconds < 5 for seconds in durations))
+        with sqlite3.connect(self.state) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM wechat_moment_posts WHERE status='posted'").fetchone()[0], rounds)
+        print(json.dumps({
+            "scenario": "cross_process_moments_contention", "attempts": rounds, "posted": outcomes.count("posted"),
+            "listener_hold_s": 2.0, "listener_gap_s": 0.3, "test_wait_budget_s": 5,
+            "avg_wait_s": round(sum(durations) / rounds, 3), "max_wait_s": round(max(durations), 3),
+        }), flush=True)
 
 
 if __name__ == "__main__":

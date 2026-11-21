@@ -19,13 +19,14 @@ const fixture = () => {
   const providers = { list: vi.fn(() => [local, remote]), setModel: vi.fn(async () => local), upsert: vi.fn(async () => local),
     remove: vi.fn(async () => undefined), clearSecret: vi.fn(async () => local), discoverModels: vi.fn(async () => []) };
   const deps = { ipc: { register }, providers, settings: { get: () => structuredClone(settings), update: vi.fn<AppSettingsService['update']>(async patch => { Object.assign(settings, patch); return structuredClone(settings); }) },
+    modelBindings: { impact: vi.fn(async () => null), change: vi.fn(async (_id, _model, _consent, save: () => Promise<ProviderConfig>) => save()) },
     routingChanged: vi.fn(), providersChanged: vi.fn(), selected: vi.fn(() => ({ activeProviderId: settings.activeProviderId }) as AppState), listModels: vi.fn(async () => []) };
   registerProviderIpc(deps);
   return { ...deps, local, remote, settingsValue: settings, call: async (channel: InvokeChannel, value: unknown = {}) => handlers.get(channel)!(value), count: handlers.size };
 };
 
 it('registers every provider route as console-only and changes selection only after a valid durable settings update', async () => {
-  const f = fixture(); expect(f.count).toBe(11);
+  const f = fixture(); expect(f.count).toBe(12);
   await expect(f.call('providers:select', { id: 'missing' })).rejects.toThrow('provider.unavailable');
   expect(f.settings.update).not.toHaveBeenCalled(); expect(f.selected).not.toHaveBeenCalled();
   await expect(f.call('providers:select', { id: f.local.id })).resolves.toEqual({ activeProviderId: f.local.id });

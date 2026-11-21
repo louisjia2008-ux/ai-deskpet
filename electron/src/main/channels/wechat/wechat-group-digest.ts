@@ -1,3 +1,4 @@
+import { providerFailureCode } from '../../../shared/provider-errors';
 import { z } from 'zod';
 import { WeChatDigestFailure, type WeChatDigestContext, type WeChatDigestOutput } from './wechat-digest-scheduler';
 import type { WeChatDigestGroupSettings } from '../../../shared/wechat-digests';
@@ -54,6 +55,7 @@ export async function generateWeChatGroupDigest(host: Host, context: WeChatDiges
   const titles = new Map(roster.map(row => [row.id, row.title]));
   const entries: WeChatDigestOutput['entries'] = [];
   const failed: Array<'read' | 'model'> = [];
+  let providerError = '';
   const keywords = host.settings.keywords.map(word => word.normalize('NFKC').toLowerCase());
   for (const scope of host.settings.groups) {
     await context.assertCurrent();
@@ -82,7 +84,12 @@ export async function generateWeChatGroupDigest(host: Host, context: WeChatDiges
       const raw = (await host.complete(scope, GROUP_DIGEST_PROMPT, data, context)).trim();
       const block = /^```(?:json)?\s*([\s\S]+)\s*```$/iu.exec(raw);
       summary = parsedSummary.parse(JSON.parse(block?.[1] ?? raw));
-    } catch { await context.assertCurrent(); failed.push('model'); continue; }
+    } catch (error) {
+      await context.assertCurrent();
+      providerError ||= providerFailureCode(error, '');
+      failed.push('model');
+      continue;
+    }
     await context.assertCurrent();
     const originals = new Set(rows.map(row => printable(row.text.replace(linkPattern, ''), 95)));
     const safePoint = (line: string) => {
@@ -111,5 +118,6 @@ export async function generateWeChatGroupDigest(host: Host, context: WeChatDiges
   const overview = [intro, '可在「动态」看全文。', ...entries.map((entry, index) => String(index + 1) + '. '
     + entry.title.slice(0, 30).replace(/[\uD800-\uDFFF]$/u, '') + '：' + entry.summary.slice(0, 55).replace(/[\uD800-\uDFFF]$/u, '')), more];
   const messages = !entries.length ? [] : full.length <= maxPrivateBubbles ? full : packWeChatDigestLines(overview).slice(0, maxPrivateBubbles);
-  return { entries, messages, ...(failed.length ? { issue: failed.includes('read') ? 'read' : 'model', failures: failed.length } : {}) };
+  return { entries, messages, ...(failed.length ? { issue: failed.includes('read') ? 'read' : 'model', failures: failed.length } : {}),
+    ...(providerError ? { providerError } : {}) };
 }

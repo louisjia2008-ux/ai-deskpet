@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { EncryptedJsonStore } from '../../persistence/encrypted-json-store';
 import type { VaultKeyProvider } from '../../persistence/encrypted-json-store';
 import { qqChannelStateSchema } from '../../../shared/qq-channel';
@@ -49,6 +50,7 @@ export class QqChannelStore {
       const draft = structuredClone(this.#state);
       const result = mutation(draft);
       const next = qqChannelStateSchema.parse(draft);
+      if (this.#store.hasPersistedValue && isDeepStrictEqual(next, this.#state)) return result;
       try { await this.#store.save(next); }
       catch (error) { this.#uncertain = true; throw error; }
       this.#state = next;

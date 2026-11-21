@@ -9,7 +9,7 @@ export const researchTaskInputSchema = z.object({
   goal: z.string().trim().min(1).max(8_000),
   material: z.string().max(64_000),
   providerId: id,
-  model: z.string().trim().min(1).max(240),
+  model: z.string().trim().min(1).max(240).nullable().default(null),
   allowRemote: z.boolean(),
   maxMinutes: z.number().int().min(2).max(30).default(10),
   maxToolCalls: z.number().int().min(4).max(40).default(20),

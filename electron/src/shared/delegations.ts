@@ -1,12 +1,16 @@
 import type { BackgroundJobStatus } from './background-jobs';
-import type { ContextPrivacy } from './contracts';
+import type { ChatModelSelection, ContextPrivacy } from './contracts';
 import type { CheckResult, Requirement } from './delegation-checks';
-export interface DelegationDraft { sessionId: string; intentVersion: number; goal: string; currentBatchId: string | null }
+export interface DelegationDraft {
+  sessionId: string; intentVersion: number; goal: string; currentBatchId: string | null;
+  childModelSelections?: ChatModelSelection[] | undefined;
+}
 export interface DelegationSubmit {
   operationId: string; sessionId: string; intentVersion: number; goal: string; deadlineAt: string;
   /** Legacy input retained for exact operation replay; token values never limit execution. */
   budget?: { maxEstimatedTokens: number; maxRequests: number } | undefined;
-  children: Array<{ instruction: string; material: string; privacy: ContextPrivacy; providerId: string; model: string; requirements: Requirement[] }>;
+  children: Array<{ instruction: string; material: string; privacy: ContextPrivacy; providerId: string; model: string | null;
+    reviewedDefaultModel?: string | undefined; requirements: Requirement[] }>;
 }
 export interface DelegationReservation { reservedTokens: number; chargedTokens: number; state: 'reserved' | 'settled' | 'released' | 'unknown' | 'overrun'; reportedTokens: number | null }
 export type DelegationStatus = 'active' | 'completed' | 'partial' | 'cancelled' | 'expired' | 'interrupted' | 'historical';

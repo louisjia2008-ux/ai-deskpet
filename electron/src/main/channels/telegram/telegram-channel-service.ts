@@ -172,7 +172,7 @@ export class TelegramChannelService {
     this.#store = deps.store;
     this.#api = deps.api ?? new TelegramBotApi();
   }
-  async initialize(): Promise<void> {
+  async initialize({ deferConnection = false } = {}): Promise<void> {
     try {
       await this.#store.initialize();
       this.#storageReady = true;
@@ -204,8 +204,24 @@ export class TelegramChannelService {
       // A workspace decision cannot survive the waiting host invocation.
       s.approvals = s.approvals.filter((a) => a.kind === 'disclose' && a.outboxId !== null);
     });
-    await this.#start(this.#epoch);
+    if (!deferConnection) await this.startConnection();
   }
+
+  async startConnection(): Promise<void> {
+    if (this.#storageReady && this.#store.snapshot().profileId !== null) await this.#start(this.#epoch);
+  }
+
+  async followModel(expected: { providerId: string; model: string }): Promise<boolean> {
+    if (!this.#storageReady) return false;
+    const changed = await this.#store.update(draft => {
+      if (draft.profileId !== this.#deps.profileId() || draft.providerId !== expected.providerId || draft.model !== expected.model) return false;
+      draft.model = null;
+      return true;
+    });
+    if (changed) this.#changed();
+    return changed;
+  }
+
   #changed(): void {
     this.#deps.onChanged?.();
   }
@@ -311,7 +327,10 @@ export class TelegramChannelService {
         s.profileId = this.#deps.profileId();
         discard(s);
         if (patch.enabled !== undefined) s.enabled = patch.enabled;
-        if (patch.providerId !== undefined) s.providerId = patch.providerId;
+        if (patch.providerId !== undefined && patch.providerId !== s.providerId) {
+          s.providerId = patch.providerId;
+          if (patch.model === undefined) s.model = null;
+        }
         if (patch.model !== undefined) s.model = patch.model;
         if (patch.memoryAllowed !== undefined) s.memoryAllowed = patch.memoryAllowed;
       });

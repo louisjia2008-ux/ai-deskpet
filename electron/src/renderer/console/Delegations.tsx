@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
-import type { ProviderConfig } from '../../shared';
+import type { ChatModelSelection, ProviderConfig } from '../../shared';
 import { API_VERSION, MAX_IPC_BYTES } from '../../shared';
 import type { DelegationBatch, DelegationDraft, DelegationResult, DelegationSubmit } from '../../shared/delegations';
 import type { Requirement } from '../../shared/delegation-checks';
@@ -20,7 +20,8 @@ const copy = {
     frozenDeadline: 'Frozen deadline', requests: 'Child requests', deadline: 'Deadline (minutes)',
     usageNote: 'Each child generates at most once. Tokens are recorded when reported by the provider; missing usage stays unknown.',
     preview: 'Delegation submission preview', submit: 'Submit delegation', saving: 'Saving delegation…', retry: 'Recover this submission', closeDraft: 'Close draft',
-    missing: 'Select an explicit provider and model for every child. Missing fields remain a draft; nothing runs until submission.',
+    missing: 'Choose a provider for every child. A child can follow that service’s default model or use a selected model.',
+    follow: 'Follow service default',
     rejected: 'This draft was rejected before acceptance. Review the fields, current goal, binding, privacy, deadline and selected children.',
     uncertain: 'Submission unconfirmed / result unknown. Recover the identical submission before creating another; its operation ID, inputs and deadline stay fixed.',
     replacementRequired: 'This chat already has a current delegation. Use Replace goal on that batch to preserve it as history and open a new draft.',
@@ -48,7 +49,8 @@ const copy = {
     frozenDeadline: '冻结截止时间', requests: 'Child 请求数', deadline: '截止时间（分钟后）',
     usageNote: '每个 child 最多生成一次。Token 用量按供应商实报记录，未返回的用量保持未知。',
     preview: '委派提交预览', submit: '提交委派', saving: '正在保存委派…', retry: '恢复本次提交', closeDraft: '关闭草稿',
-    missing: '请为每个 child 明确选择 Provider 和模型。必要字段缺失时保留草稿，显式提交前不会运行。',
+    missing: '请为每个 child 选择服务。可以跟随该服务的默认模型，也可以指定模型。',
+    follow: '跟随服务默认模型',
     rejected: '草稿在接收前被拒绝。请核对字段、当前目标、binding、隐私、截止时间和所选 child。',
     uncertain: '提交未确认／结果未知。请恢复完全相同的提交，操作 ID、输入和截止时间保持不变，不先创建另一组任务。',
     replacementRequired: '此聊天已有当前委派。请使用该批次的“替换目标”，将旧目标保留为历史并打开新草稿。',
@@ -72,7 +74,8 @@ interface ChildEditor {
   id: string; instruction: string; material: string; providerId: string; model: string; cloud: boolean;
   exact: boolean; expected: string; exactId: string; words: boolean; min: number; max: number; wordsId: string; other: string; otherId: string;
 }
-const newChild = (instruction = ''): ChildEditor => ({ id: crypto.randomUUID(), instruction, material: '', providerId: '', model: '', cloud: false,
+const newChild = (instruction = '', selection?: ChatModelSelection): ChildEditor => ({ id: crypto.randomUUID(), instruction, material: '',
+  providerId: selection?.providerId ?? '', model: selection?.model ?? '', cloud: false,
   exact: false, expected: '', exactId: crypto.randomUUID(), words: false, min: 200, max: 220, wordsId: crypto.randomUUID(), other: '', otherId: crypto.randomUUID() });
 const rulesFor = (child: ChildEditor): Requirement[] => [
   ...(child.exact ? [{ id: child.exactId, kind: 'exact-text' as const, expected: child.expected }] : []),
@@ -96,7 +99,7 @@ const reportedTokens = (batch: DelegationBatch): number | null => {
 const DelegationForm = ({ draft, providers, text, locale, onSaved, onClose }: { draft: DelegationDraft; providers: ProviderConfig[]; text: Copy; locale: 'en' | 'zh-CN'; onSaved(batch: DelegationBatch): void; onClose(): void }): JSX.Element => {
   const setupText = providerSetupText(locale);
   const [goal, setGoal] = useState(draft.goal);
-  const [children, setChildren] = useState<ChildEditor[]>(() => [newChild(draft.goal)]);
+  const [children, setChildren] = useState<ChildEditor[]>(() => [newChild(draft.goal, draft.childModelSelections?.[0])]);
   const [minutes, setMinutes] = useState(10);
   const [pending, setPending] = useState(false); const [error, setError] = useState<'rejected' | 'unknown' | null>(null);
   const attempt = useRef<DelegationSubmit | null>(null); const submitting = useRef(false); const mounted = useRef(true);
@@ -106,13 +109,16 @@ const DelegationForm = ({ draft, providers, text, locale, onSaved, onClose }: { 
   const update = (id: string, change: Partial<ChildEditor>): void => setChildren((current) => current.map((child) => child.id === id ? { ...child, ...change } : child));
   const valid = goal.trim().length > 0 && children.length >= 1 && children.length <= 3
     && Number.isFinite(minutes) && minutes >= 1 && minutes <= 1440 && children.every((child) => child.instruction.trim().length > 0 && child.instruction.trim().length <= 16000 && child.material.length <= 16000
-      && enabled.some((provider) => provider.id === child.providerId) && child.model.trim().length > 0
+      && enabled.some((provider) => provider.id === child.providerId)
       && (!child.exact || child.expected.length > 0) && (!child.words || (Number.isInteger(child.min) && Number.isInteger(child.max) && child.min >= 0 && child.max >= child.min && child.max <= 50000)));
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault(); if (submitting.current || (!attempt.current && !valid)) return;
     const input: DelegationSubmit = attempt.current ?? { operationId: crypto.randomUUID(), sessionId: draft.sessionId, intentVersion: draft.intentVersion,
       goal: goal.trim(), deadlineAt: new Date(Date.now() + minutes * 60_000).toISOString(),
-      children: children.map((child) => ({ instruction: child.instruction.trim(), material: child.material, privacy: child.cloud ? 'cloud-allowed' : 'local-only', providerId: child.providerId, model: child.model.trim(), requirements: rulesFor(child) })) };
+      children: children.map((child) => ({ instruction: child.instruction.trim(), material: child.material, privacy: child.cloud ? 'cloud-allowed' : 'local-only',
+        providerId: child.providerId, model: child.model.trim() || null,
+        ...(child.model.trim() ? {} : { reviewedDefaultModel: enabled.find(provider => provider.id === child.providerId)?.model }),
+        requirements: rulesFor(child) })) };
     // Match the actual versioned IPC envelope's UTF-8 bytes before any send.
     // A local size rejection is definite: there is no accepted operation to recover.
     if (new globalThis.Blob([JSON.stringify({ version: API_VERSION, payload: input })]).size > MAX_IPC_BYTES) {
@@ -131,9 +137,10 @@ const DelegationForm = ({ draft, providers, text, locale, onSaved, onClose }: { 
       <legend>{prefix}</legend>
       <label>{prefix} {text.instruction}<textarea aria-label={`${prefix} ${text.instruction}`} required maxLength={16_000} value={child.instruction} onChange={(event) => update(child.id, { instruction: event.target.value })} /></label>
       <label>{prefix} {text.material}<textarea aria-label={`${prefix} ${text.material}`} maxLength={16_000} value={child.material} onChange={(event) => update(child.id, { material: event.target.value })} /></label>
-      <div className="background-job-binding"><label>{prefix} {text.provider}<select aria-label={`${prefix} ${text.provider}`} value={child.providerId} required onChange={(event) => update(child.id, { providerId: event.target.value, model: enabled.find((item) => item.id === event.target.value)?.model ?? '' })}>
+      <div className="background-job-binding"><label>{prefix} {text.provider}<select aria-label={`${prefix} ${text.provider}`} value={child.providerId} required onChange={(event) => update(child.id, { providerId: event.target.value, model: '' })}>
         <option value="">{text.choose}</option>{enabled.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
-      </select></label><BoundModelSelect provider={provider} value={child.model} label={`${prefix} ${text.model}`} locale={locale} disabled={frozen} onChange={(value) => update(child.id, { model: value })} /></div>
+      </select></label><BoundModelSelect provider={provider} value={child.model} label={`${prefix} ${text.model}`} locale={locale} disabled={frozen} onChange={(value) => update(child.id, { model: value })}
+        followDefault={provider ? `${text.follow} (${provider.model})` : undefined} /></div>
       <small>{setupText('provider.childModelIndependent')}</small>
       <label className="delegation-checkbox"><input type="checkbox" checked={child.cloud} onChange={(event) => update(child.id, { cloud: event.target.checked })} />{text.cloud}</label>
       <div className="delegation-requirements">
@@ -143,15 +150,15 @@ const DelegationForm = ({ draft, providers, text, locale, onSaved, onClose }: { 
         {child.words && <div className="background-job-binding"><label>{prefix} {text.min}<input type="number" aria-label={`${prefix} ${text.min}`} min={0} max={50000} value={child.min} onChange={(event) => update(child.id, { min: Number(event.target.value) })} /></label><label>{prefix} {text.max}<input type="number" aria-label={`${prefix} ${text.max}`} min={child.min} max={50000} value={child.max} onChange={(event) => update(child.id, { max: Number(event.target.value) })} /></label></div>}
         <label>{prefix} {text.other}<textarea aria-label={`${prefix} ${text.other}`} maxLength={2000} value={child.other} onChange={(event) => update(child.id, { other: event.target.value })} /></label>
       </div>
-      <small>{provider ? `${provider.name} · ${provider.baseUrl} · ${child.model || '—'}` : text.choose}</small>
+      <small>{provider ? `${provider.name} · ${provider.baseUrl} · ${child.model || provider.model}` : text.choose}</small>
       {children.length > 1 && <button type="button" className="secondary" onClick={() => setChildren((current) => current.filter((item) => item.id !== child.id))}>{text.remove} {index + 1}</button>}
     </fieldset>; })}
-    <button type="button" className="secondary" disabled={frozen || children.length >= 3} onClick={() => setChildren((current) => current.length < 3 ? [...current, newChild()] : current)}>{text.add}</button>
+    <button type="button" className="secondary" disabled={frozen || children.length >= 3} onClick={() => setChildren((current) => current.length < 3 ? [...current, newChild('', draft.childModelSelections?.[current.length])] : current)}>{text.add}</button>
     <div className="delegation-run-fields"><label>{text.deadline}<input type="number" aria-label={text.deadline} min={1} max={1440} required value={minutes} disabled={frozen} onChange={(event) => setMinutes(Number(event.target.value))} /></label></div>
     <p className="background-job-note">{text.usageNote}</p><p className="background-job-note">{text.policy}</p>
     <details open className="background-job-preview"><summary>{text.preview}</summary><strong>{text.goal}</strong><pre>{goal.trim() || '—'}</pre><p>{text.requests}: {children.length}; {text.deadline}: {minutes}</p>{attempt.current && <p>{text.frozenDeadline}: {attempt.current.deadlineAt}</p>}
       {children.map((child, index) => { const provider = enabled.find((item) => item.id === child.providerId); return <section key={child.id} aria-label={`${text.child} ${index + 1} preview`}>
-        <h4>{text.child} {index + 1}</h4><p>{provider?.name ?? text.choose} · {provider?.baseUrl ?? '—'} · {child.model.trim() || '—'} · {child.cloud ? 'cloud-allowed' : 'local-only'}</p>
+        <h4>{text.child} {index + 1}</h4><p>{provider?.name ?? text.choose} · {provider?.baseUrl ?? '—'} · {child.model.trim() || provider?.model || '—'} · {child.cloud ? 'cloud-allowed' : 'local-only'}</p>
         <strong>{text.instruction}</strong><pre>{child.instruction.trim() || '—'}</pre><strong>{text.material}</strong><pre>{child.material || '—'}</pre>
         {rulesFor(child).map((rule) => <div key={rule.id}><strong>{checkLabel(rule.kind, text)}</strong><pre>{rule.kind === 'exact-text' ? rule.expected : rule.kind === 'english-word-count' ? `${rule.min}–${rule.max}` : rule.description}</pre></div>)}
       </section>; })}

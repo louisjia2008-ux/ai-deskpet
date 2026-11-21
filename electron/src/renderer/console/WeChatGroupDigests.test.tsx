@@ -45,12 +45,12 @@ it('sets cloud access independently for selected groups, marks reply groups and 
   expect(firstCloud).not.toBeChecked();
   expect(secondCloud).toBeChecked();
   fireEvent.change(screen.getByLabelText('每天发送时间（本机时间）'), { target: { value: '18:05' } });
-  fireEvent.change(screen.getByRole('combobox', { name: '精华使用的云端服务' }), { target: { value: `${provider.id}\n${provider.model}` } });
+  fireEvent.change(screen.getByRole('combobox', { name: '精华使用的云端服务' }), { target: { value: provider.id } });
   fireEvent.change(screen.getByRole('textbox', { name: '关注关键词（每行一个）' }), { target: { value: '  合成关键词\n\n第二个词\n 合成关键词 ' } });
   fireEvent.click(screen.getByRole('button', { name: '保存群聊精华设置' }));
   await waitFor(() => expect(api.setGroupSettings).toHaveBeenCalledExactlyOnceWith({
     time: '18:05', groups: [{ id: first.id, cloud: false }, { id: second.id, cloud: true }],
-    provider: { providerId: provider.id, model: provider.model }, keywords: ['合成关键词', '第二个词'],
+    provider: { providerId: provider.id, model: null }, keywords: ['合成关键词', '第二个词'],
   }));
   expect(await screen.findByText('群聊精华设置已保存。')).toHaveAttribute('role', 'status');
 });

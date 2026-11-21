@@ -4,6 +4,7 @@ import type { AutoMemoryAPI } from './auto-memory';
 import type { MemorySleepAPI } from './memory-sleep';
 import type { ChatImageAttachment, MediaAPI } from './media';
 import type { ModelRouting } from './model-routing';
+import type { DefaultModelChange, DefaultModelImpact, ModelChangeConsent } from './model-bindings';
 import type { ChatWorkPanelApi } from './chat-work-api';
 import type { CodingTask, CodingTaskInput } from './coding-tasks';
 import type { VmSandboxAPI } from './vm-sandbox';
@@ -163,6 +164,12 @@ export interface ChatSession {
   historyPrivacy?: ContextPrivacy | undefined;
   /** A conversation that read device-only notes continues only on this device. */
   knowledgeLocalOnly?: true | undefined;
+  modelSelection?: ChatModelSelection | undefined;
+}
+
+export interface ChatModelSelection {
+  providerId: string;
+  model: string | null;
 }
 
 export interface ChatSessionListOptions {
@@ -710,10 +717,11 @@ export interface DeskPetApi {
     renameSession(id: string, title: string): Promise<ChatSession>;
     setPinned(id: string, pinned: boolean): Promise<ChatSession>;
     setArchived(id: string, archived: boolean): Promise<ChatSession>;
+    setModelSelection(id: string, selection: ChatModelSelection | null): Promise<ChatSession>;
     removeSession(id: string): Promise<ChatSession>;
     restoreSession(id: string): Promise<ChatSession>;
     listMessages(sessionId: string): Promise<ChatMessage[]>;
-    send(input: { sessionId: string; content: string; providerId: string; model?: string; workerIdentity?: string[] }): Promise<{ runId: string }>;
+    send(input: { sessionId: string; content: string; providerId?: string; model?: string; workerIdentity?: string[] }): Promise<{ runId: string }>;
     getInteraction(sessionId: string): Promise<ChatInteractionState | null>;
     followup(input: { runId: string; sessionId: string; operationId: string; content: string }): Promise<ChatMessage>;
     resolveApproval(input: { runId: string; sessionId: string; approvalId: string; decision: ChatApprovalDecision }): Promise<void>;
@@ -769,9 +777,10 @@ export interface DeskPetApi {
     getRouting(): Promise<ModelRouting>;
     setRouting(value: ModelRouting): Promise<ModelRouting>;
     select(id: string): Promise<AppState>;
-    setModel(id: string, model: string): Promise<ProviderConfig>;
+    defaultModelImpact?(id: string): Promise<DefaultModelImpact | null>;
+    setModel(id: string, model: string, consent?: ModelChangeConsent): Promise<ProviderConfig & { modelChange?: DefaultModelChange }>;
     list(): Promise<ProviderConfig[]>;
-    upsert(input: Omit<ProviderConfig, 'secretState'> & { apiKey?: string }): Promise<ProviderConfig>;
+    upsert(input: Omit<ProviderConfig, 'secretState'> & { apiKey?: string; consent?: ModelChangeConsent }): Promise<ProviderConfig & { modelChange?: DefaultModelChange }>;
     remove(id: string): Promise<void>;
     clearSecret(id: string): Promise<ProviderConfig>;
     test(id: string): Promise<{ ok: boolean; messageCode: string; latencyMs: number | null }>;

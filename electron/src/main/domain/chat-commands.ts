@@ -7,9 +7,9 @@ export interface ChatCommandTarget {
   /** Numbered lists are remembered per place, so "/model 2" means the list shown there. */
   key: string;
   locale: 'zh-CN' | 'en';
-  /** A null field follows the desktop selection. */
+  /** A null provider follows the desktop provider. A null model follows that provider’s default. */
   selection(): { providerId: string | null; model: string | null };
-  select(providerId: string, model: string): Promise<void>;
+  select(providerId: string, model: string | null): Promise<void>;
 }
 
 export interface ChatCommandHost {
@@ -85,7 +85,7 @@ export class ChatCommands {
       if ('several' in chosen) return (zh ? '有多个匹配，请写得更完整：\n' : 'Several match; be more specific:\n') + chosen.several.join('\n');
       if ('none' in chosen) return zh ? '没有这个模型服务。发送 /provider 查看列表。' : 'No such provider. Send /provider for the list.';
       const next = providers.find(item => item.id === (byName.get(chosen.found) ?? chosen.found))!;
-      await target.select(next.id, next.model);
+      await target.select(next.id, null);
       this.#remember(target, { models: [] });
       return zh ? `已切换：${next.name} · ${next.model}` : `Switched: ${next.name} · ${next.model}`;
     }

@@ -181,6 +181,7 @@ const api: DeskPetApi = {
     setDoctorAutoRepair: (enabled) => invoke('doctor:set-auto-repair', { enabled }),
     checkDoctor: () => invoke('doctor:check', {}),
     testDoctorWeChat: () => invoke('doctor:wechat-self-test', {}),
+    followDefaultModel: input => invoke('doctor:follow-default-model', input),
     acknowledge: (input) => invoke('attention:acknowledge', input),
     onChanged: (listener) => {
       const stops = (['attention:changed', 'jobs:changed', 'delegations:changed', 'consolidation:changed', 'memory:changed', 'chat:sessions-changed'] as const).map(channel => on(channel, listener));
@@ -357,6 +358,7 @@ const api: DeskPetApi = {
     onOpenRequested: (listener) => on<string>('chat:open-requested', listener),
     listSessions: (options = {}) => invoke('chat:list-sessions', options),
     createSession: (input) => invoke('chat:create-session', input),
+    setModelSelection: (id, selection) => invoke('chat:set-model-selection', { id, selection }),
     renameSession: (id, title) => invoke('chat:rename-session', { id, title }),
     setPinned: (id, pinned) => invoke('chat:set-pinned', { id, pinned }),
     setArchived: (id, archived) => invoke('chat:set-archived', { id, archived }),
@@ -418,7 +420,8 @@ const api: DeskPetApi = {
     getRouting: () => invoke('providers:get-routing', {}),
     setRouting: value => invoke('providers:set-routing',value),
     select: (id) => invoke('providers:select', { id }),
-    setModel: (id, model) => invoke('providers:set-model', { id, model }),
+    defaultModelImpact: id => invoke('providers:default-model-impact', { id }),
+    setModel: (id, model, consent) => invoke('providers:set-model', { id, model, ...(consent ? { consent } : {}) }),
     list: () => invoke('providers:list', {}),
     upsert: (input) => invoke('providers:upsert', input),
     remove: (id) => invoke('providers:remove', { id }),

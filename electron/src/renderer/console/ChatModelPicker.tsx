@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
-import type { ProviderConfig, ProviderModel } from '../../shared';
+import type { ChatModelSelection, ProviderConfig, ProviderModel } from '../../shared';
 import { ModelSelect } from './ModelSelect';
 
-export const ChatModelPicker = ({ providers, provider, running, t, refresh, onSavingChange }: {
+export const ChatModelPicker = ({ providers, provider, selection, onSelect, running, t, refresh, onSavingChange }: {
   providers: ProviderConfig[];
   provider: ProviderConfig | undefined;
+  selection: ChatModelSelection | undefined;
+  onSelect(value: ChatModelSelection | null): Promise<unknown>;
   running: boolean;
   t(key: string): string;
   refresh(): Promise<void>;
@@ -55,21 +57,25 @@ export const ChatModelPicker = ({ providers, provider, running, t, refresh, onSa
     finally { changing.current = false; setSaving(false); onSavingChange(false); }
   };
   const selectModel = (model: string): void => {
-    if (!provider || !model.trim() || model.trim() === provider.model) return;
-    void perform(() => window.deskpet.providers.setModel(provider.id, model.trim()));
+    if (!provider || (model.trim() || null) === (selection?.model ?? null)) return;
+    void perform(() => onSelect({ providerId: provider.id, model: model.trim() || null }));
   };
+  const effectiveModel = selection?.model ?? provider?.model;
+  const summary = provider ? `${provider.name} · ${effectiveModel}` : t('chat.noProvider');
   return <details className="chat-model-picker">
-    <summary><span className="chat-model-summary-label">{t('chat.model')}</span><span className="chat-model-summary-value" title={provider ? `${provider.name} · ${provider.model}` : t('chat.noProvider')}>{provider ? `${provider.name} · ${provider.model}` : t('chat.noProvider')}</span><span className="chat-model-summary-action">{locale === 'zh-CN' ? '更换' : 'Change'}</span></summary>
+    <summary><span className="chat-model-summary-label">{t('chat.model')}</span><span className="chat-model-summary-value" title={summary}>{summary}</span><span className="chat-model-summary-action">{locale === 'zh-CN' ? '更换' : 'Change'}</span></summary>
     <div className="chat-model-expanded">
     <div className="chat-model-controls">
-      <label><span>{t('provider.current')}</span><select aria-label={t('provider.current')} value={provider?.id ?? ''} disabled={saving || !provider} onChange={(event) => {
+      <label><span>{t('provider.current')}</span><select aria-label={t('provider.current')} value={selection?.providerId ?? ''} disabled={saving || !providers.some(item => item.enabled)} onChange={(event) => {
         const selected = event.target.value;
-        void perform(() => window.deskpet.providers.select(selected));
+        void perform(() => onSelect(selected ? { providerId: selected, model: null } : null));
       }}>
-        {!provider && <option value="">{t('chat.noProvider')}</option>}
+        <option value="">{t('chat.followActiveProvider')}</option>
+        {selection && !provider && <option disabled value={selection.providerId}>{t('chat.noProvider')}</option>}
         {providers.filter((item) => item.enabled).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>
-      <ModelSelect models={catalog.key === key ? catalog.models : []} value={provider?.model ?? ''} onChange={selectModel} label={t('chat.model')}
+      <ModelSelect models={catalog.key === key ? catalog.models : []} value={selection?.model ?? ''} onChange={selectModel} label={t('chat.model')}
+        followDefault={provider ? `${t('chat.followDefaultModel')} (${provider.model})` : undefined} defaultModel={provider?.model}
         locale={locale} disabled={saving || !provider} loading={loading} onRefresh={() => setRevision((value) => value + 1)} refreshLabel={t('chat.refreshModels')}
         manualLabel={t('chat.manualModel')} manualIdLabel={t('chat.modelId')} manualUseLabel={t('chat.useModel')} catalogKey={key} showNotice={false} />
     </div>

@@ -40,11 +40,11 @@ it('changes waiting and delivery times while requiring independent cloud consent
   expect(secondCloud).not.toBeChecked();
   fireEvent.change(screen.getByLabelText('每天发送时间（本机时间）'), { target: { value: '18:05' } });
   fireEvent.change(screen.getByRole('spinbutton', { name: '等待回复（分钟）' }), { target: { value: '90' } });
-  fireEvent.change(screen.getByRole('combobox'), { target: { value: `${provider.id}\n${provider.model}` } });
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: provider.id } });
   fireEvent.click(screen.getByRole('button', { name: '保存跟进设置' }));
   await waitFor(() => expect(api.configure).toHaveBeenCalledExactlyOnceWith({
     time: '18:05', waitMinutes: 90, groups: [{ id: first.id, cloud: true }, { id: second.id, cloud: false }],
-    provider: { providerId: provider.id, model: provider.model },
+    provider: { providerId: provider.id, model: null },
   }));
   expect(screen.getByText('跟进设置已保存。')).toHaveAttribute('role', 'status');
 });

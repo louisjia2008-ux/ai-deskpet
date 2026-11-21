@@ -180,7 +180,9 @@ def deliver_private_voice(state, binding, event, settings, path, runtime):
 
     attempted = False
     try:
-        with ui.vm_operation():
+        # A voice reply is explicitly requested by the owner. Keep the wait
+        # short because this runs on the listener's delivery loop.
+        with ui.vm_operation(wait=5):
             pin = DbIntake.pins(state).get(binding)
             if pin is None or pin.target != "private" or not database_event_allowed(state, settings, runtime, event):
                 return "database_unbound"
@@ -199,6 +201,9 @@ def deliver_private_voice(state, binding, event, settings, path, runtime):
             result = record_voice(settings, path, runtime, pin, wav, before_send=before_send)
             if result["status"] == "confirmed" and state.mark_sent(event.id):
                 return "ready"
+    except ui.OperationBusy as error:
+        # Nothing was clicked. Preserve the prepared voice for the next poll.
+        raise ui.OwnerOperationPending("等待微信窗口发送语音。") from error
     except (ui.TestError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as error:
         log_failure("send_check_waiting", error, "private_voice_send")
     if attempted:

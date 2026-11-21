@@ -12,6 +12,7 @@ interface Request { model: string; messages: Array<{ role: string; content: stri
 test('switches models during a reply, preserves draft/history and restores selection after restart', async ({}, info) => {
   const profile = await mkdtemp(join(tmpdir(), 'deskpet-model-switch-e2e-'));
   const requests: Request[] = []; let firstResponse: ServerResponse | undefined;
+  const prompts = new Set(['First turn', 'Continue with the next model', 'Continue in the same conversation']);
   const text = (response: ServerResponse, content: string): void => { response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] })}\n\n`); };
   const finish = (response: ServerResponse): void => { response.end('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'); };
   const server = createServer((request, response) => {
@@ -19,9 +20,12 @@ test('switches models during a reply, preserves draft/history and restores selec
     if (request.url === '/v1/models') { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'alpha' }, { id: 'beta' }] })); return; }
     const chunks: Buffer[] = []; request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Request; requests.push(body);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Request;
+      const lastUser = [...body.messages].reverse().find(message => message.role === 'user');
+      const interactive = prompts.has(lastUser?.content ?? '');
+      if (interactive) requests.push(body);
       response.writeHead(200, { 'content-type': 'text/event-stream' });
-      if (requests.length === 1) { firstResponse = response; text(response, 'Alpha started. '); }
+      if (interactive && requests.length === 1) { firstResponse = response; text(response, 'Alpha started. '); }
       else { text(response, `Reply from ${body.model}.`); finish(response); }
     });
   });
@@ -46,6 +50,7 @@ test('switches models during a reply, preserves draft/history and restores selec
       }
       await window.deskpet.providers.select(first);
       await window.deskpet.permissions.request({ capabilityId: 'timer.write', duration: 'always' });
+      await window.deskpet.chat.createSession({ title: 'Synthetic model switch', kind: 'normal' });
       return { first, second, disabled };
     }, `http://127.0.0.1:${address.port}/v1`);
     await page!.getByRole('button', { name: 'Chat', exact: true }).click();
@@ -72,7 +77,8 @@ test('switches models during a reply, preserves draft/history and restores selec
     expect(requests[1]?.model).toBe('beta');
     expect(requests[1]?.messages).toEqual(expect.arrayContaining([{ role: 'user', content: 'First turn' }, { role: 'assistant', content: 'Alpha started. Alpha completed.' }]));
     await page!.getByRole('combobox', { name: 'Chat provider' }).selectOption(ids.second);
-    await expect(modelPicker).toHaveValue('alpha');
+    await expect(modelPicker).toHaveValue('');
+    await expect(modelPicker.getByRole('option', { name: 'Follow service default (alpha)' })).toHaveJSProperty('selected', true);
     await page!.getByText('Enter a model ID', { exact: true }).click();
     await page!.getByRole('textbox', { name: 'Model ID', exact: true }).fill('custom-gamma');
     await page!.getByRole('button', { name: 'Use this model', exact: true }).click();
@@ -82,6 +88,9 @@ test('switches models during a reply, preserves draft/history and restores selec
     expect(requests[2]?.model).toBe('custom-gamma');
     expect(requests[2]?.messages.some((message) => message.content === 'Reply from beta.')).toBe(true);
     const before = await page!.evaluate(async () => ({ app: await window.deskpet.app.getState(), providers: await window.deskpet.providers.list(), sessions: await window.deskpet.chat.listSessions(), permissions: await window.deskpet.permissions.list() }));
+    expect(before.app.activeProviderId).toBe(ids.first);
+    expect(before.providers.filter(provider => provider.id === ids.first || provider.id === ids.second).map(provider => provider.model)).toEqual(['alpha', 'alpha']);
+    expect(before.sessions[0]?.modelSelection).toEqual({ providerId: ids.second, model: 'custom-gamma' });
     await page!.screenshot({ path: info.outputPath('model-switch.png') });
     await application!.close(); application = undefined; await launch();
     await page!.getByRole('button', { name: 'Chat', exact: true }).click();
@@ -92,6 +101,7 @@ test('switches models during a reply, preserves draft/history and restores selec
     const after = await page!.evaluate(async () => ({ app: await window.deskpet.app.getState(), providers: await window.deskpet.providers.list(), sessions: await window.deskpet.chat.listSessions(), permissions: await window.deskpet.permissions.list() }));
     expect(after.providers).toEqual(before.providers); expect(after.permissions).toEqual(before.permissions);
     expect(after.sessions.map((session) => session.id)).toEqual(before.sessions.map((session) => session.id));
+    expect(after.sessions[0]?.modelSelection).toEqual(before.sessions[0]?.modelSelection);
     await writeFile(info.outputPath('evidence.json'), JSON.stringify({ configuration: { syntheticMetadata: true, nativePermissionChoice: 'mock allow', normalRendererSecurity: true }, requestModels: requests.map((request) => request.model), preservedDraft: true, preservedHistory: true, duringStream: true, restart: true, permissionsPreserved: true, sessionCount: after.sessions.length }, null, 2));
   } finally {
     await application?.close(); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); await rm(profile, { recursive: true, force: true });

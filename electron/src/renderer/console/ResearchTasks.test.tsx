@@ -56,7 +56,7 @@ describe('background research UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start background research' }));
     await screen.findByRole('article', { name: 'Compare public sources' });
     expect(f.submit).toHaveBeenCalledExactlyOnceWith({ operationId: expect.any(String), goal: 'Compare public sources', material: 'SELECTED_PUBLIC_MATERIAL',
-      providerId: provider.id, model: provider.model, allowRemote: false, maxMinutes: 5, maxToolCalls: 12 });
+      providerId: provider.id, model: null, allowRemote: false, maxMinutes: 5, maxToolCalls: 12 });
   });
 
   it('freezes uncertain submissions and recovers with the identical operation ID and input', async () => {
@@ -80,9 +80,10 @@ describe('background research UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start background research' }));
     await screen.findByText('Choose a verified local model or explicitly allow the selected input to be sent to a remote model.');
     expect(screen.getByRole('textbox', { name: 'Research goal' })).toBeEnabled();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Model' }), { target: { value: 'fixture-explicit-pin' } });
     fireEvent.click(screen.getByRole('checkbox')); fireEvent.click(screen.getByRole('button', { name: 'Start background research' }));
     await screen.findByRole('article', { name: 'Compare public sources' });
-    expect(f.submit.mock.calls[1]?.[0].allowRemote).toBe(true);
+    expect(f.submit.mock.calls[1]?.[0]).toMatchObject({ allowRemote: true, model: 'fixture-explicit-pin' });
     expect(f.submit.mock.calls[1]?.[0].operationId).not.toBe(f.submit.mock.calls[0]?.[0].operationId);
   });
 

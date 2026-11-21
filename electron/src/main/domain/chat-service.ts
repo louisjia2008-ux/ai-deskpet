@@ -4,7 +4,7 @@ import type { ChatImageAttachment } from '../../shared/media';
 import { consolidationDependenciesCurrent } from './consolidation-state';
 import { randomUUID } from 'node:crypto';
 
-import type { ChatMessage, ChatRequestPreparation, ChatRequestReceipt, ChatSession, ChatSessionListOptions, ContextTrace, ProviderRequestObservation, TimerReceipt } from '../../shared';
+import type { ChatMessage, ChatModelSelection, ChatRequestPreparation, ChatRequestReceipt, ChatSession, ChatSessionListOptions, ContextTrace, ProviderRequestObservation, TimerReceipt } from '../../shared';
 import type { DomainRepository } from './repository';
 import { chatRequestPreparationSchema, providerRequestObservationSchema } from './schemas';
 import type { PersistentState } from './schemas';
@@ -198,9 +198,9 @@ export class ChatService {
     return { message, content, history: before.slice(0, userIndex), userMessageIds: [user.id, ...additions.map((item) => item.id)] };
   }
 
-  async createSession(title: string, kind: ChatSession['kind'], now = new Date(), channelBindingId?: string): Promise<ChatSession> {
+  async createSession(title: string, kind: ChatSession['kind'], now = new Date(), channelBindingId?: string, modelSelection?: ChatModelSelection): Promise<ChatSession> {
     const session: ChatSession = { id: randomUUID(), title, kind, createdAt: now.toISOString(), updatedAt: now.toISOString(),
-      ...(channelBindingId === undefined ? {} : { channelBindingId }) };
+      ...(channelBindingId === undefined ? {} : { channelBindingId }), ...(modelSelection ? { modelSelection } : {}) };
     await this.repository.transaction((state) => state.chatSessions.push(session));
     return session;
   }

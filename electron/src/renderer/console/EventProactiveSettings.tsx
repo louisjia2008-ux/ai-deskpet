@@ -64,6 +64,7 @@ export const EventProactiveSettings = ({ api, providers, locale }: AutomationUIP
     ...current, eventKinds: current.eventKinds.includes(kind) ? current.eventKinds.filter((value) => value !== kind) : [...current.eventKinds, kind],
   });
   const providerOptions = providers.filter((provider) => provider.enabled);
+  const selectedProvider = providerOptions.find(provider => provider.id === form?.providerId);
   const history = snapshot?.automationTriggers.filter((trigger) => trigger.kind === 'proactive').slice().reverse() ?? [];
   const observations = (snapshot?.proactiveObservations ?? []).slice().reverse();
   const savedMode = snapshot ? proactiveMode(snapshot.proactivePolicy) : 'off';
@@ -85,9 +86,11 @@ export const EventProactiveSettings = ({ api, providers, locale }: AutomationUIP
       <fieldset disabled={busy}><legend>{zh ? '选择事件' : 'Selected events'}</legend>{eventKinds.map((kind) => <label key={kind}><input type="checkbox" checked={form.eventKinds.includes(kind)} onChange={() => toggleEvent(kind)} />{eventTitle(kind, zh)}</label>)}</fieldset>
       {draftMode === 'auto' && <>
         <label>{zh ? '服务提供方' : 'Provider'}<select value={form.providerId ?? ''} disabled={busy} onChange={(event) => {
-          const provider = providerOptions.find((item) => item.id === event.target.value); setForm({ ...form, providerId: provider?.id ?? null, model: provider?.model ?? '' });
+          const provider = providerOptions.find((item) => item.id === event.target.value); setForm({ ...form, providerId: provider?.id ?? null, model: provider ? null : '' });
         }}><option value="">{zh ? '选择服务提供方' : 'Choose provider'}</option>{providerOptions.map((provider) => <option value={provider.id} key={provider.id}>{provider.name}</option>)}</select></label>
-        <label>{zh ? '模型' : 'Model'}<input value={form.model} disabled={busy} maxLength={240} onChange={(event) => setForm({ ...form, model: event.target.value })} /></label>
+        <label>{zh ? '模型' : 'Model'}<input value={form.model ?? ''} disabled={busy} maxLength={240}
+          placeholder={selectedProvider ? `${zh ? '跟随服务默认模型' : 'Follow service default'} (${selectedProvider.model})` : undefined}
+          onChange={(event) => setForm({ ...form, model: event.target.value || null })} /></label>
         <label>{zh ? '资料隐私' : 'Material privacy'}<select value={form.privacy} disabled={busy} onChange={(event) => setForm({ ...form, privacy: event.target.value as ProactivePolicyInput['privacy'] })}><option value="local-only">{zh ? '仅本地' : 'Local only'}</option><option value="cloud-allowed">{zh ? '允许所选服务接收此事件材料' : 'Allow selected provider to receive this event material'}</option></select></label>
       </>}
       <div className="setting-row"><label>{zh ? '静默开始' : 'Quiet start'}<input type="time" value={form.quietStart} disabled={busy} onChange={(event) => setForm({ ...form, quietStart: event.target.value })} /></label><label>{zh ? '静默结束' : 'Quiet end'}<input type="time" value={form.quietEnd} disabled={busy} onChange={(event) => setForm({ ...form, quietEnd: event.target.value })} /></label></div>

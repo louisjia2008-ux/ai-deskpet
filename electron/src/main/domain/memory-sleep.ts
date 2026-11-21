@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { backgroundFailureCode } from './background-failure';
 import type { MemoryItem, MemorySourceReference, ProviderConfig } from '../../shared';
 import type { MemorySleepSettings, MemorySleepStatus } from '../../shared/memory-sleep';
 import { backgroundTextSampling } from '../providers/chat-request-policy';
@@ -130,7 +131,9 @@ export class MemorySleepService {
     try { await promise; this.#lastError = null; }
     catch (error) {
       // A provider code says why, without any of the provider's own text.
-      this.#lastError = error instanceof Error && /^(?:sleep|provider)\.[a-zA-Z]+$/u.test(error.message) ? error.message : 'sleep.failed';
+      this.#lastError = backgroundFailureCode(error, 'sleep.failed', [
+        'sleep.noProvider', 'sleep.invalidResult', 'sleep.incomplete', 'repository.commitUncertain',
+      ]);
       this.#lastFailureAt = this.#now().toISOString(); throw error;
     }
     finally { this.#run = null; this.deps.changed?.(); }

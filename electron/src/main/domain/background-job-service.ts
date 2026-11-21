@@ -52,7 +52,8 @@ export class BackgroundJobService {
 
   constructor(private readonly repository: DomainRepository, private readonly providers: ProviderService,
     private readonly changed: () => void = () => undefined, private readonly available: () => boolean = () => true,
-    private readonly policy: (job: BackgroundJob, phase: 'dispatch' | 'publish') => void = () => undefined) {}
+    private readonly policy: (job: BackgroundJob, phase: 'dispatch' | 'publish') => void = () => undefined,
+    private readonly modelResult: (job: BackgroundJob, error?: string) => void = () => undefined) {}
 
   async initialize(): Promise<void> {
     await this.#recoverOrphans();
@@ -303,25 +304,29 @@ export class BackgroundJobService {
       }
       if (!done) throw new Error('provider.streamInterrupted');
       if (job.delegation && text.trim().length === 0) throw new Error('job.emptyOutput');
-      await this.repository.transaction((state) => {
+      const succeeded = await this.repository.transaction((state) => {
         const current = this.#owned(state, job.id);
-        if (current.cancelRequestedAt || terminal(current.status)) return;
+        if (current.cancelRequestedAt || terminal(current.status)) return false;
         this.#assertBinding(state, current);
         this.policy(current, 'publish');
         if (this.#closing || current.executionOwner !== this.#host || !current.request || current.attemptId !== job.attemptId) throw new Error('job.staleOwner');
         current.status = 'succeeded'; current.result = text; current.completionReason = reason ?? 'stop'; current.updatedAt = now(); this.#receipt(current, 'terminal'); syncDelegations(state);
+        return true;
       });
+      if (succeeded) this.modelResult(job);
     } catch (error) {
       if (safeReason(error) === 'repository.commitUncertain') { this.#uncertain = true; return; }
-      await this.repository.transaction((state) => {
+      const failure = await this.repository.transaction((state) => {
         const current = this.#owned(state, job.id);
         if (terminal(current.status) || current.attemptId !== job.attemptId
-          || (current.executionOwner !== this.#host && !(current.status === 'queued' && current.executionOwner === null))) return;
+          || (current.executionOwner !== this.#host && !(current.status === 'queued' && current.executionOwner === null))) return null;
         current.status = job.delegation && (Date.now() >= Date.parse(job.delegation.deadlineAt) || ['delegation.cancelled', 'delegation.staleIntent', 'delegation.deadlineExceeded', 'delegation.sessionUnavailable'].includes(safeReason(error))) ? 'cancelled' : this.#closing ? (current.request ? 'interrupted' : 'queued')
           : safeReason(error) === 'provider.bindingMismatch' || safeReason(error) === 'provider.budgetExceeded' || safeReason(error).startsWith('automation.') || safeReason(error) === 'job.privacyBlocked' ? 'blocked' : 'failed';
         current.result = null; current.completionReason = this.#closing ? (current.request ? 'job.interruptedUnknown' : 'job.notDispatchedBeforeExit') : abort.signal.aborted ? 'job.deadlineExceeded' : safeReason(error);
         current.updatedAt = now(); if (terminal(current.status)) this.#receipt(current, 'terminal'); syncDelegations(state);
+        return current.status === 'failed' ? current.completionReason : null;
       });
+      if (failure) this.modelResult(job, failure);
     } finally { clearTimeout(timeout); this.#active = null; this.changed(); }
   }
 
@@ -334,7 +339,8 @@ export class BackgroundJobService {
       let intent = state.delegationIntents.find((item) => item.sessionId === input.sessionId);
       if (!intent) { intent = { sessionId: input.sessionId, version: 1, currentBatchId: null, draftGoal: '', operations: [] }; state.delegationIntents.push(intent); }
       if (goal !== null && intent.currentBatchId === null) intent.draftGoal = goal;
-      return { sessionId: input.sessionId, intentVersion: intent.version, goal: goal ?? intent.draftGoal, currentBatchId: intent.currentBatchId };
+      return { sessionId: input.sessionId, intentVersion: intent.version, goal: goal ?? intent.draftGoal, currentBatchId: intent.currentBatchId,
+        childModelSelections: intent.childModelSelections };
     });
   }
 
@@ -358,14 +364,17 @@ export class BackgroundJobService {
         budget: { maxEstimatedTokens: input.budget?.maxEstimatedTokens ?? 0, maxRequests: input.children.length }, children: [] };
       const jobs: BackgroundJob[] = [];
       for (const child of input.children) {
-        const binding = await this.providers.captureBinding(child.providerId, child.model);
+        const binding = await this.providers.captureBinding(child.providerId, child.model ?? undefined);
+        if (child.model === null && child.reviewedDefaultModel !== undefined && child.reviewedDefaultModel !== binding.model) {
+          throw new Error('provider.bindingMismatch');
+        }
         const id = randomUUID(), childId = randomUUID(), childSession = randomUUID();
         const childInput: BackgroundJobInput = { operationId: randomUUID(), instruction: `${child.instruction}\n\nConfirmed requirements:\n${describeRequirements(child.requirements)}`, material: child.material,
-          privacy: child.privacy, providerId: child.providerId, model: child.model };
+          privacy: child.privacy, providerId: child.providerId, model: binding.model };
         if (childInput.instruction.length > 32000) throw new Error('delegation.invalidDraft');
         const job: BackgroundJob = { id, profileId: batch.profileId, operationId: childInput.operationId, specDigest: digest(childInput), attemptId: randomUUID(), origin: 'background-jobs', resultOwner: id,
           instruction: childInput.instruction, material: child.material, source: { kind: 'explicit-paste', actionId: input.operationId, privacy: child.privacy },
-          binding: { provider: binding.provider, model: child.model, digest: binding.bindingDigest, credentialRef: binding.credentialRef!, destination: this.#destination(binding), limits: chatRequestLimits(binding) },
+          binding: { provider: binding.provider, model: binding.model, digest: binding.bindingDigest, credentialRef: binding.credentialRef!, destination: this.#destination(binding), limits: chatRequestLimits(binding) },
           delegation: { batchId, childId, sessionId: childSession, parentSessionId: input.sessionId, intentVersion: input.intentVersion, deadlineAt: input.deadlineAt },
           status: 'queued', executionOwner: null, cancelRequestedAt: null, createdAt, updatedAt: createdAt, completionReason: null, result: null, request: null, receipts: [] };
         if (!contextPrivacyAllows(child.privacy, job.binding.destination)) throw new Error('job.privacyBlocked');
@@ -384,7 +393,13 @@ export class BackgroundJobService {
         if (intent.currentBatchId !== null) throw new Error('delegation.replaceRequired');
         if (Date.now() >= Date.parse(input.deadlineAt)) throw new Error('delegation.deadlineExceeded');
         if (state.delegationBatches.length >= 300 || state.backgroundJobs.length + jobs.length > 1000) throw new Error('job.capacityExceeded');
+        for (const [index, child] of input.children.entries()) {
+          if (child.model === null && state.providers.find(item => item.id === child.providerId && item.enabled)?.model !== jobs[index]?.binding.model) {
+            throw new Error('provider.bindingMismatch');
+          }
+        }
         intent.currentBatchId = batchId; intent.draftGoal = input.goal;
+        intent.childModelSelections = input.children.map(({ providerId, model }) => ({ providerId, model }));
         state.delegationBatches.push(batch); state.backgroundJobs.push(...jobs);
         for (const job of jobs) this.#assertBinding(state, job);
         return batchView(state, batch);
@@ -438,14 +453,14 @@ export class BackgroundJobService {
       const old = intent.operations.find((item) => item.operationId === input.operationId);
       if (old) {
         if (old.digest !== replacementDigest) throw new Error('delegation.operationConflict');
-        return { sessionId: batch.sessionId, intentVersion: old.version, goal: old.goal, currentBatchId: null };
+        return { sessionId: batch.sessionId, intentVersion: old.version, goal: old.goal, currentBatchId: null, childModelSelections: intent.childModelSelections };
       }
       if (intent.currentBatchId !== batch.id || intent.version !== batch.intentVersion) throw new Error('delegation.staleIntent');
       batch.historicalAt = now(); batch.cancelRequestedAt ??= now(); batch.updatedAt = now();
       for (const child of batch.children) this.#cancelStoredChild(childJob(state, batch, child.id), 'delegation.replaced');
       intent.version += 1; intent.currentBatchId = null; intent.draftGoal = goal;
       intent.operations.push({ operationId: input.operationId, digest: replacementDigest, version: intent.version, goal });
-      syncDelegations(state); return { sessionId: batch.sessionId, intentVersion: intent.version, goal, currentBatchId: null };
+      syncDelegations(state); return { sessionId: batch.sessionId, intentVersion: intent.version, goal, currentBatchId: null, childModelSelections: intent.childModelSelections };
     });
     if (this.#active) {
       const state = this.repository.snapshot(); const job = state.backgroundJobs.find((item) => item.id === this.#active!.id);

@@ -37,7 +37,8 @@ export const CareSettings = ({ api, providers, activeProviderId, locale, request
   const provider = usable.find((item) => item.id === policy?.providerId) ?? usable.find((item) => item.id === activeProviderId) ?? usable[0];
   useEffect(() => { void api.snapshot().then((snapshot) => setPolicy(snapshot.proactivePolicy)).catch(() => setStatus('failed')); }, [api]);
   const on = policy !== null && proactiveMode(policy) === 'auto';
-  const apply = async (enabled: boolean, frequency: Frequency, chosen = provider, privacy = policy?.privacy): Promise<void> => {
+  const apply = async (enabled: boolean, frequency: Frequency, chosen = provider, privacy = policy?.privacy,
+    model = chosen?.id === policy?.providerId ? policy?.model || null : null): Promise<void> => {
     if (policy === null || (enabled && chosen === undefined)) return;
     setBusy(true); setStatus(null);
     try {
@@ -46,7 +47,7 @@ export const CareSettings = ({ api, providers, activeProviderId, locale, request
       setPolicy(await api.configureProactive({ ...input, enabled, mode: enabled ? 'auto' : 'off', eventKinds: ['task-completed', 'focus-completed', 'explicit-check-in'],
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...FREQUENCIES[frequency],
         privacy: privacy ?? input.privacy,
-        providerId: chosen?.id ?? input.providerId, model: chosen?.model ?? input.model }));
+        providerId: chosen?.id ?? input.providerId, model }));
     } catch { setStatus('failed'); }
     finally { setBusy(false); }
   };
@@ -66,7 +67,11 @@ export const CareSettings = ({ api, providers, activeProviderId, locale, request
       <label>{t.frequency}<select value={frequencyOf(policy)} disabled={busy} onChange={(event) => void apply(true, event.target.value as Frequency)}>
         {(['rare', 'normal', 'often'] as const).map((value) => <option key={value} value={value}>{t[value]}</option>)}</select></label>
       <label>{t.model}<select value={provider?.id ?? ''} disabled={busy} onChange={(event) => void apply(true, frequencyOf(policy), usable.find((item) => item.id === event.target.value))}>
-        {usable.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model}</option>)}</select></label>
+        {usable.map((item) => <option key={item.id} value={item.id}>{item.name} · {(item.id === policy.providerId && policy.model) || item.model}</option>)}</select></label>
+      {provider && policy.model && <button type="button" className="secondary" disabled={busy}
+        onClick={() => void apply(true, frequencyOf(policy), provider, policy.privacy, null)}>
+        {locale === 'zh-CN' ? '跟随服务默认模型' : 'Follow service default'} ({provider.model})
+      </button>}
     </div>}
     {on && <div className="persona-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void checkInNow()}>{t.now}</button></div>}
     {status && <p role={status === 'failed' ? 'alert' : 'status'}>{t[status]}</p>}

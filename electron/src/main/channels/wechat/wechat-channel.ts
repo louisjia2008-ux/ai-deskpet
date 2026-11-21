@@ -6,7 +6,8 @@ import { z } from 'zod';
 import { WECHAT_REPLY_FRIEND_LIMIT, wechatChannelStateSchema, wechatFriendIdSchema, wechatFriendRosterIdSchema, wechatModelSchema, wechatWindowSchema } from '../../../shared/wechat-channel';
 import type { WeChatChannelAPI, WeChatChannelState, WeChatGroupUpdate, WeChatReply, WeChatReplyFriend, WeChatReplyGroupCandidate, WeChatWindow } from '../../../shared/wechat-channel';
 import { wechatDigestGroupIdSchema, wechatOfficialAccountIdSchema } from '../../../shared/wechat-digests';
-import type { MomentAnswerContext } from './wechat-moments';
+import { WECHAT_MOMENT_WINDOW_FAILURES } from './wechat-moments';
+import type { MomentAnswerContext, MomentPostOutcome, MomentPreviewOutcome } from './wechat-moments';
 import type { WeChatDigestKind } from './wechat-context';
 import { wechatFollowupEvidenceReadSchema } from './wechat-followup-evidence';
 import { appOutageSchema, doctorSelfTestResultSchema, doctorVmHealthSchema, type AppOutage, type DoctorSelfTestResult, type DoctorVmHealth } from '../../../shared/doctor';
@@ -153,7 +154,7 @@ export class WeChatChannel implements Omit<WeChatChannelAPI, 'getCloud' | 'confi
   async recoverWindow(): Promise<WeChatWindow> {
     await this.requireConfigured();
     if (!this.openViewer) throw new Error('wechat.unavailable');
-    return wechatWindowSchema.parse(await this.run(['recover-window']));
+    return wechatWindowSchema.parse(await this.run(['recover-window'], undefined, 4096, 95_000));
   }
 
   async openVirtualMachine(): Promise<void> {
@@ -202,19 +203,23 @@ export class WeChatChannel implements Omit<WeChatChannelAPI, 'getCloud' | 'confi
     return z.strictObject({ outage: appOutageSchema.nullable() }).parse(await this.run(['app-outage-status'], undefined, 1024, 5_000)).outage;
   }
 
-  async postMoment(input: { id: string; text: string; visibility: 'all' | 'private'; images: Buffer[] }): Promise<'posted' | 'uncertain' | 'retry' | 'busy' | 'paused' | 'conflict' | 'invalid_payload'> {
+  async postMoment(input: { id: string; text: string; visibility: 'all' | 'private'; images: Buffer[] }): Promise<MomentPostOutcome> {
     await this.requireConfigured();
-    const result = z.strictObject({ status: z.enum(['posted', 'uncertain', 'retry', 'busy', 'paused', 'conflict', 'invalid_payload']) })
+    const result = z.strictObject({ status: z.enum(['posted', 'uncertain', 'retry', 'conflict', 'invalid_payload', ...WECHAT_MOMENT_WINDOW_FAILURES]) })
       .parse(await this.run(['moments-post'], { id: input.id, text: input.text, visibility: input.visibility,
-        images: input.images.map(image => image.toString('base64')) }, 16_384, 180_000));
+        images: input.images.map(image => image.toString('base64')) }, 16_384, 240_000));
     return result.status;
   }
 
-  async previewMoment(input: { id: string; binding: string; text: string; image: Buffer }): Promise<'sent' | 'retry' | 'uncertain'> {
-    const result = z.strictObject({ status: z.enum(['sent', 'paused', 'busy', 'retry', 'uncertain', 'binding_invalid', 'conflict', 'invalid_payload']) })
-      .parse(await this.run(['moments-preview'], { id: input.id, binding: input.binding, text: input.text, image: input.image.toString('base64') }, 16_384, 150_000));
-    if (result.status === 'sent') return 'sent';
-    return ['paused', 'busy', 'retry'].includes(result.status) ? 'retry' : 'uncertain';
+  async previewMoment(input: { id: string; binding: string; text: string; image: Buffer }): Promise<MomentPreviewOutcome> {
+    const result = z.strictObject({ status: z.enum(['sent', 'retry', 'uncertain', 'binding_invalid', 'conflict', 'invalid_payload', ...WECHAT_MOMENT_WINDOW_FAILURES]) })
+      .parse(await this.run(['moments-preview'], { id: input.id, binding: input.binding, text: input.text, image: input.image.toString('base64') }, 16_384, 210_000));
+    switch (result.status) {
+      case 'binding_invalid':
+      case 'conflict':
+      case 'invalid_payload': return 'uncertain';
+      default: return result.status;
+    }
   }
 
   async momentAnswerContext(draftId: string, input: object): Promise<MomentAnswerContext> {

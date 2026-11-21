@@ -65,7 +65,7 @@ const summaryReason = (job: BackgroundJob): string | null => {
   if (job.completionReason === null) return null;
   if (job.status === 'succeeded') return 'job.completed';
   const allowed = new Set(['job.toolsForbidden', 'job.emptyOutput', 'job.deadlineExceeded', 'job.resultTooLarge', 'job.requestFailed', 'job.interruptedUnknown', 'job.restoredUnknown',
-    'provider.truncated', 'provider.authentication', 'provider.quota', 'provider.rateLimit', 'provider.timeout', 'provider.unavailable', 'provider.failed', 'provider.request', 'provider.bindingMismatch',
+    'provider.truncated', 'provider.authentication', 'provider.quota', 'provider.rateLimit', 'provider.timeout', 'provider.unavailable', 'provider.failed', 'provider.request', 'provider.bindingMismatch', 'provider.modelUnavailable',
     'provider.contextBudgetExceeded', 'provider.invalidRequestBudget', 'provider.budgetExceeded', 'provider.streamInterrupted', 'provider.transportUncertain', 'provider.requestRecordFailed', 'repository.commitUncertain',
     'delegation.cancelled', 'delegation.staleIntent', 'delegation.deadlineExceeded', 'delegation.sessionUnavailable', 'delegation.budgetExceeded',
     'delegation.parentCancelledBeforeDispatch', 'delegation.parentCancelledRemoteUnknown', 'delegation.childCancelledBeforeDispatch', 'delegation.childCancelledRemoteUnknown',

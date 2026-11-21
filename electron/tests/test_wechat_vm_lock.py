@@ -1,5 +1,6 @@
 """An owner's settings action waits for a reply already using the VM desktop."""
 
+import fcntl
 import os
 from pathlib import Path
 import sys
@@ -57,6 +58,50 @@ class VmOperationWaitTest(unittest.TestCase):
                     pass
         finally:
             worker.join()
+
+    def test_pending_owner_does_not_let_pollers_steal_the_lock_and_timeout_releases_claim(self):
+        waiting = threading.Event()
+        finished = threading.Event()
+        errors = []
+        original_acquire = ui._acquire_desktop
+
+        def signal_waiting(lock, operation, deadline, **options):
+            original_acquire(lock, operation, deadline, **options)
+            if operation == fcntl.LOCK_SH:
+                waiting.set()
+
+        def owner():
+            try:
+                with ui.vm_operation(wait=0.35):
+                    self.fail("timed-out owner must not gain the locked desktop")
+            except ui.OperationBusy:
+                pass
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                finished.set()
+
+        ui.VM_LOCK_PATH.touch(mode=0o600)
+        with ui.VM_LOCK_PATH.open("rb") as desktop, patch.object(ui, "_acquire_desktop", side_effect=signal_waiting):
+            fcntl.flock(desktop, fcntl.LOCK_EX)
+            worker = threading.Thread(target=owner)
+            worker.start()
+            try:
+                self.assertTrue(waiting.wait(2))
+                with self.assertRaises(ui.OwnerOperationPending):
+                    with ui.vm_operation():
+                        self.fail("poller must yield to the owner")
+                self.assertTrue(finished.wait(2))
+                # Desktop still locked, but owner claim has expired.
+                with self.assertRaises(ui.OperationBusy) as busy:
+                    with ui.vm_operation():
+                        self.fail("the original owner still holds the desktop")
+                self.assertIs(type(busy.exception), ui.OperationBusy)
+            finally:
+                worker.join()
+        self.assertEqual(errors, [])
+        with ui.vm_operation():
+            pass
 
 
 if __name__ == '__main__':

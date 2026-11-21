@@ -3,6 +3,7 @@ import type { JSX, ReactNode } from 'react';
 import type { AttentionAPI, HealthFeature, HealthItem, HealthSnapshot, HealthState } from '../../shared/attention';
 import { describeWeChatSendDiagnostics } from '../../shared/wechat-send-diagnostics';
 import './attention-center.css';
+import { ModelBindingIssues } from './ModelBindingIssues';
 
 type Locale = 'en' | 'zh-CN';
 const copy = {
@@ -21,7 +22,7 @@ const copy = {
     sinceLaunch: 'Times cover only the period since the app last started.',
     remaining: 'Remaining today: ',
     state: { ok: 'Working', failing: 'Not working', waiting: 'Not run yet', off: 'Off' } satisfies Record<HealthState, string>,
-    feature: { asr: 'Local speech recognition', diary: 'Diary', knowledge: 'Knowledge vault', proactive: 'Unsolicited check-ins', 'wechat-moments': 'WeChat Moments', 'wechat-cron': 'WeChat scheduled delivery', 'wechat-group-digest': 'WeChat group digests', 'wechat-followup': 'Waiting for you', 'wechat-official-brief': 'WeChat official account brief', 'wechat-friends-moments': 'Friends’ Moments digest', 'wechat-friend-reply': 'Friend reply', 'auto-memory': 'Auto memory', 'memory-sleep': 'Nightly memory tidy-up', schedules: 'Schedules', wechat: 'WeChat', qq: 'QQ', telegram: 'Telegram' } satisfies Record<HealthFeature, string>,
+    feature: { asr: 'Local speech recognition', diary: 'Diary', knowledge: 'Knowledge vault', proactive: 'Unsolicited check-ins', 'wechat-moments': 'WeChat Moments', 'wechat-cron': 'WeChat scheduled delivery', 'wechat-group-digest': 'WeChat group digests', 'wechat-followup': 'Waiting for you', 'wechat-official-brief': 'WeChat official account brief', 'wechat-friends-moments': 'Friends’ Moments digest', 'wechat-friend-reply': 'Friend reply', 'auto-memory': 'Auto memory', 'companion-recent': 'Recent conversation summary', 'memory-sleep': 'Nightly memory tidy-up', schedules: 'Schedules', wechat: 'WeChat', qq: 'QQ', telegram: 'Telegram' } satisfies Record<HealthFeature, string>,
     about: {
       asr: 'Microphone audio is recognised on this Mac, never uploaded.', diary: 'One encrypted diary after the nightly tidy-up; only cloud-allowed owner conversations.', proactive: 'Uses the existing event policy, quiet hours and a durable daily allowance.',
       'wechat-moments': 'Draft previews and confirmed publishing; failures and uncertainty are shown here.',
@@ -32,6 +33,7 @@ const copy = {
       'wechat-friends-moments': 'Reads synced Moments from this account’s own friends and sends a private digest.',
       'wechat-friend-reply': 'Replies to incoming messages in this bound friend chat.',
       'auto-memory': 'Picks up lasting facts a few minutes after you stop chatting.',
+      'companion-recent': 'Summarizes recent conversations for continuity.',
       'memory-sleep': 'Merges and sorts what was learned, once a night.',
       schedules: 'Scheduled tasks you set up in chat.',
       knowledge: 'The local index of your linked Markdown vault.',
@@ -47,14 +49,30 @@ const copy = {
       'asr.runtime': 'The offline speech folder is missing or incomplete.', 'asr.worker': 'The local speech worker stopped.',
       'asr.protocol': 'The speech worker returned invalid output.', 'asr.timeout': 'Local transcription timed out.',
       'diary.failed': 'The diary could not be written. Check the selected cloud model and privacy settings.', 'diary.schedulerFailed': 'The diary scheduler could not save its state.',
+      'diary.noCloud': 'The diary needs an active cloud model service.',
+      'diary.contextChanged': 'The conversation or character settings changed while the diary was being written.',
+      'diary.interrupted': 'Diary writing was interrupted.', 'diary.disabled': 'The diary was turned off during writing.',
+      'diary.invalid': 'The model returned an invalid diary format.', 'diary.tooLarge': 'The model’s diary output was too long.',
+      'diary.incomplete': 'The model did not finish the diary.',
+      'recent.failed': 'Recent conversations could not be summarized.', 'recent.incomplete': 'The model did not finish the recent summary.',
+      'recent.invalidResult': 'The model’s recent summary could not be used.',
+      'chat.contextStale': 'Conversation context changed during generation.',
       'diary.storage': 'The encrypted diary could not be read. It has not been overwritten; check storage and the local vault.',
       'proactive.screenUnknown': 'Fullscreen status is unknown; desktop check-ins are withheld.', 'proactive.schedulerFailed': 'The check-in scheduler failed.',
       'proactive.pausedByError': 'Check-ins are paused after repeated failures.', 'proactive.wechatUnbound': 'Bind an owner WeChat private chat first.',
       'proactive.deliveryFailed': 'The check-in was not confirmed as delivered.', 'proactive.deliveryUncertain': 'It may have been sent. Check WeChat; it will not be repeated.',
       'proactive.speechBusy': 'Speech input is active; this voice check-in was withheld.', 'proactive.privateResult': 'Local-only check-in text cannot be sent to WeChat.',
+      'proactive.contextStale': 'The authorized check-in context changed during generation.',
+      'proactive.eventConflict': 'Two records for the same check-in event disagreed.', 'proactive.eventCapacity': 'The check-in event log is full.',
+      'proactive.triggerCapacity': 'The check-in run log is full.', 'repository.commitUncertain': 'Saving could not be confirmed. Refresh to check the stored state.',
+      'automation.permissionRequired': 'Automatic execution permission is missing.', 'automation.unavailable': 'Automatic execution is temporarily unavailable.',
+      'automation.cancelled': 'Automatic execution was cancelled.', 'job.privacyBlocked': 'Privacy settings prevent sending this material to the selected service.',
       'automation.publicationBlocked': 'The context or delivery permission changed before publication.', 'proactive.submitUnconfirmed': 'The model request outcome is unknown; it will not be retried.',
       'wechat.cronDeliveryFailed': 'The scheduled reply could not be delivered.', 'wechat.cronDeliveryUncertain': 'The scheduled reply may have been sent; check WeChat before retrying.',
       'wechat.momentFailed': 'The Moments request failed.',
+      'wechat.momentWindowBusy': 'Another operation held the WeChat window, so the Moments operation could not finish.',
+      'wechat.momentListenerPaused': 'The WeChat listener was paused, so the Moments operation could not finish.',
+      'wechat.momentWindowError': 'The Moments operation failed while opening the WeChat window.',
       'wechat.momentUncertain': 'The Moment may already be published. Check on your phone; do not publish it again.',
       'wechat.momentPreviewFallback': 'The model preview failed; a local fallback was used.', 'wechat.momentRewriteFailed': 'The rewrite failed; the old draft was kept and not published.',
       'wechat.momentPublishUnconfirmed': 'Publishing could not be confirmed. Check on your phone; do not publish it again.',
@@ -108,7 +126,7 @@ const copy = {
     sinceLaunch: '时间只统计本次启动以来。',
     remaining: '今日还可发：',
     state: { ok: '正常', failing: '异常', waiting: '尚未运行', off: '未开启' } satisfies Record<HealthState, string>,
-    feature: { asr: '本地语音识别', diary: '日记', knowledge: '知识库', proactive: '主动消息', 'wechat-moments': '朋友圈', 'wechat-cron': '微信定时投递', 'wechat-group-digest': '群聊每日精华', 'wechat-followup': '等你处理', 'wechat-official-brief': '公众号简报', 'wechat-friends-moments': '好友朋友圈摘要', 'wechat-friend-reply': '好友回复', 'auto-memory': '自动记忆', 'memory-sleep': '夜间记忆整理', schedules: '定时任务', wechat: '微信', qq: 'QQ', telegram: 'Telegram' } satisfies Record<HealthFeature, string>,
+    feature: { asr: '本地语音识别', diary: '日记', knowledge: '知识库', proactive: '主动消息', 'wechat-moments': '朋友圈', 'wechat-cron': '微信定时投递', 'wechat-group-digest': '群聊每日精华', 'wechat-followup': '等你处理', 'wechat-official-brief': '公众号简报', 'wechat-friends-moments': '好友朋友圈摘要', 'wechat-friend-reply': '好友回复', 'auto-memory': '自动记忆', 'companion-recent': '最近对话摘要', 'memory-sleep': '夜间记忆整理', schedules: '定时任务', wechat: '微信', qq: 'QQ', telegram: 'Telegram' } satisfies Record<HealthFeature, string>,
     about: {
       asr: '麦克风录音只在本机识别，不上传。', diary: '夜间整理后写一篇加密日记，只用允许云端处理的主人私聊。', proactive: '沿用事件策略、安静时段和持久化的每日限额。',
       'wechat-moments': '草稿预览和确认后的发布，失败或不确定时会写在这里。',
@@ -119,6 +137,7 @@ const copy = {
       'wechat-friends-moments': '整理此号好友已同步的朋友圈，只发给主人私聊。',
       'wechat-friend-reply': '回复这个已绑定好友发来的私聊消息。',
       'auto-memory': '聊天停下几分钟后，自动记下值得长期记住的事。',
+      'companion-recent': '整理最近的对话，帮助她接续话题。',
       'memory-sleep': '每晚把白天记下的内容合并、整理一次。',
       schedules: '你在聊天里设置的定时任务。',
       knowledge: '已关联 Markdown 笔记库的本机索引。',
@@ -134,13 +153,29 @@ const copy = {
       'asr.runtime': '离线语音文件夹缺失或不完整。', 'asr.worker': '本地语音识别进程停止了。',
       'asr.protocol': '语音识别进程返回了无效结果。', 'asr.timeout': '本地识别超时。',
       'diary.failed': '日记写入失败，请检查当前云端模型和隐私设置。', 'diary.schedulerFailed': '日记调度状态保存失败。',
+      'diary.noCloud': '日记需要当前选中的云端模型服务。',
+      'diary.contextChanged': '对话或角色设置已变更，日记停止写入。',
+      'diary.interrupted': '日记写入中断。', 'diary.disabled': '生成期间关闭了日记。',
+      'diary.invalid': '模型返回的日记格式无效。', 'diary.tooLarge': '模型返回的日记太长。',
+      'diary.incomplete': '模型未完整返回日记。',
+      'recent.failed': '最近对话摘要生成失败。', 'recent.incomplete': '模型未完整返回最近对话摘要。',
+      'recent.invalidResult': '模型返回的最近对话摘要无法使用。',
+      'chat.contextStale': '生成期间对话资料已变更。',
       'diary.storage': '加密日记读取失败，原文件没有覆盖，请检查存储和本地密钥库。',
       'proactive.screenUnknown': '无法确认全屏状态，已暂缓桌面主动消息。', 'proactive.schedulerFailed': '主动消息调度失败。',
       'proactive.pausedByError': '主动消息多次失败，已暂停。', 'proactive.wechatUnbound': '请先绑定主人微信私聊。',
       'proactive.deliveryFailed': '主动消息未确认送达。', 'proactive.deliveryUncertain': '可能已经发了，请在微信核对，不会重复发送。',
       'proactive.speechBusy': '正在语音输入，已暂缓这条主动语音。', 'proactive.privateResult': '仅本地的主动消息不能发到微信。',
+      'proactive.contextStale': '生成主动消息期间，授权资料已变更。',
+      'proactive.eventConflict': '同一主动消息事件的记录不一致。', 'proactive.eventCapacity': '主动消息事件记录已满。',
+      'proactive.triggerCapacity': '主动消息运行记录已满。', 'repository.commitUncertain': '尚不能确认资料是否保存，请刷新后核对。',
+      'automation.permissionRequired': '自动执行权限未授予。', 'automation.unavailable': '自动执行暂不可用。',
+      'automation.cancelled': '自动执行已取消。', 'job.privacyBlocked': '当前隐私设置禁止把资料发给所选模型服务。',
       'automation.publicationBlocked': '发布前上下文或投递权限已变化。', 'proactive.submitUnconfirmed': '模型请求结果不确定，不会自动重试。',
       'wechat.cronDeliveryFailed': '定时回复投递失败。', 'wechat.cronDeliveryUncertain': '定时回复可能已发送，请在微信确认后再考虑重试。',
+      'wechat.momentWindowBusy': '微信窗口被其他操作占用，朋友圈操作未完成。',
+      'wechat.momentListenerPaused': '微信监听已暂停，朋友圈操作未完成。',
+      'wechat.momentWindowError': '打开微信窗口时出错，朋友圈操作未完成。',
       'wechat.momentFailed': '朋友圈请求失败。', 'wechat.momentUncertain': '朋友圈可能已经发了，请在手机核对，不要重复发。',
       'wechat.momentPreviewFallback': '模型预览失败，已使用本地备用句。', 'wechat.momentRewriteFailed': '改写失败，保留旧草稿，没有发布。',
       'wechat.momentPublishUnconfirmed': '无法确认是否发布，请在手机核对，不要重复发。',
@@ -268,7 +303,8 @@ export const useHealthIssues = (api: AttentionAPI): [number, (issues: number) =>
     const read = (): void => { void api.health?.().then(value => { if (live) setIssues(value.issues); }).catch(() => undefined); };
     read();
     const interval = window.setInterval(read, REFRESH_MS);
-    return () => { live = false; window.clearInterval(interval); };
+    const stop = api.onChanged?.(read);
+    return () => { live = false; window.clearInterval(interval); stop?.(); };
   }, [api]);
   return [issues, setIssues];
 };
@@ -308,8 +344,9 @@ export const HealthPanel = ({ api, locale, onOpen, onIssues, children }: {
     const current = sequence.current;
     void refresh();
     const interval = window.setInterval(() => void refresh(), REFRESH_MS);
-    return () => { current.value++; window.clearInterval(interval); };
-  }, [refresh]);
+    const stop = api.onChanged?.(() => void refresh());
+    return () => { current.value++; window.clearInterval(interval); stop?.(); };
+  }, [api, refresh]);
   const time = (value: string | null): string => value ? new Intl.DateTimeFormat(lang, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : text.never;
   const card = (item: HealthItem): JSX.Element => <article key={`${item.feature}:${item.ordinal ?? 0}`} className="attention-card" data-state={item.state}>
     <div className="attention-card-heading"><span className={`status-pill ${item.acknowledged ? '' : pill[item.state]}`}>{item.acknowledged ? text.acknowledged : item.feature === 'knowledge' && item.state === 'off' ? text.vaultDetached : text.state[item.state]}</span></div>
@@ -351,6 +388,7 @@ export const HealthPanel = ({ api, locale, onOpen, onIssues, children }: {
     {children}
     {snapshot === null ? <p>{text.loading}</p> : <>
       <div className="attention-overview"><strong>{snapshot.issues || '✓'}</strong><span>{snapshot.issues ? text.issues(snapshot.issues) : seen ? text.onlyAcknowledged(seen) : text.allGood}</span></div>
+      <ModelBindingIssues issues={snapshot.modelIssues ?? []} api={api} locale={lang} refresh={refresh} />
       <div className="attention-list">{items.map(card)}</div>
     </>}
   </section>;

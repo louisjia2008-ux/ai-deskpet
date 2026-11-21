@@ -20,7 +20,7 @@ const en = {
   cronLimits: 'QQ Cron limits: 10 uncancelled tasks (including paused tasks), at least 15 minutes apart per task, 4 model requests per run, at most 2048 output tokens per request, and a 120-second run deadline. Chat and Cron share the daily request limit. No files, computer control or nested Cron.',
   loading: 'Loading QQ settings…', failure: 'Could not update QQ settings. Check the configuration and retry.',
   appId: 'QQ AppID', secret: 'AppSecret (leave blank to keep saved secret)', savedSecret: 'AppSecret saved securely', noSecret: 'No AppSecret saved',
-  provider: 'QQ provider', choose: 'Choose a provider', model: 'QQ model', daily: 'Daily request limit', web: 'Web calls before asking to continue',
+  provider: 'QQ provider', choose: 'Choose a provider', model: 'QQ model', followDefault: 'Follow provider default', daily: 'Daily request limit', web: 'Web calls before asking to continue',
   save: 'Save QQ settings', enable: 'Enable experimental QQ', disable: 'Disable QQ', stop: 'Emergency stop QQ',
   'pairing:no-active-code': 'A message arrived, but no pairing code is active. Generate a new code and send it within 5 minutes.', 'pairing:wrong-format': 'A message arrived, but it was not in the form /pair followed by 6 digits.', 'pairing:wrong-code': 'A pairing command arrived, but the code did not match. Check the digits and send it again.', 'pairing:attempts-exhausted': 'Too many wrong codes. Generate a new code.',
   errorUnreadable: 'QQ sent a message DeskPet could not read, so it was ignored.',
@@ -67,7 +67,7 @@ const zh: typeof en = {
   cronLimits: 'QQ Cron 限额：最多 10 个未取消任务（含暂停任务），同一任务实际执行至少间隔 15 分钟，每轮最多 4 次模型请求，每请求最多输出 2048 tokens，执行时限 120 秒。聊天与 Cron 共用每日请求限额。不写文件、不操作电脑、不创建嵌套任务。',
   loading: '正在读取 QQ 设置…', failure: '无法更新 QQ 设置，请检查配置后重试。',
   appId: 'QQ AppID', secret: 'AppSecret（留空保留已保存密钥）', savedSecret: 'AppSecret 已安全保存', noSecret: '尚未保存 AppSecret',
-  provider: 'QQ 使用的 Provider', choose: '选择 Provider', model: 'QQ 使用的模型', daily: '每日请求上限', web: '私聊联网次数（追加前）',
+  provider: 'QQ 使用的 Provider', choose: '选择 Provider', model: 'QQ 使用的模型', followDefault: '跟随服务默认模型', daily: '每日请求上限', web: '私聊联网次数（追加前）',
   save: '保存 QQ 设置', enable: '启用实验性 QQ 通道', disable: '停用 QQ', stop: '紧急停止 QQ',
   'pairing:no-active-code': '收到了消息，但当前没有有效的配对码。请重新生成，并在 5 分钟内发送。', 'pairing:wrong-format': '收到了消息，但格式不对。请发送 /pair 加 6 位数字。', 'pairing:wrong-code': '收到了配对命令，但配对码不匹配。请核对数字后重发。', 'pairing:attempts-exhausted': '配对码错误次数过多，请重新生成。',
   errorUnreadable: 'QQ 发来一条 DeskPet 读不懂的消息，已被忽略。',
@@ -218,10 +218,10 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
           <label>{copy.secret}<input type="password" autoComplete="new-password" value={secret} maxLength={256} onChange={event => setSecret(event.target.value)} /></label>
           <p>{state.secretConfigured && state.transport === 'official' ? copy.savedSecret : copy.noSecret}</p>
         </>}
-        <label>{copy.provider}<select value={providerId} onChange={event => { setProviderId(event.target.value); setModel(providers.find(provider => provider.id === event.target.value)?.model ?? ''); }}>
+        <label>{copy.provider}<select value={providerId} onChange={event => { setProviderId(event.target.value); setModel(''); }}>
           <option value="">{copy.choose}</option>{providers.filter(provider => provider.enabled).map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
         </select></label>
-        <label>{copy.model}<input value={model} maxLength={240} onChange={event => setModel(event.target.value)} /></label>
+        <label>{copy.model}<input value={model} maxLength={240} placeholder={copy.followDefault} onChange={event => setModel(event.target.value)} /></label>
         <label>{copy.daily}<input type="number" min={1} max={1000} required value={daily} onChange={event => setDaily(Number(event.target.value))} /></label>
         <label>{copy.web}<input type="number" min={1} max={50} required value={web} onChange={event => setWeb(Number(event.target.value))} /></label>
         <small>{locale === 'zh-CN' ? '本人私聊达到该次数后会暂停询问：回复“继续搜索”为当前任务追加 20 次，或回复“先给结果”整理已有进度。群聊每轮最多 10 次，不提供私聊追加入口；定时任务保留确认时的额度。' : 'Private research pauses at this allowance. Reply “继续搜索” to add 20 web calls to the current task, or “先给结果” to receive progress so far. Groups allow at most 10 web calls per run; scheduled tasks retain their confirmed allowance.'}</small>
@@ -236,7 +236,7 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
           : 'In your private QQ chat, send /remind 10m Drink water. Use /reminders to see times and IDs, then /cancel-reminder with the ID to cancel a reminder. DeskPet delivers reminders up to 24 hours late after reconnecting. Turning this off cancels pending reminders.'}</p>
       </section>}
       <div className="qq-actions">
-        <button type="button" disabled={busy || (!running && (dirty || !state.appIdConfigured || !state.secretConfigured || !state.providerId || !state.model))}
+        <button type="button" disabled={busy || (!running && (dirty || !state.appIdConfigured || !state.secretConfigured || !state.providerId))}
           onClick={() => void perform(() => window.deskpet.qq.configure({ enabled: !running }))}>{running ? copy.disable : copy.enable}</button>
         <button type="button" disabled={busy || !running || state.bound} onClick={() => void startPairing()}>{copy.pairing}</button>
       </div>

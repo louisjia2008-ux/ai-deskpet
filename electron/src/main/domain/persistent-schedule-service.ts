@@ -17,7 +17,7 @@ const validateInput = (input: PersistentScheduleInput): void => {
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 240
     || typeof input.instruction !== 'string' || !input.instruction.trim() || input.instruction.length > 4000
     || typeof input.material !== 'string' || input.material.length > 32_000
-    || typeof input.model !== 'string' || !input.model.trim() || input.model.length > 240
+    || (input.model !== null && (typeof input.model !== 'string' || !input.model.trim() || input.model.length > 240))
     || typeof input.enabled !== 'boolean' || !['skip', 'run-once'].includes(input.missedPolicy)
     || !['local-only', 'cloud-allowed'].includes(input.privacy)) throw new Error('schedule.invalidInput');
   validateCalendarRule(input.rule); validateCalendarTimezone(input.timezone);
@@ -27,7 +27,7 @@ const configured = (schedule: PersistentSchedule): PersistentScheduleInput => ({
   rule: schedule.rule, timezone: schedule.timezone, missedPolicy: schedule.missedPolicy, enabled: schedule.enabled });
 const sameSpecification = (job: BackgroundJob, schedule: PersistentSchedule): boolean => job.instruction === schedule.instruction
   && job.material === schedule.material && job.source?.privacy === schedule.privacy
-  && job.binding?.provider.id === schedule.providerId && job.binding?.model === schedule.model;
+  && job.binding?.provider.id === schedule.providerId && (schedule.model === null || job.binding?.model === schedule.model);
 const ownsJob = (job: BackgroundJob, trigger: AutomaticTrigger, schedule: PersistentSchedule): boolean => job.operationId === trigger.id
   && (trigger.jobId === job.id || sameSpecification(job, schedule));
 const jobStatus = (job: BackgroundJob, startup: boolean): AutomaticTrigger['status'] => {
@@ -44,7 +44,7 @@ export class PersistentScheduleService {
   #ticking = false;
 
   constructor(private readonly store: AutomationStore, private readonly tasks: AutomaticTaskPort,
-    options: { now?: () => number; changed?: () => void } = {}) {
+    private readonly options: { now?: () => number; changed?: () => void; defaultModel?: (providerId: string) => string | undefined } = {}) {
     this.#now = options.now ?? Date.now; this.#changed = options.changed ?? (() => undefined);
   }
   list(): PersistentSchedule[] { return this.store.snapshot().automationSchedules; }
@@ -137,9 +137,11 @@ export class PersistentScheduleService {
         if (!ownsJob(existing, trigger, schedule)) throw new Error('schedule.operationConflict');
         job = existing;
       } else {
+        const model = schedule.model ?? this.options.defaultModel?.(schedule.providerId);
+        if (!model) throw new Error('provider.unavailable');
         const submitted = await this.tasks.submit(trigger, { instruction: schedule.instruction, material: schedule.material,
-          privacy: schedule.privacy, providerId: schedule.providerId, model: schedule.model });
-        if (submitted.operationId !== trigger.id || !sameSpecification(submitted, schedule)) throw new Error('schedule.operationConflict');
+          privacy: schedule.privacy, providerId: schedule.providerId, model });
+        if (submitted.operationId !== trigger.id || !sameSpecification(submitted, { ...schedule, model })) throw new Error('schedule.operationConflict');
         job = submitted;
       }
       const outcome = await this.store.transaction((state) => {

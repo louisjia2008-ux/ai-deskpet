@@ -1,3 +1,4 @@
+import { providerFailureCode } from '../../../shared/provider-errors';
 import type { WeChatOfficialBriefSettings } from '../../../shared/wechat-digests';
 import { normalizeWeChatArticleUrl } from './wechat-article-reader';
 import { wechatArticleKey } from './wechat-articles';
@@ -49,6 +50,7 @@ export async function generateWeChatOfficialBrief(host: WeChatOfficialBriefHost,
   const seen = new Set((host.seenUrls ?? []).slice(0, 240).map(key).filter((value): value is string => Boolean(value)));
   const unique = new Map<string, WeChatOfficialArticle>();
   const failures: ('read' | 'model')[] = [];
+  let providerError = '';
   for (const article of source.articles.slice(0, MAX_PUSHES)) {
     const url = normalizeWeChatArticleUrl(article.url);
     const title = text(article.title, 160);
@@ -69,8 +71,9 @@ export async function generateWeChatOfficialBrief(host: WeChatOfficialBriefHost,
     await context.assertCurrent();
     let result: WeChatDigestEntry | null;
     try { result = await host.summarize(article, context); }
-    catch {
+    catch (error) {
       await context.assertCurrent();
+      providerError ||= providerFailureCode(error, '');
       failures.push('model');
       continue;
     }
@@ -91,5 +94,5 @@ export async function generateWeChatOfficialBrief(host: WeChatOfficialBriefHost,
     '回「收藏 1」「展开 1」或「问 1 你的问题」。',
   ]) : [];
   return { entries, messages, ...(failures.length ? { issue: failures.includes('read') ? 'read' : 'model',
-    failures: Math.min(32, failures.length) } : {}) };
+    failures: Math.min(32, failures.length) } : {}), ...(providerError ? { providerError } : {}) };
 }

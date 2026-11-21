@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { providerFailureCode } from '../../shared/provider-errors';
 import type { ChatCronBinding, ChatCronChannelRef, ChatCronInput, ChatCronRun, ChatCronSchedule, ChatCronState, ChatCronStore, ChatCronUpdate } from '../../shared/chat-cron';
 import { chatCronInputSchema, chatCronUpdateSchema } from './chat-cron-schemas';
 import { nextCronOccurrence } from './cron-expression';
@@ -19,7 +20,7 @@ interface Options {
 }
 type AssertAuthorized = () => void;
 interface Active { scheduleId: string; sessionId: string; controller: AbortController; promise: Promise<void> }
-const bindingSchema = z.object({ sessionId: z.string().uuid(), providerId: z.string().uuid(), model: z.string().min(1).max(240) }).strict();
+const bindingSchema = z.object({ sessionId: z.string().uuid(), providerId: z.string().uuid(), model: z.string().min(1).max(240).nullable() }).strict();
 const pending = (run: ChatCronRun) => run.status === 'reserved' || run.status === 'running';
 const instant = (value: number) => new Date(value).toISOString();
 const operationId = (key?: string) => {
@@ -191,7 +192,7 @@ export class ChatCronService {
     signal.throwIfAborted(); if (this.#closed || this.#blockedSchedules.has(schedule.id)) throw new Error('cron.interrupted');
     const state = this.store.snapshot(), current = this.#owned(state, schedule.sessionId, schedule.id);
     this.#session(state, schedule.sessionId);
-    if (!current.enabled || current.cancelledAt || current.revision !== schedule.revision) throw new Error('cron.scheduleChanged');
+    if (!current.enabled || current.cancelledAt || current.revision !== schedule.revision || current.model !== schedule.model) throw new Error('cron.scheduleChanged');
     this.options.assertSchedule?.(current);
     const run = state.chatCronRuns.find((item) => item.id === runId);
     if (!run || run.status !== 'running' || run.scheduleRevision !== schedule.revision) throw new Error('cron.staleRun');
@@ -212,8 +213,9 @@ export class ChatCronService {
         const assertCurrent = () => this.#assertCurrent(schedule, runId, controller.signal);
         assertCurrent(); await this.options.execute(structuredClone(schedule), runId, controller.signal, assertCurrent); assertCurrent();
         await this.#finish(runId, 'succeeded', null);
-      } catch {
-        await this.#finish(runId, controller.signal.aborted || this.#closed ? 'cancelled' : 'failed', controller.signal.aborted || this.#closed ? 'cron.interrupted' : 'cron.executionFailed').catch(() => undefined);
+      } catch (error) {
+        const cancelled = controller.signal.aborted || this.#closed;
+        await this.#finish(runId, cancelled ? 'cancelled' : 'failed', cancelled ? 'cron.interrupted' : providerFailureCode(error, 'cron.executionFailed')).catch(() => undefined);
       }
     }).finally(() => { this.#active.delete(runId); this.#changed(); });
   }

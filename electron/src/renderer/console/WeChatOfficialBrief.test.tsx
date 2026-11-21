@@ -63,10 +63,10 @@ it('requires a separate opt-in for cloud processing and saves the selected servi
   expect(screen.queryByRole('combobox', { name: 'Cloud service for the brief' })).toBeNull();
   fireEvent.click(cloud);
   fireEvent.change(screen.getByRole('combobox', { name: 'Cloud service for the brief' }),
-    { target: { value: `${provider.id}\n${provider.model}` } });
+    { target: { value: provider.id } });
   fireEvent.click(screen.getByRole('button', { name: 'Save official account brief settings' }));
   await waitFor(() => expect(api.setOfficialSettings).toHaveBeenCalledExactlyOnceWith({
-    ...defaults, cloud: true, provider: { providerId: provider.id, model: provider.model },
+    ...defaults, cloud: true, provider: { providerId: provider.id, model: null },
   }));
 });
 

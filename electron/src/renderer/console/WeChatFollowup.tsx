@@ -1,3 +1,4 @@
+import { WeChatDigestModel } from './WeChatDigestModel';
 import { useEffect, useId, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
 import type { ResolvedLocale } from '../../shared';
@@ -35,8 +36,6 @@ const copy = {
 };
 
 const groupLimit = 12;
-const providerKey = (route: WeChatFollowupSettings['provider']): string => route ? `${route.providerId}\n${route.model}` : '';
-const providerRoute = ({ id, model }: WeChatFollowupSettingsState['providers'][number]) => ({ providerId: id, model });
 
 export function WeChatFollowupSettingsPanel({ api, locale, disabled = false }: {
   api: Pick<WeChatFollowupAPI, 'getSettings' | 'configure'>;
@@ -100,7 +99,6 @@ export function WeChatFollowupSettingsPanel({ api, locale, disabled = false }: {
 
   const groups = state?.groups ?? [];
   const providers = state?.providers ?? [];
-  const route = providerKey(draft.provider);
   const hasMissing = draft.groups.some(group => !groups.some(option => option.id === group.id));
   return <section className="wechat-policy" aria-labelledby={title}>
     <h3 id={title}>{t.title}</h3>
@@ -138,16 +136,8 @@ export function WeChatFollowupSettingsPanel({ api, locale, disabled = false }: {
           {hasMissing && <button type="button" className="secondary" onClick={() =>
             update({ groups: draft.groups.filter(group => groups.some(option => option.id === group.id)) })}>{t.removeMissing}</button>}
         </fieldset>
-        {draft.groups.some(group => group.cloud) && <label>{t.provider}<select value={route} onChange={event => {
-          const selected = providers.find(provider => providerKey(providerRoute(provider)) === event.target.value);
-          update({ provider: selected ? providerRoute(selected) : null });
-        }}>
-          <option value="">{t.followPrivate}</option>
-          {draft.provider && !providers.some(provider => providerKey(providerRoute(provider)) === route) && <option value={route}>{t.missingProvider}</option>}
-          {providers.map(provider => <option value={providerKey(providerRoute(provider))} key={providerKey(providerRoute(provider))}>
-            {provider.name} · {provider.model}
-          </option>)}
-        </select></label>}
+        {draft.groups.some(group => group.cloud) && <WeChatDigestModel locale={locale} label={t.provider} inherited={t.followPrivate} unavailable={t.missingProvider}
+          providers={providers} value={draft.provider} change={provider => update({ provider })} />}
       </fieldset>}
       <div className="button-row">
         {state?.available && <button type="submit" disabled={locked || unchanged}>{saving ? t.saving : t.save}</button>}

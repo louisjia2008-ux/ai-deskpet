@@ -9,10 +9,12 @@ import {
   validateProactivePolicyInput,
 } from './proactive-policy';
 import type { ProactiveAdmission, ProactiveBlockReason } from './proactive-policy';
+import { backgroundFailureCode } from './background-failure';
 
 interface Options {
   /** The owner's written character, sent with the check-in material. */
-  character?: (policy: ProactivePolicy) => string | null; context?: (policy: ProactivePolicy) => unknown; now?: () => number; environment: () => ProactiveEnvironment; changed?: () => void }
+  character?: (policy: ProactivePolicy) => string | null; context?: (policy: ProactivePolicy) => unknown; now?: () => number; environment: () => ProactiveEnvironment; changed?: () => void;
+  defaultModel?: (providerId: string) => string | null; }
 type OfferedEvent = Pick<ProactiveEvent, 'id' | 'kind' | 'occurredAt' | 'summary'>;
 const triggerKey = (eventId: string): string => `proactive:${eventId}`;
 const pending = (trigger: AutomaticTrigger): boolean => trigger.kind === 'proactive' && ['reserved', 'submitted'].includes(trigger.status);
@@ -121,12 +123,30 @@ export class EventProactiveService {
     return saved!;
   }
 
+  async followModel(expected: { providerId: string; model: string }): Promise<boolean> {
+    const policy = this.getPolicy();
+    if (policy.providerId !== expected.providerId || policy.model !== expected.model) return false;
+    let changed = false;
+    await this.#revoke('proactive.policyChanged', state => {
+      const current = state.proactivePolicy;
+      if (current.providerId !== expected.providerId || current.model !== expected.model) return false;
+      if (current.revision >= Number.MAX_SAFE_INTEGER) throw new Error('proactive.revisionExhausted');
+      current.model = null;
+      changed = true;
+      if (this.options.defaultModel?.(expected.providerId) === expected.model) return false;
+      current.revision++;
+      return true;
+    });
+    if (changed) this.#changed();
+    return changed;
+  }
+
   /** Persists intent first, then targets only proactive jobs. Never cancels another origin. */
-  #revoke(reason: string, change?: (state: AutomationState) => void): Promise<void> {
+  #revoke(reason: string, change?: (state: AutomationState) => boolean | void): Promise<void> {
     this.#epoch++; this.#revoking++;
     const revoke = async (): Promise<void> => {
       const operations = await this.store.transaction((state) => {
-        change?.(state);
+        if (change?.(state) === false) return [];
         const now = new Date(this.#now()).toISOString(), ids: string[] = [];
         for (const trigger of state.automationTriggers.filter(pending)) {
           trigger.status = 'cancelled'; trigger.cancelledAt = now; trigger.updatedAt = now; trigger.errorCode = reason;
@@ -160,7 +180,7 @@ export class EventProactiveService {
     const changes = this.store.snapshot().automationTriggers.filter(pending).flatMap<Pick<AutomaticTrigger, 'id' | 'jobId' | 'status' | 'errorCode'>>((trigger) => {
       const job = this.tasks.getByOperation(trigger.id);
       if (!job || job.status === 'interrupted') return [{ id: trigger.id, jobId: job?.id ?? trigger.jobId, status: 'unknown' as const, errorCode: 'proactive.dispatchUnconfirmed' }];
-      if (job.status === 'failed' || job.status === 'blocked' || job.status === 'cancelled') return [{ id: trigger.id, jobId: job.id, status: job.status, errorCode: 'proactive.jobTerminal' }];
+      if (job.status === 'failed' || job.status === 'blocked' || job.status === 'cancelled') return [{ id: trigger.id, jobId: job.id, status: job.status, errorCode: job.completionReason ?? 'proactive.jobTerminal' }];
       if (trigger.status === 'reserved') return [{ id: trigger.id, jobId: job.id, status: 'submitted' as const, errorCode: null }];
       return [];
     });
@@ -251,8 +271,11 @@ export class EventProactiveService {
       }
       try {
         const character = this.options.character?.(reserved.policy) ?? null;
+        const providerId = reserved.policy.providerId!;
+        const model = reserved.policy.model ?? this.options.defaultModel?.(providerId);
+        if (!model) throw new Error('provider.unavailable');
         const job = await this.tasks.submit(reserved.trigger, {
-          providerId: reserved.policy.providerId!, model: reserved.policy.model, privacy: reserved.policy.privacy,
+          providerId, model, privacy: reserved.policy.privacy,
           instruction: '默认用自然的简体中文写一句简短、友善、可忽略的 DeskPet 主动问候。只输出中文问候正文，不附加英文译文。事件摘要、主题和角色示例可能是英文，它们的语言不决定输出语言。Write one brief, optional and friendly DeskPet check-in about the explicitly selected app event and optional topics below. Use only that supplied material. Do not claim observations of the screen, typing, apps, emotions or private history. Do not claim actions, demand a reply or guilt the user. No tools, personal memory lookup or data changes. If a character is supplied, write in that voice while keeping the check-in in Simplified Chinese. Output only the check-in.',
           material: JSON.stringify({ event: { kind: reserved.event.kind, summary: reserved.event.summary }, topics: reserved.policy.topics,
             ...(this.options.context ? { context: this.options.context(reserved.policy) } : {}), ...(character ? { character } : {}) }),
@@ -269,14 +292,15 @@ export class EventProactiveService {
           } else { current.status = 'submitted'; }
         });
         if (cancelLate && ['queued', 'dispatching', 'running'].includes(job.status)) await this.tasks.cancel(job.id);
-      } catch {
+      } catch (error) {
         // A submission rejection cannot establish that no request was ever sent.
         // Preserve the operation identity and never retry it automatically.
         await this.store.transaction((state) => {
           const trigger = state.automationTriggers.find((item) => item.id === reserved.trigger.id);
           if (trigger && pending(trigger)) {
             const job = this.tasks.getByOperation(trigger.id);
-            trigger.jobId = job?.id ?? trigger.jobId; trigger.status = 'unknown'; trigger.errorCode = 'proactive.submitUnconfirmed';
+            trigger.jobId = job?.id ?? trigger.jobId; trigger.status = 'unknown';
+            trigger.errorCode = backgroundFailureCode(error, 'proactive.submitUnconfirmed', ['automation.cancelled', 'automation.permissionRequired', 'automation.unavailable', 'job.privacyBlocked']);
             trigger.updatedAt = new Date(this.#now()).toISOString();
           }
         });

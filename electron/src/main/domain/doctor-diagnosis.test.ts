@@ -39,6 +39,19 @@ describe('doctor runbook, grouping and privacy', () => {
     expect(text).toContain('额度');
   });
 
+  it.each([
+    ['wechat.momentWindowBusy', '被其他操作占用'],
+    ['wechat.momentListenerPaused', '微信监听已暂停'],
+    ['wechat.momentWindowError', '打开微信窗口时出错'],
+  ])('retains the specific Moments failure %s in Doctor', (code, reason) => {
+    const health = { checkedAt: now.toISOString(), issues: 1, items: [{ feature: 'wechat-moments' as const,
+      state: 'failing' as const, errorCode: code, failures: 1, lastSuccessAt: null, lastFailureAt: now.toISOString(), sinceLaunch: true }] };
+    const findings = doctorFindings(health, { diskFreeBytes: null, uncleanExitOf: null, wechat: null });
+    expect(findings).toEqual([expect.objectContaining({ feature: 'wechat-moments', code })]);
+    const problems = reconcileDoctor([], findings, now);
+    expect(formatDoctorReport({ problems, recovered: [], digest: false })).toContain(reason);
+  });
+
   it('merges a new symptom with an already reported open root-cause symptom', () => {
     const cases = reconcileDoctor([], ['wechat.stale', 'wechat.vmUnreachable', 'wechat.selfTestFailed'].map(finding), now)
       .map(entry => ({ ...entry, seen: 2, reported: entry.code === 'wechat.stale' ? 'qq' as const : null }));

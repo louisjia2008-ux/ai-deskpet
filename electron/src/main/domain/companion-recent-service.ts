@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import type { CompanionRecentStatus } from '../../shared/companion-recent';
+import type { HealthItem } from '../../shared/attention';
 import type { DomainRepository } from './repository';
 import type { CapturedProviderBinding } from '../providers/provider-service';
 import { backgroundTextSampling } from '../providers/chat-request-policy';
 import { resolveContextDestination } from './chat-context-policy';
+import { backgroundFailureCode } from './background-failure';
 import { currentRecent, recentDigest, recentSources, RECENT_ENTRY_LIMIT, RECENT_TEXT_LIMIT, RECENT_WINDOW_MS } from './companion-recent-state';
 
 const BATCH_MS = 30 * 60_000;
@@ -20,6 +22,8 @@ export const recentPrompt = (text: string): string =>
 export class CompanionRecentService {
   #run: Promise<void> | null = null;
   #abort: AbortController | null = null;
+  #lastSuccessAt: string | null = null;
+  #lastFailure: { at: string; code: string; count: number } | null = null;
 
   constructor(private readonly repository: DomainRepository, private readonly controls: {
     available(): boolean;
@@ -30,6 +34,18 @@ export class CompanionRecentService {
 
   get active(): boolean { return this.#run !== null; }
   #now(): number { return this.controls.now?.() ?? Date.now(); }
+
+  health(): HealthItem {
+    return { feature: 'companion-recent', state: this.#lastFailure ? 'failing' : this.#lastSuccessAt ? 'ok' : 'waiting',
+      lastSuccessAt: this.#lastSuccessAt, lastFailureAt: this.#lastFailure?.at ?? null,
+      errorCode: this.#lastFailure?.code ?? null, failures: this.#lastFailure?.count ?? 0, sinceLaunch: true };
+  }
+
+  #failed(error: unknown): void {
+    this.#lastFailure = { at: new Date(this.#now()).toISOString(),
+      code: backgroundFailureCode(error, 'recent.failed', ['chat.contextStale', 'recent.incomplete', 'recent.invalidResult', 'repository.commitUncertain']),
+      count: (this.#lastFailure?.count ?? 0) + 1 };
+  }
 
   status(): CompanionRecentStatus {
     const state = this.repository.snapshot();
@@ -105,6 +121,10 @@ export class CompanionRecentService {
     this.#abort = controller;
     this.#run = run;
     try { await run; }
+    catch (error) {
+      if (!controller.signal.aborted) this.#failed(error);
+      throw error;
+    }
     finally { this.#run = null; this.#abort = null; }
   }
 
@@ -178,12 +198,17 @@ export class CompanionRecentService {
           if (output.length > 8_000) throw new Error('chat.contextStale');
           if (event.type === 'done' && ['stop', 'end_turn', 'completed'].includes(event.finishReason ?? '')) done = true;
         }
-        if (done) {
+        if (!done) throw new Error('recent.incomplete');
+        try {
           const parsed = z.strictObject({ summary: z.string() }).parse(JSON.parse(output.trim().replace(/^\x60\x60\x60(?:json)?\s*/u, '').replace(/\s*\x60\x60\x60$/u, '')));
-          if (!sensitiveOwnerText.test(parsed.summary)) generated = bounded(parsed.summary, RECENT_TEXT_LIMIT);
-        }
+          if (sensitiveOwnerText.test(parsed.summary)) throw new Error('recent.invalidResult');
+          generated = bounded(parsed.summary, RECENT_TEXT_LIMIT);
+        } catch { throw new Error('recent.invalidResult'); }
+        if (!generated) throw new Error('recent.invalidResult');
+        this.#lastSuccessAt = new Date(this.#now()).toISOString();
+        this.#lastFailure = null;
       }
-    } catch { assertion(); }
+    } catch (error) { assertion(); this.#failed(error); }
     // A disabled or unavailable provider must not prevent private continuity.
     // The local fallback keeps only short excerpts from the selected inputs.
     const summarize = (sources: typeof selected, text: string, privateOnly: boolean, updatedAt: string) => {

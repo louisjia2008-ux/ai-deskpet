@@ -1,7 +1,9 @@
+import { providerFailureCode } from '../../../shared/provider-errors';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { defaultWeChatFollowupSettings, wechatFollowupItemSchema, wechatFollowupSettingsSchema } from '../../../shared/wechat-followup';
 import type { WeChatFollowupAction, WeChatFollowupItem, WeChatFollowupSettings } from '../../../shared/wechat-followup';
+import type { WeChatPinnedCloudRoute } from '../../../shared/wechat-channel';
 import { EncryptedJsonStore } from '../../persistence/encrypted-json-store';
 import type { VaultKeyProvider } from '../../persistence/encrypted-json-store';
 import { packWeChatDigestLines } from './wechat-group-digest';
@@ -92,6 +94,23 @@ export class WeChatFollowup {
   async settings(binding: string | null): Promise<WeChatFollowupSettings> {
     const current = await this.#load();
     return binding && current.binding === binding ? structuredClone(current.settings) : defaultWeChatFollowupSettings();
+  }
+
+  async modelRoute(): Promise<WeChatFollowupSettings['provider']> {
+    const state = this.#state ?? await this.#store.readPersisted();
+    return state?.settings.provider ?? null;
+  }
+
+  async followModel(expected: WeChatPinnedCloudRoute): Promise<boolean> {
+    return this.#exclusive(async () => {
+      const current = await this.#load();
+      const route = current.settings.provider;
+      if (!route || route.providerId !== expected.providerId || route.model !== expected.model) return false;
+      this.revoke();
+      await this.#save({ ...current, revision: Math.max(this.#now(), current.revision + 1),
+        settings: { ...current.settings, provider: { providerId: expected.providerId, model: null } } });
+      return true;
+    });
   }
 
   async configure(binding: string, settings: WeChatFollowupSettings, authorize: () => Promise<void>): Promise<void> {
@@ -235,7 +254,7 @@ export class WeChatFollowup {
 
   async #format(items: Item[], settings: WeChatFollowupSettings, guard: WeChatDigestContext) {
     const result = new Map<string, ReportLine[]>();
-    let modelFailed = false;
+    let modelError: string | null = null;
     for (let start = 0; start < Math.min(items.length, 12); start += 3) {
       const batch = items.slice(start, start + 3);
       const lines: ReportLine[] = [];
@@ -243,7 +262,10 @@ export class WeChatFollowup {
         let summary = original;
         if (settings.groups.some(group => group.id === groupId && group.cloud)) {
           try { summary = tidy(await this.host.summarize({ binding: guard.binding, groupId, text: original, settings, guard }), 75) || summary; }
-          catch { await guard.assertCurrent(); modelFailed = true; }
+          catch (error) {
+            await guard.assertCurrent();
+            modelError = providerFailureCode(error, '') || modelError || 'wechat.digest_model';
+          }
         }
         lines.push({ item: { id, groupId, summary: original, deadline, snoozedUntil },
           text: `${id.slice(0, 12)} ${tidy(groupTitle, 15)} ${this.#formatAt(at)} ${tidy(summary, 60)}${deadline ? ` 截止 ${tidy(deadline, 18)}` : ''}` });
@@ -251,7 +273,7 @@ export class WeChatFollowup {
       const message = reportText(lines);
       if (message) result.set(message, lines);
     }
-    return { messages: result, modelFailed };
+    return { messages: result, modelError };
   }
 
   async generate(guard: WeChatDigestContext): Promise<WeChatDigestOutput> {
@@ -263,11 +285,12 @@ export class WeChatFollowup {
     });
     if (!current) return { entries: [], messages: [] };
     const selected = this.#eligible(current.state, current.verified, this.#now(), false);
-    const { messages, modelFailed } = await this.#format(selected, current.state.settings, guard);
+    const { messages, modelError } = await this.#format(selected, current.state.settings, guard);
     return { entries: [], messages: [...messages.keys()],
       ...(messages.size ? { metadata: [...messages.values()].map(lines => JSON.stringify([current.state.revision, lines])) } : {}),
       ...(current.failures ? { issue: 'read' as const, failures: current.failures }
-      : modelFailed ? { issue: 'model' as const } : {}) };
+      : modelError ? { issue: 'model' as const } : {}),
+      ...(modelError && modelError !== 'wechat.digest_model' ? { providerError: modelError } : {}) };
   }
 
   async #deliver(input: { binding: string; deliveryId: string; text: string }, revision: number, lines: ReportLine[], guard: WeChatDigestContext) {
@@ -335,8 +358,8 @@ export class WeChatFollowup {
       let queue = checked.state.snoozeQueue;
       if (!queue?.length) {
         const snoozed = this.#eligible(checked.state, checked.verified, this.#now(), true);
-        const { messages, modelFailed } = await this.#format(snoozed, state.settings, guard);
-        if (modelFailed) this.#lastFailure = { at: this.#now(), code: 'wechat.digest_model' };
+        const { messages, modelError } = await this.#format(snoozed, state.settings, guard);
+        if (modelError) this.#lastFailure = { at: this.#now(), code: modelError };
         queue = [...messages.values()].map(lines => ({ lines, attempts: 0 }));
         if (queue.length) await this.#saveSnoozeQueue(guard, queue);
       }

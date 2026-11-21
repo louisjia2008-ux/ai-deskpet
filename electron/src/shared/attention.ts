@@ -1,4 +1,5 @@
 import type { DoctorStatus } from './doctor';
+import type { ModelBindingIssue } from './model-bindings';
 export type AttentionSource = 'background-job' | 'delegation' | 'consolidation' | 'proactive';
 export type AttentionKind = 'action' | 'review' | 'result' | 'notice';
 export type AttentionStatus = 'completed' | 'failed' | 'interrupted' | 'blocked' | 'mixed' | 'expired' | 'invalid' | 'review';
@@ -19,7 +20,7 @@ export interface AttentionSnapshot {
   sourceCounts: { backgroundJobs: number; delegations: number; consolidations: number };
 }
 /** Background features that run without the owner watching. */
-export type HealthFeature = 'auto-memory' | 'memory-sleep' | 'schedules' | 'wechat' | 'qq' | 'telegram' | 'wechat-moments' | 'wechat-cron' | 'wechat-group-digest' | 'wechat-followup' | 'wechat-official-brief' | 'wechat-friends-moments' | 'wechat-friend-reply' | 'asr' | 'diary' | 'proactive' | 'knowledge';
+export type HealthFeature = 'auto-memory' | 'companion-recent' | 'memory-sleep' | 'schedules' | 'wechat' | 'qq' | 'telegram' | 'wechat-moments' | 'wechat-cron' | 'wechat-group-digest' | 'wechat-followup' | 'wechat-official-brief' | 'wechat-friends-moments' | 'wechat-friend-reply' | 'asr' | 'diary' | 'proactive' | 'knowledge';
 /** off: not enabled; waiting: enabled, nothing attempted yet; failing: the latest attempt or connection is not working. */
 export type HealthState = 'ok' | 'failing' | 'waiting' | 'off';
 /** Codes, times and counts only. */
@@ -45,7 +46,7 @@ export interface HealthItem {
   acknowledged?: boolean;
 }
 /** `issues` counts failing items the owner has not acknowledged. */
-export interface HealthSnapshot { checkedAt: string; items: HealthItem[]; issues: number }
+export interface HealthSnapshot { checkedAt: string; items: HealthItem[]; issues: number; modelIssues?: ModelBindingIssue[] }
 export interface HealthAcknowledge { key: string; fingerprint: string }
 export interface AttentionAPI {
   snapshot(): Promise<AttentionSnapshot>;
@@ -57,6 +58,7 @@ export interface AttentionAPI {
   setDoctorAutoRepair?(enabled: boolean): Promise<DoctorStatus>;
   checkDoctor?(): Promise<DoctorStatus>;
   testDoctorWeChat?(): Promise<DoctorStatus>;
+  followDefaultModel?(input: Pick<ModelBindingIssue, 'id' | 'providerId' | 'model'>): Promise<void>;
   acknowledge(input: AttentionAcknowledge): Promise<void>;
   onChanged?(listener: () => void): () => void;
 }

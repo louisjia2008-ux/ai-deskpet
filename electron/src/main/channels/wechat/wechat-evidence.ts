@@ -39,6 +39,7 @@ const identity = (route: WeChatEvidenceRoute): string =>
 export async function completeWeChatEvidence(input: {
   prompt: string; data: string; guard: WeChatArticleGuard; select(): Promise<WeChatEvidenceRoute>;
   providers: Pick<ProviderService, 'captureBinding' | 'acquireLocalEmbeddingSlot'>;
+  modelResult?(provider: ProviderConfig, error?: unknown): void;
 }): Promise<string> {
   const { guard, select } = input;
   await guard.assertCurrent();
@@ -79,7 +80,11 @@ export async function completeWeChatEvidence(input: {
     }
     await current();
     if (!finished || !reply.trim()) throw Error('wechat.evidenceIncomplete');
+    if (!local) input.modelResult?.(chosen.provider);
     return reply;
+  } catch (error) {
+    if (!local && !signal.aborted) input.modelResult?.(chosen.provider, error);
+    throw error;
   } finally {
     release?.();
   }

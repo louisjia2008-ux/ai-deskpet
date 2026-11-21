@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { HealthItem } from '../../../shared/attention';
+import { providerFailureCode } from '../../../shared/provider-errors';
 import { nextCronOccurrence } from '../../domain/cron-expression';
 import { EncryptedJsonStore } from '../../persistence/encrypted-json-store';
 import type { VaultKeyProvider } from '../../persistence/encrypted-json-store';
@@ -46,12 +47,14 @@ const entrySchema = z.strictObject({
   url: z.string().max(500).url().regex(/^https?:\/\//u).optional(),
 });
 const entriesSchema = z.array(entrySchema).max(32);
+const providerErrorSchema = z.string().max(80).refine(value => providerFailureCode(new Error(value), '') !== '');
 const outputSchema = z.strictObject({
   entries: entriesSchema,
   messages: z.array(z.string().min(1).max(500).refine(text => text === text.trim() &&
     !/[\p{C}\p{Zl}\p{Zp}\t\r\n]/u.test(text))).max(32),
   metadata: z.array(z.string().max(16_384)).max(32).optional(),
   issue: z.enum(['read', 'model']).optional(),
+  providerError: providerErrorSchema.optional(),
   failures: z.number().int().min(0).max(32).optional(),
 });
 export type WeChatDigestEntry = z.infer<typeof entrySchema>;
@@ -61,6 +64,7 @@ const runSchema = z.strictObject({
   outcome: z.enum(['running', 'delivering', 'retrying', 'succeeded', 'failed', 'uncertain', 'interrupted']),
   delivered: z.boolean().default(false),
   issue: issueSchema.nullable(), failures: z.number().int().min(0).max(32), entries: entriesSchema,
+  providerError: providerErrorSchema.optional(),
   deliveryProgress: z.strictObject({ sent: z.number().int().min(0).max(32), total: z.number().int().min(0).max(32) }).optional(),
   pending: z.strictObject({
     revision: z.string().max(256), schedule: z.string().max(256), output: outputSchema,
@@ -260,6 +264,8 @@ export class WeChatDigestScheduler {
         : signal.aborted || (error instanceof Error && error.message === 'wechat.digest_interrupted') ? 'interrupted'
         : error instanceof Error && error.message === 'wechat.digest_configuration' ? 'configuration' : 'model';
       settled(run, issue === 'interrupted' ? 'interrupted' : 'failed', issue, this.#now());
+      const providerError = issue === 'model' ? providerFailureCode(error, '') : '';
+      if (providerError) run.providerError = providerError;
       await this.#save(state);
       return;
     }
@@ -315,6 +321,7 @@ export class WeChatDigestScheduler {
       run.delivered = pending.sent > 0;
       settled(run, output.issue ? 'failed' : 'succeeded', output.issue ?? null,
         this.#now(), output.issue ? Math.max(1, output.failures ?? 1) : 0);
+      if (output.providerError) run.providerError = output.providerError;
     }
     await this.#save(state);
   }
@@ -350,7 +357,7 @@ export class WeChatDigestScheduler {
     const last = completed.at(-1);
     const issue = failure?.issue ?? last?.issue ?? null;
     return { feature: this.host.feature, state: issue ? 'failing' : !spec ? 'off' : last ? 'ok' : 'waiting',
-      errorCode: code(issue), lastFailureAt: iso(failure?.at ?? fail.at(-1)?.finishedAt ?? undefined),
+      errorCode: (!failure && last?.providerError) || code(issue), lastFailureAt: iso(failure?.at ?? fail.at(-1)?.finishedAt ?? undefined),
       lastSuccessAt: iso(completed.filter(run => run.outcome === 'succeeded').at(-1)?.finishedAt ?? undefined),
       failures: fail.filter(run => run.at > now - 7 * DAY).reduce((sum, run) => sum + run.failures, failure ? 1 : 0),
       sinceLaunch: false, ...(issue === 'delivery_failed' && last?.deliveryProgress ? { deliveryProgress: last.deliveryProgress } : {}) };

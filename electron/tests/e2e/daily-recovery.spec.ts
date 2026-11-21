@@ -110,7 +110,8 @@ test('accepts provider switching, a 64-second reply, crash recovery and graceful
     await expect(page!.locator('.message.assistant').last()).toHaveAttribute('data-status', 'cancelled');
     await expect(page!.locator('.chat-reply').last()).toContainText('Persist this partial answer');
     await page!.locator('.chat-model-picker > summary').click();
-    await expect(page!.getByRole('combobox', { name: 'Chat provider' })).toHaveValue(ids.first);
+    await expect(page!.getByRole('combobox', { name: 'Chat provider' })).toHaveValue(ids.second);
+    expect((await page!.evaluate(() => window.deskpet.app.getState())).activeProviderId).toBe(ids.first);
     await page!.screenshot({ path: info.outputPath('daily-recovery-accepted.png') });
   } finally { await application?.close(); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); await rm(root, { recursive: true, force: true }); }
 });

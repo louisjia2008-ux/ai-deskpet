@@ -8,7 +8,7 @@ const en = {
   title: 'Telegram remote control', setup: 'Connect a dedicated bot for DeskPet. Create a new bot when you are ready to connect Telegram. DeskPet accepts private messages only from the account you approve here.',
   boundary: 'Web and task tools are available on your phone. Each workspace operation needs separate approval on the phone. Commands, permission changes and credentials stay on the desktop.',
   loading: 'Loading Telegram settings…', error: 'The change could not be completed. Refresh the status and try again.', refresh: 'Refresh status',
-  provider: 'Telegram provider', choose: 'Select a provider', model: 'Telegram model', token: 'Dedicated bot token', tokenHelp: 'Leave blank to keep the existing token.',
+  provider: 'Telegram provider', choose: 'Select a provider', model: 'Telegram model', followDefault: 'Follow provider default', token: 'Dedicated bot token', tokenHelp: 'Leave blank to keep the existing token.',
   stored: 'A bot token is saved.', missing: 'No bot token is saved.', save: 'Save Telegram settings', clear: 'Remove bot token', enable: 'Enable Telegram', disable: 'Disable Telegram',
   memory: 'Allow approved memories in Telegram', memoryHelp: 'Only memories individually enabled for Telegram are eligible. Their existing privacy rules still apply.',
   status: 'Connection', disabled: 'Disabled', connecting: 'Connecting', online: 'Online', offline: 'Offline', lastError: 'Last connection problem',
@@ -23,7 +23,7 @@ const zh: typeof en = {
   title: 'Telegram 手机遥控', setup: '准备连接时，请为桌宠新建专用机器人。只有在这里确认过的本人账号才能通过私聊使用桌宠。',
   boundary: '手机可使用联网和任务工具。工作区的每次操作都需要在手机上单独批准。命令、权限修改和凭据仅在桌面操作。',
   loading: '正在读取 Telegram 设置…', error: '操作未完成，请刷新状态后重试。', refresh: '刷新状态',
-  provider: 'Telegram 使用的模型服务', choose: '选择模型服务', model: 'Telegram 使用的模型', token: '专用机器人 Token', tokenHelp: '留空可保留原有凭据。',
+  provider: 'Telegram 使用的模型服务', choose: '选择模型服务', model: 'Telegram 使用的模型', followDefault: '跟随服务默认模型', token: '专用机器人 Token', tokenHelp: '留空可保留原有凭据。',
   stored: '已保存机器人凭据。', missing: '尚未保存机器人凭据。', save: '保存 Telegram 设置', clear: '移除机器人凭据', enable: '启用 Telegram', disable: '停用 Telegram',
   memory: '允许 Telegram 使用已授权的记忆', memoryHelp: '只有在记忆页中逐条允许 Telegram 使用的记忆才有资格发送，且仍遵守该记忆的隐私设置。',
   status: '连接状态', disabled: '已停用', connecting: '正在连接', online: '已连接', offline: '连接中断', lastError: '最近的连接问题',
@@ -55,9 +55,9 @@ const ConnectionForm = ({ state, providers, busy, copy, save }: {
     <label>{copy.token}<input type="password" ref={token} autoComplete="new-password" disabled={busy} /></label>
     <small>{state.secretConfigured ? copy.stored : copy.missing} {copy.tokenHelp}</small>
     <label>{copy.provider}<select value={providerId} disabled={busy} onChange={event => {
-      setProviderId(event.target.value); setModel(providers.find(item => item.id === event.target.value)?.model ?? '');
+      setProviderId(event.target.value); setModel('');
     }}><option value="">{copy.choose}</option>{providers.filter(item => item.enabled).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-    <label>{copy.model}<input value={model} maxLength={240} disabled={busy} onChange={event => setModel(event.target.value)} /></label>
+    <label>{copy.model}<input value={model} maxLength={240} placeholder={copy.followDefault} disabled={busy} onChange={event => setModel(event.target.value)} /></label>
     <label className="check-row"><input type="checkbox" checked={memoryAllowed} disabled={busy || !state.bound} onChange={event => setMemoryAllowed(event.target.checked)} />{copy.memory}</label>
     <small>{copy.memoryHelp}</small>
     <button type="submit" disabled={busy}>{copy.save}</button>
@@ -130,7 +130,7 @@ export const TelegramSettings = ({ providers, locale }: { providers: ProviderCon
       {state.uncertainOutbox > 0 && <p role="status">{copy.uncertainHelp}</p>}
       <ConnectionForm key={JSON.stringify([state.providerId, state.model, state.memoryAllowed])} state={state} providers={providers} busy={busy} copy={copy} save={configure} />
       <div className="qq-actions">
-        <button type="button" disabled={busy || (!state.enabled && (!state.secretConfigured || !state.providerId || !state.model))} onClick={() => void configure({ enabled: !state.enabled })}>{state.enabled ? copy.disable : copy.enable}</button>
+        <button type="button" disabled={busy || (!state.enabled && (!state.secretConfigured || !state.providerId))} onClick={() => void configure({ enabled: !state.enabled })}>{state.enabled ? copy.disable : copy.enable}</button>
         <button type="button" className="secondary" disabled={busy || !state.secretConfigured} onClick={() => void configure({ token: null, enabled: false })}>{copy.clear}</button>
       </div>
       <h3>{copy.pairing}</h3>

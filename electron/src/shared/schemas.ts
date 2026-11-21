@@ -14,6 +14,7 @@ import { personaSchema } from './persona';
 import { characterProfileSchema } from './character';
 import { speakingStyleSchema } from './conversation-import';
 import { modelRoutingSchema } from './model-routing';
+import { modelBindingIdSchema, modelChangeConsentSchema } from './model-bindings';
 import { z } from 'zod';
 import { speechInputSettingsSchema, speechPcmSchema } from './speech-input';
 import { companionPreferencesSchema } from './companion-journal';
@@ -241,6 +242,7 @@ export const invokePayloadSchemas = {
   'doctor:set-auto-repair': z.object({ enabled: z.boolean() }).strict(),
   'doctor:check': emptySchema,
   'doctor:wechat-self-test': emptySchema,
+  'doctor:follow-default-model': z.object({ id: modelBindingIdSchema, providerId: idSchema, model: chatModelSchema }).strict(),
   'attention:acknowledge': z.object({ id: z.string().regex(/^(background-job|delegation|consolidation|proactive):[a-f0-9-]{36}$/u), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u) }).strict(),
   'automation:snapshot': emptySchema,
   'automation:trigger-result': z.object({id:idSchema}).strict(),
@@ -320,7 +322,8 @@ export const invokePayloadSchemas = {
   'chat:remove-session': z.object({ id: idSchema }).strict(),
   'chat:restore-session': z.object({ id: idSchema }).strict(),
   'chat:list-messages': z.object({ sessionId: idSchema }).strict(),
-  'chat:send': z.object({ sessionId: idSchema, content: textSchema, providerId: idSchema, model: chatModelSchema.optional(),
+  'chat:set-model-selection': z.object({ id: idSchema, selection: z.object({ providerId: idSchema, model: chatModelSchema.nullable() }).strict().nullable() }).strict(),
+  'chat:send': z.object({ sessionId: idSchema, content: textSchema, providerId: idSchema.optional(), model: chatModelSchema.optional(),
     workerIdentity: z.array(z.string().min(1).max(12_000)).max(2).optional() }).strict(),
   'chat:get-interaction': z.object({ sessionId: idSchema }).strict(),
   'chat:followup': z.object({ runId: idSchema, sessionId: idSchema, operationId: idSchema, content: z.string().trim().min(1).max(8_000) }).strict(),
@@ -345,7 +348,8 @@ export const invokePayloadSchemas = {
   'delegations:submit': z.object({ operationId: idSchema, sessionId: idSchema, intentVersion: z.number().int().positive(), goal: z.string().trim().min(1).max(4000), deadlineAt: z.iso.datetime(),
     // Old clients may replay their exact reviewed operation, including its legacy budget.
     budget: z.object({ maxEstimatedTokens: z.number().int().min(0).max(500000), maxRequests: z.number().int().min(1).max(3) }).strict().optional(),
-    children: z.array(z.object({ instruction: z.string().trim().min(1).max(16000), material: z.string().max(16000), privacy: contextPrivacySchema, providerId: idSchema, model: chatModelSchema, requirements: requirementsSchema }).strict()).min(1).max(3),
+    children: z.array(z.object({ instruction: z.string().trim().min(1).max(16000), material: z.string().max(16000), privacy: contextPrivacySchema, providerId: idSchema, model: chatModelSchema.nullable(),
+      reviewedDefaultModel: chatModelSchema.optional(), requirements: requirementsSchema }).strict()).min(1).max(3),
   }).strict(),
   'delegations:list': z.object({ sessionId: idSchema }).strict(),
   'delegations:get-result': z.object({ batchId: idSchema, childId: idSchema }).strict(),
@@ -414,8 +418,9 @@ export const invokePayloadSchemas = {
   'providers:set-routing': modelRoutingSchema,
   'providers:list': emptySchema,
   'providers:select': z.object({ id: idSchema }).strict(),
-  'providers:set-model': z.object({ id: idSchema, model: chatModelSchema }).strict(),
-  'providers:upsert': providerInputSchema,
+  'providers:default-model-impact': z.object({ id: idSchema }).strict(),
+  'providers:set-model': z.object({ id: idSchema, model: chatModelSchema, consent: modelChangeConsentSchema.optional() }).strict(),
+  'providers:upsert': providerInputSchema.extend({ consent: modelChangeConsentSchema.optional() }),
   'providers:remove': z.object({ id: idSchema }).strict(),
   'providers:clear-secret': z.object({ id: idSchema }).strict(),
   'providers:test': z.object({ id: idSchema }).strict(),

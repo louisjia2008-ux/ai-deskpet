@@ -44,6 +44,21 @@ const offered = (id: string, at = instant) => ({ id, kind: 'task-completed' as c
 const waitFor = async (predicate: () => boolean): Promise<void> => { for (let i = 0; i < 100; i++) { if (predicate()) return; await Promise.resolve(); } throw new Error('unit barrier not reached'); };
 
 describe('event-driven persistent proactive service', () => {
+  it('uses live defaults for future submissions after an equivalent legacy pin is migrated', async () => {
+    const s = setup();
+    let defaultModel = 'synthetic-model';
+    const service = new EventProactiveService(s.store, s.tasks, {
+      now: s.now, environment: () => s.environment, defaultModel: () => defaultModel,
+    });
+    const initial = await service.configure(enabled());
+    await expect(service.followModel({ providerId: 'provider', model: 'synthetic-model' })).resolves.toBe(true);
+    expect(service.getPolicy()).toMatchObject({ model: null, revision: initial.revision });
+    await expect(service.followModel({ providerId: 'provider', model: 'synthetic-model' })).resolves.toBe(false);
+    defaultModel = 'synthetic-new-default';
+    await service.offer(offered('new-default'));
+    await service.tick();
+    expect(s.submit.mock.calls[0]?.[1]).toMatchObject({ providerId: 'provider', model: defaultModel });
+  });
   it('adds both birthdays to an existing greeting but does not create one or change the daily limit', async () => {
     const s = setup();
     const service = new EventProactiveService(s.store, s.tasks, { now: s.now, environment: () => s.environment,

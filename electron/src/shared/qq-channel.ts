@@ -91,7 +91,7 @@ export const qqCronApprovalSchema = z.object({
 }).strict();
 export const qqCronOperationSchema = z.object({
   version: z.literal(1), action: z.enum(['create', 'update', 'resume']), authority: qqAuthoritySchema,
-  owner: z.object({ sessionId: z.string().uuid(), providerId: z.string().uuid(), model: z.string().min(1).max(240) }).strict(),
+  owner: z.object({ sessionId: z.string().uuid(), providerId: z.string().uuid(), model: z.string().min(1).max(240).nullable() }).strict(),
   scheduleId: z.string().uuid(), expectedRevision: z.number().int().positive().nullable(),
   enabled: z.boolean(),
   input: qqCronInputSchema, approval: qqCronApprovalSchema,

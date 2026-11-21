@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useState } from 'react';
-import type { DeskPetApi, ProviderConfig, ProviderModel } from '../../shared';
+import type { ChatModelSelection, DeskPetApi, ProviderConfig, ProviderModel } from '../../shared';
 import { messages } from '../../shared';
 import { ChatModelPicker } from './ChatModelPicker';
 
@@ -11,18 +11,20 @@ const second: ProviderConfig = { ...first, id: '11234567-89ab-4def-8123-456789ab
 const model = (id: string): ProviderModel => ({ id, displayName: id, contextWindow: null, supportsTools: false });
 const t = (key: string) => messages.en[key as keyof typeof messages.en] ?? key;
 const setup = (listModels = vi.fn<(id: string) => Promise<ProviderModel[]>>(async () => [model('alpha'), model('beta')])) => {
-  let saved = [first, second]; let selected = first.id;
-  const setModel = vi.fn(async (id: string, name: string) => { saved = saved.map((provider) => provider.id === id ? { ...provider, model: name } : provider); return saved.find((provider) => provider.id === id)!; });
-  const select = vi.fn(async (id: string) => { selected = id; });
+  const providers = [first, second];
+  let saved: ChatModelSelection | undefined;
+  const selectModel = vi.fn(async (selection: ChatModelSelection | null) => { saved = selection ?? undefined; });
+  const setModel = vi.fn(), select = vi.fn();
   Object.defineProperty(window, 'deskpet', { value: { providers: { setModel, select, listModels } } as unknown as DeskPetApi, configurable: true });
   const onSavingChange = vi.fn();
   const Harness = () => {
-    const [providers, setProviders] = useState(saved); const [active, setActive] = useState(selected);
-    return <ChatModelPicker providers={providers} provider={providers.find((provider) => provider.id === active)} running t={t} onSavingChange={onSavingChange} refresh={async () => { setProviders(saved); setActive(selected); }} />;
+    const [selection, setSelection] = useState(saved);
+    return <ChatModelPicker providers={providers} provider={providers.find(provider => provider.id === (selection?.providerId ?? first.id))}
+      selection={selection} onSelect={selectModel} running t={t} onSavingChange={onSavingChange} refresh={async () => { setSelection(saved); }} />;
   };
   render(<Harness />);
   fireEvent.click(screen.getByText('Change'));
-  return { setModel, select, listModels, onSavingChange };
+  return { selectModel, setModel, select, listModels, onSavingChange };
 };
 
 it('allows a model switch during a reply and keeps the selection after refresh', async () => {
@@ -33,21 +35,24 @@ it('allows a model switch during a reply and keeps the selection after refresh',
   expect(screen.getByText(/This reply keeps the model/u)).toBeInTheDocument();
   fireEvent.change(picker, { target: { value: 'beta' } });
   await waitFor(() => expect(picker).toHaveValue('beta'));
-  expect(api.setModel).toHaveBeenCalledWith(first.id, 'beta');
+  expect(api.selectModel).toHaveBeenCalledWith({ providerId: first.id, model: 'beta' });
   expect(api.onSavingChange.mock.calls).toEqual([[true], [false]]);
   expect(api.select).not.toHaveBeenCalled();
+  expect(api.setModel).not.toHaveBeenCalled();
+  fireEvent.change(picker, { target: { value: '' } });
+  await waitFor(() => expect(api.selectModel).toHaveBeenLastCalledWith({ providerId: first.id, model: null }));
 });
 
 it('retains the current model on list/save failure and offers a manual model ID', async () => {
   const api = setup(vi.fn(async () => { throw new Error('Unavailable'); }));
   await screen.findByText(/model list is unavailable/u);
-  expect(screen.getByRole('combobox', { name: 'Chat model' })).toHaveValue('alpha');
+  expect(screen.getByRole('combobox', { name: 'Chat model' })).toHaveValue('');
   fireEvent.click(screen.getByText('Enter a model ID'));
   fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'custom-model' } });
-  api.setModel.mockRejectedValueOnce(new Error('Disk write failed'));
+  api.selectModel.mockRejectedValueOnce(new Error('Disk write failed'));
   fireEvent.click(screen.getByRole('button', { name: 'Use this model' }));
   await screen.findByRole('alert');
-  expect(screen.getByRole('combobox', { name: 'Chat model' })).toHaveValue('alpha');
+  expect(screen.getByRole('combobox', { name: 'Chat model' })).toHaveValue('');
   fireEvent.click(screen.getByRole('button', { name: 'Use this model' }));
   await waitFor(() => expect(screen.getByRole('combobox', { name: 'Chat model' })).toHaveValue('custom-model'));
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -60,7 +65,8 @@ it('discards a model list that arrives after switching to another provider', asy
   await screen.findByRole('option', { name: /^delta ·/u });
   await act(async () => { resolveFirst([model('stale-model')]); });
   expect(screen.queryByRole('option', { name: /^stale-model ·/u })).not.toBeInTheDocument();
-  expect(screen.getByRole('combobox', { name: 'Chat model' })).toHaveValue('gamma');
+  expect(screen.getByRole('combobox', { name: 'Chat model' })).toHaveValue('');
+  expect(screen.getByRole('option', { name: 'Follow service default (gamma)' })).toHaveProperty('selected', true);
 });
 
 
@@ -73,7 +79,8 @@ it('reloads a same-config saved provider after a credential event without keepin
   const unsubscribe = vi.fn(), setModel = vi.fn(), select = vi.fn();
   const onChanged = vi.fn((listener: typeof notify) => { notify = listener; return unsubscribe; });
   Object.defineProperty(window, 'deskpet', { configurable: true, value: { providers: { listModels, setModel, select, onChanged } } as unknown as DeskPetApi });
-  const view = render(<ChatModelPicker providers={[provider]} provider={provider} running={false} t={t} refresh={vi.fn(async () => undefined)} onSavingChange={vi.fn()} />);
+  const view = render(<ChatModelPicker providers={[provider]} provider={provider} selection={{ providerId: provider.id, model: 'alpha' }} onSelect={vi.fn()}
+    running={false} t={t} refresh={vi.fn(async () => undefined)} onSavingChange={vi.fn()} />);
   fireEvent.click(screen.getByText('Change'));
   await screen.findByRole('option', { name: /^old-access/u });
   expect(screen.getByText('USD Input 1 / Output 5 · per million tokens')).toBeInTheDocument();
@@ -93,11 +100,12 @@ it('reloads a same-config saved provider after a credential event without keepin
 it('keeps configuration collapsed until requested without losing model prices or selection', async () => {
   const listModels = vi.fn(async () => [model('alpha')]);
   Object.defineProperty(window, 'deskpet', { value: { providers: { listModels } } as unknown as DeskPetApi, configurable: true });
-  const { container } = render(<ChatModelPicker providers={[first]} provider={first} running={false} t={t} refresh={vi.fn()} onSavingChange={vi.fn()} />);
+  const { container } = render(<ChatModelPicker providers={[first]} provider={first} selection={undefined} onSelect={vi.fn()}
+    running={false} t={t} refresh={vi.fn()} onSavingChange={vi.fn()} />);
   expect(container.querySelector('details')?.open).toBe(false);
   expect(screen.getByText('Local models · alpha')).toBeInTheDocument();
   fireEvent.click(screen.getByText('Change'));
-  expect(screen.getByRole('combobox', { name: 'Chat model' })).toHaveValue('alpha');
+  expect(screen.getByRole('combobox', { name: 'Chat model' })).toHaveValue('');
   await waitFor(() => expect(listModels).toHaveBeenCalledOnce());
   expect(screen.getByText('Price unknown', { selector: 'strong' })).toBeInTheDocument();
   fireEvent.click(screen.getByText('Change'));

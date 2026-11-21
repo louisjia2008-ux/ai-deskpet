@@ -1,3 +1,4 @@
+import { providerFailureCode } from '../../../shared/provider-errors';
 import { z } from 'zod';
 import type { WeChatFriendsMomentsSettings } from '../../../shared/wechat-digests';
 import { WeChatDigestFailure } from './wechat-digest-scheduler';
@@ -72,6 +73,7 @@ export async function generateWeChatFriendsMoments(host: WeChatFriendsMomentsHos
   // Only ordinal references and bounded text enter the chosen model route.
   const summaries = new Map<number, string>();
   let modelFailures = 0;
+  let providerError = '';
   if (evidence.length > 0) {
     await context.assertCurrent();
     try {
@@ -92,7 +94,8 @@ export async function generateWeChatFriendsMoments(host: WeChatFriendsMomentsHos
         summaries.set(item.id, summary);
       }
       modelFailures = evidence.length - summaries.size;
-    } catch {
+    } catch (error) {
+      providerError = providerFailureCode(error, '');
       summaries.clear();
       modelFailures = evidence.length;
     }
@@ -118,5 +121,6 @@ export async function generateWeChatFriendsMoments(host: WeChatFriendsMomentsHos
   ]) : [];
   return { entries, messages, ...(readFailures || modelFailures ? {
     issue: readFailures ? 'read' : 'model', failures: Math.min(32, readFailures + modelFailures),
+    ...(providerError ? { providerError } : {}),
   } : {}) };
 }

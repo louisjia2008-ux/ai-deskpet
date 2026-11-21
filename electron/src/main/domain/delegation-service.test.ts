@@ -120,6 +120,24 @@ afterEach(async () => {
 });
 
 describe('durable controlled delegation service', () => {
+  it('resolves a following child at approval, rejects a stale preview, and preserves the approved job model', async () => {
+    const f = await fixture('follow');
+    const input = await f.spec(1);
+    input.children[0]!.model = null;
+    input.children[0]!.reviewedDefaultModel = first.model;
+    await f.providers.setModel(first.id, 'ep3-synthetic-next');
+    await expect(f.service.submitDelegation(input)).rejects.toThrow('provider.bindingMismatch');
+    expect(f.calls).toHaveLength(0);
+    input.children[0]!.reviewedDefaultModel = 'ep3-synthetic-next';
+    const batch = await f.service.submitDelegation(input);
+    await f.providers.setModel(first.id, 'ep3-synthetic-later');
+    const call = await f.arrived();
+    expect(call.body.model).toBe('ep3-synthetic-next');
+    expect(batch.children[0]?.model).toBe('ep3-synthetic-next');
+    expect((await f.service.openDelegationDraft({ sessionId: f.parent.id })).childModelSelections).toEqual([{ providerId: first.id, model: null }]);
+    call.respond();
+    await f.idle();
+  });
   it('opens a host-owned explicit command draft without any child request and does not treat ordinary text as a command', async () => {
     const f = await fixture('draft');
     const draft = await f.service.openDelegationDraft({ sessionId: f.parent.id, command: '委派文本任务：SYNTHETIC_GOAL' });

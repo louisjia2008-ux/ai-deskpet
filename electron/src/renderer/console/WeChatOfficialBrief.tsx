@@ -1,3 +1,4 @@
+import { WeChatDigestModel } from './WeChatDigestModel';
 import { useEffect, useId, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
 import type { ResolvedLocale } from '../../shared';
@@ -37,10 +38,6 @@ const copy = {
   },
 };
 
-const routeKey = (route: WeChatOfficialBriefSettings['provider']): string =>
-  route === null ? '' : `${route.providerId}\n${route.model}`;
-const routeOf = (provider: WeChatOfficialBriefState['providers'][number]) =>
-  ({ providerId: provider.id, model: provider.model });
 
 export function WeChatOfficialBriefSettingsPanel({ api, locale, disabled = false }: {
   api: Pick<WeChatDigestsAPI, 'getOfficialSettings' | 'setOfficialSettings'>;
@@ -114,7 +111,6 @@ export function WeChatOfficialBriefSettingsPanel({ api, locale, disabled = false
   const providers = state?.providers ?? [];
   const selected = draft.accountIds ?? [];
   const missing = selected.some(accountId => !accounts.some(account => account.id === accountId));
-  const provider = routeKey(draft.provider);
   return <section className="wechat-policy" aria-labelledby={id}>
     <h3 id={id}>{t.title}</h3>
     <p>{t.description}</p>
@@ -158,15 +154,8 @@ export function WeChatOfficialBriefSettingsPanel({ api, locale, disabled = false
             onChange={event => update({ cloud: event.target.checked })} /><span>{t.cloud}</span>
         </label>
         <small id={`${id}-cloud`} className="muted">{t.cloudInfo}</small>
-        {draft.cloud && <label>{t.provider}<select value={provider} disabled={!available} onChange={event => {
-          const selectedProvider = providers.find(item => routeKey(routeOf(item)) === event.target.value);
-          update({ provider: selectedProvider ? routeOf(selectedProvider) : null });
-        }}>
-          <option value="">{t.privateRoute}</option>
-          {draft.provider && !providers.some(item => routeKey(routeOf(item)) === provider) &&
-            <option value={provider}>{t.missingService}</option>}
-          {providers.map(item => <option value={routeKey(routeOf(item))} key={routeKey(routeOf(item))}>{item.name} · {item.model}</option>)}
-        </select></label>}
+        {draft.cloud && <WeChatDigestModel locale={locale} label={t.provider} inherited={t.privateRoute} unavailable={t.missingService}
+          providers={providers} value={draft.provider} disabled={!available} change={provider => update({ provider })} />}
       </fieldset>}
       <div className="button-row">
         {state && <button type="submit" disabled={locked || unchanged}>{saving ? t.saving : t.save}</button>}

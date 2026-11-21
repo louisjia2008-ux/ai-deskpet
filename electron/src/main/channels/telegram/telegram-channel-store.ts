@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { defaultTelegramState, telegramStateSchema } from '../../../shared/telegram-channel';
 import type { TelegramState } from '../../../shared/telegram-channel';
 import { EncryptedJsonStore, type VaultKeyProvider } from '../../persistence/encrypted-json-store';
@@ -32,6 +33,7 @@ export class TelegramChannelStore {
     const work = this.#queue.then(async () => {
       const draft = this.snapshot();
       const result = mutation(draft);
+      if (this.#disk.hasPersistedValue && isDeepStrictEqual(draft, this.#state)) return result;
       await this.#disk.save(draft);
       this.#state = draft;
       return result;

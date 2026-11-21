@@ -48,7 +48,7 @@ describe('PersistentSchedules controlled UI', () => {
     fireEvent.change(screen.getByLabelText('Explicit material'), { target: { value: 'SYNTHETIC_ONLY_SELECTED_TEXT' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }));
     await waitFor(() => expect(f.api.scheduleUpsert).toHaveBeenCalledTimes(1));
-    expect(f.api.scheduleUpsert).toHaveBeenCalledWith(expect.objectContaining({ title: 'Evening summary', rule: { kind: 'weekly', time: '17:30', weekday: 5 }, timezone: 'Asia/Shanghai', missedPolicy: 'run-once', privacy: 'local-only', providerId: provider.id, model: provider.model, material: 'SYNTHETIC_ONLY_SELECTED_TEXT' }));
+    expect(f.api.scheduleUpsert).toHaveBeenCalledWith(expect.objectContaining({ title: 'Evening summary', rule: { kind: 'weekly', time: '17:30', weekday: 5 }, timezone: 'Asia/Shanghai', missedPolicy: 'run-once', privacy: 'local-only', providerId: provider.id, model: null, material: 'SYNTHETIC_ONLY_SELECTED_TEXT' }));
     expect(f.api.scheduleRunNow).not.toHaveBeenCalled();
   });
   it('pauses, resumes and confirms permanent cancellation without deleting execution identities', async () => {
@@ -56,7 +56,7 @@ describe('PersistentSchedules controlled UI', () => {
     await screen.findByRole('listitem', { name: example.title });
     fireEvent.click(screen.getByRole('button', { name: 'Pause' })); await waitFor(() => expect(f.api.schedulePause).toHaveBeenCalledWith(example.id));
     await screen.findByRole('button', { name: 'Resume' });
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' })); await waitFor(() => expect(f.api.scheduleUpsert).toHaveBeenCalledWith(expect.objectContaining({ id: example.id, enabled: true })));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' })); await waitFor(() => expect(f.api.scheduleUpsert).toHaveBeenCalledWith(expect.objectContaining({ id: example.id, enabled: true, model: example.model })));
     await screen.findByRole('button', { name: 'Pause' });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel schedule' }));
     const dialog = screen.getByRole('alertdialog'); expect(f.api.scheduleCancel).not.toHaveBeenCalled();

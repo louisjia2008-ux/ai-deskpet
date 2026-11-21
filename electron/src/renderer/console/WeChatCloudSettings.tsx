@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
 import type { ResolvedLocale } from '../../shared';
 import type { WeChatAssistant, WeChatChannelAPI, WeChatChannelState, WeChatCloudRoute, WeChatCloudSettings, WeChatCloudState, WeChatGroupRule, WeChatGroupRuleLevel, WeChatReplyFriend } from '../../shared/wechat-channel';
+import { wechatCloudRouteSchema } from '../../shared/wechat-channel';
 
 const en = {
   title: 'Reply source by conversation',
@@ -28,6 +29,8 @@ const en = {
   lifecycle: 'DeskPet must be open to generate cloud replies.',
   confirm: 'Allow this conversation’s message text and recent history to be sent to the selected cloud service.',
   service: 'Reply service',
+  followModel: 'Follow the service default',
+  model: 'Model name',
   assistantTitle: 'Owner’s private chat assistant',
   assistant: 'Answer with the full DeskPet chat: web search, recurring tasks and memory.',
   assistantDetail: 'Works with a cloud reply service. Recurring tasks created in WeChat may only search and read the web; results are sent back to this chat. Files, commands and settings stay on the desktop. The conversation appears as “WeChat assistant” in Chat.',
@@ -81,6 +84,8 @@ const zh: typeof en = {
   lifecycle: '云端回复需要保持 DeskPet 运行。',
   confirm: '允许将这个会话的新消息文字和近期文字记录发送给所选云端服务。',
   service: '回复服务',
+  followModel: '跟随服务默认模型',
+  model: '模型名称',
   assistantTitle: '主人私聊助手',
   assistant: '用完整的桌宠聊天来回复：联网搜索、定时任务和记忆。',
   assistantDetail: '需要私聊使用云端回复服务。在微信里创建的定时任务只能搜索和读取网页，结果会发回这个私聊；文件、命令和设置仍只能在桌面操作。对话会以「微信私聊助手」出现在聊天列表里。',
@@ -110,8 +115,7 @@ const zh: typeof en = {
 };
 
 type Provider = WeChatCloudState['providers'][number];
-const routeKey = (route: WeChatCloudRoute | null): string => route ? `${route.providerId}\n${route.model}` : '';
-const routeOf = (provider: Provider): WeChatCloudRoute => ({ providerId: provider.id, model: provider.model });
+const routeKey = (route: WeChatCloudRoute | null): string => route ? JSON.stringify(route) : '';
 
 function CloudRouteControl({ copy, title, saved, value, providers, localModel, disabled, approved, change, approve, data = copy.data }: {
   copy: typeof en; title: string; saved: WeChatCloudRoute | null; value: WeChatCloudRoute | null; providers: Provider[];
@@ -120,26 +124,35 @@ function CloudRouteControl({ copy, title, saved, value, providers, localModel, d
 }): JSX.Element {
   const info = useId();
   const key = routeKey(value);
-  const listed = providers.some(provider => routeKey(routeOf(provider)) === key);
-  const savedProvider = providers.find(provider => routeKey(routeOf(provider)) === routeKey(saved));
+  const provider = providers.find(item => item.id === value?.providerId);
+  const savedProvider = providers.find(item => item.id === saved?.providerId);
   const source = saved === null ? `${copy.localSource} · ${localModel}`
-    : savedProvider ? `${copy.cloudSource} · ${savedProvider.name} · ${saved.model}`
-      : `${copy.cloudSource} · ${saved.model} · ${copy.missing}`;
+    : savedProvider ? `${copy.cloudSource} · ${savedProvider.name} · ${saved.model ?? `${copy.followModel} (${savedProvider.model})`}`
+      : `${copy.cloudSource} · ${saved.model ?? copy.followModel} · ${copy.missing}`;
   const needsApproval = value !== null && key !== routeKey(saved);
   return <fieldset className="wechat-cloud-route">
     <legend>{title}</legend>
     <small className="muted">{copy.savedSource} <strong>{source}</strong></small>
-    <label>{copy.service}<select value={key} disabled={disabled} aria-describedby={value ? info : undefined} onChange={event => {
-      const selected = providers.find(provider => routeKey(routeOf(provider)) === event.target.value);
-      change(selected ? routeOf(selected) : null);
+    <label>{copy.service}<select value={value?.providerId ?? ''} disabled={disabled} aria-describedby={value ? info : undefined} onChange={event => {
+      const id = event.target.value;
+      change(id ? { providerId: id, model: null } : null);
     }}>
       <option value="">{copy.local}</option>
-      {value && !listed && <option value={key}>{value.model} · {copy.missing}</option>}
-      {providers.map(provider => <option key={provider.id} value={routeKey(routeOf(provider))}>{provider.name} · {provider.model}</option>)}
+      {value && !provider && <option value={value.providerId}>{value.model ?? copy.followModel} · {copy.missing}</option>}
+      {providers.map(item => <option key={item.id} value={item.id}>{item.name} · {item.model}</option>)}
     </select></label>
+    {value && provider && <>
+      <label className="wechat-option">
+        <input type="checkbox" checked={value.model === null} disabled={disabled}
+          onChange={event => change({ providerId: provider.id, model: event.target.checked ? null : provider.model })} />
+        <span>{copy.followModel}</span>
+      </label>
+      {value.model !== null && <label>{copy.model}<input type="text" maxLength={240} value={value.model} disabled={disabled}
+        onChange={event => change({ providerId: provider.id, model: event.target.value })} /></label>}
+    </>}
     {value && <small id={info}>{data}</small>}
     {needsApproval && <label className="wechat-option">
-      <input type="checkbox" checked={approved} disabled={disabled || !listed} onChange={event => approve(event.target.checked)} />
+      <input type="checkbox" checked={approved} disabled={disabled || !provider} onChange={event => approve(event.target.checked)} />
       <span>{copy.confirm}</span>
     </label>}
   </fieldset>;
@@ -241,7 +254,8 @@ export function WeChatCloudSettingsPanel({ api, groups, friends = [], localModel
   const locked = disabled || saving || savingAssistant || savingFriend !== null || loading || state?.available !== true || error === 'loadError';
   const approvedRoute = (id: string): boolean => {
     const route = currentRoute(id);
-    return route === null || (approvals[id] === routeKey(route) && state?.providers.some(provider => routeKey(routeOf(provider)) === routeKey(route)) === true);
+    return route === null || (approvals[id] === routeKey(route) && wechatCloudRouteSchema.safeParse(route).success
+      && state?.providers.some(provider => provider.id === route.providerId) === true);
   };
   const canSave = !locked && state !== null && changed.length > 0 && changed.every(({ id }) => approvedRoute(id));
   const submit = async (event: FormEvent) => {

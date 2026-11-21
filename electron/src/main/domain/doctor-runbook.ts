@@ -10,6 +10,9 @@ const vmDisk: DoctorRunbookEntry = { causes: ['虚拟机磁盘空间不足', '�
 const fixed: Record<string, DoctorRunbookEntry> = {
   'wechat.selfTestFailed': { causes: ['发送界面或目标核验失败', '数据库发送基线不可读'], actions: ['打开微信虚拟机窗口确认微信已登录。', '查看医生页失败阶段，确认后可手动再测一次。'] },
   'wechat.selfTestUncertain': receipt,
+  'wechat.momentWindowBusy': { causes: ['其他微信操作在等待期内占着窗口'], actions: ['等其他微信操作结束，再重新准备和确认草稿。'] },
+  'wechat.momentListenerPaused': { causes: ['微信监听处于暂停状态'], actions: ['需要继续使用朋友圈时，先在微信渠道设置恢复监听。'] },
+  'wechat.momentWindowError': { causes: ['微信会话窗口或朋友圈面板没有打开'], actions: ['确认微信已登录，检查窗口是否有需要处理的提示，再准备新草稿。'] },
   'wechat.selfTestSkipped': { causes: ['回复队列卡住或监听暂停'], actions: ['在运行状态查看微信队列是否有未确认的消息'] },
   'wechat.vmUnreachable': { causes: ['微信虚拟机未运行或连接不可用', '客体只读体检接口不可用'], actions: ['打开微信虚拟机窗口，查看是否仍在运行和登录。'] },
   'wechat.vmDiskLow': vmDisk, 'wechat.vmDiskCritical': vmDisk, 'wechat.vmLogGrowth': vmDisk,

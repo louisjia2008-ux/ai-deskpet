@@ -105,6 +105,10 @@ class OperationBusy(TestError):
     pass
 
 
+class OwnerOperationPending(OperationBusy):
+    """An owner operation is waiting for or using the desktop."""
+
+
 class AttemptUncertain(TestError):
     code = "send_receipt_unconfirmed"
 
@@ -143,10 +147,39 @@ class WeChatDesktop:
 
 
 @contextmanager
-def vm_operation(*, wait=0.0):
-    """Reserve the guest desktop across the CLI, MCP worker, and reply watcher.
+def _private_desktop_lock(directory, name, uid):
+    try:
+        lock = os.open(name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
+    except OSError as error:
+        raise DiagnosticTestError("无法打开虚拟机专用锁。") from error
+    try:
+        info = os.fstat(lock)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != uid or stat.S_IMODE(info.st_mode) != 0o600:
+            raise DiagnosticTestError("虚拟机专用锁应为当前用户私有文件。")
+        yield lock
+    finally:
+        os.close(lock)
 
-    The listener never waits; an owner action may wait `wait` seconds for an operation already under way.
+
+def _acquire_desktop(lock, operation, deadline, *, busy=OperationBusy):
+    while True:
+        try:
+            fcntl.flock(lock, operation | fcntl.LOCK_NB)
+            return
+        except BlockingIOError as error:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise busy("另一个操作正在使用虚拟机桌面。") from error
+            time.sleep(min(0.2, remaining))
+
+
+@contextmanager
+def vm_operation(*, wait=0.0):
+    """Reserve the guest desktop across worker processes.
+
+    Owner actions hold a shared gate while waiting with a deadline and while
+    using the desktop. A poller only passes the gate when no owner holds it.
+    Closing a descriptor, including on process exit, releases its gate claim.
     """
     uid = os.geteuid()
     try:
@@ -157,27 +190,19 @@ def vm_operation(*, wait=0.0):
         root = os.fstat(directory)
         if root.st_uid != uid or stat.S_IMODE(root.st_mode) != 0o700:
             raise DiagnosticTestError("虚拟机专用锁目录应仅允许当前用户访问。")
-        try:
-            lock = os.open(VM_LOCK_PATH.name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
-                           0o600, dir_fd=directory)
-        except OSError as error:
-            raise DiagnosticTestError("无法打开虚拟机专用锁。") from error
-        try:
-            info = os.fstat(lock)
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != uid or stat.S_IMODE(info.st_mode) != 0o600:
-                raise DiagnosticTestError("虚拟机专用锁应为当前用户私有文件。")
-            deadline = time.monotonic() + wait
-            while True:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError as error:
-                    if time.monotonic() >= deadline:
-                        raise OperationBusy("另一个操作正在使用虚拟机桌面。") from error
-                    time.sleep(0.2)
+        deadline = time.monotonic() + wait
+        with _private_desktop_lock(directory, VM_LOCK_PATH.name, uid) as lock:
+            with _private_desktop_lock(directory, VM_LOCK_PATH.name + ".owners", uid) as gate:
+                if wait > 0:
+                    _acquire_desktop(gate, fcntl.LOCK_SH, deadline)
+                    _acquire_desktop(lock, fcntl.LOCK_EX, deadline)
+                    yield
+                    return
+                # Keep gate acquisition and the desktop try-lock atomic with
+                # respect to a newly queued owner. Never hold it during a poll.
+                _acquire_desktop(gate, fcntl.LOCK_EX, deadline, busy=OwnerOperationPending)
+                _acquire_desktop(lock, fcntl.LOCK_EX, deadline)
             yield
-        finally:
-            os.close(lock)
     finally:
         os.close(directory)
 
@@ -1586,7 +1611,7 @@ def main():
     if args.action == "recover-window":
         if args.target is not None:
             parser.error("recover-window does not take a target")
-        with vm_operation(), tempfile.TemporaryDirectory(prefix="deskpet-wechat-guest-") as temp:
+        with vm_operation(wait=20), tempfile.TemporaryDirectory(prefix="deskpet-wechat-guest-") as temp:
             outcome = recover_window(config(), Path(temp) / "guest.png")
             return {"ok": outcome in {"already_open", "restored"}, "outcome": outcome}
     if args.target not in ("private", "group"):
@@ -1606,7 +1631,7 @@ def main():
         not message.strip() or len(message) > 80 or re.search(r"[\x00-\x1f\x7f]", message)
     ):
         raise TestError("首轮验证请用一行、80 个字符以内的测试文字。")
-    with vm_operation(), tempfile.TemporaryDirectory(prefix="deskpet-wechat-guest-") as temp:
+    with vm_operation(wait=20), tempfile.TemporaryDirectory(prefix="deskpet-wechat-guest-") as temp:
         return run_test(args.action, args.target, message, config(), Path(temp) / "guest.png", quote=quote)
 
 

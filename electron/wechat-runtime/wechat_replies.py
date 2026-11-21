@@ -528,28 +528,35 @@ def watch(args, model, db, settings, path):
         if not args.mention_frame or not was_mentioned(settings, args.mention_frame):
             raise ui.TestError("恢复群 @ 测试需要已观察到的微信原生提醒。")
         group = MessageSnapshot("group", ui.conversation_messages(settings, args.group_baseline, "group"))
-        _, sent = reply_to_mention(model, db, settings, path, group)
+        with ui.vm_operation(wait=20):
+            _, sent = reply_to_mention(model, db, settings, path, group)
         if not sent:
             raise ui.TestError("未能发送恢复的群 @ 回复。")
         return
-    group = thread_snapshot(settings, path, "group")
-    private = thread_snapshot(settings, path, "private")
-    log("watch_ready", duration_seconds=args.seconds)
     deadline = time.monotonic() + args.seconds
+    group = private = None
     private_sent = group_sent = False
     while time.monotonic() < deadline:
-        incoming = thread_snapshot(settings, path, "private")
-        native_mention = was_mentioned(settings, path)
-        pending_private = new_messages(private, incoming)
-        if pending_private is None:
-            raise ui.TestError("私聊画面与已读取的消息失去连续性，已暂停自动回复。")
-        for message in pending_private:
-            if not args.once_each or not private_sent:
-                private_sent = bool(reply_to(model, db, settings, path, "private", message, quote=False)) or private_sent
-        private = incoming
-        if native_mention and (not args.once_each or not group_sent):
-            group, sent = reply_to_mention(model, db, settings, path, group)
-            group_sent = sent or group_sent
+        try:
+            with ui.vm_operation():
+                if private is None:
+                    group = thread_snapshot(settings, path, "group")
+                    private = thread_snapshot(settings, path, "private")
+                    log("watch_ready", duration_seconds=args.seconds)
+                incoming = thread_snapshot(settings, path, "private")
+                native_mention = was_mentioned(settings, path)
+                pending_private = new_messages(private, incoming)
+                if pending_private is None:
+                    raise ui.TestError("私聊画面与已读取的消息失去连续性，已暂停自动回复。")
+                for message in pending_private:
+                    if not args.once_each or not private_sent:
+                        private_sent = bool(reply_to(model, db, settings, path, "private", message, quote=False)) or private_sent
+                private = incoming
+                if native_mention and (not args.once_each or not group_sent):
+                    group, sent = reply_to_mention(model, db, settings, path, group)
+                    group_sent = sent or group_sent
+        except ui.OperationBusy:
+            pass
         if args.once_each and private_sent and group_sent:
             log("watch_completed")
             return
@@ -592,7 +599,7 @@ def main():
     os.environ["DESKPET_WECHAT_VM_CONFIG"] = args.config
     model = None
     try:
-        with ui.vm_operation(), session(args.state) as db, tempfile.TemporaryDirectory(
+        with session(args.state) as db, tempfile.TemporaryDirectory(
             prefix="deskpet-wechat-watch-"
         ) as tmp:
             settings = ui.config()
@@ -601,7 +608,8 @@ def main():
             if args.action == "watch":
                 watch(args, model, db, settings, path)
             else:
-                single(args, model, db, settings, path)
+                with ui.vm_operation(wait=20):
+                    single(args, model, db, settings, path)
     except (ui.TestError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         log("stopped", reason=str(error) if isinstance(error, ui.TestError) else type(error).__name__)
         return 1

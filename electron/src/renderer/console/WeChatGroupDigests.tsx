@@ -1,3 +1,4 @@
+import { WeChatDigestModel } from './WeChatDigestModel';
 import { useEffect, useId, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
 import type { ResolvedLocale } from '../../shared';
@@ -41,10 +42,6 @@ const copy = {
   },
 };
 
-const providerKey = (route: WeChatDigestGroupSettings['provider']): string =>
-  route === null ? '' : `${route.providerId}\n${route.model}`;
-const routeOf = (provider: WeChatDigestGroupState['providers'][number]) =>
-  ({ providerId: provider.id, model: provider.model });
 
 export function WeChatGroupDigestSettings({ api, locale, disabled = false }: {
   api: Pick<WeChatDigestsAPI, 'getGroupSettings' | 'setGroupSettings'>;
@@ -110,7 +107,6 @@ export function WeChatGroupDigestSettings({ api, locale, disabled = false }: {
   const providers = state?.providers ?? [];
   const available = state?.groups ?? [];
   const missing = draft.groups.some(group => !available.some(option => option.id === group.id));
-  const route = providerKey(draft.provider);
   return <section className="wechat-policy" aria-labelledby={title}>
     <h3 id={title}>{t.title}</h3>
     <p>{t.privacy}</p>
@@ -120,15 +116,8 @@ export function WeChatGroupDigestSettings({ api, locale, disabled = false }: {
     <form className="stack-form wechat-cloud-route" onSubmit={event => void submit(event)}>
       {state?.available && <fieldset disabled={locked} className="stack-form wechat-cloud-route">
         <label>{t.time}<input type="time" value={draft.time} required onChange={event => update({ time: event.target.value })} /></label>
-        <label>{t.provider}<select value={route} onChange={event => {
-          const selected = providers.find(provider => providerKey(routeOf(provider)) === event.target.value);
-          update({ provider: selected ? routeOf(selected) : null });
-        }}>
-          <option value="">{t.followPrivate}</option>
-          {draft.provider && !providers.some(provider => providerKey(routeOf(provider)) === route) &&
-            <option value={route}>{t.missingProvider}</option>}
-          {providers.map(provider => <option value={providerKey(routeOf(provider))} key={providerKey(routeOf(provider))}>{provider.name} · {provider.model}</option>)}
-        </select></label>
+        <WeChatDigestModel locale={locale} label={t.provider} inherited={t.followPrivate} unavailable={t.missingProvider}
+          providers={providers} value={draft.provider} change={provider => update({ provider })} />
         <label>{t.keywords}<textarea rows={3} value={keywords} maxLength={16 * 81} onChange={event => { setNotice(null); setKeywords(event.target.value); }} /></label>
         <fieldset className="wechat-cloud-route">
           <legend>{t.groups}</legend>

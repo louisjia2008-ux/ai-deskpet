@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { backgroundFailureCode } from './background-failure';
 import { isOwnerDiaryChannel, type ChannelContext } from '../security/execution-context';
 import { companionPreferencesSchema, defaultCompanionPreferences, diaryEntrySchema } from '../../shared/companion-journal';
 import type { KnowledgeDiaryCopy } from '../../shared/knowledge';
@@ -220,7 +221,13 @@ export class CompanionJournal {
           }
           state.lastSuccessAt = entry.createdAt; state.errorCode = null;
         });
-      } catch { await this.#update(state => { state.lastFailureAt = new Date(input.now).toISOString(); state.errorCode = 'diary.failed'; }); }
+      } catch (error) {
+        const code = backgroundFailureCode(error, 'diary.failed', [
+          'diary.noCloud', 'diary.contextChanged', 'diary.interrupted', 'diary.disabled',
+          'diary.invalid', 'diary.tooLarge', 'diary.incomplete',
+        ]);
+        await this.#update(state => { state.lastFailureAt = new Date(input.now).toISOString(); state.errorCode = code; });
+      }
     })().finally(() => { this.#running = null; this.#controller = null; });
     await this.#running;
   }

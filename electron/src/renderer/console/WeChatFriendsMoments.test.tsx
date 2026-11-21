@@ -57,10 +57,10 @@ it('uses an explicit cloud provider only when the owner selects it', async () =>
   render(<WeChatFriendsMomentsSettingsPanel api={api} locale="en" />);
   const route = await screen.findByRole('combobox', { name: 'Cloud service for the digest' });
   expect(route).toHaveValue('');
-  fireEvent.change(route, { target: { value: `${provider.id}\n${provider.model}` } });
+  fireEvent.change(route, { target: { value: provider.id } });
   fireEvent.click(screen.getByRole('button', { name: 'Save friends’ Moments digest settings' }));
   await waitFor(() => expect(api.setFriendsMomentsSettings).toHaveBeenCalledExactlyOnceWith({
-    ...defaults, provider: { providerId: provider.id, model: provider.model },
+    ...defaults, provider: { providerId: provider.id, model: null },
   }));
 });
 

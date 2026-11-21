@@ -20,3 +20,26 @@
 .delegation-child-editor .background-job-binding { align-items: start; }
 .delegation-child-editor .model-select { grid-column: 1 / -1; }
 .provider-list .model-select { padding-top: 12px; }
+.provider-model-confirmation {
+  width: min(32rem, calc(100% - 2rem));
+  max-height: calc(100% - 2rem);
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface-solid, #fff);
+  color: var(--text);
+}
+
+.provider-model-confirmation::backdrop {
+  background: rgb(0 0 0 / 55%);
+}
+
+.provider-model-confirmation-list {
+  max-height: 40vh;
+  overflow-y: auto;
+  margin: 1rem 0;
+}
+
+.provider-model-confirmation-list small {
+  display: block;
+}

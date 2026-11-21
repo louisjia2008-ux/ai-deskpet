@@ -3,7 +3,7 @@ import type { QQ_CHANNEL_POLICY_VERSION } from './qq-channel';
 import type { QqCronApproval } from './qq-channel';
 export const CHAT_CRON_CAPABILITIES = ['web.search', 'web.read', 'workspace.write', 'math.calculate', 'time.read'] as const;
 export type ChatCronCapability = typeof CHAT_CRON_CAPABILITIES[number];
-export interface ChatCronBinding { sessionId: string; providerId: string; model: string }
+export interface ChatCronBinding { sessionId: string; providerId: string; model: string | null }
 /** Present when the schedule was created from a bound QQ channel; execution and
  * delivery then carry QQ restrictions for the schedule's lifetime. */
 export interface ChatCronChannelRef { kind: 'qq'; bindingId: string; senderId: string; policyVersion: 1 | typeof QQ_CHANNEL_POLICY_VERSION; approval?: QqCronApproval | undefined }

@@ -70,14 +70,31 @@ describe('WeChat Moments', () => {
     expect(f.host.post).toHaveBeenCalledTimes(1);
   });
 
-  it('retries a busy desktop, then reports failure; an unconfirmed post is never retried', async () => {
-    const busy = fixture({ post: async () => 'busy' });
-    await busy.moments.propose({ text: '忙', imageIdea: 'idea' });
-    await busy.moments.answer('发', adjacent);
-    await vi.waitFor(() => expect(busy.host.notify).toHaveBeenCalled());
-    expect(busy.host.post).toHaveBeenCalledTimes(12);
-    expect(busy.stored()!.draft!.status).toBe('failed');
+  it.each([
+    ['busy', 'wechat.momentWindowBusy', '微信窗口还被其他操作占着', 1],
+    ['paused', 'wechat.momentListenerPaused', '微信监听已暂停', 12],
+    ['window_error', 'wechat.momentWindowError', '打开微信窗口时出了错', 12],
+  ] as const)('reports %s distinctly and keeps failure/preview consent rules', async (status, code, reason, attempts) => {
+    const f = fixture({ post: async () => status });
+    await f.moments.propose({ text: '合成草稿', imageIdea: 'synthetic idea' });
+    await f.moments.answer('发', adjacent);
+    await vi.waitFor(() => expect(f.host.notify).toHaveBeenCalledWith(expect.stringContaining(reason)));
+    expect(f.host.notify).toHaveBeenCalledWith(expect.stringContaining('草稿已经作废'));
+    expect(f.host.post).toHaveBeenCalledTimes(attempts);
+    expect(f.stored()!.draft!.status).toBe('failed');
+    expect(f.moments.lastError).toBe(code);
 
+    f.host.preview.mockResolvedValue(status);
+    const preview = await f.moments.propose({ text: '没有收到的预览', imageIdea: 'synthetic idea' });
+    expect(preview).toMatchObject({ status: 'preview_unconfirmed', reason: expect.stringContaining(reason) });
+    expect(await f.moments.answer('发', adjacent)).toContain(reason);
+    expect(f.stored()!.draft).toMatchObject({ status: 'awaiting' });
+    expect(f.stored()!.draft!.previewedAt).toBeUndefined();
+    expect(f.host.post).toHaveBeenCalledTimes(attempts);
+    expect(f.moments.lastError).toBe(code);
+  });
+
+  it('never retries an unconfirmed post', async () => {
     const unsure = fixture({ post: async () => 'uncertain' });
     await unsure.moments.propose({ text: '不确定', imageIdea: 'idea' });
     await unsure.moments.answer('发', adjacent);

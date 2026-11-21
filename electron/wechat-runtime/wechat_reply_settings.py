@@ -103,12 +103,18 @@ def read_friend_cloud_route(runtime, friend_id):
 
 
 def route_fingerprint(route, pin):
-    if (pin is None or not isinstance(route, dict) or set(route) != {"providerId", "model"}
-            or any(not isinstance(value, str) or not 1 <= len(value) <= 240 or value != value.strip()
-                   or not all(character.isprintable() for character in value) for value in route.values())):
+    keys = {"providerId", "model"}
+    if (pin is None or not isinstance(route, dict)
+            or set(route) != keys and (set(route) != keys | {"follow"} or route["follow"] is not True)
+            or any(not isinstance(route[key], str) or not 1 <= len(route[key]) <= 240 or route[key] != route[key].strip()
+                   or not route[key].isprintable() for key in keys)):
         raise ValueError("Invalid selected cloud reply route.")
-    authority = json.dumps([route["providerId"], route["model"], pin],
-                           separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    # Electron resolves the service default. The worker sends under the
+    # configuration it authorized, using the original approval model as an anchor.
+    parts = [route["providerId"], route["model"], pin]
+    if route.get("follow") is True:
+        parts.append(True)
+    authority = json.dumps(parts, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(authority).hexdigest()
 
 

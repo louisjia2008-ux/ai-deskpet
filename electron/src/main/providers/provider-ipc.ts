@@ -3,10 +3,12 @@ import { defaultModelRouting, routingDestination } from '../../shared/model-rout
 import type { AppSettingsService } from '../app-settings';
 import type { IpcRouter } from '../ipc-router';
 import type { ProviderService } from './provider-service';
+import type { ModelBindingService } from './model-bindings';
 
 interface Dependencies {
   ipc: Pick<IpcRouter, 'register'>;
   providers: Pick<ProviderService, 'list' | 'setModel' | 'upsert' | 'remove' | 'clearSecret' | 'discoverModels'>;
+  modelBindings: Pick<ModelBindingService, 'impact' | 'change'>;
   settings: Pick<AppSettingsService, 'get' | 'update'>;
   routingChanged(): void;
   providersChanged(): void;
@@ -16,7 +18,7 @@ interface Dependencies {
 
 /** Provider settings routes only. IPC authentication/schema/maintenance gates
  * remain in IpcRouter; credentials and dispatch stay in ProviderService. */
-export const registerProviderIpc = ({ ipc, providers, settings, routingChanged, providersChanged, selected, listModels }: Dependencies): void => {
+export const registerProviderIpc = ({ ipc, providers, modelBindings, settings, routingChanged, providersChanged, selected, listModels }: Dependencies): void => {
   const consoleOnly = ['console'] as const;
   ipc.register('providers:get-routing', consoleOnly, () => settings.get().modelRouting ?? defaultModelRouting);
   ipc.register('providers:set-routing', consoleOnly, async value => {
@@ -31,11 +33,12 @@ export const registerProviderIpc = ({ ipc, providers, settings, routingChanged, 
     if (!providers.list().some(provider => provider.id === id && provider.enabled)) throw new Error('provider.unavailable');
     await settings.update({ activeProviderId: id }); return selected();
   });
-  ipc.register('providers:set-model', consoleOnly, async ({ id, model }) => {
-    const result = await providers.setModel(id, model); providersChanged(); return result;
+  ipc.register('providers:default-model-impact', consoleOnly, ({ id }) => modelBindings.impact(id));
+  ipc.register('providers:set-model', consoleOnly, async ({ id, model, consent }) => {
+    const result = await modelBindings.change(id, model, consent, () => providers.setModel(id, model)); providersChanged(); return result;
   });
-  ipc.register('providers:upsert', consoleOnly, async ({ apiKey, ...config }) => {
-    const result = await providers.upsert(config, apiKey); providersChanged(); return result;
+  ipc.register('providers:upsert', consoleOnly, async ({ apiKey, consent, ...config }) => {
+    const result = await modelBindings.change(config.id, config.model, consent, () => providers.upsert(config, apiKey)); providersChanged(); return result;
   });
   ipc.register('providers:remove', consoleOnly, async ({ id }) => { await providers.remove(id); providersChanged(); });
   ipc.register('providers:clear-secret', consoleOnly, async ({ id }) => { const result = await providers.clearSecret(id); providersChanged(); return result; });
