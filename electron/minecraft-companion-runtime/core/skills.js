@@ -849,7 +849,7 @@ const sourceLevel = (block) => Number(block?.getProperties?.().level);
  * Fills one empty bucket from a still source of water or lava, seen from dry
  * ground. Confirmed only by the full bucket appearing in the inventory.
  */
-async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48 }) {
+async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48, exclude = () => false }) {
   const full = `${liquid}_bucket`;
   if (!bot.inventory.items().some((i) => i.name === 'bucket')) return fail('no_bucket');
   // Lava is only approached in good health: a slip costs a lot more than water.
@@ -858,7 +858,7 @@ async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48 }) {
   if (id === undefined) return fail('unknown_block');
   const here = bot.entity.position;
   const sources = bot.findBlocks({ matching: id, maxDistance: radius, count: 128 })
-    .filter((p) => !blacklist.has(posKey(p)))
+    .filter((p) => !blacklist.has(posKey(p)) && !exclude(p))
     .map((p) => bot.blockAt(p))
     // A still source with open air above it, so the bucket can be aimed from the side or above.
     .filter((b) => b && sourceLevel(b) === 0 && AIR.has(bot.blockAt(b.position.offset(0, 1, 0))?.name || ''))
@@ -872,7 +872,7 @@ async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48 }) {
     const moved = await actions.goNear(bot, ctx, target.position.offset(0.5, 1, 0.5), 2, { timeoutMs: 45000 });
     if (!moved.ok && !actions.withinReach(bot, target.position, 4.5)) {
       blacklist.add(key, moved.reason);
-      return moved;
+      return { ...moved, sourcePosition: target.position };
     }
   }
   if (liquid === 'lava' && bot.entity.isInLava) return fail('in_lava');
@@ -895,7 +895,7 @@ async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48 }) {
     if (filled) return { ok: true, filled: full };
   }
   blacklist.add(key, 'bucket_unfilled');
-  return fail('bucket_unfilled');
+  return fail('bucket_unfilled', { sourcePosition: target.position });
 }
 
 /**

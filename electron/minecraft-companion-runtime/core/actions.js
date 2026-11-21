@@ -11,6 +11,7 @@ const { goals } = require('mineflayer-pathfinder');
 const { waitUntil, runCancellable, sleep, abortError } = require('./confirm');
 const { ownedItems } = require('./perception');
 const { dropReturnPosition } = require('./pathReturn');
+const { posKey } = require('./blacklist');
 const { meleeGeometry, meleeSight, MeleeFollowGoal, entitySizeEvidence } = require('./entityGeometry');
 const { surveyDigPermit, withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight } = require('./survey-plan-actions');
 
@@ -26,7 +27,7 @@ function haltBody(bot) {
 // Climbing out of a mine needs pillaring: allow it, with dirt or cobblestone,
 // only while the destination lies well above the bot. Pillars left in a shaft
 // are harmless; on the surface the bot never pillars.
-const CLIMB_BLOCKS = ['dirt', 'cobblestone', 'cobbled_deepslate'];
+const CLIMB_BLOCKS = ['dirt', 'cobblestone', 'cobbled_deepslate', 'sandstone', 'red_sandstone'];
 // Sand and gravel stay put when placed on the block below the bot, so a carried
 // stack can also tower out of a pit. They are not dug for this purpose.
 const SCAFFOLD_BLOCKS = [...CLIMB_BLOCKS, 'sand', 'red_sand', 'gravel'];
@@ -728,6 +729,8 @@ async function unstick(bot, ctx) {
   if (await swimAshore(bot, ctx)) return { ok: true, moved: 'swam_ashore' };
   if (await stepOutOfPool(bot, ctx)) return { ok: true, moved: 'out_of_pool' };
   if (await drainPocket(bot, ctx)) return { ok: true, moved: 'drained_pocket' };
+  const pit = shallowPitTarget(bot);
+  if (pit && await climbPitDirectly(bot, ctx, pit)) return { ok: true, moved: 'pit_pillar' };
   if (await nudge(bot, ctx)) return { ok: true, moved: 'nudged' };
   const start = bot.entity.position.clone();
   const movements = bot.pathfinder.movements;
@@ -937,7 +940,7 @@ const fluidNext = (bot, p) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0,
   .some(([dx, dy, dz]) => FLUID.test(bot.blockAt(p.offset(dx, dy, dz))?.name || ''));
 // Blocks whose drop can be pillared with: soil by hand, rock with a pickaxe.
 const SOIL = /^(dirt|grass_block|coarse_dirt|podzol|rooted_dirt|mycelium)$/;
-const ROCK = /^(stone|cobblestone|deepslate|cobbled_deepslate)$/;
+const ROCK = /^(stone|cobblestone|deepslate|cobbled_deepslate|sandstone|red_sandstone)$/;
 
 /** Digs a few pit-wall blocks at or above foot level for their dirt or cobblestone. */
 async function gatherClimbBlocks(bot, ctx, { want = 6 } = {}) {
@@ -980,6 +983,38 @@ function localSurfaceY(bot, { radius = 3, above = 10 } = {}) {
     }
   }
   return best;
+}
+
+// The pathfinder can return without moving in a narrow, open shaft. There
+// is room to jump and place on the floor without asking it to find a route.
+function shallowPitTarget(bot) {
+  if (String(bot.game?.dimension || '').replace('minecraft:', '') !== 'overworld'
+    || bot.pathfinder?.movements?.companionWalkOnly || !underground(bot)) return null;
+  const feet = bot.entity.position.floored();
+  if (!openSky(bot, feet)) return null;
+  const rim = localSurfaceY(bot, { above: 5 });
+  const height = rim - feet.y;
+  return height >= 2 && height <= 6 ? rim : null;
+}
+
+async function climbPitDirectly(bot, ctx, targetY) {
+  const from = bot.entity.position.floored();
+  const depth = targetY - from.y;
+  const below = bot.blockAt(from.offset(0, -1, 0));
+  if (depth < 1 || depth > 6 || bot.entity.onGround !== true || !solidGround(below)
+    || FLUID.test(below.name) || /^(magma_block|campfire|soul_campfire|cactus)$/.test(below.name)
+    || ![0, 1, 2].every((dy) => /^(air|cave_air|void_air)$/.test(bot.blockAt(from.offset(0, dy, 0))?.name || ''))
+    || bot.companionNearPlayerBuild?.(from)
+    || countItems(bot, (name) => CLIMB_BLOCKS.includes(name)) < depth) return false;
+  ctx.record?.('recovery_switch', { task: 'pit_exit', to: 'direct_pillar', at: posKey(from), targetY });
+  const blocks = new RegExp(`^(?:${CLIMB_BLOCKS.join('|')})$`);
+  await recentre(bot, ctx);
+  await require('./end').pillarUp(bot, ctx, targetY, { maxSteps: depth + 2, blocks,
+    stop: () => ctx.signal?.aborted || bot.entity.isInWater || bot.entity.isInLava || bot.companionNearPlayerBuild?.(bot.entity.position.floored()) });
+  if (ctx.signal?.aborted) throw abortError(ctx.signal);
+  const ok = bot.entity.onGround && bot.entity.position.y >= targetY - 0.1;
+  ctx.record?.('pit_pillar_result', { at: posKey(bot.entity.position), targetY, ok: Boolean(ok) });
+  return Boolean(ok);
 }
 
 /**
@@ -1112,12 +1147,17 @@ async function digStairsDown(bot, ctx, target, { maxSteps = 16 } = {}) {
 
 /** Climbs back to the surface reference level (or `targetY`) if the bot is below it. */
 async function surface(bot, ctx, { targetY = bot.companionSurfaceY } = {}) {
+  const rim = shallowPitTarget(bot);
+  if (!Number.isFinite(targetY)) targetY = rim;
   if (!Number.isFinite(targetY) || bot.entity.position.y >= targetY - 1) return null;
   if (!underground(bot)) return null;
   const target = Math.floor(targetY);
   await withClimbing(bot, target + 4, () => goTo(bot, ctx, new goals.GoalY(target), { timeoutMs: 30000, arrived: () => true }));
   // The pathfinder found no way up in time: dig a staircase the rest of the way.
   if (bot.entity.position.y < target - 1) {
+    if (rim && await climbPitDirectly(bot, ctx, Math.min(rim, target)) && bot.entity.position.y >= target - 1) {
+      return { ok: true, surfaced: true };
+    }
     await digStairsUp(bot, ctx, target, { maxSteps: target - Math.floor(bot.entity.position.y) + 4 });
   }
   return bot.entity.position.y >= target - 1 ? { ok: true, surfaced: true } : fail('still_below_surface');

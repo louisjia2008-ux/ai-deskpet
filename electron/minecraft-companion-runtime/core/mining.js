@@ -194,6 +194,25 @@ async function tossRubble(bot, ctx) {
 async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, start = null, actions = defaultActions, skills = defaultSkills }) {
   const feet = bot.entity.position.floored();
   if (memory.mine?.floorRepair) return repairFloor(bot, ctx, memory.mine, skills);
+  if (memory.mine?.retiring) {
+    const old = memory.mine;
+    const out = await leaveMine(bot, ctx, memory, actions);
+    if (out) {
+      if (out.reason === 'aborted' || ctx.signal?.aborted) return out;
+      if (out.ok && !bot.entity.position.floored().equals(feet)) { old.exitFailures = 0; return { ...out, progress: false }; }
+      if ((old.exitFailures = (old.exitFailures || 0) + 1) < 3) return out.ok ? fail('mine_exit_not_arrived') : out;
+    }
+    // Keep the known tunnel until the body has a way out, even if the approach
+    // to the working face failed. A new entrance won't help below it.
+    if (out || (feet.y < old.surfaceY - 1 && actions.underground?.(bot))) {
+      ctx.record('recovery_switch', { task: 'mine_exit', to: 'surface', entrance: posKey(old.entrance) });
+      const targetY = out ? old.surfaceY : Math.min(old.surfaceY, actions.localSurfaceY?.(bot) ?? old.surfaceY);
+      return (await actions.surface?.(bot, ctx, { targetY })) || fail('mine_exit_blocked');
+    }
+    memory.mineDir = (old.dir + 1) % 4;
+    memory.mine = null;
+    return fail('mine_exhausted');
+  }
   // Ore already open to the tunnel first: the ore asked for, and any other
   // ore worth taking that the carried pickaxes can harvest.
   if (memory.mine) {
@@ -234,7 +253,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
     if (bot.companionNearPlayerBuild?.(from)) return fail('mine_entrance_near_player_build');
     if (entranceCooling(bot, from)) return fail('mine_entrance_cooling');
     memory.mine = { entrance: from, front: from, surfaceY: from.y, y, dir: memory.mineDir ?? 0, phase: 'descend',
-      mainSteps: 0, steps: 0, turns: 0, branch: null, cells: { [posKey(from)]: null }, walkFailures: 0 };
+      mainSteps: 0, steps: 0, turns: 0, branch: null, cells: { [posKey(from)]: null } };
     ctx.record('mine_start', { at: posKey(from), y });
   }
   const mine = memory.mine;
@@ -255,19 +274,24 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
     const back = (await walkTunnel(bot, ctx, mine, 'front', actions))
       || await actions.goTo(bot, ctx, new goals.GoalBlock(front.x, front.y, front.z),
         { timeoutMs: 8000, arrived: (at) => at.floored().equals(front) });
+    if (back.reason === 'aborted' || ctx.signal?.aborted) return back;
     // Legs that each succeed yet never end at the front (a cell that cannot
     // be stood in any more) loop as surely as failing ones.
     mine.returns = (mine.returns || 0) + 1;
-    if ((!back.ok && ++mine.walkFailures >= 3) || mine.returns > MAX_RETURN_LEGS) {
-      ctx.record('mine_abandoned', { reason: back.ok ? 'front_unreached' : back.reason });
-      coolEntrance(bot, ctx, mine.entrance, back.ok ? 'front_unreached' : back.reason);
-      memory.mineDir = (mine.dir + 1) % 4;
-      memory.mine = null;
+    const advanced = back.ok && !bot.entity.position.floored().equals(feet);
+    mine.frontFailures = advanced ? 0 : (mine.frontFailures || 0) + 1;
+    if (mine.frontFailures >= 3 || mine.returns > MAX_RETURN_LEGS) {
+      const reason = back.ok ? 'front_unreached' : back.reason;
+      ctx.record('recovery_switch', { task: 'mine_front', to: 'retire_entrance', entrance: posKey(mine.entrance), reason });
+      ctx.record('mine_abandoned', { reason });
+      coolEntrance(bot, ctx, mine.entrance, reason);
+      mine.retiring = true;
     }
-    return { ...back, progress: back.ok && !bot.entity.position.floored().equals(feet) };
+    return { ...back, progress: advanced };
   }
 
   mine.returns = 0;
+  mine.frontFailures = 0;
   let dir = mine.dir;
   let descend = mine.phase === 'descend' && mine.front.y > mine.y;
   if (mine.phase === 'descend' && !descend) {
@@ -468,7 +492,7 @@ async function rejoinTunnel(bot, ctx, mine, target, actions) {
   };
   try {
     const first = await go(target);
-    if (first.ok) { mine.walkFailures = 0; return first; }
+    if (first.ok) return first;
     if (first.reason !== 'no_progress') return first;
     const from = bot.entity.position.floored(), path = cardinalRejoin(bot, from, target);
     if (!check()) return fail('path_timeout');
@@ -491,7 +515,6 @@ async function rejoinTunnel(bot, ctx, mine, target, actions) {
         if (!owned()) return fail('no_progress');
       }
       if (!near(bot.entity.position.floored(), target, 0.5)) return fail('not_arrived');
-      mine.walkFailures = 0;
       return { ok: true };
     } finally {
       for (const k of Object.keys(restricted)) if (profile[k] === restricted[k]) profile[k] = saved[k];
@@ -528,12 +551,8 @@ function chain(mine, k) {
  * there is nowhere to go (already there, or not in the tunnel).
  */
 async function walkTunnel(bot, ctx, mine, towards, actions = defaultActions, { stopAt = null } = {}) {
-  const go = async (p, timeoutMs = 20000) => {
-    const result = await actions.goTo(bot, ctx, new goals.GoalBlock(p.x, p.y, p.z),
-      { timeoutMs, arrived: (at) => near(at.floored(), p, 0.5) });
-    if (result.ok) mine.walkFailures = 0;
-    return result;
-  };
+  const go = (p, timeoutMs = 20000) => actions.goTo(bot, ctx, new goals.GoalBlock(p.x, p.y, p.z),
+    { timeoutMs, arrived: (at) => near(at.floored(), p, 0.5) });
   const feet = bot.entity.position.floored();
   const here = cellAt(mine, feet);
   if (!here) {

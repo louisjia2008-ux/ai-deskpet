@@ -14,6 +14,7 @@
 // furnace, short-lived blacklists, and which furniture has been used.
 
 const { Vec3 } = require('vec3');
+const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const { planNext } = require('../planner');
@@ -502,6 +503,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     Object.assign(memory, {
       house: null, protect: null, homeSite: null, siteDigs: 0, houseBuilt: 0, houseBed: false,
       relocate: false, explore: {}, exploreStreak: 0, scaffoldActive: false, doorPlug: false,
+      relocation: { anchor, attempt: 0 }, siteAccessFailures: 0,
       furnace: { item: null, input: 0, output: 0 }, validated: false,
     });
     for (const key of Object.keys(memory.verified)) memory.verified[key] = false;
@@ -509,6 +511,31 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     skipped.clear();
     reportedUpgradeBlocks.clear();
     return { ok: true, abandoned: true };
+  }
+
+  async function exploreRelocation(ctx) {
+    const r = memory.relocation;
+    if (r.retryAt > Date.now()) return { ok: true, waited: true, reason: 'relocation_routes_exhausted', retryAt: r.retryAt };
+    if (r.retryAt) { r.attempt = 0; r.retryAt = 0; }
+    const up = await surfaceFirst(ctx);
+    if (up) return up;
+    const from = bot.entity.position.clone();
+    const closest = (bot.companionDanger || []).filter((p) => Math.hypot(from.x - p.x, from.z - p.z) < 80)
+      .sort((a, b) => from.distanceTo(a) - from.distanceTo(b))[0] || r.anchor;
+    const outward = Math.atan2(from.z - closest.z, from.x - closest.x);
+    const turns = [0, 1, -1, 2, -2, 3, -3, 4];
+    const distance = r.attempt < turns.length ? 24 : 12;
+    const angle = outward + turns[r.attempt % turns.length] * Math.PI / 4;
+    const x = Math.round(from.x + Math.cos(angle) * distance);
+    const z = Math.round(from.z + Math.sin(angle) * distance);
+    ctx.record('recovery_switch', { task: 'homestead_site', to: 'outward_route', x, z, attempt: r.attempt + 1 });
+    const route = new goals.GoalNearXZ(x, z, 3);
+    const result = await actions.goTo(bot, ctx, route, { timeoutMs: 15000, retryNoProgress: false });
+    if (result.reason === 'aborted' || ctx.signal?.aborted) return result;
+    const moved = bot.entity.position.distanceTo(from);
+    if (result.ok && moved >= 6 && route.isEnd(bot.entity.position.floored())) return { ok: true, moved };
+    if (++r.attempt >= 2 * turns.length) r.retryAt = Date.now() + 10 * 60_000;
+    return { ok: false, reason: result.ok ? 'relocation_not_arrived' : result.reason };
   }
 
   const nearbyWoolMobs = () => Object.values(bot.entities || {}).some((e) => e.position
@@ -615,8 +642,13 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
     if (bot.entity.position.distanceTo(new Vec3(position.x + 0.5, position.y, position.z + 0.5)) > 12) {
       ctx.record('return_home', { for: what });
       const back = await actions.goNear(bot, ctx, new Vec3(position.x, position.y, position.z), 4, { timeoutMs: 90000 });
-      if (!back.ok) return back;
+      if (!back.ok) {
+        if (!memory.established && !memory.pinned && back.reason !== 'aborted' && !ctx.signal?.aborted
+          && (memory.siteAccessFailures = (memory.siteAccessFailures || 0) + 1) >= 3) return abandonSite(ctx, 'site_unreachable');
+        return back;
+      }
     }
+    memory.siteAccessFailures = 0;
     const result = await skills.placeAt(bot, ctx, position, match, options);
     // A mob in the way moves on quickly; other failures wait a little longer.
     if (!result.ok) blacklist.add(`build:${posKey(position)}`, result.reason, result.reason === 'cell_occupied_by_entity' ? 4000 : 15000);
@@ -836,8 +868,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, gear = DEFAULT_G
         return dug;
       }
       const site = chooseSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), near || state.position, { avoid: (p) => nearDanger(p) || bot.companionNearPlayerBuild?.(p) });
-      if (!site) return explore(ctx, 'site');
+      if (!site) return memory.relocation ? exploreRelocation(ctx) : explore(ctx, 'site');
       memory.house = createStarterHouse(site.anchor);
+      memory.relocation = null;
       ctx.record('site_chosen', { anchor: site.anchor, fills: site.fills, digs: site.digs });
       return { ok: true };
     }

@@ -17,6 +17,7 @@ const { createHomesteadGoal } = require('../core/goals/homestead');
 const { createNetherExpeditionGoal } = require('../core/goals/netherExpedition');
 const { createStarterHouse } = require('../core/blueprints/starterHouse');
 const { nightShelter } = require('../core/companion');
+const actions = require('../core/actions');
 
 function fixture(options = {}) {
   let now = 1000;
@@ -232,6 +233,95 @@ test('unfinished house can abandon its dangerous or distant site without throwin
   assert.equal(result.abandoned, true);
   assert.equal(goal.memory.house, null);
   assert.deepEqual(events, ['site_abandoned']);
+});
+
+test('a shallow sandstone pit uses a direct pillar when the walking plan does not move', async () => {
+  const before = new Vec3(0.5, 61, 0.5);
+  let height = 60;
+  let placed = 0;
+  const bot = {
+    game: { dimension: 'overworld' }, entity: { position: before.clone(), onGround: true },
+    inventory: { items: () => [{ name: 'sandstone', count: 20 - placed }] },
+    registry: { itemsByName: { sandstone: { id: 1 } } },
+    pathfinder: { movements: { allow1by1towers: false, scafoldingBlocks: [] }, async goto() {} },
+    blockAt(p) {
+      const top = p.x === 0 && p.z === 0 ? height : 63;
+      return { name: p.y <= top ? 'sandstone' : 'air', boundingBox: p.y <= top ? 'block' : 'empty', position: p };
+    },
+    async equip() {},
+    async look() {},
+    setControlState(key, value) { if (key === 'jump' && value) bot.entity.position.y = height + 2.1; },
+    async placeBlock(ref) {
+      assert.equal(ref.position.y, height);
+      height += 1;
+      placed += 1;
+      bot.entity.position.y = height + 1;
+    },
+  };
+  const records = [];
+  const result = await actions.surface(bot, { record: (type, data) => records.push({ type, ...data }) });
+  assert.equal(result.surfaced, true);
+  assert.equal(placed, 3);
+  assert.equal(bot.entity.position.y, 64);
+  assert.equal(records.find((entry) => entry.type === 'recovery_switch').to, 'direct_pillar');
+  assert.equal(records.find((entry) => entry.type === 'pit_pillar_result').ok, true);
+  assert.equal(bot.pathfinder.movements.allow1by1towers, false);
+});
+
+test('after abandoning a home, failed outward routes rotate and a verified move reopens site search', async () => {
+  const tried = [];
+  const bot = {
+    entity: { position: new Vec3(66.5, 64, 0.5) }, companionDanger: [{ x: 0, y: 64, z: 0 }],
+    blockAt(p) {
+      if (bot.entity.position.x < 80) return null;
+      return { name: p.y <= 63 ? 'stone' : 'air', boundingBox: p.y <= 63 ? 'block' : 'empty' };
+    },
+  };
+  const goal = createHomesteadGoal({ bot, anchor: { x: 0, y: 64, z: 0 }, actions: {
+    goTo: async (_bot, _ctx, next) => {
+      tried.push(`${next.x},${next.z}`);
+      if (tried.length === 1) return { ok: false, reason: 'not_arrived' };
+      if (tried.length === 3) bot.entity.position = new Vec3(next.x, 64, next.z);
+      return { ok: true };
+    },
+  } });
+  goal.memory.pinned = false;
+  const records = [];
+  const ctx = { perceive: () => ({ isDay: true, position: bot.entity.position }), record: (type, data) => records.push({ type, ...data }) };
+  assert.equal((await goal.run(ctx)).abandoned, true);
+  assert.equal((await goal.run(ctx)).ok, false);
+  assert.equal((await goal.run(ctx)).reason, 'relocation_not_arrived');
+  assert.ok((await goal.run(ctx)).moved >= 6);
+  assert.equal(new Set(tried).size, 3);
+  assert.equal((await goal.run(ctx)).ok, true);
+  assert.ok(records.some((entry) => entry.type === 'site_chosen' && Math.hypot(entry.anchor.x, entry.anchor.z) >= 80));
+});
+
+test('three failures to regain a mining face retain the old route until the bot has come back up', async () => {
+  const entrance = new Vec3(0, 64, 0);
+  const front = new Vec3(6, 61, 0);
+  const from = new Vec3(3, 61, 0);
+  const bot = { entity: { position: from.clone() }, registry: { blocksByName: {} }, inventory: { items: () => [] } };
+  const memory = { mine: { entrance, dir: 0, surfaceY: 64, y: 60, front,
+    cells: { '0,64,0': null, '3,61,0': '0,64,0', '6,61,0': '3,61,0' } } };
+  let walks = 0;
+  const events = [];
+  const ctx = { record: (type, data) => events.push({ type, ...data }) };
+  const options = { blocks: () => false, dropMatch: () => false, y: 60, blacklist: createBlacklist(), actions: {
+    async goTo(_bot, _ctx, goal) {
+      if (++walks <= 3) return { ok: false, reason: 'not_arrived' };
+      bot.entity.position = new Vec3(goal.x, goal.y, goal.z);
+      return { ok: true };
+    },
+  } };
+  for (let i = 0; i < 3; i += 1) assert.equal((await mineStep(bot, ctx, memory, options)).reason, 'not_arrived');
+  assert.equal(memory.mine.retiring, true);
+  assert.equal(entranceCooling(bot, entrance), true);
+  assert.equal((await mineStep(bot, ctx, memory, options)).ok, true);
+  assert.equal(bot.entity.position.y, entrance.y);
+  assert.equal((await mineStep(bot, ctx, memory, options)).reason, 'mine_exhausted');
+  assert.equal(memory.mine, null);
+  assert.ok(events.some((e) => e.type === 'recovery_switch' && e.to === 'retire_entrance'));
 });
 
 test('autonomous Nether expedition stops after an overworld respawn without enough rods', async () => {

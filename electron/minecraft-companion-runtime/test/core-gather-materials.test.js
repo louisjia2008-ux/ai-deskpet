@@ -61,3 +61,39 @@ test('with a search radius, no tree near the chest ends the task with what is mi
   assert.match(result.reason, /^none_near_site:log within 128 of the chest at 0,64,0/);
   assert.equal(legs, 8);
 });
+
+test('three bad approaches within a lava pool switch to a different pool without blocking all buckets', async () => {
+  const { bot, chest, skills } = world([]);
+  const inventory = { bucket: 1 };
+  const bad = [new Vec3(1, 60, 1), new Vec3(2, 60, 1), new Vec3(1, 60, 3)];
+  const untriedSamePool = new Vec3(3, 60, 2);
+  const good = new Vec3(25, 68, 3);
+  let attempts = 0;
+  const records = [];
+  Object.assign(skills, {
+    storeInChest: async () => ({ ok: true, contents: {} }),
+    fillBucket: async (_bot, _ctx, { exclude }) => {
+      const p = bad[attempts++];
+      if (p) {
+        assert.equal(exclude(p), false);
+        return { ok: false, reason: 'path_timeout', sourcePosition: p };
+      }
+      assert.equal(exclude(untriedSamePool), true);
+      assert.equal(exclude(good), false);
+      inventory.bucket = 0;
+      inventory.lava_bucket = 1;
+      return { ok: true, filled: 'lava_bucket' };
+    },
+  });
+  const goal = createGatherMaterialsGoal({ bot, chest, skills, actions: { unstick: async () => ({ ok: true, moved: 'test' }) },
+    requirements: [{ key: 'lava_bucket', count: 1 }], carry: () => true });
+  const outcomes = [];
+  const ctx = { perceive: () => ({ inventory }), record: (type, data) => records.push({ type, ...data }),
+    stepOutcome: (step, result) => outcomes.push({ step, result }) };
+  for (let i = 0; i < 10 && !goal.isDone(ctx.perceive()); i += 1) await goal.run(ctx);
+  assert.equal(goal.isDone(ctx.perceive()), true);
+  assert.equal(inventory.lava_bucket, 1);
+  assert.equal(attempts, 4);
+  assert.equal(outcomes.filter(({ result }) => !result.ok).length, 0);
+  assert.ok(records.some((e) => e.type === 'recovery_switch' && e.to === 'different_pool' && e.failures === 3));
+});

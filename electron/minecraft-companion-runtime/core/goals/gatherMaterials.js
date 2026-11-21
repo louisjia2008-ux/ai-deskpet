@@ -64,6 +64,9 @@ const FRAME_OBSIDIAN = 10;
 const FRAME_CORNERS = 4;
 // A station farther off than this is behind the bot: another goes down beside it.
 const STATION_REACH = 32;
+const POOL_COOLDOWN_MS = 10 * 60_000;
+const POOL_FAILURE_WINDOW_MS = 30 * 60_000;
+const samePool = (a, b) => Math.abs(a.y - b.y) <= 4 && Math.hypot(a.x - b.x, a.z - b.z) <= 10;
 
 function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint = null, stations = {},
   skills = defaultSkills, actions = defaultActions, kb = KNOWLEDGE, maxExploreStreak = 20, carry = () => false, reserved = {}, countWorn = false,
@@ -86,6 +89,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     steps: 0,
   };
   const blacklist = createBlacklist({ ttlMs: 120000 });
+  let lavaPools = [];
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   const nameAt = (p) => blockAt(p)?.name || null;
   const plan = (ctx, args) => planNext({ ...args, kb, stepBlocked: ctx.stepBlocked });
@@ -398,9 +402,34 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         return result;
       }
       case 'fill': {
-        let result = await skills.fillBucket(bot, ctx, { liquid: step.liquid, blacklist });
-        if (result.reason === 'no_target_in_range') result = await skills.fillBucket(bot, ctx, { liquid: step.liquid, blacklist, radius: 128 });
+        const isLava = step.liquid === 'lava';
+        const now = Date.now();
+        if (isLava) lavaPools = lavaPools.filter((pool) => pool.until ? pool.until > now : pool.last > now - POOL_FAILURE_WINDOW_MS);
+        const exclude = (p) => isLava && lavaPools.some((pool) => pool.until > Date.now() && samePool(p, pool.position));
+        const args = { liquid: step.liquid, blacklist, exclude };
+        let result = await skills.fillBucket(bot, ctx, args);
+        if (result.reason === 'no_target_in_range') result = await skills.fillBucket(bot, ctx, { ...args, radius: 128 });
         if (result.reason === 'no_target_in_range') return explore(ctx, step.key);
+        if (isLava && result.ok) lavaPools = lavaPools.filter((pool) => pool.until);
+        if (isLava && result.sourcePosition && !result.ok && result.reason !== 'aborted' && !ctx.signal?.aborted) {
+          const p = result.sourcePosition;
+          let pool = lavaPools.find((entry) => samePool(entry.position, p));
+          if (!pool) {
+            pool = { position: { x: p.x, y: p.y, z: p.z }, failures: [] };
+            lavaPools = [...lavaPools.slice(-15), pool];
+          }
+          pool.last = Date.now();
+          pool.failures = pool.failures.filter((at) => at > pool.last - POOL_FAILURE_WINDOW_MS);
+          pool.failures.push(pool.last);
+          if (pool.failures.length >= 3) {
+            pool.until = pool.last + POOL_COOLDOWN_MS;
+            ctx.record('recovery_switch', { task: 'fill_lava_bucket', to: 'different_pool', at: posKey(pool.position),
+              reason: result.reason, failures: pool.failures.length, until: pool.until });
+          }
+          // This source has its own cooldown. Keep the goal-wide failure
+          // window but don't block other pools as the same planning step.
+          return { ...result, sourceHandled: true };
+        }
         return result;
       }
       case 'hunt': {
