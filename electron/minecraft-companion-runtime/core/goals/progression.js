@@ -18,7 +18,7 @@ const { exitPortalLit } = require('../end');
 const RANGE = { overworld: 3, nether: 4, end: 6 };
 const ARMOR = ['helmet', 'chestplate', 'leggings', 'boots'];
 const key = (key, count = 1) => ({ key, count });
-const OVERWORLD_IRON = [...ARMOR.map((piece) => key(`iron_${piece}`)), key('iron_sword'), key('iron_pickaxe'), key('shield')];
+const OVERWORLD_IRON = [key('iron_pickaxe'), key('iron_sword'), key('shield'), ...ARMOR.map((piece) => key(`iron_${piece}`))];
 const IRON = [...OVERWORLD_IRON, key('bow'), key('arrow', 32), key('water_bucket'), key('lava_bucket')];
 const DIAMOND = [key('diamond_pickaxe'), key('diamond_sword')];
 const TRAVEL = [key('food', 16), key('cobblestone', 64), key('arrow', 32)];
@@ -70,8 +70,7 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
     if (here() === 'the_end') return 6;
     if (here() === 'the_nether') return 4;
     if (!m.homestead?.isDone(s)) return 0;
-    if (!m.wheatFarmDone || !built(m, 'cobbleGenerator', s) || !built(m, 'autoSmelter', s)) return 1;
-    if (!holds(s, OVERWORLD_IRON)) return 2;
+    if (!m.wheatFarmDone || !holds(s, OVERWORLD_IRON)) return 1;
     if (!holds(s, DIAMOND) || range(m) === 3) return 3;
     if (milestones(m).dragon) return 7;
     if (bot.companionEndPortal && milestones(m).end) return 5;
@@ -176,13 +175,16 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
     card('harvest_wheat', 1, (s, m) => inOverworld() && m.wheatFarmDone && homeOf(m) && farm(m).harvestNeeded(),
       (m) => harvest(m), { score: 30, maintenance: true }),
     card('guest_bed', 1, (s, m) => inOverworld() && m.homestead?.wantsGuestBed?.(s),
-      (m) => m.homestead.guestBedGoal(), { score: 25, maintenance: true }),
+      (m) => m.homestead.guestBedGoal(), { score: 81, maintenance: true }),
+    card('home_lighting', 1, (s, m) => inOverworld() && m.homestead?.wantsLighting?.(s),
+      (m) => m.homestead.lightingGoal(), { score: 85, maintenance: true }),
     card('primary_bed', 1, (s, m) => inOverworld() && m.homestead?.wantsPrimaryBed?.(s),
       (m) => m.homestead.primaryBedGoal(), { score: 31, maintenance: true }),
     card('return_home', 0, (s, m) => inOverworld() && Boolean(m.homestead?.memory.established)
       && (m.homePending || VALUABLES.some((item) => (s.inventory[item] || 0) > 0 && (item !== 'diamond' || holds(s, DIAMOND)))),
       (m) => { m.homePending = true; return homeStep(m); }, { score: 100, safeReturn: true }),
-    card('iron_outfit', 2, (s) => inOverworld() && (!holds(s, OVERWORLD_IRON) || upgrades(bot).some(([item]) => item.name.startsWith('iron_'))),
+    // A machine is useful, but its construction must not block making iron tools.
+    card('iron_outfit', 1, (s) => inOverworld() && (!holds(s, OVERWORLD_IRON) || upgrades(bot).some(([item]) => item.name.startsWith('iron_'))),
       (m) => outfit(m, OVERWORLD_IRON), { maintenance: true }),
     card('diamond_tools', 3, (s) => inOverworld() && !holds(s, DIAMOND), (m) => outfit(m, DIAMOND)),
     card('nether_supplies', 4, (s, m) => inOverworld() && !m.homePending && blaze(s, m) < 14 && !holds(s, [...IRON, ...netherKit()]),

@@ -54,7 +54,7 @@ function evaluateSite(blockAt, corner, around, { variant = 'starter', protectedC
   }
   const anchor = { x: corner.x, y: mode + 1, z: corner.z };
   const house = createStarterHouse(anchor, { variant });
-  if ([...house.clearance, ...house.foundation, ...house.torchSupports, house.entrance].some(protectedCell)) return null;
+  if ([...house.clearance, ...house.foundation, ...house.torchSupports].some(protectedCell)) return null;
   // Every solid block left in the shell's space is digging work too.
   digs = 0;
   for (const p of house.clearance) {
@@ -123,6 +123,11 @@ function safeCaveDig(blockAt, p) {
   });
 }
 
+function canClearTerrain(blockAt, p) {
+  const block = blockAt(p.x, p.y, p.z);
+  return (GROUND.has(block?.name) || caveRock(block)) && safeCaveDig(blockAt, p);
+}
+
 function chooseHillside(blockAt, around, { avoid = () => false, protectedCell = () => false } = {}) {
   const x0 = Math.floor(around.x), y0 = Math.floor(around.y), z0 = Math.floor(around.z);
   const read = (p) => blockAt(p.x, p.y, p.z);
@@ -133,16 +138,14 @@ function chooseHillside(blockAt, around, { avoid = () => false, protectedCell = 
         const anchor = { x: x0 + dx - 2, y: y0 + dy, z: z0 + dz + 1 };
         if (avoid(anchor)) continue;
         const house = createStarterHouse(anchor, { variant: 'hillside' });
-        const e = house.entrance;
-        if (![read(e), read({ ...e, y: e.y + 1 })].every((b) => b && isSoft(b))
-          || !house.foundation.every((p) => isSolid(read(p))) || !house.torchSupports.every((p) => isSolid(read(p)))) continue;
+        if (!house.foundation.every((p) => isSolid(read(p))) || !house.torchSupports.every((p) => isSolid(read(p)))) continue;
         if (house.blocks.filter((b) => b.family === 'cave_wall').some((b) => !caveRock(read(b.position)))) continue;
-        if ([...house.clearance, ...house.foundation, ...house.torchSupports, e].some(protectedCell)) continue;
+        if ([...house.clearance, ...house.foundation, ...house.torchSupports].some(protectedCell)) continue;
         if (!house.clearance.every((p) => {
           const b = read(p);
-          return b && (isSoft(b) || caveRock(b)) && safeCaveDig(blockAt, p);
+          return b && (isSoft(b) || caveRock(b) || (p.z < anchor.z && canClearTerrain(blockAt, p))) && safeCaveDig(blockAt, p);
         })) continue;
-        return { anchor, variant: 'hillside', fills: 0, digs: house.clearance.filter((p) => caveRock(read(p))).length };
+        return { anchor, variant: 'hillside', fills: 0, digs: house.clearance.filter((p) => !isSoft(read(p))).length };
       }
     }
   }
@@ -171,4 +174,4 @@ function siteWork(blockAt, house, isCorrect) {
   return { digs, fills };
 }
 
-module.exports = { chooseSite, chooseHillside, safeCaveDig, evaluateSite, siteWork, groundAt, isAir, isSoft, isSolid, WALL_HEIGHT };
+module.exports = { chooseSite, chooseHillside, safeCaveDig, canClearTerrain, evaluateSite, siteWork, groundAt, isAir, isSoft, isSolid, WALL_HEIGHT };

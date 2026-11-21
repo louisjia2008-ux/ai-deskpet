@@ -18,8 +18,8 @@ const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const { createAutoSmelter } = require('../blueprints/autoSmelter');
 const { FACINGS } = require('../blueprints/cobbleGenerator');
-const { createBlacklist } = require('../blacklist');
 const { sleep } = require('../confirm');
+const { deviceTargets } = require('../target-recovery');
 
 const LIQUID = new Set(['water', 'lava', 'bubble_column']);
 const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
@@ -84,8 +84,8 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
     lastCheck: 0,
     guarded: false,
   };
-  const blacklist = createBlacklist({ ttlMs: 60000 });
   const blockAt = (p) => bot.blockAt(v(p));
+  const targets = deviceTargets(bot, actions, 'auto_smelter', memory);
   // Main inventory only: storeItems deposits from there, not from the off-hand.
   const have = (name) => bot.inventory.items().filter((i) => i.name === name).reduce((sum, i) => sum + i.count, 0);
 
@@ -159,7 +159,8 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
     progress: () => (memory.device ? inspect().built + memory.taken : 0),
     async run(ctx) {
       if (!memory.device) {
-        const device = chooseSmelterSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), bot.entity.position, { avoid });
+        const device = chooseSmelterSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), bot.entity.position,
+          { avoid: q => avoid?.(q) || bot.companionPlayerBlock?.(q) || targets.avoids(ctx, q) });
         if (!device) return { ok: false, reason: 'no_site' };
         memory.device = device;
         ctx.record('device_site', { kind: device.kind, anchor: device.anchor, facing: device.facing });
@@ -167,22 +168,25 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
       guardDevice();
       const d = memory.device;
       const s = inspect();
+      const relocation = !anchor && !memory.loaded.input && !memory.loaded.fuel
+        ? [...d.dig, ...d.floor, ...d.clearAbove, ...d.parts.map(p => p.position)] : null;
 
       if (s.toDig.length || s.nextPart) {
-        if (overPit() && s.toDig.length) return stepOff(ctx);
+        if (overPit() && s.toDig.length) return targets.run(ctx, 'step_off', s.toDig[0], () => stepOff(ctx), { relocate: relocation });
         const target = s.toDig[0] || (s.nextPart && !isAir(blockAt(s.nextPart.position)) ? s.nextPart.position : null);
         if (target) {
-          const block = blockAt(target);
-          const reach = await actions.goToDig(bot, ctx, block);
-          if (!reach.ok) return reach;
-          return actions.digBlock(bot, ctx, block);
+          return targets.run(ctx, 'dig', target, async () => {
+            const block = blockAt(target);
+            if (!block) return { ok: false, reason: 'unloaded' };
+            const reach = await actions.goToDig(bot, ctx, block);
+            return reach.ok ? actions.digBlock(bot, ctx, block) : reach;
+          }, { relocate: relocation });
         }
         const part = s.nextPart;
         const toward = new Vec3(part.against.x - part.position.x, part.against.y - part.position.y, part.against.z - part.position.z);
-        const result = await skills.placeAt(bot, ctx, part.position, (n) => n === part.block, {
+        const result = await targets.run(ctx, 'part', part.position, () => skills.placeAt(bot, ctx, part.position, (n) => n === part.block, {
           faces: [toward], sneak: Boolean(part.sneak), verify: () => partOk(part),
-        });
-        if (!result.ok) blacklist.add(key(part.position), result.reason);
+        }), { cells: [part.against], tag: `${part.block}:${d.facing}`, relocate: relocation });
         ctx.record('device_part', { part: part.key, ok: result.ok, reason: result.reason, facing: facingOf(blockAt(part.position)) });
         return result;
       }
@@ -190,14 +194,16 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
       // Built: the hoppers feed whatever is in the chests.
       for (const [slot, name, chest] of [['input', input, d.cells.inChest], ['fuel', fuel, d.cells.fuelChest]]) {
         if (have(name) === 0) continue;
-        const stored = await skills.storeItems(bot, ctx, { position: chest, items: [{ name }] });
+        const stored = await targets.run(ctx, `load_${slot}`, chest,
+          () => skills.storeItems(bot, ctx, { position: chest, items: [{ name }] }));
         if (stored.ok) memory.loaded[slot] += stored.stored?.[name] || 0;
         return stored;
       }
       const wait = memory.lastCheck + SMELT_WAIT_MS - Date.now();
       if (wait > 0) await sleep(wait, ctx.signal);
       memory.lastCheck = Date.now();
-      const result = await skills.takeItems(bot, ctx, { position: d.cells.outChest, itemMatch: (n) => n === output });
+      const result = await targets.run(ctx, 'take_output', d.cells.outChest,
+        () => skills.takeItems(bot, ctx, { position: d.cells.outChest, itemMatch: (n) => n === output }));
       if (result.ok) memory.taken += result.taken;
       ctx.record('smelter_output', { ok: result.ok, reason: result.reason, taken: memory.taken });
       return result;

@@ -14,6 +14,7 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.
   let retryAt = 0;
   let pauses = 0;
   let lastHome = null;
+  let upgrade = null;
 
   function current() {
     const goal = home();
@@ -23,6 +24,7 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.
       noChange = 0;
       retryAt = 0;
       pauses = 0;
+      upgrade = null;
     }
     return goal;
   }
@@ -112,7 +114,8 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.
         || state.hostiles?.some((h) => h.distance <= 8)
         || String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '') !== 'overworld') return 0;
       const gearReady = gearMissingSince !== null && now() - gearMissingSince >= missingGearDelayMs;
-      return status.missing.length || status.unverified.length || gearReady ? 0.2 : 0;
+      if (status.missing.length || status.unverified.length || gearReady) return 0.2;
+      return goal.optionalMaintenance && !activeGoal() && (goal.wantsLighting(state) || goal.wantsGuestBed(state)) ? 0.1 : 0;
     },
     async run(ctx) {
       const goal = current();
@@ -121,7 +124,15 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.
       const before = { key: observed(goal, start), still: observed(goal, start, { moved: false }) };
       let result;
       try {
-        result = await watched(ctx, (inner) => goal.run(inner));
+        const status = goal.maintenance(start);
+        if (goal.optionalMaintenance && !activeGoal() && !status.missing.length && !status.unverified.length && !status.gear.length) {
+          if (!upgrade || upgrade.isDone(start)) {
+            upgrade = goal.wantsLighting(start) ? goal.lightingGoal() : goal.wantsGuestBed(start) ? goal.guestBedGoal() : null;
+          }
+          result = upgrade ? await watched(ctx, (inner) => upgrade.run(inner)) : { ok: true, waited: true };
+        } else {
+          result = await watched(ctx, (inner) => goal.run(inner));
+        }
       } catch (error) {
         if (error?.code !== 'aborted' && error?.code !== 'ABORT_ERR' && error?.name !== 'AbortError') {
           try { accountAttempt(ctx, goal, before); } catch { /* Preserve the original repair exception. */ }

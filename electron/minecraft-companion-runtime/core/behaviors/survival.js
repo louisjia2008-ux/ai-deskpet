@@ -1137,13 +1137,14 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       const near = feeding();
       const stocking = stockingUp(ctx.perceive());
       const result = await skills.huntOne(bot, ctx, { mobs: FOOD_ANIMALS, dropMatch: foodCheck,
-        radius: stocking ? t.stockRange : near ? FEEDING_RANGE : 96, blacklist: huntBlacklist, accept: (e) => !spare(e) });
+        radius: stocking ? t.stockRange : near ? FEEDING_RANGE : 96, blacklist: huntBlacklist, accept: (e) => !spare(e),
+        targetGoal: bot.companionTargets ? 'stock_food' : null });
       if (result.ok) lastHuntAt = Date.now();
       // Nothing to hunt in sight: berries, else look further afield instead of waiting to starve.
       // Could not reach anything: the bot itself is probably stuck (tree top, ledge).
       if (['NoPath', 'Timeout', 'path_timeout', 'no_progress', 'not_arrived', 'chase_stuck'].includes(result.reason)) {
         stuckStreak += 1;
-        if (stuckStreak >= 2) { stuckStreak = 0; return actions.unstick(bot, ctx); }
+        if (stuckStreak >= 2 && !result.sourceHandled) { stuckStreak = 0; return actions.unstick(bot, ctx); }
         return result;
       }
       stuckStreak = 0;

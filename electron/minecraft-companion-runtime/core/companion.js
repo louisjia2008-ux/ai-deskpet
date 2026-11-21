@@ -151,7 +151,7 @@ function configureMovements(bot) {
  * (core-host keeps one per world), or null to remember it only while connected.
  */
 function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = false, retirementTimeoutMs = 20000, ownerName = null,
-  home = null, adaptationStore = null, autonomyRange = 'nether' } = {}) {
+  home = null, adaptationStore = null, autonomyRange = 'overworld' } = {}) {
   if (!bot) throw new TypeError('bot is required');
   if (!Number.isFinite(retirementTimeoutMs) || retirementTimeoutMs <= 0 || retirementTimeoutMs > 2147483647) {
     throw new TypeError('retirementTimeoutMs must be a positive timer duration');
@@ -184,6 +184,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   let retirementFailed = false;
   let survey = null;
   const adaptation = autonomy ? require('./adaptation').createAdaptation({ store: adaptationStore, onEvent }) : null;
+  if (adaptation) bot.companionTargets = adaptation.targets;
   const policy = { risk: 'normal', guard: 'self_first' };
   let goalOwner = null;
   // The connection owns this evidence even while a cached goal is retired.
@@ -719,8 +720,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     policy: () => ({ ...policy }),
     /** The house this world has (built now or on an earlier connection): its corner and whether it is finished. */
     home() {
-      const memory = director?.memory.homestead?.memory;
-      return memory?.house ? { anchor: { ...memory.house.anchor }, finished: memory.established === true } : null;
+      return director?.memory.homestead?.status(perceive(bot)) ?? null;
     },
     /** Legacy stop is not an all-stop: subsequent ticks still run safety. */
     async stop(reason = 'user_stop') {

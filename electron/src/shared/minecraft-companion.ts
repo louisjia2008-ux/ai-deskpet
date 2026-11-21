@@ -69,7 +69,7 @@ export interface MinecraftCompanionObservation {
   position: { x: number; y: number; z: number } | null;
   inventory: Record<string, number>;
   /** The bot's house in this world, remembered across connections; finished once built and furnished. */
-  home?: { x: number; y: number; z: number; finished: boolean } | null;
+  home?: { x: number; y: number; z: number; usable?: boolean; finished: boolean } | null;
 }
 
 export interface MinecraftCompanionEngine {

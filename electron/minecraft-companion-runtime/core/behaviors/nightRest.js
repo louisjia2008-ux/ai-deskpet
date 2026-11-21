@@ -65,6 +65,7 @@ function createNightRest({ bot, home, shelterDoor = null, actions = defaultActio
         }
         ctx.record('night_rest', { action: 'dig_out' });
         const out = await skills.digOut(bot, ctx, bunker);
+        if (out.ok) ctx.record('night_rest', { action: 'dug_out' });
         bunker = null;
         bot.companionSheltered = false;
         return out;
@@ -79,6 +80,7 @@ function createNightRest({ bot, home, shelterDoor = null, actions = defaultActio
         ctx.record('night_rest', { action: 'dig_in', distance: Math.round(distance) });
         const dug = await skills.digIn(bot, ctx, { sealMatch: (n) => SEALS.has(n) });
         if (!dug.ok) return dug;
+        ctx.record('night_rest', { action: 'dug_in' });
         bunker = dug.bunker;
         bot.companionSheltered = true;
         return { ok: true };

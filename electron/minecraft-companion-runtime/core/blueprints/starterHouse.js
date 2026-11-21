@@ -61,12 +61,14 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
     door: { position: at(door.dx, 0, door.dz), upper: at(door.dx, 1, door.dz), family: 'door' },
   };
   if (size < SIZE) Object.assign(furniture, {
-    crafting_table: { position: at(1, 0, 3), family: 'crafting_table' },
-    furnace: { position: at(2, 0, 3), family: 'furnace' },
-    chest: { position: at(1, 0, 2), family: 'chest' },
-    bed: { position: at(3, 0, 2), head: at(3, 0, 1), stand: at(3, 0, 3), family: 'bed' },
-    guestBed: { position: at(2, 0, 2), head: at(2, 0, 1), stand: at(2, 0, 3), family: 'bed' },
-    torches: [at(1, 0, 1), at(1, 0, -1)],
+    crafting_table: { position: at(1, 0, 1), family: 'crafting_table' },
+    furnace: { position: at(3, 0, 1), family: 'furnace' },
+    chest: { position: at(2, 0, 3), family: 'chest' },
+    // From the doorstep the southward component of the placement aim is
+    // dominant for either bed. Both are accessible from the central aisle.
+    bed: { position: at(3, 0, 2), head: at(3, 0, 3), stand: at(2, 0, -1), family: 'bed' },
+    guestBed: { position: at(1, 0, 2), head: at(1, 0, 3), stand: at(2, 0, -1), family: 'bed' },
+    torches: [at(2, 0, 1), at(2, 0, 2), at(1, 0, -1), at(3, 0, -1)],
   });
 
   // The first roof ring sits on the wall tops, whose upper faces are above eye
@@ -82,12 +84,15 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
       for (let dy = 0; dy <= WALL_HEIGHT + (variant === 'hillside' ? 0 : 1); dy += 1) clearance.push(at(dx, dy, dz));
     }
   }
+  const entrance = at(door.dx, 0, -1);
+  const exteriorTorches = furniture.torches.filter((p) => p.z < anchor.z);
+  clearance.push(entrance, at(door.dx, 1, -1), ...exteriorTorches);
   const foundation = [];
   for (let dx = 0; dx < size; dx += 1) for (let dz = 0; dz < size; dz += 1) foundation.push(at(dx, -1, dz));
   // And under the doorstep: a pit there (a creeper crater, a cave) leaves the
   // bot shut in the house with no path out.
   foundation.push(at(door.dx, -1, -1));
-  const torchSupports = furniture.torches.filter((p) => p.z < anchor.z).map((p) => ({ ...p, y: p.y - 1 }));
+  const torchSupports = exteriorTorches.map((p) => ({ ...p, y: p.y - 1 }));
 
   return {
     anchor: { ...anchor },
@@ -100,7 +105,7 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
     foundation,
     torchSupports,
     // Doorstep outside the door; the bot must be able to reach it.
-    entrance: at(door.dx, 0, -1),
+    entrance,
     interiorCenter: at(mid, 0, mid),
     materials() {
       const totals = {};

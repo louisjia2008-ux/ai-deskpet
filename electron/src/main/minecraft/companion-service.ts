@@ -513,7 +513,11 @@ export class MinecraftCompanionService {
         at: finite(observation.at) ?? Date.now(), alive: observation.alive === true, health: finite(observation.health), food: finite(observation.food), dimension: text(observation.dimension, 128),
         position: position && finite(position.x) !== null && finite(position.y) !== null && finite(position.z) !== null ? { x: position.x as number, y: position.y as number, z: position.z as number } : null,
         inventory: Object.fromEntries(Object.entries(inventory ?? {}).slice(0, 256).filter(([key, count]) => /^[a-z0-9_:]{1,100}$/.test(key) && Number.isInteger(count) && (count as number) >= 0 && (count as number) <= 1_000_000)) as Record<string, number>,
-        home: corner && [corner.x, corner.y, corner.z].every(Number.isInteger) ? { x: corner.x as number, y: corner.y as number, z: corner.z as number, finished: home?.finished === true } : null,
+        home: corner && [corner.x, corner.y, corner.z].every(Number.isInteger) ? {
+          x: corner.x as number, y: corner.y as number, z: corner.z as number,
+          ...(typeof home?.usable === 'boolean' ? { usable: home.usable } : {}),
+          finished: home?.finished === true,
+        } : null,
       } satisfies MinecraftCompanionObservation : null;
       const engine = record(result.engine); const goal = record(engine?.goal);
       const autonomy = minecraftAutonomyStatusSchema.safeParse(engine?.autonomy);

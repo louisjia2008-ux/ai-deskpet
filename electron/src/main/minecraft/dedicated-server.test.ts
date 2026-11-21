@@ -34,7 +34,7 @@ test('requires explicit consent, merges queued settings and honors a persistent 
   let reopened: MinecraftDedicatedServer | null = null;
   try {
     await server.initialize();
-    expect(server.getState().settings).toEqual({ enabled: true, memoryGb: 3, allowPlanApproval: false, autonomyRange: 'nether', offlineModelDailyLimit: 20 });
+    expect(server.getState().settings).toEqual({ enabled: true, memoryGb: 3, allowPlanApproval: false, autonomyRange: 'overworld', offlineModelDailyLimit: 20 });
     expect((await server.start()).status).toBe('eula_required');
     await expect(stat(join(managed, 'server', 'eula.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
     await Promise.all([server.setSettings({ enabled: false }), server.setSettings({ memoryGb: 5, autonomyRange: 'end' }), server.setSettings({ offlineModelDailyLimit: 0 })]);

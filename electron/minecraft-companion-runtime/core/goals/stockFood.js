@@ -23,7 +23,7 @@ function createStockFoodGoal({ bot, target = 16, skills = defaultSkills, kb = KN
     isDone: (state) => count(state) >= target,
     progress: (state) => count(state),
     async run(ctx) {
-      const hunted = await skills.huntOne(bot, ctx, { mobs: FOOD_MOBS, dropMatch: kb.food.match, blacklist, radius });
+      const hunted = await skills.huntOne(bot, ctx, { mobs: FOOD_MOBS, dropMatch: kb.food.match, blacklist, radius, targetGoal: 'stock_food' });
       if (hunted.ok || hunted.reason !== 'no_mob_in_range') return hunted;
       ctx.record('explore_for', { why: 'food' });
       return skills.explore(bot, ctx, exploreMemory);

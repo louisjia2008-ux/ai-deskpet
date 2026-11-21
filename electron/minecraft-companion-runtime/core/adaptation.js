@@ -1,6 +1,7 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
+const { createTargetMemory } = require('./target-memory');
 
 const MINUTE = 60_000;
 const LIMIT = 3;
@@ -44,6 +45,7 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
   let lastProof = now();
   let lastContext = null;
   const emit = (type, fields) => { try { onEvent({ type, at: now(), ...fields }); } catch { /* observers do not own the body */ } };
+  const targets = createTargetMemory({ now, load: saved.targets, onChange: persist, emit });
   for (const e of Array.isArray(saved.states) ? saved.states.slice(-MAX_ENTRIES) : []) {
     if (typeof e?.key === 'string' && e.key.length <= 150 && Object.hasOwn(LADDERS, e.task) && e.until > now()
       && Number.isInteger(e.index) && e.index >= 0 && e.index <= LADDERS[e.task].length) {
@@ -66,7 +68,7 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
     for (const [key, entry] of states) if (entry.until <= now()) states.delete(key);
     while (states.size > MAX_ENTRIES) states.delete(states.keys().next().value);
     lessons = lessons.filter((e) => e.until > now()).slice(-MAX_ENTRIES);
-    try { store?.save({ states: [...states.values()], lessons, asked: Object.fromEntries(asked) }); }
+    try { store?.save({ states: [...states.values()], lessons, asked: Object.fromEntries(asked), targets: targets.snapshot() }); }
     catch { /* this connection can still use the retained lessons */ }
   }
 
@@ -254,7 +256,7 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
     return true;
   }
   function scope(valid) {
-    return { plan, avoids, progress: () => { if (valid()) lastProof = now(); },
+    return { plan, avoids, targets: targets.scope(valid), progress: () => { if (valid()) lastProof = now(); },
       teach: (...args) => valid() && teach(...args), promote: (...args) => valid() && promote(...args),
       outcome: (p, result, options) => outcome(p, result, { ...options, valid }),
       async run(task, input, execute, options) {
@@ -264,7 +266,7 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
         return outcome(p, await execute(p.method, p), { ...options, valid });
       } };
   }
-  return { plan, scope, promote, teach, avoids, reply, poll, defer, progress: () => { lastProof = now(); }, pending: () => pending.size };
+  return { plan, scope, promote, teach, avoids, reply, poll, defer, targets, progress: () => { lastProof = now(); }, pending: () => pending.size };
 }
 
 module.exports = { createAdaptation, LADDERS, FALLBACK, NEW_AREA };

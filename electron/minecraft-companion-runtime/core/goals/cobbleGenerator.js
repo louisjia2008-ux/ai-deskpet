@@ -17,8 +17,8 @@ const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const { createCobbleGenerator, FACINGS } = require('../blueprints/cobbleGenerator');
-const { createBlacklist } = require('../blacklist');
 const { sleep, waitUntil } = require('../confirm');
+const { deviceTargets, clearTerrain } = require('../target-recovery');
 
 const FILLERS = ['cobblestone', 'dirt', 'cobbled_deepslate', 'stone', 'coarse_dirt'];
 const LIQUID = new Set(['water', 'lava', 'bubble_column']);
@@ -118,8 +118,8 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
     regenerated: 0,
     guarded: false,
   };
-  const blacklist = createBlacklist({ ttlMs: 60000 });
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
+  const targets = deviceTargets(bot, actions, 'cobble_generator', memory);
 
   // The pathfinder must never walk into the liquid cells or C (lava flows in
   // behind a mined cobblestone), nor break the seal while routing.
@@ -299,56 +299,71 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
     async run(ctx) {
       if (!memory.device) {
         const p = bot.entity.position;
-        const device = chooseGeneratorSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), p, { collector, avoid });
+        const device = chooseGeneratorSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), p,
+          { collector, avoid: q => avoid?.(q) || bot.companionPlayerBlock?.(q) || targets.avoids(ctx, q) });
         if (!device) return { ok: false, reason: 'no_site' };
         memory.device = device;
         ctx.record('device_site', { kind: device.kind, anchor: device.anchor, facing: device.facing });
       }
       guardDevice();
-      if (trappedCell()) return stepOff(ctx);
       const s = inspect();
       const d = memory.device;
+      const dry = !anchor && liquidCells().every(p => {
+        const b = blockAt(p);
+        return b && !['lava', 'water'].includes(b.name);
+      });
+      const relocation = dry ? footprint(d) : null;
+      const trapped = trappedCell();
+      if (trapped) return targets.run(ctx, 'step_off', trapped, () => stepOff(ctx), { relocate: relocation });
 
       if (s.openSeal.length) {
-        const target = s.openSeal.find((p) => !blacklist.has(key(p))) || s.openSeal[0];
-        const result = await skills.placeAt(bot, ctx, target, (n) => FILLERS.includes(n));
-        if (!result.ok) blacklist.add(key(target), result.reason);
-        return result;
+        const p = s.openSeal[0];
+        const place = () => skills.placeAt(bot, ctx, p, (n) => FILLERS.includes(n));
+        return targets.run(ctx, 'seal', p, place, { relocate: relocation });
       }
       if (s.toDig.length || s.headBlocked) {
         const target = s.toDig[0] || d.cells.head;
-        const block = blockAt(target);
-        const reach = await actions.goToDig(bot, ctx, block);
-        if (!reach.ok) return reach;
-        return actions.digBlock(bot, ctx, block);
+        return targets.run(ctx, 'dig', target, async () => {
+          const block = blockAt(target);
+          if (!block) return { ok: false, reason: 'unloaded' };
+          const reach = await actions.goToDig(bot, ctx, block);
+          return reach.ok ? actions.digBlock(bot, ctx, block) : reach;
+        }, { relocate: relocation });
       }
       if (s.nextPart) {
         const part = s.nextPart;
-        if (!isAir(blockAt(part.position))) {
-          const block = blockAt(part.position);
-          const reach = await actions.goToDig(bot, ctx, block);
-          if (!reach.ok) return reach;
-          return actions.digBlock(bot, ctx, block);
-        }
         const toward = new Vec3(part.against.x - part.position.x, part.against.y - part.position.y, part.against.z - part.position.z);
-        const result = await skills.placeAt(bot, ctx, part.position, (n) => n === part.block, {
-          faces: [toward], sneak: Boolean(part.sneak), verify: () => partOk(part),
-        });
+        const result = await targets.run(ctx, 'part', part.position, async () => {
+          if (!isAir(blockAt(part.position))) {
+            const block = blockAt(part.position);
+            const reach = await actions.goToDig(bot, ctx, block);
+            return reach.ok ? actions.digBlock(bot, ctx, block) : reach;
+          }
+          return skills.placeAt(bot, ctx, part.position, (n) => n === part.block, {
+            faces: [toward], sneak: Boolean(part.sneak), verify: () => partOk(part),
+          });
+        }, { cells: [part.against], tag: `${part.block}:${d.facing}`, relocate: relocation });
         ctx.record('device_part', { part: part.key, ok: result.ok, reason: result.reason, facing: facingOf(blockAt(part.position)) });
         return result;
       }
-      if (!s.water) return skills.pourLiquid(bot, ctx, d.cells.water, 'water');
+      if (!s.water) return targets.run(ctx, 'pour_water', d.cells.water, () => skills.pourLiquid(bot, ctx, d.cells.water, 'water'),
+        { cells: d.seal, relocate: relocation });
       if (!s.pitWater) {
         // Flowing water takes a few ticks to fill the pit.
-        const filled = await waitUntil(() => blockAt(d.cells.pitBottom)?.name === 'water', { timeoutMs: 3000, signal: ctx.signal });
-        return filled ? { ok: true } : { ok: false, reason: 'pit_not_filled' };
+        return targets.run(ctx, 'pit_water', d.cells.pitBottom, async () => {
+          const filled = await waitUntil(() => blockAt(d.cells.pitBottom)?.name === 'water', { timeoutMs: 3000, signal: ctx.signal });
+          return filled ? { ok: true } : { ok: false, reason: 'pit_not_filled' };
+        }, { cells: [d.cells.water, d.cells.pitTop], recover: async (reason) => {
+          const repair = await clearTerrain(bot, ctx, actions, d.cells.pitTop);
+          return repair.ok ? repair : { ok: false, reason };
+        } });
       }
       if (!s.lava) {
-        const result = await skills.pourLiquid(bot, ctx, d.cells.lava, 'lava');
+        const result = await targets.run(ctx, 'pour_lava', d.cells.lava, () => skills.pourLiquid(bot, ctx, d.cells.lava, 'lava'), { cells: d.seal });
         if (result.ok) await sleep(500, ctx.signal);
         return result;
       }
-      return harvestOnce(ctx);
+      return targets.run(ctx, 'stand_harvest', d.cells.stand, () => harvestOnce(ctx), { cells: [d.cells.cobble] });
     },
   };
 }

@@ -601,42 +601,63 @@ const HUNT_HEIGHT = 10;
 // Could not be reached once: not worth another try for a while.
 const HUNT_UNREACHABLE_MS = 300000;
 
-async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, blacklist, accept = () => true, penalty = () => 0 }) {
+async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, blacklist, accept = () => true, penalty = () => 0, targetGoal = null }) {
+  const { targetsFor } = require('./target-memory');
+  const { alternateStand, dimensionOf } = require('./target-recovery');
+  const targets = targetGoal && targetsFor(bot, ctx);
+  const area = (p) => `${Math.floor(p.x / 12)}:${Math.floor(p.y / 8)}:${Math.floor(p.z / 12)}`;
+  const spec = (e) => ({ goal: targetGoal, step: 'chase', entity: e.uuid || `region:${e.name}:${area(e.position)}`,
+    dimension: dimensionOf(bot), position: e.position,
+    witness: () => {
+      const current = bot.entities[e.id];
+      if (!current?.position) return null;
+      const weapons = [...new Set((bot.inventory?.items?.() || []).map(i => i.name)
+        .filter(n => n.endsWith('_sword') || n.endsWith('_axe') || n === 'bow'))].sort();
+      return `${area(current.position)}|${weapons.join(',')}`;
+    } });
   const here = bot.entity.position;
   const score = (e) => e.position.distanceTo(here) + penalty(e);
   const target = Object.values(bot.entities)
     .filter((e) => mobs.includes(e.name) && e.position && e.position.distanceTo(here) <= radius
-      && Math.abs(e.position.y - here.y) <= HUNT_HEIGHT && !blacklist?.has(`mob:${e.id}`) && accept(e))
+       && Math.abs(e.position.y - here.y) <= HUNT_HEIGHT && !blacklist?.has(`mob:${e.id}`) && accept(e)
+       && !targets?.excluded(spec(e)))
     .sort((a, b) => score(a) - score(b))[0];
   if (!target) return fail('no_mob_in_range');
-  ctx.record('hunt_target', { mob: target.name, distance: Math.round(target.position.distanceTo(here)) });
-  // Far animals: walk over first; the fight itself has a short timeout.
-  if (target.position.distanceTo(here) > 12) {
-    const near = await actions.goNear(bot, ctx, target.position.clone(), 4, { timeoutMs: 60000 });
-    if (!bot.entities[target.id]) return near.ok ? fail('mob_gone') : near;
-    // Could not get close: report the path failure instead of flailing in the fight loop.
-    if (!near.ok && bot.entities[target.id].position.distanceTo(bot.entity.position) > 8) {
-      blacklist?.add(`mob:${target.id}`, near.reason, HUNT_UNREACHABLE_MS);
-      return near;
+  const chase = async () => {
+    ctx.record('hunt_target', { mob: target.name, distance: Math.round(target.position.distanceTo(bot.entity.position)) });
+    // Far animals: walk over first; the fight itself has a short timeout.
+    if (target.position.distanceTo(bot.entity.position) > 12) {
+      const near = await actions.goNear(bot, ctx, target.position.clone(), 4, { timeoutMs: 60000 });
+      if (!bot.entities[target.id]) return near.ok ? fail('mob_gone') : near;
+      if (!near.ok && bot.entities[target.id].position.distanceTo(bot.entity.position) > 8) {
+        if (!targets) blacklist?.add(`mob:${target.id}`, near.reason, HUNT_UNREACHABLE_MS);
+        return near;
+      }
     }
-  }
-  let last = target.position.clone();
-  const tracker = setInterval(() => { if (bot.entities[target.id]) last = bot.entities[target.id].position.clone(); }, 100);
-  let result;
-  try {
-    result = await actions.attack(bot, ctx, target.id, { timeoutMs: 25000 });
-  } finally {
-    clearInterval(tracker);
-  }
-  if (!result.ok) {
-    blacklist?.add(`mob:${target.id}`, result.reason, 60000);
-    return result;
-  }
-  // Pick up everything it dropped: a sheep killed for mutton also gives the wool a bed needs.
-  const before = actions.countItems(bot, dropMatch);
-  const picked = await actions.collectDrops(bot, ctx, last, () => true, { radius: 8 });
-  const wanted = actions.countItems(bot, dropMatch) - before;
-  return picked.ok ? { ok: true, gained: wanted } : picked;
+    let last = target.position.clone();
+    const tracker = setInterval(() => { if (bot.entities[target.id]) last = bot.entities[target.id].position.clone(); }, 100);
+    let result;
+    try {
+      result = await actions.attack(bot, ctx, target.id, { timeoutMs: 25000 });
+    } finally {
+      clearInterval(tracker);
+    }
+    if (!result.ok) {
+      if (!targets) blacklist?.add(`mob:${target.id}`, result.reason, 60000);
+      return result;
+    }
+    // Pick up everything it dropped: a sheep killed for mutton also gives the wool a bed needs.
+    const before = actions.countItems(bot, dropMatch);
+    const picked = await actions.collectDrops(bot, ctx, last, () => true, { radius: 8 });
+    const wanted = actions.countItems(bot, dropMatch) - before;
+    return picked.ok ? { ok: true, gained: wanted } : picked;
+  };
+  return targets ? targets.run(spec(target), chase, async (reason) => {
+    const current = bot.entities[target.id];
+    if (!current) return fail('mob_gone');
+    const flank = await alternateStand(bot, ctx, actions, current.position, { distance: 3 });
+    return flank.ok ? chase() : fail(reason);
+  }) : chase();
 }
 
 /** Picks a ripe sweet berry bush (taiga food when no animals are around). */
