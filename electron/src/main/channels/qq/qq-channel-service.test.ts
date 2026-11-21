@@ -608,6 +608,19 @@ describe('explicit private image test', () => {
   });
 });
 
+it('guards ordinary QQ deliveries against mixed controls and empty output', async () => {
+  const f = await fixture(); await f.pair();
+  try {
+    const scheduled = { runId: randomUUID(), assistantMessageId: randomUUID(), scheduleId: randomUUID(), scheduleRevision: 1 };
+    await expect(f.service.deliverReply(f.service.authority(), { ...scheduled, content: '[mood:happy] [sticker:none]' })).rejects.toThrow('qq.emptyMessage');
+    await f.service.deliverReply(f.service.authority(), { ...scheduled, content: '[mood:happy][sticker:none] 正文[sticker:with-text:thanks]。' });
+    expect(f.adapter.sends.at(-1)).toMatchObject({ content: '正文。' });
+    expect(f.store.snapshot().outbox.filter(item => item.kind === 'cron')).toHaveLength(1);
+  } finally {
+    f.service.dispose();
+  }
+});
+
 describe('QQ model failure replies', () => {
   it.each([
     ['provider.network', '连接模型服务失败，请检查桌面电脑的网络或代理连接后再试。'],

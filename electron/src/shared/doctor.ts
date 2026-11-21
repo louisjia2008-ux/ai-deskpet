@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ModelBindingIssue } from './model-bindings';
 import { describeWeChatSendDiagnostics } from './wechat-send-diagnostics';
+import { isWeChatMomentStage, WECHAT_MOMENT_STAGE_LABELS } from './wechat-moment-stages';
 
 /** One problem the doctor noticed. Codes, counts and times only: never message content, names or who sent anything. */
 export const doctorCaseSchema = z.object({
@@ -149,6 +150,8 @@ export interface DoctorStatus {
   providerTests: DoctorProviderTestRecord[];
   appOutage?: AppOutage | null;
   modelIssues?: ModelBindingIssue[];
+  /** Local Doctor IPC only. Never included in diagnostic reports or model input. */
+  momentFailureScreenshot?: string | null;
 }
 
 export const DOCTOR_FEATURES: Record<string, string> = {
@@ -184,6 +187,7 @@ export const DOCTOR_CODES: Record<string, string> = {
   'wechat.momentListenerPaused': '微信监听已暂停，朋友圈操作未完成。',
   'wechat.momentWindowError': '打开微信窗口时出错，朋友圈操作未完成。',
   'wechat.momentFailed': '朋友圈请求失败。', 'wechat.momentUncertain': '朋友圈可能已经发了，请在手机核对，不要重复发。',
+  'wechat.momentRestricted': '微信提示账号有风险，暂时不能发朋友圈，需要在手机微信里处理。草稿已保留。',
   'wechat.momentPublishUnconfirmed': '无法确认朋友圈是否发布，请在手机核对。',
   'qq.offline': 'QQ 连接断开了。', 'qq.deliveryFailed': '有 QQ 消息发送失败。', 'qq.uncertain': '有 QQ 消息不确定是否送达。',
   'telegram.offline': 'Telegram 连接断开了。', 'telegram.uncertain': '有 Telegram 消息不确定是否送达。',
@@ -248,6 +252,10 @@ export const doctorClock = (iso: string, timeZone?: string): string =>
 export const describeDoctorCase = (entry: Pick<DoctorCase, 'feature' | 'code' | 'detail'>, timeZone?: string): string => {
   const feature = DOCTOR_FEATURES[safeDoctorFeature(entry.feature)] ?? '功能';
   const detail = safeDoctorDetail(entry.detail);
+  if (entry.feature === 'wechat-moments' && isWeChatMomentStage(detail)) {
+    const suffix = entry.code === 'wechat.momentWindowError' ? '' : (DOCTOR_CODES[safeDoctorCode(entry.code)] ?? '');
+    return `${feature}：卡在「${WECHAT_MOMENT_STAGE_LABELS[detail]}」（${detail}）。${suffix}`;
+  }
   switch (entry.code) {
     case 'wechat.dropped': return `微信：最近一天有 ${detail ?? 1} 条消息没回成（一直发不出去或等太久，已跳过）。`;
     case 'wechat.skipped': return `微信：你发的一条${KINDS[detail ?? 'other'] ?? '消息'}她还看不懂，没有回复。`;
@@ -262,7 +270,7 @@ export const safeDoctorCode = (code: string): string => Object.hasOwn(DOCTOR_COD
 export const safeDoctorFeature = (feature: string): string => Object.hasOwn(DOCTOR_FEATURES, feature) ? feature : 'app';
 export const safeDoctorDetail = (detail: string | null): string | null => {
   if (detail === null) return null;
-  if ((DOCTOR_SELF_TEST_STAGES as readonly string[]).includes(detail) || Object.hasOwn(KINDS, detail)) return detail;
+  if ((DOCTOR_SELF_TEST_STAGES as readonly string[]).includes(detail) || isWeChatMomentStage(detail) || Object.hasOwn(KINDS, detail)) return detail;
   if (/^\d{1,16}(?:\.\d{1,3})?(?: (?:GB|MB))?$/u.test(detail)) return detail;
   return z.iso.datetime().safeParse(detail).success ? detail : null;
 };

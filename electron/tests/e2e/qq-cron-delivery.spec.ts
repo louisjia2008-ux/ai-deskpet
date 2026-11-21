@@ -101,7 +101,7 @@ test('a desktop schedule sends its result to the bound QQ private chat only whil
       const due = (await schedules())[0]!.nextRunAt!;
       await app!.evaluate((_, ms) => (globalThis as unknown as { __fixtureCronClock: (time: number) => void }).__fixtureCronClock(ms), Date.parse(due) + 1000);
       await expect.poll(() => page.evaluate(({ id, answer }) => window.deskpet.chat.listMessages(id).then(messages =>
-        messages.some(message => message.role === 'assistant' && message.status === 'complete' && message.content === answer)), { id: session.id, answer: `[sticker:none]\nFixture scheduled result ${n}\n${source}` }), { timeout: 20_000 }).toBe(true);
+        messages.some(message => message.role === 'assistant' && message.status === 'complete' && message.content === answer)), { id: session.id, answer: `Fixture scheduled result ${n}\n${source}` }), { timeout: 20_000 }).toBe(true);
     };
     const delivered = (n: number) => texts().filter(text => text === `Fixture scheduled result ${n}\n（合成天气网说的）`);
 

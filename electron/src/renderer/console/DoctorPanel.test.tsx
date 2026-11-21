@@ -26,3 +26,17 @@ it('shows the diagnosis, database stage and pass rate, invoking only the manual 
   await waitFor(() => expect(manual).toHaveBeenCalledOnce());
   await waitFor(() => expect(button).toBeDisabled());
 });
+
+it('shows a Moments failure stage and the retained screenshot as a local path', async () => {
+  const path = '/synthetic/listener/moments-failures/20261121T123456123456Z-paste.png';
+  const api: AttentionAPI = { snapshot: vi.fn(), acknowledge: vi.fn(), doctor: async () => ({ ...status(),
+    open: 1, momentFailureScreenshot: path, cases: [{ key: 'wechat-moments:wechat.momentWindowError:paste', feature: 'wechat-moments',
+      code: 'wechat.momentWindowError', detail: 'paste', event: false, severity: 'warning', openedAt: at, lastSeenAt: at,
+      resolvedAt: null, seen: 1, reported: null, reportedAt: null, recoveryReported: false }],
+  }) };
+  render(<DoctorPanel api={api} locale="zh-CN" />);
+  expect(await screen.findByText('朋友圈：卡在「填文字」（paste）。')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '有失败截图可以排查' })).toBeInTheDocument();
+  expect(screen.getByText(path)).toBeInTheDocument();
+  expect(screen.queryByRole('img')).not.toBeInTheDocument();
+});

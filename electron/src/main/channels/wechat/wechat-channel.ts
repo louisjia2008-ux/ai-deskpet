@@ -1,6 +1,7 @@
+import { cleanReplyText } from '../../../shared/qq-sticker-reply';
 import { spawn } from 'node:child_process';
-import { lstat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, readdir } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { WECHAT_REPLY_FRIEND_LIMIT, wechatChannelStateSchema, wechatFriendIdSchema, wechatFriendRosterIdSchema, wechatModelSchema, wechatWindowSchema } from '../../../shared/wechat-channel';
@@ -8,6 +9,7 @@ import type { WeChatChannelAPI, WeChatChannelState, WeChatGroupUpdate, WeChatRep
 import { wechatDigestGroupIdSchema, wechatOfficialAccountIdSchema } from '../../../shared/wechat-digests';
 import { WECHAT_MOMENT_WINDOW_FAILURES } from './wechat-moments';
 import type { MomentAnswerContext, MomentPostOutcome, MomentPreviewOutcome } from './wechat-moments';
+import { WECHAT_MOMENT_STAGES, isWeChatMomentStage } from '../../../shared/wechat-moment-stages';
 import type { WeChatDigestKind } from './wechat-context';
 import { wechatFollowupEvidenceReadSchema } from './wechat-followup-evidence';
 import { appOutageSchema, doctorSelfTestResultSchema, doctorVmHealthSchema, type AppOutage, type DoctorSelfTestResult, type DoctorVmHealth } from '../../../shared/doctor';
@@ -32,6 +34,8 @@ const viewer = 'http://127.0.0.1:15939/vnc.html?autoconnect=1&resize=scale';
 
 const replyFriendSchema = z.strictObject({ id: wechatFriendIdSchema, title: z.string().min(1).max(256) });
 const friendRosterEntrySchema = replyFriendSchema.extend({ id: wechatFriendRosterIdSchema });
+const momentFailureImage = /^\d{8}T\d{12}Z-([a-z_]+)\.png$/u;
+const momentFailureMaxAgeMs = 7 * 24 * 60 * 60_000;
 
 export class WeChatChannel implements Omit<WeChatChannelAPI, 'getCloud' | 'configureCloud' | 'configureFriendCloud' | 'configureAssistant' | 'configureGroupRule'> {
   constructor(private readonly root: string, private readonly script: string,
@@ -177,10 +181,12 @@ export class WeChatChannel implements Omit<WeChatChannelAPI, 'getCloud' | 'confi
   }
 
   async deliverOwner(input: { binding: string; deliveryId: string; text: string; stickerAsset?: string; voice?: boolean; recordTranscript?: false; digestKind?: WeChatDigestKind }): Promise<'sent' | 'retry' | 'uncertain'> {
+    const text = cleanReplyText(input.text);
+    if (!text.trim()) return 'uncertain';
     // Allow for each 30-second lock wait, including voice fallback and the separate sticker action.
     const timeout = input.voice && input.stickerAsset ? 290_000 : input.voice || input.stickerAsset ? 260_000 : 150_000;
     const result = z.strictObject({ status: z.enum(['sent', 'paused', 'busy', 'retry', 'uncertain', 'binding_invalid', 'conflict', 'invalid_payload']) })
-      .parse(await this.run(['owner-deliver'], { id: input.deliveryId, binding: input.binding, text: input.text,
+      .parse(await this.run(['owner-deliver'], { id: input.deliveryId, binding: input.binding, text,
         ...(input.stickerAsset ? { stickerAsset: input.stickerAsset } : {}), ...(input.voice ? { voice: true } : {}),
         ...(input.recordTranscript === false ? { recordTranscript: false } : {}),
         ...(input.digestKind ? { digestKind: input.digestKind } : {}) }, 16_384, timeout));
@@ -204,16 +210,52 @@ export class WeChatChannel implements Omit<WeChatChannelAPI, 'getCloud' | 'confi
   }
 
   async postMoment(input: { id: string; text: string; visibility: 'all' | 'private'; images: Buffer[] }): Promise<MomentPostOutcome> {
+    const text = cleanReplyText(input.text);
+    if (!text) return { status: 'invalid_payload' };
     await this.requireConfigured();
-    const result = z.strictObject({ status: z.enum(['posted', 'uncertain', 'retry', 'conflict', 'invalid_payload', ...WECHAT_MOMENT_WINDOW_FAILURES]) })
-      .parse(await this.run(['moments-post'], { id: input.id, text: input.text, visibility: input.visibility,
+    const result = z.strictObject({ status: z.enum(['posted', 'uncertain', 'retry', 'restricted', 'conflict', 'invalid_payload', ...WECHAT_MOMENT_WINDOW_FAILURES]),
+      stage: z.enum(WECHAT_MOMENT_STAGES).optional(), screenshotPath: z.string().max(4096).optional() })
+      .parse(await this.run(['moments-post'], { id: input.id, text, visibility: input.visibility,
         images: input.images.map(image => image.toString('base64')) }, 16_384, 240_000));
-    return result.status;
+    const path = result.screenshotPath;
+    if (path && (dirname(path) !== this.momentFailureDirectory() || this.momentFailureImageStage(basename(path)) !== result.stage || !result.stage)) {
+      delete result.screenshotPath;
+    }
+    return result;
+  }
+
+  private momentFailureDirectory(): string { return join(this.root, 'listener', 'moments-failures'); }
+
+  private momentFailureImageStage(name: string) {
+    const stage = momentFailureImage.exec(name)?.[1];
+    return isWeChatMomentStage(stage) ? stage : undefined;
+  }
+
+  /** Only the local Doctor panel receives this path. The file contents are never read here. */
+  async latestMomentFailureScreenshot(): Promise<string | null> {
+    try {
+      await this.requirePrivateRoot();
+      const directory = this.momentFailureDirectory();
+      for (const path of [dirname(directory), directory]) {
+        const info = await lstat(path);
+        if (!info.isDirectory() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) return null;
+      }
+      const names = (await readdir(directory)).filter(name => this.momentFailureImageStage(name));
+      const earliest = Date.now() - momentFailureMaxAgeMs;
+      const files = await Promise.all(names.map(async name => {
+        const path = join(directory, name), info = await lstat(path).catch(() => null);
+        return info?.isFile() && info.uid === process.getuid?.() && info.nlink === 1 && (info.mode & 0o077) === 0 && info.mtimeMs > earliest
+          ? { path, at: info.mtimeMs } : null;
+      }));
+      return files.filter(file => file !== null).sort((a, b) => b.at - a.at || b.path.localeCompare(a.path))[0]?.path ?? null;
+    } catch { return null; }
   }
 
   async previewMoment(input: { id: string; binding: string; text: string; image: Buffer }): Promise<MomentPreviewOutcome> {
+    const text = cleanReplyText(input.text);
+    if (!text) return 'uncertain';
     const result = z.strictObject({ status: z.enum(['sent', 'retry', 'uncertain', 'binding_invalid', 'conflict', 'invalid_payload', ...WECHAT_MOMENT_WINDOW_FAILURES]) })
-      .parse(await this.run(['moments-preview'], { id: input.id, binding: input.binding, text: input.text, image: input.image.toString('base64') }, 16_384, 210_000));
+      .parse(await this.run(['moments-preview'], { id: input.id, binding: input.binding, text, image: input.image.toString('base64') }, 16_384, 210_000));
     switch (result.status) {
       case 'binding_invalid':
       case 'conflict':

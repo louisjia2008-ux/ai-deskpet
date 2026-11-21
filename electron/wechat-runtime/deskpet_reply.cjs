@@ -246,9 +246,11 @@ async function generate(page, providerId, input) {
   const workerIdentity = input.target === 'private' ? input.context.identity ?? (input.context.persona ? [input.context.persona] : []) : undefined;
   const grounded = groundedChat(incoming);
   const parse = ({ text: raw, mood: isolatedMood }) => {
-    const reply = plainReply(raw, incoming, name);
+    const controls = /^(?:\s*\[(?:sticker|mood):[^\]\r\n]*\])*/iu.exec(raw)?.[0] ?? '';
+    const tagged = /\[mood:([a-z]+)\]/iu.exec(controls)?.[1]?.toLowerCase();
+    const body = raw.replace(/\[(?:sticker|mood):[^\]\r\n]*\]?/giu, '');
+    const reply = plainReply(body, incoming, name);
     if (!reply || (grounded && !grounded.accepts(reply))) return null;
-    const tagged = /^\[mood:([a-z]+)\]/iu.exec(raw.trim())?.[1]?.toLowerCase();
     const mood = tagged === 'playful' ? 'happy' : moods.includes(tagged) ? tagged : moods.includes(isolatedMood) ? isolatedMood : null;
     const sticker = input.stickers && mood === 'happy'
       && /你好|嗨|哈喽|谢谢|收到|好的|哈哈|打招呼|表情包|真棒|开心/u.test(incoming)

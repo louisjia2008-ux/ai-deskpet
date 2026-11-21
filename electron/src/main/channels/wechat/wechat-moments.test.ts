@@ -1,5 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
+import { WECHAT_MOMENT_STAGES, WECHAT_MOMENT_STAGE_LABELS } from '../../../shared/wechat-moment-stages';
+import { describeDoctorCase } from '../../../shared/doctor';
+import { doctorFindings } from '../../domain/doctor';
 import { classifyMomentAnswer, momentText, WECHAT_MOMENT_TTL_MS, WeChatMoments } from './wechat-moments';
 import type { MomentAnswerContext, WeChatMomentsHost, WeChatMomentsState } from './wechat-moments';
 
@@ -20,8 +23,8 @@ function fixture(options: { enabled?: boolean; post?: WeChatMomentsHost['post'];
     draw: vi.fn(async () => ({ assetId: asset })),
     image: vi.fn(async () => ({ full: Buffer.from('full'), preview: Buffer.from('preview') })),
     preview: vi.fn<WeChatMomentsHost['preview']>(async () => 'sent'),
-    post: vi.fn<WeChatMomentsHost['post']>(options.post ?? (async () => 'posted')),
-    notify: vi.fn(async () => undefined),
+    post: vi.fn<WeChatMomentsHost['post']>(options.post ?? (async () => ({ status: 'posted' }))),
+    notify: vi.fn<WeChatMomentsHost['notify']>(async () => undefined),
     record: vi.fn(async () => undefined),
     wait: vi.fn(async () => undefined),
   } satisfies WeChatMomentsHost;
@@ -75,7 +78,7 @@ describe('WeChat Moments', () => {
     ['paused', 'wechat.momentListenerPaused', '微信监听已暂停', 12],
     ['window_error', 'wechat.momentWindowError', '打开微信窗口时出了错', 12],
   ] as const)('reports %s distinctly and keeps failure/preview consent rules', async (status, code, reason, attempts) => {
-    const f = fixture({ post: async () => status });
+    const f = fixture({ post: async () => ({ status }) });
     await f.moments.propose({ text: '合成草稿', imageIdea: 'synthetic idea' });
     await f.moments.answer('发', adjacent);
     await vi.waitFor(() => expect(f.host.notify).toHaveBeenCalledWith(expect.stringContaining(reason)));
@@ -95,12 +98,95 @@ describe('WeChat Moments', () => {
   });
 
   it('never retries an unconfirmed post', async () => {
-    const unsure = fixture({ post: async () => 'uncertain' });
+    const unsure = fixture({ post: async () => ({ status: 'uncertain' }) });
     await unsure.moments.propose({ text: '不确定', imageIdea: 'idea' });
     await unsure.moments.answer('发', adjacent);
     await vi.waitFor(() => expect(unsure.host.notify).toHaveBeenCalledWith(expect.stringMatching(/没能确认/u)));
     expect(unsure.host.post).toHaveBeenCalledOnce();
     expect(unsure.stored()!.draft!.status).toBe('uncertain');
+  });
+
+  it.each(['post_button', 'ledger'] as const)('stops immediately when %s is uncertain after a possible click', async stage => {
+    const f = fixture({ post: async () => ({ status: 'uncertain', stage }) });
+    await f.moments.propose({ text: '不确定', imageIdea: 'idea' });
+    await f.moments.answer('发', adjacent);
+    await vi.waitFor(() => expect(f.host.notify).toHaveBeenCalledWith(expect.stringContaining('别重复发')));
+    expect(f.host.post).toHaveBeenCalledOnce();
+    expect(f.moments.lastError).toBe('wechat.momentUncertain');
+    expect(f.moments.attempts().momentStage).toBe(stage);
+    expect(f.stored()!.draft!.status).toBe('uncertain');
+  });
+
+  it.each(WECHAT_MOMENT_STAGES)('reports the %s failure through the owner notice and doctor', async stage => {
+    const uncertain = stage === 'confirm';
+    const f = fixture({ post: async () => ({ status: uncertain ? 'uncertain' : stage === 'open_window' ? 'window_error' : 'retry', stage }) });
+    await f.moments.propose({ text: '合成草稿', imageIdea: 'synthetic idea' });
+    await f.moments.answer('发', adjacent);
+    await vi.waitFor(() => expect(f.host.notify).toHaveBeenCalledWith(expect.stringContaining(WECHAT_MOMENT_STAGE_LABELS[stage])));
+    expect(f.host.post).toHaveBeenCalledTimes(uncertain ? 1 : 2);
+    expect(f.host.wait.mock.calls).toHaveLength(uncertain ? 1 : 2);
+    expect(f.stored()!.draft!.status).toBe(uncertain ? 'uncertain' : 'failed');
+    const code = uncertain ? 'wechat.momentUncertain' : 'wechat.momentWindowError';
+    expect(f.moments.lastError).toBe(code);
+    const checkedAt = new Date(f.host.now()).toISOString();
+    const findings = doctorFindings({ checkedAt, issues: 1, items: [{ feature: 'wechat-moments', state: 'failing',
+      errorCode: f.moments.lastError, failures: 1, sinceLaunch: true, ...f.moments.attempts() }] },
+    { diskFreeBytes: null, uncleanExitOf: null, wechat: null });
+    expect(findings).toMatchObject([{ code, detail: stage }]);
+    expect(describeDoctorCase(findings[0]!)).toContain(`「${WECHAT_MOMENT_STAGE_LABELS[stage]}」（${stage}）`);
+  });
+
+  it('retries nonconsecutive failures until the same step fails twice in succession', async () => {
+    const f = fixture();
+    f.host.post.mockResolvedValueOnce({ status: 'retry', stage: 'placeholder' })
+      .mockResolvedValueOnce({ status: 'retry', stage: 'paste' })
+      .mockResolvedValueOnce({ status: 'retry', stage: 'placeholder' })
+      .mockResolvedValueOnce({ status: 'retry' })
+      .mockResolvedValueOnce({ status: 'retry', stage: 'placeholder' })
+      .mockResolvedValueOnce({ status: 'retry', stage: 'placeholder' });
+    await f.moments.propose({ text: '合成草稿', imageIdea: 'synthetic idea' });
+    await f.moments.answer('发', adjacent);
+    await vi.waitFor(() => expect(f.host.notify).toHaveBeenCalledOnce());
+    expect(f.host.post).toHaveBeenCalledTimes(6);
+    expect(f.moments.attempts().momentStage).toBe('placeholder');
+  });
+
+  it('preserves restricted drafts, the consent anchor and privacy until an explicit owner retry', async () => {
+    const f = fixture({ post: async () => ({ status: 'posted' }) });
+    f.host.post.mockResolvedValueOnce({ status: 'restricted', stage: 'camera', screenshotPath: '/synthetic/private/moments-failures/frame.png' });
+    const first = await f.moments.propose({ text: '合成草稿', imageIdea: 'synthetic idea' });
+    expect(await f.moments.answer('再发一次', adjacent)).toBeNull();
+    await f.moments.answer('发，仅自己可见', later);
+    await vi.waitFor(() => expect(f.host.notify).toHaveBeenCalledWith(expect.stringContaining('微信提示账号有风险，暂时不能发朋友圈，需要你在手机微信里处理一下')));
+    expect(f.host.notify.mock.calls[0]![0]).not.toContain('/synthetic/private/');
+    expect(f.moments.lastError).toBe('wechat.momentRestricted');
+    expect(f.moments.attempts().momentStage).toBe('camera');
+    expect(f.host.post).toHaveBeenCalledOnce();
+    expect(f.stored()!.draft).toMatchObject({ status: 'awaiting', restricted: true, visibility: 'private', id: first.id, imageAssetId: asset });
+
+    f.setNow(f.host.now() + WECHAT_MOMENT_TTL_MS + 1);
+    const restarted = new WeChatMoments(f.host);
+    f.host.compose.mockClear();
+    await restarted.tick();
+    expect(f.host.compose).not.toHaveBeenCalled();
+    expect(f.stored()!.draft).toMatchObject({ status: 'awaiting', restricted: true, id: first.id });
+    expect(await restarted.answer('好', adjacent)).toBeNull();
+    expect(await restarted.answer('再发一次', async () => 'before-preview')).toBeNull();
+    expect(await restarted.answer('再发一次。', later)).toContain('仅自己可见');
+    await vi.waitFor(() => expect(f.stored()!.draft!.status).toBe('posted'));
+    expect(f.host.post.mock.calls[1]).toEqual(f.host.post.mock.calls[0]);
+    expect(f.stored()!.draft!.restricted).toBeUndefined();
+  });
+
+  it('keeps captions free of reply markers and refuses a draft without caption text', async () => {
+    const f = fixture();
+    await expect(f.moments.propose({ text: '[mood:happy][sticker:none]', imageIdea: 'synthetic idea' })).rejects.toThrow('wechat.momentInvalid');
+    expect(f.host.preview).not.toHaveBeenCalled();
+    await f.moments.propose({ text: '[mood:happy][sticker:none] 朋友圈[sticker:with-text:合成]草稿', imageIdea: 'synthetic idea' });
+    expect(f.host.preview.mock.calls[0]![0].text).toContain('朋友圈草稿');
+    expect(f.host.preview.mock.calls[0]![0].text).not.toMatch(/\[(?:mood|sticker):/u);
+    await f.moments.answer('发', adjacent);
+    await vi.waitFor(() => expect(f.host.post).toHaveBeenCalledWith(expect.objectContaining({ text: '朋友圈草稿' })));
   });
 
   it('drafts at most once a day after the planned time, and only when enabled', async () => {

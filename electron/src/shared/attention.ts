@@ -1,5 +1,6 @@
 import type { DoctorStatus } from './doctor';
 import type { ModelBindingIssue } from './model-bindings';
+import type { WeChatMomentStage } from './wechat-moment-stages';
 export type AttentionSource = 'background-job' | 'delegation' | 'consolidation' | 'proactive';
 export type AttentionKind = 'action' | 'review' | 'result' | 'notice';
 export type AttentionStatus = 'completed' | 'failed' | 'interrupted' | 'blocked' | 'mixed' | 'expired' | 'invalid' | 'review';
@@ -28,6 +29,7 @@ export interface HealthItem {
   feature: HealthFeature; state: HealthState;
   lastSuccessAt: string | null; lastFailureAt: string | null;
   errorCode: string | null;
+  momentStage?: WeChatMomentStage | undefined;
   /** Failed attempts in a row, failed schedule runs in the last week, or messages whose delivery is unconfirmed. */
   failures: number;
   /** Confirmed parts and total parts of a failed multipart delivery, with no content. */

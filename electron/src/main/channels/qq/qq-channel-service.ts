@@ -1,3 +1,4 @@
+import { cleanReplyText } from '../../../shared/qq-sticker-reply';
 import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import type { QqChannelStore } from './qq-channel-store';
@@ -1067,8 +1068,8 @@ export class QqChannelService {
     stickerOnly?: true | undefined;
   }, completedInboundId?: string): Promise<void> {
     const standaloneImage = input.stickerOnly === true;
-    if (!standaloneImage && !input.content.trim()) throw new Error('qq.emptyMessage');
-    const message = input.kind === 'reply' || input.kind === 'cron' ? qqDeliveryText(input.content, input.kind === 'cron' && qqGroupIdFromSender(authority.senderId) === null) : { content: input.content };
+    const message = input.kind === 'reply' || input.kind === 'cron' ? qqDeliveryText(input.content, input.kind === 'cron' && qqGroupIdFromSender(authority.senderId) === null) : { content: cleanReplyText(input.content) };
+    if (!standaloneImage && !message.content.trim()) throw new Error('qq.emptyMessage');
     const image = input.attachments?.[0] === undefined ? undefined : qqReplyImageSchema.parse(input.attachments[0]);
     const sendImage = qqGroupIdFromSender(authority.senderId) === null ? this.#adapter.sendImageToUser : this.#adapter.sendImageToGroup;
     const attach = image && (input.kind === 'reply' || input.kind === 'cron' && qqGroupIdFromSender(authority.senderId) === null)
@@ -1279,9 +1280,13 @@ export class QqChannelService {
             imageDispatched = true;
             result = await send.call(this.#adapter, groupId ?? item.authority.senderId, image, item.replyTo ?? undefined, controls);
           }
-        } else result = await (groupId === null ? this.#adapter.sendToUser(item.authority.senderId,
-          item.kind === 'cron' ? privateCronText(item.content) : qqReminderDeliveryText(item, this.#now()), item.replyTo ?? undefined, controls)
-          : this.#adapter.sendToGroup(groupId, item.content, item.replyTo ?? undefined, controls));
+        } else {
+          const text = cleanReplyText(groupId !== null ? item.content
+            : item.kind === 'cron' ? privateCronText(item.content) : qqReminderDeliveryText(item, this.#now()));
+          if (!text.trim()) result = { ok: false, unknown: false, error: 'qq.emptyMessage' };
+          else result = await (groupId === null ? this.#adapter.sendToUser(item.authority.senderId, text, item.replyTo ?? undefined, controls)
+            : this.#adapter.sendToGroup(groupId, text, item.replyTo ?? undefined, controls));
+        }
       } catch { result = item.attachment && !imageDispatched ? { ok: false, unknown: false, error: 'qq.imageUnavailable' }
         : { ok: false, unknown: true, error: 'qq.sendUnknown' }; }
       await this.#store.update(draft => {

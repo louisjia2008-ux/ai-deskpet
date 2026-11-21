@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { cleanReplyText } from '../../../shared/qq-sticker-reply';
 import { privateCronText } from '../../domain/chat-cron-run';
 
 /** The listener keeps each reply in its history, which it caps at 500 characters. */
@@ -10,7 +11,7 @@ const suffix = { 'zh-CN': '…（完整回复在桌宠里）', en: '… (full re
 /** One WeChat bubble: no Markdown, no line breaks (the listener pastes and
  * verifies a single line), only characters the listener accepts as printable. */
 export function wechatAssistantText(content: string, locale: 'en' | 'zh-CN', limit = WECHAT_ASSISTANT_REPLY_LIMIT): string {
-  const lines = content
+  const lines = cleanReplyText(content)
     .replace(/```[^\n]*\n?/gu, '')
     .replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^)\s]{1,500})\)/gu, '$1 $2')
     .split(/\r?\n/u)

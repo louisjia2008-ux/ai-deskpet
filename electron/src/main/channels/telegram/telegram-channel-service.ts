@@ -1,3 +1,4 @@
+import { cleanReplyText } from '../../../shared/qq-sticker-reply';
 import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { defaultTelegramState } from '../../../shared/telegram-channel';
@@ -62,13 +63,15 @@ function enqueue(
   // Evict terminal receipts only. Live work is never silently replaced.
   if (s.outbox.length >= 256) s.outbox = s.outbox.filter((item) => !['sent', 'discarded'].includes(item.status));
   if (s.outbox.length >= 1024) throw new Error('telegram.outboxFull');
+  const body = cleanReplyText(content);
+  if (!body.trim()) throw new Error('telegram.noReply');
   const item: TelegramOutbox = {
     id: randomUUID(),
     authority: bare(authority),
-    content,
+    content: body,
     kind,
     sourceId,
-    digest: hash(content),
+    digest: hash(body),
     approved: false,
     approvalId: null,
     status: 'pending',
@@ -733,7 +736,7 @@ export class TelegramChannelService {
           if (!this.#live(epoch) || !same(s.binding, queued.authority)) return;
           s.inbox = s.inbox.filter((i) => i.runId !== queued.runId);
           if (signal.aborted) return;
-          if (!result.content.trim() || !result.sourceId) {
+          if (!cleanReplyText(result.content).trim() || !result.sourceId) {
             enqueue(s, queued.authority, '本轮没有可投递的结果，请在桌面查看。');
             return;
           }
@@ -756,7 +759,9 @@ export class TelegramChannelService {
   }
   #checkDelivery(item: TelegramOutbox): void {
     this.assertAuthorized(item.authority);
-    if (hash(item.content) !== item.digest) throw new Error('telegram.resultChanged');
+    // A saved legacy message can already have approval or partial-send offsets
+    // tied to its original body. Block it rather than changing that contract.
+    if (cleanReplyText(item.content) !== item.content || hash(item.content) !== item.digest) throw new Error('telegram.resultChanged');
     if (item.kind !== 'control') {
       if (!item.sourceId) throw new Error('telegram.missingSource');
       this.#deps.host.assertDelivery({
@@ -1026,7 +1031,7 @@ export class TelegramChannelService {
       authority.bindingId !== input.bindingId ||
       authority.sessionId !== input.sessionId ||
       !input.sourceId ||
-      !input.content.trim()
+      !cleanReplyText(input.content).trim()
     )
       throw new Error('telegram.cronUnbound');
     const epoch = this.#epoch;

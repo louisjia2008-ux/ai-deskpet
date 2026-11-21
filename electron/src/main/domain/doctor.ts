@@ -44,8 +44,9 @@ function healthFinding(item: HealthItem, wechat: WeChatChannelState | null): Doc
     !/(?:auth|credential|storage|targetBlocked|processing|invalid|rateLimit|quota|http4)/iu.test(item.errorCode);
   const code = safeDoctorCode(reconnectable ? `${feature}.offline` : item.errorCode);
   const scope = item.ordinal === undefined || !Number.isSafeInteger(item.ordinal) || item.ordinal < 1 ? feature : `${feature}:${item.ordinal}`;
-  return { key: `${scope}:${code}`, feature, code, event: false,
-    severity: MINOR.has(code) || !SERIOUS.test(code) ? 'warning' : 'error', detail: safeDoctorDetail(item.failures ? String(item.failures) : null) };
+  const stage = feature === 'wechat-moments' ? item.momentStage : undefined;
+  return { key: `${scope}:${code}${stage ? `:${stage}` : ''}`, feature, code, event: false,
+    severity: MINOR.has(code) || !SERIOUS.test(code) ? 'warning' : 'error', detail: safeDoctorDetail(stage ?? (item.failures ? String(item.failures) : null)) };
 }
 
 const droppedFinding = (wechat: WeChatChannelState): DoctorFinding => ({ key: `wechat.dropped@${wechat.droppedAt}`, feature: 'wechat', code: 'wechat.dropped',

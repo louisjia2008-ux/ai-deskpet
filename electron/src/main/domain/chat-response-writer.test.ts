@@ -46,3 +46,12 @@ it('retries the original user question with its preceding context, never the par
   await f.chat.updateMessage(f.message.id, { content: 'Done', status: 'complete', errorCode: null });
   expect(() => f.chat.retryContext(f.message.id)).toThrow('interrupted');
 });
+
+it('guards completed desktop replies and marks control-only output as failed', async () => {
+  const f = await fixture();
+  f.writer.append('[mood:happy] 正文[sticker:none]。');
+  expect(await f.writer.finish('complete')).toMatchObject({ content: '正文。', status: 'complete' });
+  const empty = await fixture();
+  empty.writer.append('[sticker:none] [mood:happy]');
+  expect(await empty.writer.finish('complete')).toMatchObject({ content: '', status: 'failed', errorCode: 'chat.runFailed' });
+});

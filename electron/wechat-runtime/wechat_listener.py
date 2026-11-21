@@ -38,8 +38,9 @@ from wechat_group_policy import (
     write_group_policy, write_group_registry,
 )
 from wechat_messages import MessageSnapshot, VisibleMessage, bubble_boxes, key, native_group_mention, new_messages, select_quote, share_vertical_shift
+from wechat_moments import prune_failure_screenshots
 from wechat_replies import (
-    CLOUD_REQUEST_LIMIT, DeskPet, ReplyRejected, ReplyYielded, article_reply_plan, cloud_reply_plan, cloud_request_from_bytes, local_reply_context, log,
+    CLOUD_REQUEST_LIMIT, DeskPet, ReplyRejected, ReplyYielded, article_reply_plan, clean_prepared_reply, cloud_reply_plan, cloud_request_from_bytes, local_reply_context, log,
     ephemeral_owner_reply, knowledge_reply_current, owner_command_candidate, owner_command_plan, read_tool_candidate, read_tool_plan, reply_bubbles, report_local_reply, rich_reply_plan, select_reply_sticker, sticker_mode,
     sticker_command, thread_snapshot,
 )
@@ -1971,6 +1972,10 @@ def run(state, settings, path, runtime, *, state_path=None):
                     prune_send_samples(prepare_runtime(prepare_runtime(runtime) / "send-checks"))
                 except (OSError, TypeError):
                     pass
+                try:
+                    prune_failure_screenshots(runtime)
+                except (OSError, TypeError):
+                    pass
             paused = is_paused(runtime)
             if watchdog is not None:
                 try:
@@ -2197,6 +2202,9 @@ def run(state, settings, path, runtime, *, state_path=None):
                             if not state.prepare(event.id, plan["reply"], presentation=presentation):
                                 raise StateConflict("Prepared occurrence changed.")
                             event = state.pending(binding)[0]
+                        event = clean_prepared_reply(state, event, GROUP_REPLY_DECLINED if target == "group" else PRIVATE_REPLY_REJECTED)
+                        if event is None:
+                            continue
                         if voice_requested and (event.observation.get("presentation") or {}).get("voice") is True:
                             from wechat_voice_send import deliver_private_voice
                             statuses[entry] = deliver_private_voice(state, binding, event, active_settings, path, runtime)

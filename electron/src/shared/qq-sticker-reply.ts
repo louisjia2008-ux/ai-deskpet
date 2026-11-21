@@ -1,3 +1,6 @@
+import { CHARACTER_MOODS } from './character-reactions';
+import type { CharacterMood } from './character-reactions';
+
 const sceneDescriptions = {
   greeting: '打招呼或问候',
   noon: '午间问候',
@@ -30,94 +33,123 @@ export const QQ_STICKER_REPLY_INSTRUCTION = stickerReplyInstruction(' QQ ');
 export const WECHAT_STICKER_REPLY_INSTRUCTION = stickerReplyInstruction('微信').replace('这是微信私聊的回复格式', '这是微信回复的格式')
   .replace(/\[sticker:only:场景\][^\n]*\n/u, '');
 
-const PREFIX = '[sticker:';
 const TEXT: QqStickerDecision = Object.freeze({ mode: 'text' });
 const markers = new Map<string, QqStickerDecision>([['none', TEXT]]);
 for (const scene of Object.keys(sceneDescriptions) as QqStickerScene[]) {
   markers.set(`with-text:${scene}`, Object.freeze({ mode: 'with-text', scene }));
   markers.set(`only:${scene}`, Object.freeze({ mode: 'sticker-only', scene }));
 }
-const MAX_HINT_LENGTH = Math.max(...Array.from(markers.keys(), marker => marker.length));
+const controls = ['[sticker:', '[mood:'] as const;
+const bareMoodTags = CHARACTER_MOODS.map(mood => `[${mood}]`);
+const maxValueLength = Math.max(...Array.from(markers.keys(), value => value.length));
 
-type FilterState = 'prefix' | 'hint' | 'discard-hint' | 'newline' | 'optional-lf' | 'text';
+type ReservedControl = typeof controls[number];
 
-/** Consumes just the leading control line. An invalid reserved hint falls back
- * to text. Once the prefix is settled, subsequent content is never interpreted. */
+/** Interprets leading controls during a stream and drops reserved tags throughout.
+ * Ordinary bracketed text is released as soon as it cannot be a control. */
 export class QqStickerReplyFilter {
-  #state: FilterState = 'prefix';
-  #pending = '';
+  #buffer = '';
+  #leading = true;
+  #removed = false;
+  #control: ReservedControl | null = null;
+  #value = '';
+  #overlong = false;
   #decision: QqStickerDecision | null = null;
+  #stickerControl = false;
+  mood: CharacterMood | null = null;
+
+  constructor(private readonly allowBareMood = true) {}
 
   get decision(): QqStickerDecision | null { return this.#decision; }
+  get hasStickerControl(): boolean { return this.#stickerControl; }
+  get removed(): boolean { return this.#removed; }
 
   push(chunk: string): string {
-    if (this.#state === 'text' || chunk === '') return chunk;
-    let offset = 0;
-
-    if (this.#state === 'prefix') {
-      offset = Math.min(PREFIX.length - this.#pending.length, chunk.length);
-      const candidate = this.#pending + chunk.slice(0, offset);
-      if (!PREFIX.startsWith(candidate)) {
-        const original = this.#pending + chunk;
-        this.#pending = '';
-        this.#decision = TEXT;
-        this.#state = 'text';
-        return original;
-      }
-      if (candidate.length < PREFIX.length) {
-        this.#pending = candidate;
-        return '';
-      }
-      this.#pending = '';
-      this.#state = 'hint';
-    }
-
-    if (this.#state === 'hint' || this.#state === 'discard-hint') {
-      let end = offset;
-      while (end < chunk.length && chunk[end] !== ']' && chunk[end] !== '\n' && chunk[end] !== '\r') end++;
-      if (this.#state === 'hint') {
-        if (this.#pending.length + end - offset > MAX_HINT_LENGTH) {
-          this.#pending = '';
-          this.#state = 'discard-hint';
-        } else {
-          this.#pending += chunk.slice(offset, end);
+    this.#buffer += chunk;
+    let visible = '';
+    while (this.#buffer !== '') {
+      if (this.#control !== null) {
+        const end = this.#buffer.search(/[\]\r\n]/u);
+        const value = end < 0 ? this.#buffer : this.#buffer.slice(0, end);
+        this.#overlong ||= this.#value.length + value.length > maxValueLength;
+        if (!this.#overlong) this.#value += value;
+        if (end < 0) {
+          this.#buffer = '';
+          break;
         }
+        const closed = this.#buffer[end] === ']';
+        if (this.#leading) this.#readControl(closed && !this.#overlong ? this.#value : null);
+        this.#control = null;
+        this.#value = '';
+        this.#overlong = false;
+        this.#buffer = this.#buffer.slice(end + Number(closed));
+        continue;
       }
-      if (end === chunk.length) return '';
 
-      const closed = chunk[end] === ']';
-      this.#decision = closed && this.#state === 'hint' ? markers.get(this.#pending) ?? TEXT : TEXT;
-      this.#pending = '';
-      this.#state = 'newline';
-      offset = closed ? end + 1 : end;
-    }
-
-    if (this.#state === 'newline' && offset < chunk.length) {
-      if (chunk[offset] === '\r') {
-        offset++;
-        this.#state = 'optional-lf';
-      } else {
-        if (chunk[offset] === '\n') offset++;
-        this.#state = 'text';
+      const pending = this.#leading ? this.#buffer.trimStart() : this.#buffer;
+      const opening = pending.indexOf('[');
+      if (opening === 0) {
+        const lower = pending.slice(0, controls[0].length).toLowerCase();
+        const control = controls.find(prefix => lower.startsWith(prefix));
+        if (control) {
+          this.#control = control;
+          this.#buffer = pending.slice(control.length);
+          this.#removed = true;
+          continue;
+        }
+        if (this.#leading && this.allowBareMood) {
+          const bareMood = bareMoodTags.find(tag => pending.startsWith(tag));
+          if (bareMood) {
+            this.mood ??= CHARACTER_MOODS.find(mood => bareMood === `[${mood}]`) ?? null;
+            this.#buffer = pending.slice(bareMood.length);
+            this.#removed = true;
+            continue;
+          }
+          if (bareMoodTags.some(tag => tag.startsWith(pending))) break;
+        }
+        if (controls.some(prefix => prefix.startsWith(lower))) break;
       }
+      if (pending === '') break;
+      // Release ordinary text up to its next opening bracket. A literal
+      // opening bracket moves the cursor forward so it cannot be reprocessed.
+      const length = opening === 0 ? 1 : opening < 0 ? pending.length : opening;
+      const whitespace = this.#buffer.length - pending.length;
+      if (!this.#removed) visible += this.#buffer.slice(0, whitespace);
+      visible += pending.slice(0, length);
+      this.#buffer = pending.slice(length);
+      this.#leading = false;
+      this.#decision ??= TEXT;
     }
-    if (this.#state === 'optional-lf' && offset < chunk.length) {
-      if (chunk[offset] === '\n') offset++;
-      this.#state = 'text';
-    }
-    return chunk.slice(offset);
+    return visible;
   }
 
   flush(): string {
-    const literal = this.#state === 'prefix' ? this.#pending : '';
-    if (literal || this.#state === 'hint' || this.#state === 'discard-hint') this.#decision = TEXT;
-    this.#pending = '';
-    this.#state = 'text';
+    if (this.#control !== null && this.#leading) this.#readControl(null);
+    const literal = this.#leading && this.#removed ? this.#buffer.trimStart() : this.#buffer;
+    if (literal !== '') this.#decision ??= TEXT;
+    this.#buffer = '';
+    this.#control = null;
     return literal;
+  }
+
+  #readControl(value: string | null): void {
+    if (this.#control === '[sticker:') {
+      this.#stickerControl = true;
+      this.#decision ??= value === null ? TEXT : markers.get(value) ?? TEXT;
+    } else if (value !== null) {
+      const mood = value.toLowerCase();
+      this.mood ??= mood === 'playful' ? 'happy' : CHARACTER_MOODS.find(candidate => candidate === mood) ?? null;
+    }
   }
 }
 
-/** Non-streaming deliveries use exactly the same reserved-prefix parser as chat. */
+/** Final delivery guard, also for saved text that predates the streaming filter. */
+export function cleanReplyText(content: string): string {
+  const filter = new QqStickerReplyFilter(false);
+  const text = filter.push(content) + filter.flush();
+  return filter.removed ? text.trim() : text;
+}
+
 export const stickerReply = (content: string): { text: string; decision: QqStickerDecision } => {
   const filter = new QqStickerReplyFilter();
   const text = filter.push(content) + filter.flush();

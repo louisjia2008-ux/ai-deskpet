@@ -66,7 +66,7 @@ export const DoctorPanel = ({ api, locale }: { api: AttentionAPI; locale: string
     </details>}
     <p className="attention-note">{text.since}{time(entry.openedAt)}{entry.resolvedAt && <>{entry.acknowledged ? text.acknowledgedAt : text.until}{time(entry.resolvedAt)}</>}
       {!entry.acknowledged && <> · {entry.reported ? text.reported[entry.reported] : text.waiting}</>} · <code>{entry.code}</code></p>
-    {entry.detail && (DOCTOR_SELF_TEST_STAGES as readonly string[]).includes(entry.detail) && <p className="attention-note">
+    {entry.feature !== 'wechat-moments' && entry.detail && (DOCTOR_SELF_TEST_STAGES as readonly string[]).includes(entry.detail) && <p className="attention-note">
       {lang === 'zh-CN' ? '阶段：' : 'Stage: '}{lang === 'zh-CN' ? DOCTOR_SELF_TEST_STAGE_LABELS[entry.detail as typeof DOCTOR_SELF_TEST_STAGES[number]] : entry.detail}</p>}
   </article>;
   return <section className="attention-center health-panel doctor-panel">
@@ -94,6 +94,10 @@ export const DoctorPanel = ({ api, locale }: { api: AttentionAPI; locale: string
       </article>
       <div className="attention-overview"><strong>{status.open || '✓'}</strong><span>{text.open(status.open)}</span></div>
       <ModelBindingIssues issues={status.modelIssues ?? []} api={api} locale={lang} refresh={() => run(() => api.doctor!())} />
+      {status.momentFailureScreenshot && <article className="attention-card">
+        <h2>{lang === 'zh-CN' ? '有失败截图可以排查' : 'A Moments failure screenshot is available'}</h2>
+        <p><code style={{ overflowWrap: 'anywhere' }}>{status.momentFailureScreenshot}</code></p>
+      </article>}
       {outage && <article className="attention-card">
         <h2>{lang === 'zh-CN' ? '最近一次桌宠无响应' : 'Latest DeskPet outage'}</h2>
         <p>{lang === 'zh-CN' ? '最后心跳：' : 'Last heartbeat: '}{epoch(outage.startedAt)}</p>

@@ -1,4 +1,6 @@
 import { providerFailureCode } from '../../../shared/provider-errors';
+import { cleanReplyText } from '../../../shared/qq-sticker-reply';
+import { WECHAT_MOMENT_STAGE_LABELS, type WeChatMomentStage } from '../../../shared/wechat-moment-stages';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
@@ -12,6 +14,7 @@ const draftSchema = z.strictObject({
   previewedAt: z.number().int().nonnegative().optional(),
   status: z.enum(['awaiting', 'posting', 'posted', 'uncertain', 'discarded', 'expired', 'failed']),
   visibility: z.enum(['all', 'private']).optional(),
+  restricted: z.literal(true).optional(),
 });
 const stateSchema = z.strictObject({
   version: z.literal(1),
@@ -25,14 +28,18 @@ export type WeChatMomentsState = z.infer<typeof stateSchema>;
 export type WeChatMomentDraft = z.infer<typeof draftSchema>;
 export const WECHAT_MOMENT_WINDOW_FAILURES = ['busy', 'paused', 'window_error'] as const;
 type WindowFailure = typeof WECHAT_MOMENT_WINDOW_FAILURES[number];
-export type MomentPostOutcome = 'posted' | 'uncertain' | 'retry' | 'conflict' | 'invalid_payload' | WindowFailure;
+export interface MomentPostOutcome {
+  status: 'posted' | 'uncertain' | 'retry' | 'restricted' | 'conflict' | 'invalid_payload' | WindowFailure;
+  stage?: WeChatMomentStage | undefined;
+  screenshotPath?: string | undefined;
+}
 export type MomentPreviewOutcome = 'sent' | 'retry' | 'uncertain' | WindowFailure;
 const windowFailures = {
   busy: { code: 'wechat.momentWindowBusy', text: '微信窗口还被其他操作占着。' },
   paused: { code: 'wechat.momentListenerPaused', text: '微信监听已暂停。' },
   window_error: { code: 'wechat.momentWindowError', text: '打开微信窗口时出了错。' },
 } as const;
-const windowFailure = (outcome: MomentPostOutcome | MomentPreviewOutcome) =>
+const windowFailure = (outcome: MomentPostOutcome['status'] | MomentPreviewOutcome) =>
   WECHAT_MOMENT_WINDOW_FAILURES.find(reason => reason === outcome);
 
 export interface WeChatMomentsHost {
@@ -57,12 +64,13 @@ export interface WeChatMomentsHost {
 export const WECHAT_MOMENT_TTL_MS = 24 * 3_600_000;
 export const WECHAT_MOMENT_TEXT_LIMIT = 300;
 const MOMENT_REPLY_WINDOW_MS = 2 * 3_600_000;
-export type MomentAnswer = 'all' | 'private' | 'discard' | 'rewrite' | 'clarify' | 'unrelated';
+export type MomentAnswer = 'all' | 'private' | 'retry' | 'discard' | 'rewrite' | 'clarify' | 'unrelated';
 export type MomentAnswerContext = 'before-preview' | 'later' | 'next';
 /** Deliberately closed consent grammar: questions, negatives and substrings never grant permission. */
 export const classifyMomentAnswer = (raw: string, next = false): MomentAnswer => {
   const text = raw.normalize('NFKC').trim().replace(/[!。.！]+$/u, '').trim();
   const draftTopic = /朋友圈|草稿/u.test(text);
+  if (/^(?:再发一次|重新发一次|重发一次)$/u.test(text)) return 'retry';
   if (/^(?:(?:发|朋友圈)[,\s]*)?(?:只给我看|仅自己可见|别让别人看到|只给自己看|自己可见|私密)$/u.test(text)
     && (next || /发|朋友圈|可见/u.test(text))) return 'private';
   if (/^(?:发|发吧|发布|发出去|可以发|就这样发|嗯,?发|好,?发吧|发朋友圈吧?|发这条吧?|(?:这条)?朋友圈发吧?|post)$/iu.test(text)
@@ -82,6 +90,7 @@ const phrases = {
   discard: ['好呀，那这条就不发了。', '嗯，听你的，这条不发啦。'],
 } as const;
 const hint = '可以跟我说“发 / 只给我看 / 不发 / 改成……”。';
+const restrictionNotice = '微信提示账号有风险，暂时不能发朋友圈，需要你在手机微信里处理一下。草稿还留着，处理好后告诉我“再发一次”。';
 const empty = (): WeChatMomentsState => ({ version: 1, plan: null, draft: null, posted: [], hintsShown: false, lastPhrases: {} });
 
 const localDate = (epoch: number, timezone: string): string =>
@@ -98,7 +107,7 @@ function planFor(now: number, timezone: string): { date: string; at: number } {
 }
 
 export function momentText(value: string): string {
-  return value.replace(/\r\n?/gu, '\n').split('\n').map(line => line.replace(/[\p{C}\p{Zl}\p{Zp}]/gu, '').trim())
+  return cleanReplyText(value).replace(/\r\n?/gu, '\n').split('\n').map(line => line.replace(/[\p{C}\p{Zl}\p{Zp}]/gu, '').trim())
     .join('\n').replace(/\n{3,}/gu, '\n\n').trim();
 }
 
@@ -108,10 +117,15 @@ export class WeChatMoments {
   #lastError: string | null = null;
   #lastSuccessAt: string | null = null;
   #lastFailureAt: string | null = null;
+  #lastFailureStage: WeChatMomentStage | undefined;
   constructor(private readonly host: WeChatMomentsHost) {}
   get lastError(): string | null { return this.#lastError; }
-  attempts() { return { lastSuccessAt: this.#lastSuccessAt, lastFailureAt: this.#lastFailureAt }; }
-  failed(code: string): void { this.#lastError = code; this.#lastFailureAt = new Date(this.host.now()).toISOString(); }
+  attempts() { return { lastSuccessAt: this.#lastSuccessAt, lastFailureAt: this.#lastFailureAt, momentStage: this.#lastFailureStage }; }
+  failed(code: string, stage?: WeChatMomentStage): void {
+    this.#lastError = code;
+    this.#lastFailureAt = new Date(this.host.now()).toISOString();
+    this.#lastFailureStage = stage;
+  }
 
   #phrase(state: WeChatMomentsState, kind: keyof typeof phrases): string {
     const choices = phrases[kind], previous = state.lastPhrases[kind];
@@ -127,7 +141,9 @@ export class WeChatMoments {
     catch (error) { this.failed(providerFailureCode(error, 'wechat.momentPreviewFallback')); }
     if (!intro || [...intro].length > 100) intro = this.#phrase(state, 'preview');
     // The original draft is not silently truncated. The listener's text path accepts 500 printable characters.
-    const notice = `${intro} ${draft.text.replace(/\n+/gu, ' / ')}${state.hintsShown ? '' : ` ${hint}`}`;
+    const text = momentText(draft.text);
+    if (!text) throw new Error('wechat.momentInvalid');
+    const notice = `${intro} ${text.replace(/\n+/gu, ' / ')}${state.hintsShown ? '' : ` ${hint}`}`;
     if ([...notice].length > 500) throw new Error('wechat.momentInvalid');
     await this.host.write(state);
     const { preview } = await this.host.image(draft.imageAssetId);
@@ -190,14 +206,14 @@ export class WeChatMoments {
     const adjacency = await context(draft.id);
     if (adjacency === 'before-preview') return null;
     const elapsed = this.host.now() - draft.previewedAt;
-    const answer = classifyMomentAnswer(trimmed, adjacency === 'next' && elapsed >= 0 && elapsed <= MOMENT_REPLY_WINDOW_MS);
-    if (answer === 'unrelated') return null;
-    if (elapsed > WECHAT_MOMENT_TTL_MS) {
+    const answer = classifyMomentAnswer(trimmed, !draft.restricted && adjacency === 'next' && elapsed >= 0 && elapsed <= MOMENT_REPLY_WINDOW_MS);
+    if (answer === 'unrelated' || (answer === 'retry' && !draft.restricted)) return null;
+    if (!draft.restricted && elapsed > WECHAT_MOMENT_TTL_MS) {
       draft.status = 'expired';
       await this.host.write(state);
       return '这条朋友圈草稿已经超过一天，作废了。想发的话再跟我说一次。';
     }
-    if (answer === 'clarify') return `我还没发呢，你是想发这条，还是再改改呀？${hint}`;
+    if (answer === 'clarify') return draft.restricted ? restrictionNotice : `我还没发呢，你是想发这条，还是再改改呀？${hint}`;
     if (answer === 'rewrite') {
       const target = /^把(.+?)改成/u.exec(trimmed)?.[1]?.trim();
       if (target && !/朋友圈|草稿|^(?:这句(?:话)?|开头|结尾|标题|正文)$/u.test(target) && !draft.text.includes(target)) return null;
@@ -206,7 +222,8 @@ export class WeChatMoments {
         const revised = await this.host.rewrite({ text: draft.text, imageIdea: draft.imageIdea, instruction: trimmed });
         const value = momentText(revised.text);
         if (!value || [...value].length > WECHAT_MOMENT_TEXT_LIMIT) throw new Error('wechat.momentInvalid');
-        const next = { ...draft, id: createHash('sha256').update(randomUUID()).digest('hex'), text: value, createdAt: this.host.now(), previewedAt: undefined };
+        const next = { ...draft, id: createHash('sha256').update(randomUUID()).digest('hex'), text: value,
+          createdAt: this.host.now(), previewedAt: undefined, restricted: undefined };
         state.draft = next;
         const sent = await this.#preview(state, next);
         await this.host.record(`（修改后的朋友圈草稿）${value}`);
@@ -224,8 +241,9 @@ export class WeChatMoments {
       await this.host.write(state);
       return notice;
     }
+    if (!momentText(draft.text)) throw new Error('wechat.momentInvalid');
     draft.status = 'posting';
-    draft.visibility = answer === 'private' ? 'private' : 'all';
+    draft.visibility = answer === 'private' || (draft.restricted && draft.visibility === 'private') ? 'private' : 'all';
     const notice = this.#phrase(state, 'posting') + (draft.visibility === 'private' ? ' 这次仅自己可见，只给你看。' : '');
     await this.host.write(state);
     void this.#publish(draft.id).catch(() => { this.failed('wechat.momentPublishUnconfirmed'); });
@@ -266,33 +284,54 @@ export class WeChatMoments {
   async #publish(id: string): Promise<void> {
     // The listener is still sending the acknowledgement; give it the desktop first.
     await this.host.wait(15_000);
-    let outcome: MomentPostOutcome = 'retry';
+    let outcome: MomentPostOutcome = { status: 'retry' };
+    let previousStage: WeChatMomentStage | undefined;
     for (let attempt = 0; attempt < 12; attempt++) {
       const state = await this.state();
       const draft = state.draft;
       if (!draft || draft.id !== id || draft.status !== 'posting') return;
-      const { full } = await this.host.image(draft.imageAssetId);
-      outcome = await this.host.post({ id, text: draft.text, visibility: draft.visibility ?? 'all', images: [full] }).catch(() => 'retry' as const);
+      const image = await this.host.image(draft.imageAssetId).catch(() => null);
+      if (!image) {
+        outcome = { status: 'retry', stage: 'attach_images' };
+      } else {
+        outcome = await this.host.post({ id, text: momentText(draft.text), visibility: draft.visibility ?? 'all', images: [image.full] })
+          .catch((): MomentPostOutcome => ({ status: 'retry' }));
+      }
       // The worker already waited for the window. Repeating a lock timeout
       // here would make the owner wait one full lock budget for each retry.
-      if (outcome !== 'retry' && outcome !== 'paused' && outcome !== 'window_error') break;
-      await this.host.wait(20_000);
+      if (outcome.status !== 'retry' && outcome.status !== 'paused' && outcome.status !== 'window_error') break;
+      if (outcome.stage && outcome.stage === previousStage) break;
+      previousStage = outcome.stage;
+      if (attempt < 11) await this.host.wait(20_000);
     }
     const state = await this.state();
     const draft = state.draft;
-    if (!draft || draft.id !== id) return;
-    const reason = windowFailure(outcome);
-    draft.status = outcome === 'posted' ? 'posted' : reason || outcome === 'retry' ? 'failed' : 'uncertain';
+    if (!draft || draft.id !== id || draft.status !== 'posting') return;
+    const { status, stage } = outcome;
+    const stageMessage = stage ? `卡在「${WECHAT_MOMENT_STAGE_LABELS[stage]}」这一步。` : '';
+    if (status === 'restricted') {
+      draft.status = 'awaiting';
+      draft.restricted = true;
+      this.failed('wechat.momentRestricted', stage);
+      await this.host.write(state);
+      await this.host.notify(stageMessage + restrictionNotice).catch(() => undefined);
+      return;
+    }
+    delete draft.restricted;
+    const reason = windowFailure(status);
+    draft.status = status === 'posted' ? 'posted' : reason || status === 'retry' ? 'failed' : 'uncertain';
     if (draft.status === 'posted') {
       state.posted = [...state.posted, { id, text: draft.text, at: this.host.now() }].slice(-30);
       this.#lastError = null;
+      this.#lastFailureStage = undefined;
       this.#lastSuccessAt = new Date(this.host.now()).toISOString();
     } else {
-      this.failed(reason ? windowFailures[reason].code : draft.status === 'failed' ? 'wechat.momentFailed' : 'wechat.momentUncertain');
+      this.failed(draft.status === 'uncertain' ? 'wechat.momentUncertain'
+        : stage ? 'wechat.momentWindowError' : reason ? windowFailures[reason].code : 'wechat.momentFailed', stage);
     }
-    const notice = reason ? `${windowFailures[reason].text}这次没发出去，草稿已经作废了。` : this.#phrase(state, draft.status);
+    const notice = stageMessage + (reason && !stage ? `${windowFailures[reason].text}这次没发出去，草稿已经作废了。` : this.#phrase(state, draft.status));
     await this.host.write(state);
-    await this.host.notify(notice);
+    await this.host.notify(notice).catch(() => undefined);
   }
 
   /** Prepares today's draft once its planned time has come. */
@@ -300,6 +339,7 @@ export class WeChatMoments {
     if (this.#busy || !await this.host.enabled()) return;
     const now = this.host.now(), timezone = this.host.timezone();
     const state = await this.state();
+    if (this.#busy || state.draft?.status === 'posting' || (state.draft?.status === 'awaiting' && state.draft.restricted)) return;
     const today = localDate(now, timezone);
     if (state.plan?.date !== today) {
       state.plan = planFor(now, timezone);
@@ -309,7 +349,6 @@ export class WeChatMoments {
     if (now < plan.at) return;
     const draftedToday = state.draft && localDate(state.draft.createdAt, timezone) === today;
     if (draftedToday || state.posted.some(item => localDate(item.at, timezone) === today)) return;
-    if (state.draft?.status === 'posting') return;
     // A failed attempt waits an hour instead of retrying every tick.
     state.plan = { date: today, at: now + 3_600_000 };
     await this.host.write(state);

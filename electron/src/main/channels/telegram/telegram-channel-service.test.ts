@@ -111,6 +111,22 @@ it('carries note intent proof only for the owner’s text and never for forwards
   ]);
 });
 
+it('strips internal controls before hashing a scheduled delivery and rejects a controls-only result', async () => {
+  const f = await fixture();
+  await f.store.initialize();
+  await f.store.update(s => Object.assign(s, defaultTelegramState(), {
+    profileId, tokenConfigured: true, enabled: true, botId: '42', binding: { ...owner, displayName: 'Owner' },
+  }));
+  await f.service.initialize();
+  const scheduled = { sessionId: owner.sessionId, bindingId: owner.bindingId, sourceId: randomUUID() };
+  await expect(f.service.enqueueCron({ ...scheduled, content: '[mood:happy][sticker:none]' })).rejects.toThrow('telegram.cronUnbound');
+  await f.service.enqueueCron({ ...scheduled, content: '[sticker:none] [mood:happy] 正文[sticker:only:noon]。' });
+  await vi.waitFor(() => expect(f.api.send).toHaveBeenCalledExactlyOnceWith(
+    expect.any(String), owner.chatId, '正文。', null, expect.any(AbortSignal),
+  ));
+  await vi.waitFor(() => expect(f.store.snapshot().outbox[0]).toMatchObject({ content: '正文。', status: 'sent' }));
+});
+
 it('never resends an ambiguous POST even when desktop retries definite failures', async () => {
   const f = await fixture();
   await f.store.initialize();

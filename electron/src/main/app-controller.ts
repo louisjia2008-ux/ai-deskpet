@@ -31,7 +31,7 @@ import { registerChatCronTools } from './tools/chat-cron-tools';
 import type { ChatCronSchedule } from '../shared/chat-cron';
 import { qqGroupIdFromSender } from '../shared/qq-channel';
 import type { QqAuthority, QqOutboxItem, QqPrivateImageTestResult } from '../shared/qq-channel';
-import { QQ_STICKER_REPLY_INSTRUCTION, QqStickerReplyFilter, stickerReply, WECHAT_STICKER_REPLY_INSTRUCTION } from '../shared/qq-sticker-reply';
+import { cleanReplyText, QQ_STICKER_REPLY_INSTRUCTION, QqStickerReplyFilter, stickerReply, WECHAT_STICKER_REPLY_INSTRUCTION } from '../shared/qq-sticker-reply';
 import type { QqStickerDecision, QqStickerScene } from '../shared/qq-sticker-reply';
 import { ReaService } from './rea/service';
 import { localToolModel } from './plugins/mcp-local-turn';
@@ -170,7 +170,6 @@ import { foregroundCoversDisplay } from './voice/screen-restraint';
 import { selectReplySticker } from './channels/wechat/wechat-reply-sticker';
 import { SpeechTurnGate } from './voice/speech-turn-gate';
 import { isProactiveQuiet, proactiveDayKey, proactiveMinuteOfDay } from './domain/proactive-policy';
-import { MoodTagFilter } from '../shared/character-reactions';
 import type { CharacterMood } from '../shared/character-reactions';
 import { personaPrompt } from '../shared/persona';
 import { TimerService } from './domain/timer-service';
@@ -965,7 +964,8 @@ export class AppController {
         proactiveHealth({ policy: state.proactivePolicy, triggers: state.automationTriggers, now: Date.now(), errorCode: this.#proactiveError,
           lastFailureAt: this.#proactiveFailureAt, pausedByError: this.#proactive.pausedByError }),
         { feature: 'wechat-moments', state: this.#moments?.lastError ? 'failing' : this.#moments?.attempts().lastSuccessAt ? 'ok' : 'waiting', errorCode: this.#moments?.lastError ?? null,
-          lastSuccessAt: this.#moments?.attempts().lastSuccessAt ?? null, lastFailureAt: this.#moments?.attempts().lastFailureAt ?? null, failures: this.#moments?.lastError ? 1 : 0, sinceLaunch: true },
+          lastSuccessAt: this.#moments?.attempts().lastSuccessAt ?? null, lastFailureAt: this.#moments?.attempts().lastFailureAt ?? null,
+          momentStage: this.#moments?.attempts().momentStage, failures: this.#moments?.lastError ? 1 : 0, sinceLaunch: true },
         { feature: 'wechat-cron', state: this.#wechatCronError ? 'failing' : this.#wechatCronSuccessAt ? 'ok' : 'waiting', errorCode: this.#wechatCronError,
           lastSuccessAt: this.#wechatCronSuccessAt, lastFailureAt: this.#wechatCronFailureAt, failures: this.#wechatCronError ? 1 : 0, sinceLaunch: true },
       ] });
@@ -2099,6 +2099,7 @@ export class AppController {
       preview: async ({ id, text, image }) => wechat.previewMoment({ id, binding: await ownerBinding(), text, image }),
       post: input => wechat.postMoment(input),
       notify: async text => {
+        this.windows.send('console', 'attention:changed', undefined);
         const binding = await ownerBinding();
         const deliveryId = createHash('sha256').update(`deskpet/wechat/moment-notice/v1\0${randomUUID()}`).digest('hex');
         this.#noteWeChatHandled(deliveryId);
@@ -2464,10 +2465,11 @@ export class AppController {
       return withModelIssues(health);
     });
     const doctorStatus = async () => {
-      const appOutage = await wechat.latestAppOutage().catch(() => null);
-      const modelIssues = await this.#modelBindings.issues();
+      const [appOutage, modelIssues, momentFailureScreenshot] = await Promise.all([
+        wechat.latestAppOutage().catch(() => null), this.#modelBindings.issues(), wechat.latestMomentFailureScreenshot(),
+      ]);
       const status = this.#doctor.status();
-      return { ...status, appOutage, modelIssues, open: status.open + modelIssues.length };
+      return { ...status, appOutage, modelIssues, momentFailureScreenshot, open: status.open + modelIssues.length };
     };
     this.#ipc.register('doctor:status', consoleOnly, doctorStatus);
     this.#ipc.register('doctor:set-enabled', consoleOnly, async ({ enabled }) => { await this.#doctor.setEnabled(enabled); return doctorStatus(); });
@@ -3457,7 +3459,8 @@ export class AppController {
     const state = this.#repository.snapshot();
     const message = state.chatMessages.find(value => value.id === item.sourceId);
     if (!message || message.role !== 'assistant' || message.status !== 'complete' || !message.requestReceipts?.length ||
-      message.content !== item.content || createHash('sha256').update(message.content).digest('hex') !== item.digest) throw new Error('telegram.disclosureBlocked');
+      (message.content !== item.content && cleanReplyText(message.content) !== item.content)
+      || createHash('sha256').update(item.content).digest('hex') !== item.digest) throw new Error('telegram.disclosureBlocked');
     if (item.kind === 'cron') {
       const run = state.chatCronRuns.find(value => value.sessionId === message.sessionId &&
         message.requestReceipts?.some(receipt => receipt.runId === value.id));
@@ -4813,16 +4816,15 @@ export class AppController {
         this.#chat.assertPreparedRequest(assistant.id, request.identity!.requestId);
         signal.throwIfAborted();this.#assertReaChat(runId);this.#assertChannelLive(channel, sessionId);this.#skillTools.assertCurrent(runId);
         modelCallHadOutput = false;
-        const moodTag = new MoodTagFilter();
-        const stickerTag = qqSemanticStickers || wechatStickerPrompt ? new QqStickerReplyFilter() : null;
+        const replyControls = new QqStickerReplyFilter();
         const showText = (visible: string): void => {
-          if (moodTag.mood !== null) reactions.state(moodTag.mood);
+          if (replyControls.mood !== null) reactions.state(replyControls.mood);
           if (visible === '') return;
           firstTextMs ??= Date.now() - started;
           text += visible;
           // An image-only plan keeps its draft available without previewing text
           // that might never be part of the actual reply.
-          if (qqStickerPrompt && round === 0 && stickerTag?.decision?.mode === 'sticker-only') writer.append(visible);
+          if (qqStickerPrompt && round === 0 && replyControls.decision?.mode === 'sticker-only') writer.append(visible);
           else appendText(visible);
         };
         let minecraftReservation: Awaited<ReturnType<MinecraftOfflineModelBudget['reserve']>> | undefined;
@@ -4856,7 +4858,7 @@ export class AppController {
           }
           if (event.type === 'text' || event.type === 'tool-call' || event.type === 'tool-thought' || event.type === 'response-items') modelCallHadOutput = true;
           if (event.type === 'text') {
-            showText(moodTag.push(stickerTag ? stickerTag.push(event.text) : event.text));
+            showText(replyControls.push(event.text));
           } else if (event.type === 'tool-call') {
             if (wrapUp) continue;
             if (illustrative) throw new ToolFailure('tool.notRequested');
@@ -4893,11 +4895,11 @@ export class AppController {
         }
         if (featureBindingId && !usingFallback && !signal.aborted) this.#modelBindings.succeeded(featureBindingId, provider.id, model);
         if (releaseOllama) this.#embeddings.expectChatRelease(model);
-        if (stickerTag) showText(moodTag.push(stickerTag.flush()));
-        showText(moodTag.flush());
-        if (moodTag.mood && sharedMoodTags && calls.length === 0) await this.#characterSheet.noteMood(moodTag.mood).catch(() => undefined);
+        showText(replyControls.flush());
+        if (replyControls.removed && calls.length === 0 && !writer.text.trim()) throw new Error('chat.runFailed');
+        if (replyControls.mood && sharedMoodTags && calls.length === 0) await this.#characterSheet.noteMood(replyControls.mood).catch(() => undefined);
         qqStickerReply.decision = stickerPrompt && !wrapUp && round === 0 && calls.length === 0
-          ? stickerTag?.decision ?? null : null;
+          ? replyControls.decision ?? null : null;
         if (wechatStickerRun) wechatStickerRun.decision = qqStickerReply.decision;
         let localResultInBatch = contextTrace.privacy === 'local-only';
         for (const call of calls) {

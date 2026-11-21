@@ -1,3 +1,4 @@
+import { cleanReplyText } from '../../shared/qq-sticker-reply';
 import { randomUUID } from 'node:crypto';
 import type { AutomaticTaskPort, AutomaticTrigger, AutomationSnapshot } from '../../shared/automation';
 import type { BackgroundJob, BackgroundJobInput } from '../../shared/background-jobs';
@@ -98,10 +99,12 @@ export class AutomaticTaskCoordinator implements AutomaticTaskPort {
             catch { trigger.status = 'blocked'; trigger.errorCode = 'automation.publicationBlocked'; return null; }
             if (trigger.kind === 'schedule') { trigger.status = 'succeeded'; return null; }
             if (trigger.messageId) { trigger.status = 'succeeded'; return null; }
+            const content = cleanReplyText(job.result ?? '');
+            if (!content.trim()) { trigger.status = 'failed'; trigger.errorCode = 'job.emptyOutput'; return null; }
             // One message identity, one result. No memory write and no additional generation.
             let session = s.chatSessions.find((v) => CHECK_IN_TITLES.includes(v.title) && v.analysisSource !== 'rea-static' && !v.wechatTranscript && !v.deletedAt && !v.archivedAt);
             if (!session) { session = { id: randomUUID(), title: this.dependencies.checkInTitle?.() ?? CHECK_IN_TITLES[0]!, kind: 'normal', createdAt: trigger.updatedAt, updatedAt: trigger.updatedAt, historyPrivacy: job.source.privacy }; s.chatSessions.push(session); }
-            const saved: ChatMessage = { id: randomUUID(), sessionId: session.id, role: 'assistant', content: job.result ?? '', automationTriggerId: trigger.id, status: 'complete', createdAt: trigger.updatedAt, errorCode: null,
+            const saved: ChatMessage = { id: randomUUID(), sessionId: session.id, role: 'assistant', content, automationTriggerId: trigger.id, status: 'complete', createdAt: trigger.updatedAt, errorCode: null,
               contextTrace: { ...(this.dependencies.proactiveContext?.(job) ?? { version: 1, memoryReferences: [], historyMessageIds: [], privacy: job.source.privacy, lineage: 'complete' }), scope: { kind: 'session', sessionId: session.id } } };
             s.chatMessages.push(saved); session.updatedAt = trigger.updatedAt; trigger.messageId = saved.id; trigger.publishedAt = null; trigger.status = 'succeeded'; return saved;
           });

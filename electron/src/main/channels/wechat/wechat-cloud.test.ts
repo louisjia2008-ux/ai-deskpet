@@ -202,6 +202,7 @@ it('accepts local reply observations only with a live listener binding and local
 
 it('captures real loopback model wires for cross-channel context, consent, stated mood and owner memory', async () => {
   const wires: Array<Pick<ProviderChatRequest, 'messages'>> = [];
+  let modelReply = '[mood:happy] 加油，等你的好消息。';
   const loopback = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -210,7 +211,7 @@ it('captures real loopback model wires for cross-channel context, consent, state
       const wire = JSON.parse(Buffer.concat(chunks).toString()) as typeof wires[number];
       wires.push(wire);
       const system = wire.messages[0]?.content ?? '';
-      let content = '[mood:happy] 加油，等你的好消息。';
+      let content = modelReply;
       if (system.startsWith('Summarize the owner')) content = '{"summary":"主人明天要考试"}';
       if (system.startsWith('You keep the long-term profile')) content = '{"memories":[{"text":"用户喜欢无糖茉莉花茶","evidence":[1]}]}';
       response.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -296,6 +297,13 @@ it('captures real loopback model wires for cross-channel context, consent, state
   if (process.env.DESKPET_WECHAT_WIRE_EVIDENCE) await writeFile(process.env.DESKPET_WECHAT_WIRE_EVIDENCE,
     JSON.stringify({ desktop: wires[0], summary: wires[1], privateWire, groupWire, friendWire, restrictedWire,
       autoMemory: wires.at(-1), sharedMood: character.state().mood?.name }, null, 2), { mode: 0o600 });
+  for (const raw of ['[mood:happy][sticker:none] 加油。', '[sticker:none] [mood:happy]\n加油。',
+    '[sticker:with-text:场景] 加油。', '加[mood:happy]油[sticker:none]。']) {
+    modelReply = raw;
+    expect(await send(f.socket, ownerPacket)).toMatchObject({ reply: '加油。', sticker: false });
+  }
+  modelReply = '[mood:happy] [sticker:none]';
+  expect(await send(f.socket, ownerPacket)).toEqual({ error: 'reply.invalid' });
 });
 
 it('keeps owner forwarding cloud consent independent, disabled by default, and bound to the owner', async () => {

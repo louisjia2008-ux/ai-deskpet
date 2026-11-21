@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { JSX, ReactNode } from 'react';
 import type { AttentionAPI, HealthFeature, HealthItem, HealthSnapshot, HealthState } from '../../shared/attention';
 import { describeWeChatSendDiagnostics } from '../../shared/wechat-send-diagnostics';
+import { WECHAT_MOMENT_STAGE_LABELS } from '../../shared/wechat-moment-stages';
 import './attention-center.css';
 import { ModelBindingIssues } from './ModelBindingIssues';
 
@@ -72,7 +73,8 @@ const copy = {
       'wechat.momentFailed': 'The Moments request failed.',
       'wechat.momentWindowBusy': 'Another operation held the WeChat window, so the Moments operation could not finish.',
       'wechat.momentListenerPaused': 'The WeChat listener was paused, so the Moments operation could not finish.',
-      'wechat.momentWindowError': 'The Moments operation failed while opening the WeChat window.',
+      'wechat.momentWindowError': 'A Moments publishing step failed.',
+      'wechat.momentRestricted': 'WeChat reported a restriction on posting Moments. The draft was kept.',
       'wechat.momentUncertain': 'The Moment may already be published. Check on your phone; do not publish it again.',
       'wechat.momentPreviewFallback': 'The model preview failed; a local fallback was used.', 'wechat.momentRewriteFailed': 'The rewrite failed; the old draft was kept and not published.',
       'wechat.momentPublishUnconfirmed': 'Publishing could not be confirmed. Check on your phone; do not publish it again.',
@@ -175,7 +177,8 @@ const copy = {
       'wechat.cronDeliveryFailed': '定时回复投递失败。', 'wechat.cronDeliveryUncertain': '定时回复可能已发送，请在微信确认后再考虑重试。',
       'wechat.momentWindowBusy': '微信窗口被其他操作占用，朋友圈操作未完成。',
       'wechat.momentListenerPaused': '微信监听已暂停，朋友圈操作未完成。',
-      'wechat.momentWindowError': '打开微信窗口时出错，朋友圈操作未完成。',
+      'wechat.momentWindowError': '朋友圈发布流程中的一个步骤未完成。',
+      'wechat.momentRestricted': '微信提示账号有风险，暂时不能发朋友圈。草稿已保留。',
       'wechat.momentFailed': '朋友圈请求失败。', 'wechat.momentUncertain': '朋友圈可能已经发了，请在手机核对，不要重复发。',
       'wechat.momentPreviewFallback': '模型预览失败，已使用本地备用句。', 'wechat.momentRewriteFailed': '改写失败，保留旧草稿，没有发布。',
       'wechat.momentPublishUnconfirmed': '无法确认是否发布，请在手机核对，不要重复发。',
@@ -229,6 +232,7 @@ const fixes: Record<Locale, { code: Record<string, string>; feature: Partial<Rec
       'wechat.uncertain': checkWeChat.en, 'wechat.friend_send_uncertain': checkWeChat.en, 'wechat.digest_delivery_uncertain': checkWeChat.en,
       'wechat.cronDeliveryUncertain': checkWeChat.en, 'proactive.deliveryUncertain': checkWeChat.en,
       'wechat.momentUncertain': 'Check Moments on your phone. Do not post it again if it is already there. Then press “Got it”.',
+      'wechat.momentRestricted': 'Handle the notice in WeChat on your phone, then say 「再发一次」 in the owner chat.',
       'wechat.momentPublishUnconfirmed': 'Check Moments on your phone. Do not post it again if it is already there. Then press “Got it”.',
       'wechat.momentPreviewFallback': 'Nothing to fix; a built-in sentence was used instead.',
       'wechat.stopped': 'Press “Open settings”. If replies are paused, press “Resume automatic replies”. If it still does not run, restart DeskPet.',
@@ -259,6 +263,7 @@ const fixes: Record<Locale, { code: Record<string, string>; feature: Partial<Rec
       'wechat.uncertain': checkWeChat['zh-CN'], 'wechat.friend_send_uncertain': checkWeChat['zh-CN'], 'wechat.digest_delivery_uncertain': checkWeChat['zh-CN'],
       'wechat.cronDeliveryUncertain': checkWeChat['zh-CN'], 'proactive.deliveryUncertain': checkWeChat['zh-CN'],
       'wechat.momentUncertain': '去手机上看一下朋友圈，已经发了就不要再发。看完点「知道了」。',
+      'wechat.momentRestricted': '在手机微信里处理提示，然后在主人私聊回复「再发一次」。',
       'wechat.momentPublishUnconfirmed': '去手机上看一下朋友圈，已经发了就不要再发。看完点「知道了」。',
       'wechat.momentPreviewFallback': '不用处理，已经用备用句代替了。',
       'wechat.stopped': '点「去设置」。如果是暂停了，点「恢复自动回复」；还是不运行就重启桌宠。',
@@ -361,6 +366,8 @@ export const HealthPanel = ({ api, locale, onOpen, onIssues, children }: {
           : `${item.retainedInvalidDiaries} invalidated diary copies were kept because you edited them.`}
     </p>}
     {item.state === 'failing' && item.errorCode && <p role="status"><strong>{text.reason}</strong>{text.code[item.errorCode] ?? (item.feature === 'knowledge' ? '' : item.errorCode)} <code>{item.errorCode}</code></p>}
+    {item.state === 'failing' && item.momentStage && <p className="attention-note">
+      {lang === 'zh-CN' ? `失败步骤：${WECHAT_MOMENT_STAGE_LABELS[item.momentStage]} ` : 'Failed step: '}<code>{item.momentStage}</code></p>}
     {item.state === 'failing' && item.failures > 0 && <p>{text.failures(item.feature, item.failures, item.errorCode)}</p>}
     {item.deliveryProgress && <p>{lang === 'zh-CN'
       ? `已发 ${item.deliveryProgress.sent}/${item.deliveryProgress.total} 条`

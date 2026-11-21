@@ -27,7 +27,7 @@ test('a natural reply approves only the current Moments preview, never a questio
     draw: async () => ({ assetId: 'a'.repeat(64) }),
     image: async () => ({ full: Buffer.from('synthetic image'), preview: Buffer.from('synthetic image') }),
     preview: async value => { previews.push(value.text); return 'sent'; },
-    post: async value => { posted.push(value); return 'posted'; },
+    post: async value => { posted.push(value); return { status: 'posted' }; },
     notify: async value => { notices.push(value); }, record: async () => undefined, wait: async () => undefined,
   };
   try {

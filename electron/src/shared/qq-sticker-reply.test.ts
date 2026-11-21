@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QqStickerReplyFilter } from './qq-sticker-reply';
+import { cleanReplyText, QqStickerReplyFilter } from './qq-sticker-reply';
 import type { QqStickerDecision, QqStickerScene } from './qq-sticker-reply';
 
 function filterReply(chunks: string[]): { text: string; decision: QqStickerDecision | null } {
@@ -36,16 +36,16 @@ describe('QQ private reply sticker hint', () => {
     expect(filter.push('[sti')).toBe('');
     expect(filter.push('ckers] 正文')).toBe('[stickers] 正文');
     expect(filter.decision).toEqual({ mode: 'text' });
-    expect(filter.push('\n后续 [sticker:only:noon] 原样保留')).toBe('\n后续 [sticker:only:noon] 原样保留');
+    expect(filter.push('\n后续[sticker:only:noon]原样保留')).toBe('\n后续原样保留');
     expect(filter.flush()).toBe('');
   });
 
-  it.each([' 正文', '\n[sticker:only:noon]\n逐字引用', '把 [sticker:none] 当作普通正文。', '[sticker', '[其他标记]'])('preserves ordinary output %j verbatim', text => {
+  it.each([' 正文', '把 [文字] 当作普通正文。', '[sticker', '[其他标记]'])('preserves ordinary output %j verbatim', text => {
     expect(filterReply(text.split(''))).toEqual({ text, decision: { mode: 'text' } });
   });
 
-  it('removes only the first recognized hint and its optional single line separator', () => {
-    expect(filterReply(['[sticker:none]', '\n', '\n  [sticker:only:noon]'])).toEqual({ text: '\n  [sticker:only:noon]', decision: { mode: 'text' } });
+  it('uses the first sticker decision and consumes consecutive leading hints and separators', () => {
+    expect(filterReply(['[sticker:none]', '\n', '\n  [sticker:only:noon]'])).toEqual({ text: '', decision: { mode: 'text' } });
     expect(filterReply(['[sticker:with-text:thanks]谢谢'])).toEqual({ text: '谢谢', decision: { mode: 'with-text', scene: 'thanks' } });
   });
 
@@ -81,5 +81,28 @@ describe('QQ private reply sticker hint', () => {
     expect(filter.push('[sticker:only:greeting]')).toBe('');
     expect(filter.decision).toEqual({ mode: 'sticker-only', scene: 'greeting' });
     expect(filter.flush()).toBe('');
+  });
+});
+
+describe('combined reply controls', () => {
+  it.each([
+    ['[mood:happy][sticker:none] 文本', '文本', 'happy', { mode: 'text' }],
+    ['[sticker:none] [mood:happy]\n文本', '文本', 'happy', { mode: 'text' }],
+    ['[sticker:with-text:场景] 文本', '文本', null, { mode: 'text' }],
+    ['[mood:happy] [sticker:with-text:thanks] 文本', '文本', 'happy', { mode: 'with-text', scene: 'thanks' }],
+    ['早[mood:happy]安[sticker:only:noon]。', '早安。', null, { mode: 'text' }],
+    ['[sticker:none] \n[mood:happy]    ', '', 'happy', { mode: 'text' }],
+  ])('cleans %s at every stream split', (raw, text, mood, decision) => {
+    for (let split = 0; split <= raw.length; split++) {
+      const filter = new QqStickerReplyFilter();
+      const reply = filter.push(raw.slice(0, split)) + filter.push(raw.slice(split)) + filter.flush();
+      expect({ reply, mood: filter.mood, decision: filter.decision }).toEqual({ reply: text, mood, decision });
+    }
+    expect(cleanReplyText(raw)).toBe(text);
+  });
+
+  it('preserves ordinary text and legacy bare labels at a final outbound boundary', () => {
+    expect(cleanReplyText('  [happy] 合成正文。\n')).toBe('  [happy] 合成正文。\n');
+    expect(cleanReplyText('正文[MOOD:future][Sticker:with-text:场景]')).toBe('正文');
   });
 });

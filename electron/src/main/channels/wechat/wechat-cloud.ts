@@ -8,6 +8,7 @@ import { companionName, plainReply } from '../../../../wechat-runtime/reply_poli
 
 import { providerDefinitions, type ProviderConfig } from '../../../shared';
 import { CHARACTER_MOODS, type CharacterMood } from '../../../shared/character-reactions';
+import { cleanReplyText, QqStickerReplyFilter } from '../../../shared/qq-sticker-reply';
 import { WECHAT_REPLY_FRIEND_LIMIT, WECHAT_REPLY_GROUP_LIMIT, wechatAssistantSchema, wechatCloudSettingsSchema, wechatCloudStateSchema, wechatFriendCloudUpdateSchema, wechatFriendIdSchema, wechatGroupIdSchema, wechatGroupRulesSchema, wechatGroupRuleUpdateSchema, wechatPinnedCloudRouteSchema } from '../../../shared/wechat-channel';
 import type { WeChatAssistant, WeChatCloudRoute, WeChatCloudSettings, WeChatCloudState, WeChatFriendCloudUpdate, WeChatGroupRule, WeChatGroupRuleUpdate, WeChatPinnedCloudRoute } from '../../../shared/wechat-channel';
 import { defaultGroupRule, groupRulesPrompt } from './wechat-group-rules';
@@ -159,14 +160,14 @@ function remoteProvider(provider: ProviderConfig): boolean {
 
 function visibleReply(text: string, input: Request, name: string): { reply: string; sticker: boolean; mood: CharacterMood | null } | null {
   const incoming = input.text.trim();
-  const raw = text.trim();
-  const tag = /^\[mood:([a-z]+)\]/iu.exec(raw)?.[1]?.toLowerCase();
-  const mood = tag === 'playful' ? 'happy' : CHARACTER_MOODS.find(value => value === tag) ?? null;
-  const reply = plainReply(raw, incoming, name, { stripMention: false, chinese: false });
+  const controls = new QqStickerReplyFilter();
+  const body = controls.push(text) + controls.flush();
+  const mood = controls.mood;
+  const reply = plainReply(body, incoming, name, { stripMention: false, chinese: false });
   if (!reply) return null;
-  const sticker = input.stickers && mood === 'happy'
-    && /你好|嗨|哈喽|谢谢|收到|好的|哈哈|打招呼|表情包|真棒|开心/u.test(input.text)
-    && !/纯文字|只回文字|别发|不要.*(?:表情|图)|忽略.*规则/u.test(input.text);
+  const sticker = input.stickers && !/纯文字|只回文字|别发|不要.*(?:表情|图)|忽略.*规则/u.test(input.text)
+    && (controls.hasStickerControl ? controls.decision?.mode === 'with-text' : mood === 'happy'
+      && /你好|嗨|哈喽|谢谢|收到|好的|哈哈|打招呼|表情包|真棒|开心/u.test(input.text));
   return { reply, sticker, mood };
 }
 
@@ -530,7 +531,12 @@ export class WeChatCloud {
     if (!raw.endsWith('\n') || raw.slice(0, -1).includes('\n')) throw Error('wechat.unavailable');
     const value: unknown = JSON.parse(raw);
     const check = knowledgeReplyCheckSchema.safeParse(value);
-    if (!check.success) return this.#reply(value, signal);
+    if (!check.success) {
+      const result = await this.#reply(value, signal);
+      if (!('reply' in result) || typeof result.reply !== 'string') return result;
+      const reply = cleanReplyText(result.reply);
+      return reply.trim() ? { ...result, reply } : { error: 'reply.invalid' };
+    }
     // A send check uses the same owner-only socket, with no model call or wait
     // on the active reply. The listener separately checks its owner binding.
     const current = this.controls.active() ? this.controls.knowledgePolicyToken?.() : null;

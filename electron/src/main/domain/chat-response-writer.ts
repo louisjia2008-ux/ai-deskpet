@@ -1,3 +1,4 @@
+import { cleanReplyText } from '../../shared/qq-sticker-reply';
 import type { ChatMessage } from '../../shared';
 import type { ChatService } from './chat-service';
 
@@ -36,6 +37,9 @@ export class ChatResponseWriter {
   async finish(status: ChatMessage['status'], errorCode: string | null = null): Promise<ChatMessage> {
     this.stop();
     await this.#pending;
-    return this.chat.updateMessage(this.id, { content: this.#text, status: this.#failed ? 'failed' : status, errorCode: this.#failed ? 'chat.persistenceFailed' : errorCode });
+    const content = cleanReplyText(this.#text);
+    const emptyReply = status === 'complete' && !content.trim() && content !== this.#text;
+    return this.chat.updateMessage(this.id, { content, status: this.#failed || emptyReply ? 'failed' : status,
+      errorCode: this.#failed ? 'chat.persistenceFailed' : emptyReply ? 'chat.runFailed' : errorCode });
   }
 }

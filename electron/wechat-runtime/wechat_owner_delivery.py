@@ -14,6 +14,7 @@ import time
 
 import vm_console as ui
 from wechat_db_intake import DbIntake
+from wechat_replies import clean_reply_text
 from wechat_service import is_paused
 from wechat_state import DIGEST_KINDS, WeChatState
 
@@ -37,11 +38,11 @@ def parse_delivery(raw):
             raise ValueError("Invalid owner delivery identifier.")
     if "stickerAsset" in value and (not isinstance(value["stickerAsset"], str) or not DELIVERY_ID.fullmatch(value["stickerAsset"])):
         raise ValueError("Invalid owner sticker identifier.")
-    text = value["text"]
+    text = clean_reply_text(value["text"])
     if (not isinstance(text, str) or not 1 <= len(text) <= MAX_TEXT_LENGTH or not text.strip()
             or not text.isprintable()):
         raise ValueError("Invalid owner delivery text.")
-    return value
+    return {**value, "text": text}
 
 
 class OwnerDeliveryLedger:

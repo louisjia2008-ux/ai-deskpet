@@ -2,6 +2,7 @@
 
 import argparse
 from contextlib import contextmanager
+from dataclasses import replace
 import fcntl
 import hashlib
 import json
@@ -31,6 +32,7 @@ CLOUD_RESPONSE_LIMIT = 4_096
 LOCAL_CONTEXT_RESPONSE_LIMIT = 131_072
 IDENTITY_FRAME_LENGTH = 12_000
 CLOUD_SOCKET = "cloud.sock"
+REPLY_CONTROL = re.compile(r"\[(?:sticker|mood):[^\]\r\n]*\]?", re.IGNORECASE)
 CHARACTER_MOODS = frozenset(("happy", "affection", "shy", "sad", "curious", "surprised", "pout", "angry", "tired"))
 # DeskPet allows the assistant 300 s, then answers within its 30 s socket margin.
 PRIVATE_REPLY_TIMEOUT = 335
@@ -50,6 +52,26 @@ INBOX_ARGUMENT_COMMAND = re.compile(r"(?:收件箱[^\S\r\n]+[0-9]{1,4}|找[^\S\r
 
 def log(event, **details):
     print(json.dumps({"event": event, **details}, ensure_ascii=False), flush=True)
+
+
+def clean_reply_text(text):
+    if not isinstance(text, str):
+        return text
+    result, removed = REPLY_CONTROL.subn("", text)
+    return result.strip() if removed else text
+
+
+def clean_prepared_reply(state, event, empty_notice):
+    """Migrate a saved, unattempted reply before the receipt binds its text."""
+    if event.status != "prepared":
+        return event
+    text = clean_reply_text(event.reply)
+    if text == event.reply:
+        return event
+    text = text or empty_notice
+    if not state.set_prepared_reply(event.id, text):
+        return None
+    return replace(event, reply=text)
 
 
 def thread_snapshot(settings, path, target):
@@ -303,7 +325,7 @@ def owner_command_plan(runtime, request):
         return None
     if not isinstance(value, dict) or set(value) != {"reply"} or not isinstance(value["reply"], str):
         raise ValueError("Owner command service unavailable.")
-    reply = "".join(c if c.isprintable() else " " for c in value["reply"]).strip()
+    reply = clean_reply_text("".join(c if c.isprintable() else " " for c in value["reply"]).strip())
     if not 0 < len(reply) <= 500:
         raise ValueError("Owner command reply is empty or too long.")
     return {"reply": reply, "sticker": False}
@@ -318,7 +340,7 @@ def read_tool_plan(runtime, request):
     value = _host_reply(runtime, {**request, "history": [], "readTool": True}, timeout=35, response_limit=4096)
     if (not isinstance(value, dict) or set(value) != {"reply"} or not isinstance(value["reply"], str)):
         raise ValueError("WeChat read-only tools unavailable.")
-    reply = "".join(character if character.isprintable() else " " for character in value["reply"]).strip()
+    reply = clean_reply_text("".join(character if character.isprintable() else " " for character in value["reply"]).strip())
     if not 0 < len(reply) <= 500:
         raise ValueError("WeChat tool result is empty or too long.")
     return {"reply": reply, "sticker": False}
@@ -326,6 +348,8 @@ def read_tool_plan(runtime, request):
 
 def article_reply_plan(runtime, request):
     value = _host_reply(runtime, request, timeout=PRIVATE_REPLY_TIMEOUT, response_limit=CLOUD_RESPONSE_LIMIT)
+    if isinstance(value, dict) and "reply" in value:
+        value["reply"] = clean_reply_text(value["reply"])
     if not isinstance(value, dict) or set(value) != {"reply"} or not valid_assistant_reply(value["reply"]):
         raise ValueError("WeChat article service returned an unavailable or invalid result.")
     return {"reply": value["reply"], "sticker": False}
@@ -333,6 +357,8 @@ def article_reply_plan(runtime, request):
 
 def rich_reply_plan(runtime, request):
     value = _host_reply(runtime, request, timeout=GROUP_REPLY_TIMEOUT, response_limit=CLOUD_RESPONSE_LIMIT)
+    if isinstance(value, dict) and "reply" in value:
+        value["reply"] = clean_reply_text(value["reply"])
     if not isinstance(value, dict) or set(value) != {"reply"} or not valid_assistant_reply(value["reply"]):
         raise ValueError("WeChat rich message service returned an invalid result.")
     return value["reply"]
@@ -349,6 +375,11 @@ def cloud_reply_plan(runtime, request, fingerprint, *, wait_hook=None):
     assistant = isinstance(value, dict) and value.get("format") == "assistant"
     if assistant:
         value = {name: item for name, item in value.items() if name != "format"}
+    if isinstance(value, dict) and "reply" in value:
+        original = value["reply"]
+        value["reply"] = clean_reply_text(original)
+        if original != value["reply"] and not value["reply"]:
+            raise ReplyRejected("DeskPet 没有生成可发送的回复。")
     if (not isinstance(value, dict) or not required <= set(value) <= required | {"stickerAsset", "knowledgeReplyToken", "privateContext"}
             or value["routeFingerprint"] != fingerprint or (request['target'] == 'friend' and assistant)
             or not (valid_assistant_reply(value["reply"]) if assistant else valid_reply(value["reply"]))
@@ -414,7 +445,10 @@ class DeskPet:
             "reply.invalid", "request.invalid", "request.empty",
         }:
             raise ReplyRejected("DeskPet 没有生成可发送的回复。")
-        reply = response.get("reply")
+        original = response.get("reply")
+        reply = clean_reply_text(original)
+        if response.get("id") == event_id and original != reply and not reply:
+            raise ReplyRejected("DeskPet 没有生成可发送的回复。")
         if response.get("id") != event_id or response.get("ok") is not True or not valid_reply(reply):
             raise ui.TestError("DeskPet 未生成可发送的单行回复。")
         mood = response.get("mood")
@@ -481,7 +515,7 @@ def reply_to(model, db, settings, path, target, selected, reply_text=None, *, qu
         log("duplicate_ignored", target=target)
         return False
     log("incoming_verified", target=target, sender=selected.sender, mention=selected.mentions_account)
-    reply = reply_text if reply_text is not None else model.reply(event_id, target, selected.text)
+    reply = clean_reply_text(reply_text if reply_text is not None else model.reply(event_id, target, selected.text))
     if not valid_reply(reply):
         raise ui.TestError("请输入不超过 80 字的单行回复。")
     current = thread_snapshot(settings, path, target)

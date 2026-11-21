@@ -12,7 +12,7 @@ import vm_console as ui
 from wechat_db_channel import DatabaseUnavailable
 from wechat_db_intake import DbIntake, DbScope
 from wechat_friends import enrolled_friends, friend_binding_key, settings_for_friend, verify_friend
-from wechat_replies import DeskPet, ReplyRejected, ReplyYielded, cloud_reply_plan, local_reply_context, log, owner_command_candidate, report_local_reply
+from wechat_replies import DeskPet, ReplyRejected, ReplyYielded, clean_prepared_reply, cloud_reply_plan, local_reply_context, log, owner_command_candidate, report_local_reply
 from wechat_reply_settings import read_cloud_route, read_reply_settings
 from wechat_rich_message import chat_quote_excerpt
 from wechat_service import is_paused
@@ -335,6 +335,9 @@ class FriendReplyLane:
                         if not state.prepare(event.id, reply, presentation=presentation):
                             continue
                         event = state.pending(binding)[0]
+                    event = clean_prepared_reply(state, event, '这次没生成可发送的回复。')
+                    if event is None:
+                        continue
                     self._status[key] = deliver_friend(state, settings, path, runtime, friend, binding, event, priority)
                     self._next[key] = time.monotonic() + (0 if self._status[key] in ('ready', 'checking', 'friend_rate_limited') else 10)
                 except ReplyYielded:

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { expressionForMood, MoodTagFilter, reactionForReply } from './character-reactions';
+import { expressionForMood, reactionForReply } from './character-reactions';
+import { QqStickerReplyFilter } from './qq-sticker-reply';
 
 describe('companion facial reactions', () => {
   it('uses local reply hints with a neutral, provider-independent fallback', () => {
@@ -21,7 +22,7 @@ describe('companion facial reactions', () => {
 });
 
 describe('mood tag in streamed replies', () => {
-  const run = (...chunks: string[]) => { const filter = new MoodTagFilter(); const shown = chunks.map((chunk) => filter.push(chunk)).join('') + filter.flush(); return { shown, mood: filter.mood }; };
+  const run = (...chunks: string[]) => { const filter = new QqStickerReplyFilter(); const shown = chunks.map((chunk) => filter.push(chunk)).join('') + filter.flush(); return { shown, mood: filter.mood }; };
 
   it('removes a leading tag and reports the mood, however the stream is split', () => {
     expect(run('[mood:shy] 才不是呢')).toEqual({ shown: '才不是呢', mood: 'shy' });
@@ -30,17 +31,18 @@ describe('mood tag in streamed replies', () => {
     expect(run('[af', 'fection]', '\n\n', '哼')).toEqual({ shown: '哼', mood: 'affection' });
   });
 
-  it('passes through a reply without a tag, unknown moods and later tags', () => {
+  it('preserves ordinary bracketed text and removes unknown or embedded reserved tags', () => {
     expect(run('你好')).toEqual({ shown: '你好', mood: null });
     expect(run('[', '1] 第一项')).toEqual({ shown: '[1] 第一项', mood: null });
     expect(run('[note] 这是备注')).toEqual({ shown: '[note] 这是备注', mood: null });
     expect(run('[链接](https://example.org)')).toEqual({ shown: '[链接](https://example.org)', mood: null });
-    expect(run('[mood:plotting] 嘿')).toEqual({ shown: '[mood:plotting] 嘿', mood: null });
-    expect(run('你好 [mood:happy]')).toEqual({ shown: '你好 [mood:happy]', mood: null });
+    expect(run('[mood:plotting] 嘿')).toEqual({ shown: '嘿', mood: null });
+    expect(run('你好 [mood:happy]')).toEqual({ shown: '你好 ', mood: null });
   });
 
-  it('does not lose text when a stream ends inside something that looked like a tag', () => {
-    expect(run('[mood:ha')).toEqual({ shown: '[mood:ha', mood: null });
+  it('discards unfinished reserved syntax and preserves ordinary brackets', () => {
+    expect(run('[mood:ha')).toEqual({ shown: '', mood: null });
+    expect(run('[moo')).toEqual({ shown: '[moo', mood: null });
     expect(run('[mood:happy]')).toEqual({ shown: '', mood: 'happy' });
   });
 
