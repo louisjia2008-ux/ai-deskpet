@@ -383,6 +383,11 @@ const minecraftProxyDownloadRuntime = {
   mainSHA256: 'bb0602405e9b10448d6260b9df407119d90640792a2bfaebd36e1a3e1b2bfa26',
   asarSHA256: '2962c2e1cd39739828413b7d7bfff114cbf28fa5e9010645575dc4db75456743',
 };
+const sameSelfDoctorV3Runtime = {
+  sourceSHA256: '5f92f348e3ec9573cc606c01c727f502a705a493a6e7e820d17a440cc960034b',
+  mainSHA256: 'a27031d9231af0d1cc62e848b24a5c06fcde91e439a093952c83d29f6366d5f0',
+  asarSHA256: '5a5608877086fad515877421f04c6d037f0c50e97422e362fb020f8331ee69eb',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -494,6 +499,8 @@ const reviewedRuntimeManifest = [
   { runtime: minecraftDedicatedRuntime, previous: digestHeartbeatBirthdayRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   // Local Minecraft runtime downloads through the system proxy, over the installed managed-world build, diary still on (2026-11-20).
   { runtime: minecraftProxyDownloadRuntime, previous: minecraftDedicatedRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Shared owner identity, recent context and mood, doctor v3 auto-repair and the legacy Minecraft engine retired, over the proxy-download build, diary still on (2026-11-21).
+  { runtime: sameSelfDoctorV3Runtime, previous: minecraftProxyDownloadRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
