@@ -1391,3 +1391,28 @@ describe('live private QQ web-budget decisions', () => {
     expect(f.adapter.sends.at(-1)!.content).toContain('当前没有等待确认');
   });
 });
+
+it('reconnects an offline adapter without revoking authority or resending an uncertain reply', async () => {
+  const { service, adapter, pair, store } = await fixture();
+  try {
+    await pair();
+    adapter.nextResult = { ok: false, unknown: true };
+    await service.handleInbound(message('repair-test-message', 'owner-1', 'Hello fixture'));
+    expect(service.status().uncertainOutbox).toBe(1);
+    const sends = adapter.sends.length;
+    const starts = adapter.starts;
+    const authority = service.authority();
+    const outbox = store.snapshot().outbox;
+    adapter.lastError = 'qq.gatewayClosed';
+    adapter.events!.onConnectionChange('offline');
+    expect(service.canReconnect()).toBe(true);
+    expect(await service.reconnect(() => true)).toBe(true);
+    expect(service.status().connection).toBe('online');
+    expect(adapter.starts).toBe(starts + 1);
+    expect(service.authority()).toEqual(authority);
+    expect(adapter.sends).toHaveLength(sends);
+    expect(store.snapshot().outbox).toEqual(outbox);
+    await service.emergencyStop();
+    expect(await service.reconnect(() => true)).toBe(false);
+  } finally { service.dispose(); }
+});

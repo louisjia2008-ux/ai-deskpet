@@ -31,6 +31,7 @@ export interface HealthItem {
   failures: number;
   /** Confirmed parts and total parts of a failed multipart delivery, with no content. */
   deliveryProgress?: { sent: number; total: number };
+  connectionOffline?: true;
   /** True when the times only cover the time since the app last started. */
   sinceLaunch: boolean;
   remainingToday?: number;
@@ -53,6 +54,7 @@ export interface AttentionAPI {
   /** The doctor: a second agent that watches the background features and reports problems. */
   doctor?(): Promise<DoctorStatus>;
   setDoctor?(enabled: boolean): Promise<DoctorStatus>;
+  setDoctorAutoRepair?(enabled: boolean): Promise<DoctorStatus>;
   checkDoctor?(): Promise<DoctorStatus>;
   testDoctorWeChat?(): Promise<DoctorStatus>;
   acknowledge(input: AttentionAcknowledge): Promise<void>;

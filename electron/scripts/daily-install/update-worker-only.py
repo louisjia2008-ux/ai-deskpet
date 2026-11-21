@@ -443,7 +443,8 @@ def apply_update(listener, plan, contents, approved):
     for path in (listener.root, listener.runtime, listener.worker, listener.backups):
         directory(path)
     installed = Path(listener.config['installedApp']) / 'Contents/Resources/app.asar'
-    with lock(listener.backups / '.worker-only.lock', create=True):
+    with lock(listener.backups / '.worker-only.lock', create=True), \
+            lock(listener.runtime / 'doctor-install.lock', create=True, timeout=25):
         agent_digest = listener.inspect_agent()
         was_paused = listener.paused()
         initial = listener.heartbeat(paused=was_paused, after=time.time() - 25)

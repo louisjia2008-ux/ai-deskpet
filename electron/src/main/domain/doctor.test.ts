@@ -207,3 +207,107 @@ describe('doctor service', () => {
     expect(sent).toEqual([]);
   });
 });
+
+describe('doctor automatic repairs', () => {
+  let root: string;
+  afterEach(async () => { if (root) await rm(root, { recursive: true, force: true }); });
+  const prepare = async (initialTime: Date, inputs: () => HealthSnapshot, repairs: DoctorServiceDeps['repairs']) => {
+    root = await mkdtemp(join(tmpdir(), 'deskpet-doctor-repairs-'));
+    let now = initialTime;
+    const sent: string[] = [];
+    const path = join(root, 'doctor.json');
+    const deps: DoctorServiceDeps = { path, timeZone: TZ, now: () => now, available: () => true, changed: () => undefined,
+      inputs: async () => ({ health: inputs(), wechat: null }), diskFree: async () => 100 * 1024 ** 3,
+      sendQq: async text => { sent.push(text); return true; }, notifyDesktop: () => false, ...(repairs ? { repairs } : {}) };
+    const doctor = new DoctorService(deps);
+    await doctor.initialize();
+    return { doctor, sent, deps, jump: (ms: number) => { now = new Date(now.getTime() + ms); } };
+  };
+
+  it.each(['wechat.stopped', 'wechat.stale', 'wechat.degraded'])('verifies one restarted listener and sends one report for %s', async code => {
+    let state = health(item('wechat', 'failing', code));
+    const run = vi.fn(async () => { state = health(item('wechat', 'ok')); return 'recovered' as const; });
+    const { doctor, sent } = await prepare(at('12:00'), () => state, { wechat: { eligible: () => true, run } });
+    expect(doctor.status().autoRepair).toBe(true);
+    await Promise.all([doctor.check(), doctor.check()]);
+    await doctor.check();
+    expect(run).toHaveBeenCalledOnce();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('重启微信监听，已恢复');
+    expect(doctor.status().repairs).toMatchObject([{ id: 'wechat', result: 'recovered', reportedAt: expect.any(String) }]);
+  });
+
+  it('shares a rate limit and circuit across listener issue codes, including across an app restart', async () => {
+    const hour = 60 * 60_000;
+    let code = 'wechat.stopped';
+    const run = vi.fn(async () => 'failed' as const);
+    const { doctor, sent, deps, jump } = await prepare(at('12:00'), () => health(item('wechat', 'failing', code)),
+      { wechat: { eligible: () => true, run } });
+    await doctor.check();
+    code = 'wechat.stale';
+    jump(hour - 1);
+    await doctor.check();
+    expect(run).toHaveBeenCalledTimes(1);
+    jump(1);
+    await doctor.check();
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(sent.at(-1)).toContain('修不好，需要你看看');
+    expect(doctor.status().repairs[0]?.circuitUntil).toBe(new Date(at('13:00').getTime() + 24 * hour).toISOString());
+    await doctor.shutdown();
+    const resumed = new DoctorService(deps);
+    await resumed.initialize();
+    jump(23 * hour);
+    await resumed.check();
+    expect(run).toHaveBeenCalledTimes(2);
+    jump(hour);
+    await resumed.check();
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(resumed.status().repairs[0]?.circuitUntil).toBeNull();
+  });
+
+  it('automatically repairs and records at night, then reports once in the morning', async () => {
+    let state = health(item('asr', 'failing', 'asr.worker'));
+    const run = vi.fn(async () => { state = health(item('asr', 'ok')); return 'recovered' as const; });
+    const { doctor, sent, jump } = await prepare(at('03:00'), () => state, { asr: { eligible: () => true, run } });
+    await doctor.check();
+    expect(run).toHaveBeenCalledOnce();
+    expect(sent).toEqual([]);
+    expect(doctor.status().repairs[0]).toMatchObject({ heldForMorning: true, reportedAt: null });
+    jump(6 * 60 * 60_000);
+    await doctor.check();
+    await doctor.check();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('夜间自动修复记录');
+  });
+
+  it('keeps the doctor reporting when repairs are off and never acts on uncertain delivery by itself', async () => {
+    let state = health(item('wechat', 'failing', 'wechat.stale'));
+    const run = vi.fn(async () => 'failed' as const);
+    const { doctor, sent } = await prepare(at('12:00'), () => state, { wechat: { eligible: () => true, run }, qq: { eligible: () => true, run } });
+    await doctor.setAutoRepair(false);
+    await doctor.check();
+    await doctor.check();
+    expect(run).not.toHaveBeenCalled();
+    expect(sent[0]).toMatch(/心跳/);
+    await doctor.setAutoRepair(true);
+    state = health(item('wechat', 'failing', 'wechat.uncertain'), item('wechat', 'failing', 'wechat.send_receipt_unconfirmed'),
+      item('wechat-group-digest', 'failing', 'wechat.digest_delivery_uncertain'), item('qq', 'failing', 'qq.uncertain'));
+    await doctor.check();
+    await doctor.check();
+    expect(run).not.toHaveBeenCalled();
+    expect(doctor.status().repairs).toEqual([]);
+  });
+
+  it('caps attempts to three per rolling day and honors the two-hour Minecraft interval', async () => {
+    const run = vi.fn(async () => 'recovered' as const);
+    const { doctor, jump } = await prepare(at('10:00'), () => health(),
+      { minecraft: { observed: () => true, eligible: () => true, run } });
+    const hour = 60 * 60_000;
+    await doctor.check();
+    jump(hour);
+    await doctor.check();
+    expect(run).toHaveBeenCalledTimes(1);
+    for (const hours of [1, 2, 2]) { jump(hours * hour); await doctor.check(); }
+    expect(run).toHaveBeenCalledTimes(3);
+  });
+});

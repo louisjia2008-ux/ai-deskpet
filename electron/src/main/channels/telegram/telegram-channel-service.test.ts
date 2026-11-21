@@ -269,3 +269,26 @@ it('revoking a private scheduled delivery while offline suppresses the result ap
   expect(f.store.snapshot().outbox.map((o) => o.status)).toEqual(['discarded', 'discarded']);
   expect(f.api.send).not.toHaveBeenCalled();
 });
+
+it('wakes a disconnected poller without changing its token, cursor or binding', async () => {
+  const f = await fixture();
+  await f.store.initialize();
+  await f.store.update(s => Object.assign(s, {
+    ...defaultTelegramState(), profileId, tokenConfigured: true, enabled: true, botId: '42',
+    binding: { ...owner, displayName: 'Owner' }, offset: 12, lastUpdateAt: Date.now(),
+  }));
+  let disconnected = true;
+  f.api.poll.mockImplementation(async () => {
+    if (disconnected) throw new TelegramApiError('telegram.network');
+    return [];
+  });
+  await f.service.initialize();
+  await vi.waitFor(() => expect(f.service.canReconnect()).toBe(true));
+  disconnected = false;
+  expect(f.service.reconnect()).toBe(true);
+  await vi.waitFor(() => expect(f.service.status().connection).toBe('online'));
+  expect(f.getSecret).toHaveBeenCalledOnce();
+  expect(f.service.currentAuthority()).toEqual(owner);
+  expect(f.api.send).not.toHaveBeenCalled();
+  expect(f.store.snapshot().offset).toBe(12);
+});

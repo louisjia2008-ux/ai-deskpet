@@ -39,7 +39,10 @@ function healthFinding(item: HealthItem, wechat: WeChatChannelState | null): Doc
     return code ? { key: `knowledge:${code}`, feature: 'knowledge', code,
       severity: 'warning', event: false, detail: item.failures ? String(item.failures) : null } : null;
   }
-  const feature = safeDoctorFeature(item.feature), code = safeDoctorCode(item.errorCode);
+  const feature = safeDoctorFeature(item.feature);
+  const reconnectable = item.connectionOffline && (feature === 'qq' || feature === 'telegram') &&
+    !/(?:auth|credential|storage|targetBlocked|processing|invalid|rateLimit|quota|http4)/iu.test(item.errorCode);
+  const code = safeDoctorCode(reconnectable ? `${feature}.offline` : item.errorCode);
   const scope = item.ordinal === undefined || !Number.isSafeInteger(item.ordinal) || item.ordinal < 1 ? feature : `${feature}:${item.ordinal}`;
   return { key: `${scope}:${code}`, feature, code, event: false,
     severity: MINOR.has(code) || !SERIOUS.test(code) ? 'warning' : 'error', detail: safeDoctorDetail(item.failures ? String(item.failures) : null) };

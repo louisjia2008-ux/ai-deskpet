@@ -1,16 +1,17 @@
 import { createHash } from 'node:crypto';
 import type { HealthSnapshot } from '../../shared/attention';
-import { doctorStateSchema, doctorSelfTestResultSchema, doctorVmHealthSchema, doctorProviderTestResultSchema, doctorDiagnosisSchema, type DoctorCase, type DoctorProviderTestResult, type DoctorSelfTestResult, type DoctorState, type DoctorStatus, type DoctorVmHealth } from '../../shared/doctor';
+import { DOCTOR_REPAIR_ACTIONS, DOCTOR_REPAIR_LOG_LIMIT, doctorStateSchema, doctorSelfTestResultSchema, doctorVmHealthSchema, doctorProviderTestResultSchema, doctorDiagnosisSchema, type DoctorCase, type DoctorRepair, type DoctorRepairId, type DoctorProviderTestResult, type DoctorSelfTestResult, type DoctorState, type DoctorStatus, type DoctorVmHealth } from '../../shared/doctor';
 import type { WeChatChannelState } from '../../shared/wechat-channel';
 import { AtomicJsonStore } from '../persistence/atomic-json-store';
 import {
-  DOCTOR_DAILY_LIMIT, acknowledgedDoctorKeys, doctorFindings, formatCheckup, formatDoctorReport, isDoctorQuiet, planDoctorReport, reconcileDoctor, sanitizeDoctorCase,
+  DOCTOR_DAILY_LIMIT, type DoctorFinding, acknowledgedDoctorKeys, doctorFindings, formatCheckup, formatDoctorReport, isDoctorQuiet, planDoctorReport, reconcileDoctor, sanitizeDoctorCase,
 } from './doctor';
 import { afterDoctorMorning, applySelfTest, doctorDay, observeSelfTestDay, selfTestDays, selfTestDue, selfTestFindings, selfTestPassRate } from './doctor-self-test';
 import { applyVmHealth, formatVmHealth, vmHealthDue, vmHealthFindings } from './doctor-vm';
 import { doctorDeadline, doctorDiagnosisInput, type DoctorDiagnosisInput } from './doctor-diagnosis';
 import { doctorRunbook } from './doctor-runbook';
 import { providerTestFindings } from './doctor-provider-test';
+import { canAttemptRepair, DOCTOR_REPAIR_RULES, finishRepair, type DoctorRepairActions } from './doctor-repairs';
 
 export interface DoctorServiceDeps {
   path: string;
@@ -28,13 +29,14 @@ export interface DoctorServiceDeps {
   vmHealth?(): Promise<DoctorVmHealth>;
   diagnose?(input: DoctorDiagnosisInput, localOnly: boolean, signal: AbortSignal): Promise<{ text: string; source: 'cloud' | 'local' } | null>;
   providerTest?(signal: AbortSignal): Promise<DoctorProviderTestResult | null>;
+  repairs?: DoctorRepairActions;
 }
 
 const initial = (): DoctorState => doctorStateSchema.parse({ enabled: true, cases: [], alerts: { day: '', count: 0 }, session: null });
 const same = (a: DoctorCase, b: DoctorCase): boolean => a.key === b.key && a.openedAt === b.openedAt;
 
 /** A second agent that watches the first: it reads health and reports problems to the owner,
- * over QQ when it can and a desktop notification when it cannot. It only looks and tells. */
+ * over QQ when it can and a desktop notification when it cannot. */
 export class DoctorService {
   readonly #store: AtomicJsonStore<DoctorState>;
   #state = initial();
@@ -44,6 +46,8 @@ export class DoctorService {
   #timers: NodeJS.Timeout[] = [];
   #ready = false;
   #checking: Promise<void> | null = null;
+  #repairRequested = true;
+  #disposed = false;
 
   constructor(private readonly deps: DoctorServiceDeps) {
     this.#store = new AtomicJsonStore({ path: deps.path, schemaVersion: 1, schema: doctorStateSchema, defaultValue: initial });
@@ -55,6 +59,10 @@ export class DoctorService {
     // An unreadable case log is quarantined by the store; the doctor starts over rather than stopping the app.
     this.#state = await this.#store.load().catch(initial);
     this.#state.cases = this.#state.cases.map(sanitizeDoctorCase);
+    this.#repairRequested = this.#state.autoRepair;
+    const now = this.#now();
+    this.#state.repairs = this.#state.repairs.map(attempt => attempt.result === 'running'
+      ? finishRepair(this.#state.repairs, attempt, 'failed', now, isDoctorQuiet(now, this.deps.timeZone)) : attempt);
     this.#state.selfTestDays = selfTestDays(this.#state.selfTestDays, this.#state.selfTests, this.deps.timeZone);
     const previous = this.#state.session;
     this.#uncleanExitOf = previous && !previous.cleanExit ? previous.startedAt : null;
@@ -76,11 +84,14 @@ export class DoctorService {
     await this.#store.save(this.#state);
   }
 
-  dispose(): void { for (const timer of this.#timers.splice(0)) clearTimeout(timer); }
+  dispose(): void {
+    this.#disposed = true;
+    for (const timer of this.#timers.splice(0)) clearTimeout(timer);
+  }
 
   status(): DoctorStatus {
     const cases = [...this.#state.cases].sort((a, b) => b.openedAt.localeCompare(a.openedAt));
-    return { enabled: this.#state.enabled, lastCheckAt: this.#lastCheckAt, open: cases.filter(entry => entry.resolvedAt === null).length,
+    return { enabled: this.#state.enabled, autoRepair: this.#state.autoRepair, repairs: structuredClone(this.#state.repairs).reverse(), lastCheckAt: this.#lastCheckAt, open: cases.filter(entry => entry.resolvedAt === null).length,
       alertsToday: this.#state.alerts.day === this.#day() ? this.#state.alerts.count : 0, dailyLimit: DOCTOR_DAILY_LIMIT, cases,
       selfTests: structuredClone(this.#state.selfTests), selfTestPassRate: selfTestPassRate(this.#state.selfTests, this.#now(), this.deps.timeZone, this.#state.selfTestDays),
       manualSelfTestsToday: this.#state.selfTestSchedule.manualDay === this.#day() ? this.#state.selfTestSchedule.manualCount : 0,
@@ -92,6 +103,52 @@ export class DoctorService {
     await this.#serial(async () => { this.#state = { ...this.#state, enabled }; await this.#store.save(this.#state); });
     this.deps.changed();
     return this.status();
+  }
+
+  async setAutoRepair(enabled: boolean): Promise<DoctorStatus> {
+    this.#repairRequested = enabled;
+    await this.#serial(async () => {
+      this.#state = { ...this.#state, autoRepair: enabled };
+      await this.#store.save(this.#state);
+    });
+    this.deps.changed();
+    return this.status();
+  }
+
+  #allowRepair = (): boolean => this.#ready && !this.#disposed && this.#repairRequested &&
+    this.#state.enabled && this.#state.autoRepair && this.deps.available();
+
+  async #saveRepairs(repairs: DoctorRepair[]): Promise<void> {
+    this.#state = { ...this.#state, repairs: repairs.slice(-DOCTOR_REPAIR_LOG_LIMIT) };
+    await this.#store.save(this.#state);
+    this.deps.changed();
+  }
+
+  async #attemptRepairs(findings: readonly DoctorFinding[]): Promise<boolean> {
+    let attempted = false;
+    for (const id of Object.keys(DOCTOR_REPAIR_RULES) as DoctorRepairId[]) {
+      if (!this.#allowRepair()) break;
+      const action = this.deps.repairs?.[id];
+      const { codes } = DOCTOR_REPAIR_RULES[id];
+      if (!action || !findings.some(entry => codes.includes(entry.code)) ||
+        !canAttemptRepair(id, this.#state.repairs, this.#now().getTime())) continue;
+      const eligible = await Promise.resolve().then(() => action.eligible()).catch(() => false);
+      if (!eligible || !this.#allowRepair()) continue;
+      const repair: DoctorRepair = { id, at: this.#now().toISOString(), finishedAt: null, circuitUntil: null,
+        heldForMorning: false, reportedAt: null, result: 'running' };
+      // A crash during the action counts as an attempt. Save before crossing the service boundary.
+      await this.#saveRepairs([...this.#state.repairs, repair]);
+      const result = await Promise.resolve().then(() => action.run(this.#allowRepair)).catch(() => 'failed' as const);
+      const prior = this.#state.repairs.filter(entry => entry !== repair);
+      if (result === 'skipped') {
+        await this.#saveRepairs(prior);
+        continue;
+      }
+      const now = this.#now();
+      await this.#saveRepairs([...prior, finishRepair(prior, repair, result, now, isDoctorQuiet(now, this.deps.timeZone))]);
+      attempted = true;
+    }
+    return attempted;
   }
 
   acknowledgeHealth(health: HealthSnapshot, wechat: WeChatChannelState | null): Promise<void> {
@@ -224,13 +281,19 @@ export class DoctorService {
   #day(): string { return doctorDay(this.#now(), this.deps.timeZone); }
 
   #findings(health: HealthSnapshot, wechat: WeChatChannelState | null, disk: number | null) {
-    return [...doctorFindings(health, { diskFreeBytes: disk, uncleanExitOf: this.#uncleanExitOf, wechat }),
+    const minecraft: DoctorFinding[] = this.deps.repairs?.minecraft?.observed?.() ?
+      [{ key: 'minecraft:minecraft.gaveUp', feature: 'minecraft', code: 'minecraft.gaveUp', severity: 'error', event: false, detail: null }] : [];
+    return [...doctorFindings(health, { diskFreeBytes: disk, uncleanExitOf: this.#uncleanExitOf, wechat }), ...minecraft,
       ...selfTestFindings(this.#state.selfTestSchedule, this.#now(), this.deps.timeZone), ...vmHealthFindings(this.#state.vm), ...providerTestFindings(this.#state.providerTests)];
   }
 
   async #check(): Promise<void> {
-    if (!this.#ready || !this.#state.enabled || !this.deps.available()) return;
-    const { health, wechat } = await this.deps.inputs(), disk = await this.deps.diskFree();
+    if (!this.#ready || !this.#state.enabled || !this.deps.available() || this.#disposed) return;
+    let { health, wechat } = await this.deps.inputs();
+    const disk = await this.deps.diskFree();
+    const attempted = await this.#attemptRepairs(this.#findings(health, wechat, disk));
+    if (!this.deps.available()) return;
+    if (attempted) ({ health, wechat } = await this.deps.inputs());
     if (wechat && (wechat.configured || this.#state.vm.attemptedAt)) await this.#sampleVm();
     if (!this.deps.available()) return;
     const paused = wechat?.paused === true || wechat?.state === 'paused';
@@ -248,20 +311,39 @@ export class DoctorService {
     const findings = this.#findings(health, wechat, disk);
     const acknowledged = acknowledgedDoctorKeys(health, wechat);
     let cases = reconcileDoctor(this.#state.cases, findings, now, acknowledged);
-    const reportable = cases.filter(entry => !acknowledged.has(entry.key));
-    const plan = planDoctorReport(reportable, isDoctorQuiet(now, this.deps.timeZone));
+    const quiet = isDoctorQuiet(now, this.deps.timeZone);
+    const unreportedRepairs = this.#state.repairs.filter(repair => repair.result !== 'running' && repair.reportedAt === null);
+    const dueRepairs = quiet ? [] : unreportedRepairs;
+    const covered = (entry: DoctorCase) => unreportedRepairs.some(repair =>
+      DOCTOR_REPAIR_RULES[repair.id].codes.includes(entry.code) && (entry.resolvedAt === null || entry.resolvedAt === now.toISOString()));
+    const reportable = cases.filter(entry => !acknowledged.has(entry.key) && !covered(entry));
+    const plan = planDoctorReport(reportable, quiet);
     const at = now.toISOString();
     cases = cases.map(entry => plan.held.some(held => same(held, entry)) ? { ...entry, reported: 'held' as const, reportedAt: at } : entry);
     let alerts = this.#state.alerts.day === this.#day() ? this.#state.alerts : { day: this.#day(), count: 0 };
     const diagnosis = plan.problems.some(entry => entry.severity === 'error') ? await this.#diagnose(reportable, disk) : null;
-    const text = formatDoctorReport(plan, this.deps.timeZone, diagnosis);
+    const repairLines = dueRepairs.map(repair => {
+      const action = DOCTOR_REPAIR_ACTIONS[repair.id]['zh-CN'];
+      const result = repair.result === 'recovered' ? '已恢复' : repair.circuitUntil ? '修不好，需要你看看。24 小时后再检查' : '尚未恢复';
+      return `· ${action}，${result}。`;
+    });
+    const repairReport = repairLines.length
+      ? [dueRepairs.some(repair => repair.heldForMorning) ? '【医生】夜间自动修复记录' : '【医生】自动修复记录', ...repairLines].join('\n') : null;
+    const text = [formatDoctorReport(plan, this.deps.timeZone, diagnosis), repairReport].filter(Boolean).join('\n');
     if (text && this.deps.available()) {
+      // Reserve the notification so an ambiguous QQ send is never replayed on the next check.
+      if (dueRepairs.length) await this.#saveRepairs(this.#state.repairs.map(repair => dueRepairs.includes(repair) ? { ...repair, reportedAt: at } : repair));
       let via: DoctorCase['reported'] = 'failed';
       if (alerts.count < DOCTOR_DAILY_LIMIT && await this.deps.sendQq(text).catch(() => false)) {
         via = 'qq'; alerts = { ...alerts, count: alerts.count + 1 };
       } else if (this.deps.notifyDesktop(text)) via = 'desktop';
-      cases = cases.map(entry => plan.problems.some(problem => same(problem, entry)) ? { ...entry, reported: via, reportedAt: at }
-        : plan.recovered.some(recovered => same(recovered, entry)) ? { ...entry, recoveryReported: true } : entry);
+      cases = cases.map(entry => {
+        if (!acknowledged.has(entry.key) && !quiet && covered(entry))
+          return { ...entry, reported: via, reportedAt: at, recoveryReported: entry.resolvedAt !== null };
+        if (plan.problems.some(problem => same(problem, entry))) return { ...entry, reported: via, reportedAt: at };
+        if (plan.recovered.some(recovered => same(recovered, entry))) return { ...entry, recoveryReported: true };
+        return entry;
+      });
     }
     this.#lastCheckAt = at;
     const next = { ...this.#state, cases, alerts };

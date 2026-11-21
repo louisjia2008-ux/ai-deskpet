@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { AtomicJsonStore } from '../persistence';
 import { ASR_MODEL, defaultSpeechInputSettings, speechInputSettingsSchema, speechPcmSchema } from '../../shared/speech-input';
 import type { SpeechInputSettings, SpeechInputStatus } from '../../shared/speech-input';
@@ -60,9 +61,7 @@ export class SpeechInputService {
       await this.options.beforeStart();
       if (generation !== this.#generation) throw new Error('asr.cancelled');
       if (!this.#child) {
-        const dir = this.options.runtimeDir();
-        if (!dir || !isAbsolute(dir)) throw new Error('asr.folder');
-        for (const path of [join(dir, '.venv/bin/python'), join(dir, 'hf/hub', `models--${ASR_MODEL.replace('/', '--')}`, 'snapshots')]) await stat(path);
+        const dir = await this.#runtimeDirectory();
         if (generation !== this.#generation) throw new Error('asr.cancelled');
         this.#start(dir);
       }
@@ -72,12 +71,40 @@ export class SpeechInputService {
     }
     return result;
   }
+  async #runtimeDirectory(): Promise<string> {
+    const dir = this.options.runtimeDir();
+    if (!dir || !isAbsolute(dir)) throw new Error('asr.folder');
+    for (const path of [join(dir, '.venv/bin/python'), join(dir, 'hf/hub', `models--${ASR_MODEL.replace('/', '--')}`, 'snapshots')]) await stat(path);
+    return dir;
+  }
+
+  canRestartWorker(): boolean { return !this.#pending && !this.#child && this.#errorCode === 'asr.worker'; }
+
+  async restartWorker(allowed: () => boolean): Promise<'skipped' | 'failed' | 'recovered'> {
+    if (!allowed() || !this.canRestartWorker()) return 'skipped';
+    const generation = this.#generation;
+    await this.#stopping;
+    const dir = await this.#runtimeDirectory();
+    const eligible = () => allowed() && generation === this.#generation && this.canRestartWorker() && dir === this.options.runtimeDir();
+    if (!eligible()) return 'skipped';
+    await this.options.beforeStart();
+    if (!eligible()) return 'skipped';
+    this.#start(dir);
+    const child = this.#child;
+    const until = Date.now() + (this.options.timeoutMs ?? 120_000);
+    while (this.#child === child && !this.#ready && allowed() && Date.now() < until) await delay(100);
+    if (this.#child === child && this.#ready) return 'recovered';
+    // User-initiated cancellation and a new transcription own the worker's lifecycle.
+    if (this.#child === child && !this.#pending) await this.release();
+    return 'failed';
+  }
+
   #start(dir: string): void {
     const child = (this.options.spawn ?? spawn)(join(dir, '.venv/bin/python'), ['-I', '-B', this.options.workerScript, ASR_MODEL, '--pcm'], {
       cwd: dir, env: { PATH: '/usr/bin:/bin', HOME: homedir(), HF_HOME: join(dir, 'hf'), HF_HUB_OFFLINE: '1', TOKENIZERS_PARALLELISM: 'false' }, stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.#child = child; this.#ready = false; child.stderr.resume(); child.stdout.setEncoding('utf8');
-    child.stdin.on('error', () => { if (this.#child === child) this.#fail('asr.worker'); });
+    child.stdin.on('error', () => { if (this.#child === child) { this.#fail('asr.worker'); void this.release(); } });
     let buffer = '';
     child.stdout.on('data', (chunk: string) => {
       if (child !== this.#child) return;
@@ -93,7 +120,12 @@ export class SpeechInputService {
     let value: { ready?: boolean; id?: string; text?: string; error?: string };
     try { value = JSON.parse(line) as typeof value; if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); }
     catch { this.#fail('asr.protocol'); void this.release(); return; }
-    if (value.ready === true) { this.#ready = true; return; }
+    if (value.ready === true) {
+      this.#ready = true;
+      if (this.#errorCode === 'asr.worker') this.#errorCode = null;
+      if (!this.#pending) this.#armIdle();
+      return;
+    }
     const pending = this.#pending;
     if (!pending || value.id !== pending.id) return;
     if (typeof value.text !== 'string' || value.text.length > 8_000 || !value.text.trim() || /[\p{Cc}]/u.test(value.text.replace(/[\n\r\t]/gu, ''))) { this.#fail('asr.transcription'); return; }

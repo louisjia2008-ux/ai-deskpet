@@ -9,6 +9,7 @@ from pathlib import Path
 import plistlib
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -20,6 +21,8 @@ STATUS_FILE = "status.json"
 PAUSE_FILE = "paused"
 TEMPORARY_PAUSE_LOCK = "reply-target-pause.lock"
 LOCK_FILE = "listener.lock"
+REPAIR_INSTALL_LOCK = "doctor-install.lock"
+LISTENER_LABEL = "local.deskpet.wechat-listener"
 GROUP_POLICY_VERSION = 4
 REPLY_TARGET_BINDING_VERSION = 2
 GROUP_STATUS_ID = re.compile(r"(?:legacy|[0-9a-f]{32})\Z")
@@ -118,15 +121,48 @@ def pause_for_target_binding(runtime):
         os.close(handle)
 
 
+@contextmanager
+def repair_install_lock(runtime, *, wait=False):
+    handle = _open_private(prepare_runtime(runtime) / REPAIR_INSTALL_LOCK, os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    finally:
+        os.close(handle)
+
+
+def restart_listener(runtime):
+    """Kickstart only a configured listener whose independent heartbeat is unhealthy."""
+    try:
+        with repair_install_lock(runtime):
+            status = read_status(runtime, stale_after=200)
+            if status["paused"] or status["state"] == "paused":
+                return {"started": False}
+            if not status["stale"] and status["state"] not in ("degraded", "stopped"):
+                return {"started": False}
+            # Exclude reply-target binding until the fixed launchd operation returns.
+            with pause_for_target_binding(runtime):
+                if (prepare_runtime(runtime) / PAUSE_FILE).exists():
+                    return {"started": False}
+                service = f"gui/{os.getuid()}/{LISTENER_LABEL}"
+                after = time.time()
+                subprocess.run(["/bin/launchctl", "kickstart", "-k", service], check=True, timeout=20,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return {"started": True, "after": after, "pid": status["pid"]}
+    except BlockingIOError:
+        return {"started": False}
+
+
 def set_paused(runtime, paused):
     if not isinstance(paused, bool):
         raise ValueError("Pause state must be a boolean.")
     path = prepare_runtime(runtime) / PAUSE_FILE
-    if paused:
-        _replace_private(path, b"paused\n", durable=True)
-    else:
-        path.unlink(missing_ok=True)
-        _sync_directory(path.parent)
+    with repair_install_lock(runtime, wait=True):
+        if paused:
+            _replace_private(path, b"paused\n", durable=True)
+        else:
+            path.unlink(missing_ok=True)
+            _sync_directory(path.parent)
     return paused
 
 
@@ -240,7 +276,7 @@ def _absolute_path(path):
     return str(path)
 
 
-def launchd_plist(config, runtime, script, *, state=None, label="local.deskpet.wechat-listener"):
+def launchd_plist(config, runtime, script, *, state=None, label=LISTENER_LABEL):
     if not isinstance(label, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", label):
         raise ValueError("Invalid LaunchAgent label.")
     runtime_path = Path(_absolute_path(runtime))

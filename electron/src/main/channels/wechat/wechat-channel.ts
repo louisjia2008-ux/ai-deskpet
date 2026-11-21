@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { WECHAT_REPLY_FRIEND_LIMIT, wechatChannelStateSchema, wechatFriendIdSchema, wechatFriendRosterIdSchema, wechatModelSchema, wechatWindowSchema } from '../../../shared/wechat-channel';
 import type { WeChatChannelAPI, WeChatChannelState, WeChatGroupUpdate, WeChatReply, WeChatReplyFriend, WeChatReplyGroupCandidate, WeChatWindow } from '../../../shared/wechat-channel';
@@ -44,6 +45,36 @@ export class WeChatChannel implements Omit<WeChatChannelAPI, 'getCloud' | 'confi
     } catch {
       return unavailable;
     }
+  }
+
+  async canRestartListener(): Promise<boolean> {
+    // A development or packaged test profile must never control the installed LaunchAgent.
+    if (!this.openViewer || this.platform !== 'darwin') return false;
+    const state = await this.getState();
+    return state.configured && !state.paused && state.state !== 'paused' &&
+      (state.stale || state.state === 'stopped' || state.state === 'degraded');
+  }
+
+  async restartListener(allowed: () => boolean): Promise<'skipped' | 'failed' | 'recovered'> {
+    if (!allowed() || !await this.canRestartListener() || !allowed()) return 'skipped';
+    const until = Date.now() + 60_000;
+    const start = z.discriminatedUnion('started', [
+      z.strictObject({ started: z.literal(false) }),
+      z.strictObject({ started: z.literal(true), after: z.number().positive(), pid: z.number().int().positive().nullable() }),
+    ]).parse(await this.run(['restart-listener'], undefined, 1024, 22_000));
+    if (!start.started) return 'skipped';
+    const heartbeat = z.object({ state: z.string(), heartbeat_at: z.number().positive().nullable(),
+      pid: z.number().int().positive().nullable(), paused: z.boolean(), stale: z.boolean() });
+    while (allowed() && Date.now() < until) {
+      const current = heartbeat.safeParse(await this.run(['status'], undefined, 16_384, 3500).catch(() => null));
+      if (current.success) {
+        const state = current.data;
+        if (state.state === 'running' && !state.paused && !state.stale && state.pid !== null && state.pid !== start.pid &&
+          state.heartbeat_at !== null && state.heartbeat_at >= start.after && Date.now() <= until) return 'recovered';
+      }
+      await delay(750);
+    }
+    return 'failed';
   }
 
   async configureGroup({ groupId, policy }: WeChatGroupUpdate): Promise<WeChatChannelState> {

@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -87,4 +88,41 @@ it('times out one request, kills its worker and allows a subsequent recording', 
   const next = f.service.transcribe(pcm); await vi.waitFor(() => expect(f.workers[1]?.requests).toHaveLength(1));
   const worker = f.workers[1]!; worker.say({ id: worker.requests[0]!.id, text: '恢复了' }); expect(await next).toBe('恢复了');
   await f.service.release();
+});
+
+it('restarts a killed local ASR process and verifies readiness without replaying PCM', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'deskpet-asr-doctor-')); roots.push(root);
+  await mkdir(join(root, '.venv/bin'), { recursive: true });
+  await writeFile(join(root, '.venv/bin/python'), '#!');
+  await mkdir(join(root, 'hf/hub', `models--${ASR_MODEL.replace('/', '--')}`, 'snapshots'), { recursive: true });
+  const workers: ReturnType<typeof spawn>[] = [];
+  const fakeScript = `
+    const lines = require('node:readline').createInterface({ input: process.stdin });
+    process.stdout.write('{"ready":true}\\n');
+    lines.on('line', line => {
+      const { id } = JSON.parse(line);
+      process.stdout.write(JSON.stringify({ id, text: 'fixture transcript' }) + '\\n');
+    });
+    setInterval(() => {}, 1000);
+  `;
+  const launch: typeof spawn = (() => {
+    const child = spawn(process.execPath, ['-e', fakeScript], { stdio: ['pipe', 'pipe', 'pipe'] });
+    workers.push(child);
+    return child;
+  }) as unknown as typeof spawn;
+  const service = new SpeechInputService({ settingsPath: join(root, 'speech.json'), workerScript: '/fixture/asr.py',
+    runtimeDir: () => root, beforeStart: async () => undefined, spawn: launch, timeoutMs: 3000 });
+  try {
+    await service.initialize();
+    expect(await service.transcribe(pcm)).toBe('fixture transcript');
+    const priorSuccess = service.status().lastSuccessAt;
+    expect(workers[0]!.kill('SIGKILL')).toBe(true);
+    await vi.waitFor(() => expect(service.canRestartWorker()).toBe(true));
+    expect(await service.restartWorker(() => true)).toBe('recovered');
+    expect(workers).toHaveLength(2);
+    expect(workers[1]!.pid).not.toBe(workers[0]!.pid);
+    expect(service.status()).toMatchObject({ state: 'ready', errorCode: null, lastSuccessAt: priorSuccess });
+  } finally {
+    await service.release();
+  }
 });

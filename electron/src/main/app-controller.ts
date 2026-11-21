@@ -80,6 +80,7 @@ import { AttentionService } from './domain/attention-service';
 import { buildHealth, proactiveHealth } from './domain/health';
 import { HealthReceipts } from './domain/health-receipts';
 import { DoctorService } from './domain/doctor-service';
+import { doctorRepairActions } from './domain/doctor-repairs';
 import { DoctorModel } from './domain/doctor-model';
 import type { AutomationStore, AutomationState } from '../shared/automation';
 import type { ProactiveState } from '../shared/proactive';
@@ -907,6 +908,8 @@ export class AppController {
       vmHealth: () => { if (!this.#wechatChannel) throw new Error('doctor.unavailable'); return this.#wechatChannel.vmHealth(); },
       diagnose: (input, localOnly, signal) => doctorModel.diagnose(input, localOnly, signal),
       providerTest: signal => doctorModel.probe(signal),
+      repairs: doctorRepairActions({ wechat: () => this.#wechatChannel ?? undefined, qq: this.#qq, telegram: this.#telegram,
+        speech: this.#speech, voice: this.#voice, knowledge: this.#knowledge, minecraft: this.#minecraftDedicated }),
       diskFree: async () => { try { const disk = await statfs(homedir()); return disk.bavail * disk.bsize; } catch { return null; } },
       sendQq: text => this.#qq.notifyOwner(text),
       notifyDesktop: text => { if (!Notification.isSupported()) return false; new Notification({ title: '桌宠医生', body: text }).show(); return true; },
@@ -2351,6 +2354,7 @@ export class AppController {
     };
     this.#ipc.register('doctor:status', consoleOnly, doctorStatus);
     this.#ipc.register('doctor:set-enabled', consoleOnly, async ({ enabled }) => { await this.#doctor.setEnabled(enabled); return doctorStatus(); });
+    this.#ipc.register('doctor:set-auto-repair', consoleOnly, async ({ enabled }) => { await this.#doctor.setAutoRepair(enabled); return doctorStatus(); });
     this.#ipc.register('doctor:check', consoleOnly, async () => { await this.#doctor.check(); return doctorStatus(); });
     this.#ipc.register('doctor:wechat-self-test', consoleOnly, async () => { await this.#doctor.testWeChatNow(); return doctorStatus(); });
     this.#ipc.register('attention:acknowledge', consoleOnly, async (input) => { await this.#attention.acknowledge(input); this.windows.send('console', 'attention:changed', undefined); });

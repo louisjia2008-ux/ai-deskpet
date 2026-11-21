@@ -83,8 +83,32 @@ export type DoctorProviderTestResult = z.infer<typeof doctorProviderTestResultSc
 export const doctorProviderTestRecordSchema = doctorProviderTestResultSchema.extend({ at: z.iso.datetime(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u) });
 export type DoctorProviderTestRecord = z.infer<typeof doctorProviderTestRecordSchema>;
 
+export const doctorRepairIdSchema = z.enum(['wechat', 'qq', 'telegram', 'asr', 'knowledge', 'minecraft']);
+export type DoctorRepairId = z.infer<typeof doctorRepairIdSchema>;
+export const DOCTOR_REPAIR_LOG_LIMIT = 100;
+export const doctorRepairSchema = z.strictObject({
+  id: doctorRepairIdSchema,
+  at: z.iso.datetime(),
+  finishedAt: z.iso.datetime().nullable(),
+  result: z.enum(['running', 'recovered', 'failed']),
+  circuitUntil: z.iso.datetime().nullable(),
+  heldForMorning: z.boolean(),
+  reportedAt: z.iso.datetime().nullable(),
+});
+export type DoctorRepair = z.infer<typeof doctorRepairSchema>;
+export const DOCTOR_REPAIR_ACTIONS: Record<DoctorRepairId, Record<'zh-CN' | 'en', string>> = {
+  wechat: { 'zh-CN': '重启微信监听', en: 'Restart WeChat listener' },
+  qq: { 'zh-CN': '重连 QQ', en: 'Reconnect QQ' },
+  telegram: { 'zh-CN': '重连 Telegram', en: 'Reconnect Telegram' },
+  asr: { 'zh-CN': '重启本地语音识别', en: 'Restart local speech recognition' },
+  knowledge: { 'zh-CN': '重新索引知识库', en: 'Reindex knowledge vault' },
+  minecraft: { 'zh-CN': '重启 Minecraft 专用服', en: 'Restart local Minecraft server' },
+};
+
 export const doctorStateSchema = z.object({
   enabled: z.boolean(),
+  autoRepair: z.boolean().default(true),
+  repairs: z.array(doctorRepairSchema).max(DOCTOR_REPAIR_LOG_LIMIT).default([]),
   cases: z.array(doctorCaseSchema).max(200),
   alerts: z.object({ day: z.string().max(10), count: z.number().int().min(0) }).strict(),
   /** The current run; a run that never reached shutdown ended abnormally. */
@@ -107,6 +131,8 @@ export type AppOutage = z.infer<typeof appOutageSchema>;
 
 export interface DoctorStatus {
   enabled: boolean;
+  autoRepair: boolean;
+  repairs: DoctorRepair[];
   lastCheckAt: string | null;
   open: number;
   alertsToday: number;
@@ -126,7 +152,7 @@ export interface DoctorStatus {
 export const DOCTOR_FEATURES: Record<string, string> = {
   asr: '本地语音识别', diary: '日记', proactive: '主动消息', 'wechat-moments': '朋友圈', 'wechat-cron': '微信定时投递', 'wechat-group-digest': '群聊每日精华', 'wechat-followup': '等你处理', 'wechat-official-brief': '公众号简报', 'wechat-friends-moments': '好友朋友圈摘要', 'wechat-friend-reply': '微信好友回复',
   'auto-memory': '自动记忆', 'memory-sleep': '夜间记忆整理', schedules: '定时任务', wechat: '微信', qq: 'QQ', telegram: 'Telegram',
-  knowledge: '知识库', system: '系统', app: '桌宠', provider: '聊天模型',
+  knowledge: '知识库', minecraft: 'Minecraft 专用服', system: '系统', app: '桌宠', provider: '聊天模型',
 };
 export const DOCTOR_CODES: Record<string, string> = {
   ...describeWeChatSendDiagnostics('zh-CN'),
@@ -165,6 +191,7 @@ export const DOCTOR_CODES: Record<string, string> = {
   'knowledge.embeddingModelMissing': '本机 Ollama 缺少知识库选用的嵌入模型。',
   'knowledge.indexRepeatedFailures': '知识库索引连续失败，可在运行状态查看上次错误码。',
   'diary.failed': '日记写入失败。', 'diary.storage': '加密日记读取失败（原文件没有覆盖）。',
+  'minecraft.gaveUp': '本地专用服重启次数用完，服务器已停止。',
   'asr.worker': '本地语音识别进程停止了。', 'asr.runtime': '离线语音文件夹缺失或不完整。', 'asr.permission': '麦克风权限被拒绝。',
   'proactive.pausedByError': '主动消息多次失败，已暂停。', 'proactive.deliveryFailed': '主动消息未确认送达。',
   'sleep.noProvider': '还没有选择模型。', 'sleep.incomplete': '模型没有回答完。', 'autoMemory.incomplete': '模型没有回答完。',

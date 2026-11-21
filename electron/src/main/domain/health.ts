@@ -98,7 +98,7 @@ const remote = (feature: 'qq' | 'telegram', status: QqChannelStatus | TelegramCh
   if (!status.enabled || ('stopped' in status && status.stopped)) return item(feature, 'off');
   const failedOutbox = 'failedOutbox' in status ? status.failedOutbox : 0;
   const unconfirmed = failedOutbox + status.uncertainOutbox;
-  if (status.connection === 'offline') return item(feature, 'failing', { errorCode: status.lastError ?? `${feature}.offline`, failures: unconfirmed });
+  if (status.connection === 'offline') return item(feature, 'failing', { errorCode: status.lastError ?? `${feature}.offline`, failures: unconfirmed, connectionOffline: true });
   if (unconfirmed) return item(feature, 'failing', { errorCode: failedOutbox ? `${feature}.deliveryFailed` : `${feature}.uncertain`, failures: unconfirmed });
   return item(feature, status.connection === 'online' ? 'ok' : 'waiting');
 };

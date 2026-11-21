@@ -128,6 +128,19 @@ export class MinecraftDedicatedServer {
     });
   }
 
+  restartAfterGiveUp(allowed: () => boolean): Promise<'skipped' | 'failed' | 'recovered'> {
+    return this.#serialize(async () => {
+      if (!allowed() || this.#disposed || this.#stopping || !this.#stored.settings.enabled || this.#snapshot.status !== 'gave_up') return 'skipped';
+      this.#crashes = [];
+      const result = await this.#start();
+      if (result.status === 'running') return 'recovered';
+      if (this.#stored.settings.enabled && !this.#stopping && !this.#disposed && result.status === 'error') {
+        this.#update({ status: 'gave_up', error: result.error });
+      }
+      return 'failed';
+    });
+  }
+
   stop(): Promise<MinecraftDedicatedServerSnapshot> {
     const sequence = this.#requestStop();
     return this.#serialize(async () => {

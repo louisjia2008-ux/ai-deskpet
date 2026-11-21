@@ -256,6 +256,7 @@ export const invokePayloadSchemas = {
   'attention:acknowledge-health': z.object({ key: z.string().regex(/^[a-z-]{1,40}:\d{1,2}$/u), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u) }).strict(),
   'doctor:status': emptySchema,
   'doctor:set-enabled': z.object({ enabled: z.boolean() }).strict(),
+  'doctor:set-auto-repair': z.object({ enabled: z.boolean() }).strict(),
   'doctor:check': emptySchema,
   'doctor:wechat-self-test': emptySchema,
   'attention:acknowledge': z.object({ id: z.string().regex(/^(background-job|delegation|consolidation|proactive):[a-f0-9-]{36}$/u), fingerprint: z.string().regex(/^[a-f0-9]{64}$/u) }).strict(),

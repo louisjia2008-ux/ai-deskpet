@@ -18,6 +18,7 @@ const fixed: Record<string, DoctorRunbookEntry> = {
   'provider.quota': { causes: ['额度已用完', '模型服务的消费上限被触发'], actions: ['在模型服务的账号页面查看额度与消费上限。'] },
   'knowledge.embeddingModelMissing': { causes: ['选用的嵌入模型尚未准备好'], actions: ['在知识库设置核对嵌入模型是否已准备好。'] },
   'knowledge.indexRepeatedFailures': { causes: ['知识库读取或索引连续失败', '本机嵌入服务不可用'], actions: ['在知识库运行状态查看上次错误类型。'] },
+  'minecraft.gaveUp': { causes: ['专用服在短时间内反复退出'], actions: ['在陪伴页查看专用服状态和上次启动错误。'] },
   'app.uncleanExit': { causes: ['上次桌宠异常退出', '系统关闭或进程被强制结束'], actions: ['观察是否再次异常退出；反复出现时请维护人员检查。'] },
 };
 

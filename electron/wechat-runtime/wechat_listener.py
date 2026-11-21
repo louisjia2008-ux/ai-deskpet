@@ -47,7 +47,7 @@ from wechat_reply_settings import DEFAULT_REPLY, list_models, read_cloud_route, 
 from wechat_rich_message import chat_quote_excerpt, valid_rich
 from wechat_service import (
     GROUP_POLICY_VERSION, is_paused, launchd_plist, pause_for_target_binding, prepare_runtime, read_status,
-    reply_target_binding_supported, service_lock, set_paused, write_status,
+    reply_target_binding_supported, restart_listener, service_lock, set_paused, write_status,
 )
 from wechat_state import QUEUE_COMMANDS, StateConflict, WeChatState, binding_key, database_queue_command
 from wechat_sticker_spool import read_staged_sticker
@@ -2530,7 +2530,7 @@ def main():
     for action in ("run", "status", "pause", "resume", "plist", "channel-status", "reply-models", "recover-window", "db-enroll",
                    "open-viewer", "cloud-authorize", "cloud-bindings", "transcript-read", "transcript-ack", "owner-deliver",
                    "moments-post", "moments-preview", "digest-group-list", "digest-group-select", "digest-group-read",
-                   "followup-group-select", "followup-group-read", "self-test", "vm-health", "app-outage-status",
+                   "followup-group-select", "followup-group-read", "self-test", "vm-health", "app-outage-status", "restart-listener",
                    "official-list", "official-read", "friends-moments-read", "list-reply-friends", "reply-friend-roster"):
         actions.add_parser(action)
     actions.add_parser("moments-answer-context").add_argument("draft_id")
@@ -2672,6 +2672,13 @@ def main():
         if fingerprint is None:
             control_error("cloud_not_authorized")
         print(json.dumps({"ok": True, "routeFingerprint": fingerprint}))
+        return
+    if args.action == "restart-listener":
+        settings = ui.config()
+        if not channel_status(settings, runtime)["configured"]:
+            print(json.dumps({"started": False}))
+            return
+        print(json.dumps(restart_listener(runtime)))
         return
     if args.action == "channel-status":
         try:

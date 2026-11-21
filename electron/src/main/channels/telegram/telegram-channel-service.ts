@@ -161,6 +161,7 @@ export class TelegramChannelService {
   #managing: Promise<unknown> = Promise.resolve();
   #managementPending = 0;
   #timer: ReturnType<typeof setInterval> | null = null;
+  #retryPoll: AbortController | null = null;
   #running: { runId: string; controller: AbortController; authority: TelegramAuthority } | null = null;
   #runPump = false;
   #outPump = false;
@@ -222,6 +223,7 @@ export class TelegramChannelService {
     this.#verified = false;
     this.#generation.abort();
     this.#generation = new AbortController();
+    this.#retryPoll = null;
     this.#secret = null;
     this.#running?.controller.abort();
     this.#connection = 'disabled';
@@ -398,6 +400,15 @@ export class TelegramChannelService {
       return this.status();
     });
   }
+  canReconnect(): boolean {
+    return this.#managementPending === 0 && this.#connection === 'offline' &&
+      this.#live(this.#epoch) && this.#retryPoll !== null;
+  }
+  reconnect(): boolean {
+    if (!this.canReconnect()) return false;
+    this.#retryPoll?.abort();
+    return true;
+  }
   async #pollLoop(epoch: number, token: string, signal: AbortSignal): Promise<void> {
     let verified = false,
       backoff = 300;
@@ -445,7 +456,13 @@ export class TelegramChannelService {
           await this.#store.update((s) => diagnostic(s, 'update', 'update_id')).catch(() => undefined);
         }
         const wait = Math.max(backoff, error instanceof TelegramApiError ? error.retryAfterMs : 0);
-        await delay(wait, undefined, { signal }).catch(() => undefined);
+        const retry = new AbortController();
+        // Do not shorten a server-imposed wait, or retry an authentication, storage or input fault here.
+        if (this.#error === 'telegram.network' || this.#error === 'telegram.timeout' || /^telegram\.http5[0-9]{2}$/u.test(this.#error)) {
+          if (!(error instanceof TelegramApiError) || error.retryAfterMs === 0) this.#retryPoll = retry;
+        }
+        await delay(wait, undefined, { signal: AbortSignal.any([signal, retry.signal]) }).catch(() => undefined);
+        if (this.#retryPoll === retry) this.#retryPoll = null;
         backoff = Math.min(30_000, backoff * 2);
       }
     }

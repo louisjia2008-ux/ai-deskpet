@@ -179,6 +179,7 @@ const api: DeskPetApi = {
     acknowledgeHealth: (input) => invoke('attention:acknowledge-health', input),
     doctor: () => invoke('doctor:status', {}),
     setDoctor: (enabled) => invoke('doctor:set-enabled', { enabled }),
+    setDoctorAutoRepair: (enabled) => invoke('doctor:set-auto-repair', { enabled }),
     checkDoctor: () => invoke('doctor:check', {}),
     testDoctorWeChat: () => invoke('doctor:wechat-self-test', {}),
     acknowledge: (input) => invoke('attention:acknowledge', input),

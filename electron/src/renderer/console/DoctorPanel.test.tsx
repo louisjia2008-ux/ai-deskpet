@@ -6,7 +6,7 @@ import { DoctorPanel } from './DoctorPanel';
 
 const at = '2026-11-17T07:00:00.000Z';
 const status = (manualSelfTestsToday = 0): DoctorStatus => ({
-  ...doctorStateSchema.parse({ enabled: true, cases: [], session: null, alerts: { day: '', count: 0 } }),
+  ...doctorStateSchema.parse({ enabled: true, autoRepair: true, repairs: [], cases: [], session: null, alerts: { day: '', count: 0 } }),
   lastCheckAt: at, open: 0, alertsToday: 0, dailyLimit: 6, selfTestPassRate: 1, manualSelfTestsToday, runbooks: {},
   diagnosis: { at, source: 'local', text: '当前采样正常，可以继续使用。' },
   selfTests: [{ at, source: 'auto', status: 'passed', code: null, durationMs: 100,

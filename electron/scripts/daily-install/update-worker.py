@@ -1,6 +1,7 @@
 """Stage or roll back the host listener while its paused heartbeat is current."""
 
 from contextlib import closing
+import fcntl
 import hashlib
 import json
 import os
@@ -57,6 +58,41 @@ def cli(command):
     return json.loads(subprocess.check_output([PYTHON, '-B', str(WORKER / 'wechat_listener.py'),
         '--config', str(ROOT / 'targets.json'), '--state', str(ROOT / 'listener.db'),
         '--runtime', str(RUNTIME), command], timeout=12))
+
+
+def request_install_pause():
+    require_private(RUNTIME, directory=True)
+    lock = RUNTIME / 'doctor-install.lock'
+    handle = os.open(lock, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CREAT, 0o600)
+    try:
+        require_private(lock)
+        if not os.path.samestat(os.fstat(handle), lock.lstat()):
+            raise RuntimeError('The listener maintenance lock changed.')
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        prior = cli('status')
+        marker = RUNTIME / 'paused'
+        was_paused = marker.exists() or marker.is_symlink()
+        if was_paused:
+            require_private(marker)
+        write_record(PAUSE_RECORD, {'paused': was_paused, 'pid': prior['pid']})
+        if not was_paused:
+            # The installed worker may predate the maintenance interlock.
+            fd, name = tempfile.mkstemp(prefix='.listener-', dir=RUNTIME)
+            try:
+                with os.fdopen(fd, 'wb') as file:
+                    file.write(b'paused\n')
+                    file.flush()
+                    os.fsync(file.fileno())
+                os.replace(name, RUNTIME / 'paused')
+                directory = os.open(RUNTIME, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            finally:
+                Path(name).unlink(missing_ok=True)
+    finally:
+        os.close(handle)
 
 
 def wait_for_pause(previous_pid=None):
@@ -242,10 +278,7 @@ def main():
         raise SystemExit('Choose pause, backup, swap, rollback or resume.')
     command = sys.argv[1]
     if command == 'pause':
-        prior = cli('status')
-        write_record(PAUSE_RECORD, {'paused': prior['paused'], 'pid': prior['pid']})
-        if not prior['paused']:
-            cli('pause')
+        request_install_pause()
         print(json.dumps({'paused': True, 'pid': wait_for_pause()['pid']}))
     elif command == 'backup':
         # Use previously sealed candidate identity; active app may still be the predecessor.

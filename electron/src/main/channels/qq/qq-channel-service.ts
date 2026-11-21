@@ -637,14 +637,27 @@ export class QqChannelService {
     });
   }
 
-  async #syncConnection(generation: number): Promise<void> {
+  canReconnect(): boolean {
+    const state = this.#store.snapshot();
+    return !this.#revoked && this.#managementPending === 0 && this.#connection === 'offline' &&
+      state.config.enabled && !state.stopped && state.profileId === this.#deps.profileId() && this.#secretConfigured &&
+      !/^(?:qq\.(?:authFailed|gatewayTargetBlocked|onebotTargetBlocked))$/u.test(this.#adapter.lastError ?? '');
+  }
+
+  async reconnect(allowed: () => boolean): Promise<boolean> {
+    if (!allowed() || !this.canReconnect()) return false;
+    const generation = this.#generation;
+    return this.#manage(() => this.#syncConnection(generation, () => allowed() && this.#connection === 'offline'));
+  }
+
+  async #syncConnection(generation: number, allowed = () => true): Promise<boolean> {
     const secret = await this.#deps.getSecret().catch(() => null);
-    if (generation !== this.#generation || this.#revoked) return;
+    if (!allowed() || generation !== this.#generation || this.#revoked) return false;
     this.#secretConfigured = secret !== null && secret.length > 0;
     const state = this.#store.snapshot();
     if (!state.config.enabled || state.stopped || endpoint(state) === '' || !secret
       || (!state.binding && !state.config.pairingCode && !state.pairingCandidate && state.groups.length === 0 && !state.groupPairing && !state.groupCandidate)) {
-      this.#adapter.stop(); this.#connection = 'disabled'; return;
+      this.#adapter.stop(); this.#connection = 'disabled'; return false;
     }
     try {
       this.#connection = 'connecting';
@@ -663,6 +676,7 @@ export class QqChannelService {
     } catch {
       if (generation === this.#generation && !this.#revoked) { this.#connection = 'offline'; this.#changed(); }
     }
+    return true;
   }
 
   async handleInbound(message: QqInboundMessage): Promise<void> {
