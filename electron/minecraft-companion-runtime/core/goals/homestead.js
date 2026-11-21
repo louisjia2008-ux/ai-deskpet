@@ -993,15 +993,19 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
 
   // The planner treats the upper half of an open wooden door as a solid
   // block. A short, level walk along the verified centreline can still pass it.
-  async function crossDoorstep(ctx) {
+  async function crossDoorstep(ctx, inward = false) {
     const { entrance, furniture } = memory.house;
     const { x, y, z } = entrance;
     const inside = new Vec3(x, y, z + 2);
     const outside = new Vec3(x, y, z);
+    const from = inward ? outside : inside;
+    const destination = inward ? inside : outside;
     const door = furniture.door.position;
     const feet = () => bot.entity.position.floored();
-    if (feet().equals(outside)) return { ok: true };
-    if (!insideRoom(feet()) || !actions.goTo || !bot.lookAt || !bot.setControlState) return { ok: false, reason: 'not_inside' };
+    if (feet().equals(destination)) return { ok: true };
+    if ((!inward && !insideRoom(feet())) || !actions.goTo || !bot.lookAt || !bot.setControlState) {
+      return { ok: false, reason: 'not_at_doorway' };
+    }
     const passable = () => {
       const state = blockAt(door)?.getProperties?.();
       return state?.open && ['north', 'south'].includes(state.facing)
@@ -1012,26 +1016,33 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         }));
     };
     if (!passable()) return { ok: false, reason: 'doorway_not_clear' };
-    if (!feet().equals(inside)) {
-      const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(inside.x, inside.y, inside.z),
+    if (!feet().equals(from)) {
+      const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(from.x, from.y, from.z),
         { timeoutMs: 5000, retryNoProgress: false });
-      if (!moved.ok || !feet().equals(inside)) return { ok: false, reason: moved.reason || 'not_in_doorway' };
+      if (!moved.ok || !feet().equals(from)) return { ok: false, reason: moved.reason || 'not_at_doorway' };
     }
-    if (Math.abs(bot.entity.position.x - (x + 0.5)) > 0.15) await actions.recentre?.(bot, ctx, { accept: p => p.equals(inside) });
-    if (!passable() || !feet().equals(inside) || Math.abs(bot.entity.position.x - (x + 0.5)) > 0.16) {
+    if (Math.abs(bot.entity.position.x - (x + 0.5)) > 0.15) await actions.recentre?.(bot, ctx, { accept: p => p.equals(from) });
+    if (!passable() || !feet().equals(from) || Math.abs(bot.entity.position.x - (x + 0.5)) > 0.16) {
       return { ok: false, reason: 'doorway_not_clear' };
     }
     try {
-      await bot.lookAt(outside.offset(0.5, 1.62, 0.5), true);
+      await bot.lookAt(destination.offset(0.5, 1.62, 0.5), true);
       ctx.signal?.throwIfAborted();
       bot.setControlState('forward', true);
-      const reached = await waitUntil(() => feet().equals(outside) || !passable(), { timeoutMs: 1500, signal: ctx.signal });
-      if (!reached || !feet().equals(outside)) return { ok: false, reason: 'doorstep_unreached' };
+      const reached = await waitUntil(() => feet().equals(destination) || !passable(), { timeoutMs: 1500, signal: ctx.signal });
+      if (!reached || !feet().equals(destination)) return { ok: false, reason: 'doorstep_unreached' };
     } finally {
       bot.setControlState('forward', false);
     }
-    ctx.record('home_doorway_crossed', { position: posKey(entrance) });
+    ctx.record('home_doorway_crossed', { position: posKey(entrance), inward });
     return { ok: true };
+  }
+
+  function enterShelter(ctx) {
+    const e = memory.house?.entrance, at = bot.entity.position;
+    if (!e || insideRoom(at.floored()) || at.z > e.z + 1 || Math.abs(at.y - e.y) > 1
+      || Math.hypot(at.x - e.x - 0.5, at.z - e.z - 0.5) > 6) return null;
+    return crossDoorstep(ctx, true);
   }
 
   async function nightStep(ctx, hs, state) {
@@ -1077,10 +1088,11 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       if (!shellDone && available.length) memory.bedRefusedAt = Date.now();
     }
     if (shellDone && !strandedFar) {
-      const centre = new Vec3(house.interiorCenter.x + 0.5, house.interiorCenter.y, house.interiorCenter.z + 0.5);
-      if (bot.entity.position.distanceTo(centre) > 2) {
+      if (!insideRoom(bot.entity.position.floored())) {
         ctx.record('night', { action: 'shelter' });
-        return actions.goNear(bot, ctx, centre, 1, { timeoutMs: 40000 });
+        const crossed = await enterShelter(ctx);
+        if (crossed?.ok) return crossed;
+        return actions.goTo(bot, ctx, new goals.GoalBlock(house.interiorCenter.x, house.interiorCenter.y, house.interiorCenter.z), { timeoutMs: 40000 });
       }
       if (insideRoom(bot.entity.position.floored())) {
         if (hs.placed.door) {
@@ -1175,6 +1187,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     wantsPrimaryBed,
     primaryBedGoal,
     isInside: () => Boolean(memory.established && insideRoom(bot.entity.position.floored())),
+    enterShelter,
     shelterDoor: (ctx, open) => {
       if (!memory.established || !insideRoom(bot.entity.position.floored())) return null;
       return doorOpen() === open ? { ok: true, already: true } : setDoor(ctx, open);

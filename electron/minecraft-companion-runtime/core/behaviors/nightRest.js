@@ -24,7 +24,7 @@ const NEAR_BED = 16;
  * `home()` returns { bed, centre, inside? } once the house is finished (bed
  * null if it is gone), { bed: null, centre: null } to dig in in place, or null.
  */
-function createNightRest({ bot, home, shelterDoor = null, actions = defaultActions, skills = defaultSkills, now = Date.now,
+function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, actions = defaultActions, skills = defaultSkills, now = Date.now,
   farDistance = 64, retryBedMs = 20000 } = {}) {
   if (!bot || typeof home !== 'function') throw new TypeError('bot and home are required');
   let bunker = null;
@@ -84,6 +84,10 @@ function createNightRest({ bot, home, shelterDoor = null, actions = defaultActio
         bunker = dug.bunker;
         bot.companionSheltered = true;
         return { ok: true };
+      }
+      if (spot.inside === false && enterShelter) {
+        const crossed = await enterShelter(ctx);
+        if (crossed?.ok) return crossed;
       }
       if (spot.bed && now() >= bedRefusedUntil) {
         // Close by, the bed is walked to by using it: a walk to "near the bed"

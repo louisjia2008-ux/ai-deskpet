@@ -217,6 +217,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   // that (see nightShelter).
   const nightRest = createNightRest({ bot,
     shelterDoor: (ctx, open) => director?.memory.homestead?.shelterDoor?.(ctx, open),
+    enterShelter: (ctx) => director?.memory.homestead?.enterShelter?.(ctx),
     home: () => {
       const homestead = director?.memory.homestead;
       const built = homestead?.memory;
