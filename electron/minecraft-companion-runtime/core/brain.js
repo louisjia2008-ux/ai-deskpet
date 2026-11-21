@@ -138,7 +138,14 @@ function createBrain({
     }
     // Being interrupted by survival is not a lack of progress, and neither is
     // waiting out the night: a wait neither spends nor refills the budget.
-    if (preempted || result?.waited) return;
+    if (preempted) return;
+    const yielded = entry.autonomy?.outcome(result, now() - entry.startedAt);
+    if (yielded) {
+      goal = null;
+      emit('goal_yielded', { goal: entry.def.name, ...yielded, ...correlation(entry) });
+      return;
+    }
+    if (result?.waited) return;
     const progress = safeProgress(entry.def, state);
     // The goal knows it cannot go on here (nothing to build with in reach of
     // the site): end it now and say why, rather than burn the stall budget.
@@ -210,6 +217,14 @@ function createBrain({
       ...correlation(behavior.goalEntry),
       behavior: behavior.name,
     };
+    const autonomous = behavior.goalEntry?.autonomy;
+    if (autonomous) {
+      behavior.goalEntry.startedAt = now();
+      ctx.stepBlocked = autonomous.stepBlocked;
+      ctx.stepOutcome = (step, result) => {
+        if (isCurrent() && !controller.signal.aborted) autonomous.stepOutcome(step, result, ctx.record);
+      };
+    }
     entry.promise = Promise.resolve()
       .then(() => controller.signal.aborted || !isCurrent()
         ? { ok: false, reason: 'aborted' } : behavior.run(ctx))
@@ -328,7 +343,8 @@ function createBrain({
       validateGoal(def);
       const state = safePerceive();
       const taskId = metadata?.taskId ?? def.metadata?.taskId ?? def.taskId;
-      goal = { def, generation: ++generation, taskId, best: state ? safeProgress(def, state) : -Infinity,
+      const nextGeneration = ++generation;
+      goal = { def, generation: nextGeneration, taskId, autonomy: metadata?.autonomy, best: state ? safeProgress(def, state) : -Infinity,
         stalls: 0, recoveries: 0, reasons: [] };
       paused = false;
       failures.delete(`goal:${def.name}`);
@@ -343,6 +359,7 @@ function createBrain({
         try { want = Number(chore.behavior.want(state)) || 0; } catch { /* reported by choose() on the next tick */ }
         if (want <= 0) void preempt('goal_set', chore).catch(() => {});
       }
+      return nextGeneration;
     },
     async clearGoal(reason = 'cleared') {
       assertActive();

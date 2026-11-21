@@ -34,14 +34,14 @@ test('requires explicit consent, merges queued settings and honors a persistent 
   let reopened: MinecraftDedicatedServer | null = null;
   try {
     await server.initialize();
-    expect(server.getState().settings).toEqual({ enabled: true, memoryGb: 3, allowPlanApproval: false, autonomyRange: 'end', offlineModelDailyLimit: 20 });
+    expect(server.getState().settings).toEqual({ enabled: true, memoryGb: 3, allowPlanApproval: false, autonomyRange: 'nether', offlineModelDailyLimit: 20 });
     expect((await server.start()).status).toBe('eula_required');
     await expect(stat(join(managed, 'server', 'eula.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await Promise.all([server.setSettings({ enabled: false }), server.setSettings({ memoryGb: 5, autonomyRange: 'nether' }), server.setSettings({ offlineModelDailyLimit: 0 })]);
+    await Promise.all([server.setSettings({ enabled: false }), server.setSettings({ memoryGb: 5, autonomyRange: 'end' }), server.setSettings({ offlineModelDailyLimit: 0 })]);
     await server.setIdentity({ ownerName: 'TestOwner', botName: 'TestRobot' });
     const accepted = await server.acceptEula();
     expect(accepted.status).toBe('stopped');
-    expect(accepted.settings).toEqual({ enabled: false, memoryGb: 5, allowPlanApproval: false, autonomyRange: 'nether', offlineModelDailyLimit: 0 });
+    expect(accepted.settings).toEqual({ enabled: false, memoryGb: 5, allowPlanApproval: false, autonomyRange: 'end', offlineModelDailyLimit: 0 });
     const consent = accepted.eulaAcceptedAt;
     expect(consent).not.toBeNull();
     expect(await readFile(join(managed, 'server', 'eula.txt'), 'utf8')).toMatch(/^eula=true$/mu);
@@ -49,7 +49,7 @@ test('requires explicit consent, merges queued settings and honors a persistent 
     reopened = new MinecraftDedicatedServer(options);
     expect((await reopened.start()).status).toBe('stopped');
     expect(reopened.getState().eulaAcceptedAt).toBe(consent);
-    expect(reopened.getState().settings.autonomyRange).toBe('nether');
+    expect(reopened.getState().settings.autonomyRange).toBe('end');
     expect(reopened.getState()).toMatchObject({ ownerName: 'TestOwner', botName: 'TestRobot' });
     await expect(stat(join(managed, 'downloads'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {

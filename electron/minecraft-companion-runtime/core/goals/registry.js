@@ -34,6 +34,7 @@ function avoidFor(memory, home, self) {
   const a = home.anchor;
   return (p) => {
     if (p.x >= a.x - 2 && p.x <= a.x + 8 && p.z >= a.z - 4 && p.z <= a.z + 8) return true;
+    if (self !== 'wheatFarm' && (memory.wheatFarm?.memory.plots || memory.wheatPlots || []).some((q) => q.x === p.x && q.z === p.z)) return true;
     for (const id of ['cobbleGenerator', 'autoSmelter']) {
       const d = id !== self && memory[id]?.memory.device?.device;
       if (!d) continue;

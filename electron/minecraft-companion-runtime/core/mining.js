@@ -44,6 +44,24 @@ const MAX_RETURN_LEGS = 80; // y=-53 and a long main tunnel: some 40 legs from t
 const MAX_TURNS = 4;
 // Directions (relative to the staircase) a boxed-in main tunnel restarts in from its foot.
 const RESTART_SIDES = [1, 3];
+const ENTRANCE_COOLDOWN_MS = 10 * 60_000;
+const ENTRANCE_SPACING = 8;
+const cooledEntrances = new WeakMap();
+
+function entranceCooling(bot, p, now = Date.now()) {
+  const entries = cooledEntrances.get(bot);
+  if (!entries) return false;
+  for (const [key, entry] of entries) if (entry.until <= now) entries.delete(key);
+  return [...entries.values()].some(({ at }) => Math.hypot(at.x - p.x, at.z - p.z) < ENTRANCE_SPACING);
+}
+
+function coolEntrance(bot, ctx, p, reason, now = Date.now()) {
+  const entries = cooledEntrances.get(bot) || new Map();
+  cooledEntrances.set(bot, entries);
+  const at = { x: p.x, y: p.y, z: p.z }, until = now + ENTRANCE_COOLDOWN_MS;
+  entries.set(posKey(p), { at, until });
+  ctx?.record('mine_entrance_cooled', { at: posKey(p), reason, until });
+}
 
 const add = (p, dx, dy, dz) => ({ x: p.x + dx, y: p.y + dy, z: p.z + dz });
 const same = (a, b) => a.x === b.x && a.y === b.y && a.z === b.z;
@@ -214,6 +232,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
   if (!memory.mine) {
     const from = start || { x: feet.x, y: feet.y, z: feet.z };
     if (bot.companionNearPlayerBuild?.(from)) return fail('mine_entrance_near_player_build');
+    if (entranceCooling(bot, from)) return fail('mine_entrance_cooling');
     memory.mine = { entrance: from, front: from, surfaceY: from.y, y, dir: memory.mineDir ?? 0, phase: 'descend',
       mainSteps: 0, steps: 0, turns: 0, branch: null, cells: { [posKey(from)]: null }, walkFailures: 0 };
     ctx.record('mine_start', { at: posKey(from), y });
@@ -221,7 +240,9 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
   const mine = memory.mine;
   if (mine.exhausted) {
     const out = await leaveMine(bot, ctx, memory, actions);
-    if (out) return out;
+    if (out?.ok) { mine.exitFailures = 0; return out; }
+    if (out && (mine.exitFailures = (mine.exitFailures || 0) + 1) < 3) return out;
+    coolEntrance(bot, ctx, mine.entrance, out?.reason || 'exhausted');
     memory.mineDir = (mine.dir + 1) % 4;
     memory.mine = null;
     return fail('mine_exhausted');
@@ -239,6 +260,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
     mine.returns = (mine.returns || 0) + 1;
     if ((!back.ok && ++mine.walkFailures >= 3) || mine.returns > MAX_RETURN_LEGS) {
       ctx.record('mine_abandoned', { reason: back.ok ? 'front_unreached' : back.reason });
+      coolEntrance(bot, ctx, mine.entrance, back.ok ? 'front_unreached' : back.reason);
       memory.mineDir = (mine.dir + 1) % 4;
       memory.mine = null;
     }
@@ -263,7 +285,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
     if (!memory.mine) {
       // Re-use the known route, but only to reach an exit that has not been
       // attempted. Walking old cells is transit, never new excavation.
-      const frontier = findFrontier(bot, mine);
+      const frontier = mine.phase === 'descend' && mine.steps < 8 ? null : findFrontier(bot, mine);
       memory.mine = mine;
       mine.turns = 0;
       mine.restarts = 0;
@@ -643,5 +665,5 @@ async function maybeTorch(bot, ctx, mine, cell) {
   } catch { /* a torch is a nicety, not progress */ }
 }
 
-module.exports = { installCheapDigging, inspectStep, turn, knownOpen, mineStep, leaveMine, walkTunnel, walkToCell, LIQUID, visibleOre, exposed, advance, retarget, pickFor, isLoot,
+module.exports = { installCheapDigging, inspectStep, turn, knownOpen, mineStep, leaveMine, walkTunnel, walkToCell, entranceCooling, coolEntrance, LIQUID, visibleOre, exposed, advance, retarget, pickFor, isLoot,
   LOOT_ORES, DIRS, BRANCH_EVERY, BRANCH_LENGTH, cardinalRejoin };

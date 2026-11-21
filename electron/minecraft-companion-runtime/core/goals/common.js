@@ -12,6 +12,15 @@ const CROPS = /^(wheat|carrots|potatoes|beetroots|melon_stem|pumpkin_stem|attach
 // A table this close is used rather than another one made.
 const TABLE_NEAR = 16;
 
+async function runPlanned(ctx, step, execute) {
+  if (step.kind === 'blocked') return { ok: true, waited: true, reason: 'planning_sources_blocked', retryAt: step.retryAt };
+  const until = ctx.stepBlocked?.(step.kind, step.key || step.station);
+  if (until) return { ok: true, waited: true, reason: 'planning_source_blocked', retryAt: until };
+  const result = await execute();
+  if (!result?.transit) ctx.stepOutcome?.(step, result);
+  return result;
+}
+
 function createPlannerRunner({ bot, skills, kb, memory, blacklist, avoid = () => false }) {
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   memory.shortfall = memory.shortfall || {};
@@ -69,7 +78,9 @@ function createPlannerRunner({ bot, skills, kb, memory, blacklist, avoid = () =>
     return inventory;
   }
 
-  async function step(ctx, planned) {
+  const step = (ctx, planned) => runPlanned(ctx, planned, () => executeStep(ctx, planned));
+
+  async function executeStep(ctx, planned) {
     ctx.record('plan_step', { kind: planned.kind, key: planned.key, for: planned.for, item: planned.item });
     switch (planned.kind) {
       case 'gather': {
@@ -96,4 +107,4 @@ function createPlannerRunner({ bot, skills, kb, memory, blacklist, avoid = () =>
   return { step, inventoryFor, tableHere, placeTableNearby, placeNearby };
 }
 
-module.exports = { createPlannerRunner, DOWN };
+module.exports = { createPlannerRunner, runPlanned, DOWN };

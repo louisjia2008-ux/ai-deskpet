@@ -30,7 +30,7 @@ export const minecraftDedicatedSettingsSchema = z.object({
 export type MinecraftDedicatedSettings = z.infer<typeof minecraftDedicatedSettingsSchema>;
 
 export const defaultMinecraftDedicatedSettings: MinecraftDedicatedSettings = {
-  enabled: true, memoryGb: 3, allowPlanApproval: false, autonomyRange: 'end', offlineModelDailyLimit: 20,
+  enabled: true, memoryGb: 3, allowPlanApproval: false, autonomyRange: 'nether', offlineModelDailyLimit: 20,
 };
 
 export const minecraftDedicatedIdentitySchema = z.object({

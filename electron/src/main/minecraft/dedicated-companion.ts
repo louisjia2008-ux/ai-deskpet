@@ -1,4 +1,5 @@
 import type { MinecraftAutonomyRange, MinecraftDedicatedServerSnapshot } from '../../shared/minecraft-dedicated';
+import { defaultMinecraftDedicatedSettings } from '../../shared/minecraft-dedicated';
 import type { MinecraftCompanionService } from './companion-service';
 
 const holdsWorld = new Set(['starting', 'running', 'restarting', 'stopping']);
@@ -50,7 +51,7 @@ export class MinecraftDedicatedCompanion {
       const state = this.companion.getState();
       if (state.connectionState === 'connecting') return;
       if (state.connectionState === 'ready') {
-        const range = this.#world?.settings.autonomyRange ?? 'end';
+        const range = this.#world?.settings.autonomyRange ?? defaultMinecraftDedicatedSettings.autonomyRange;
         if (range === this.#range) return;
         this.#operation = this.companion.setAutonomyRange(range).then(() => {
           this.#range = range;
@@ -80,7 +81,7 @@ export class MinecraftDedicatedCompanion {
       this.#range = null;
       if (!world || !desired || desired !== this.#target()) return;
       this.#attached = desired;
-      this.#range = world.settings.autonomyRange ?? 'end';
+      this.#range = world.settings.autonomyRange ?? defaultMinecraftDedicatedSettings.autonomyRange;
       await this.companion.connect({ host: '127.0.0.1', port: world.port, username: world.botName, auth: 'offline',
         version: world.versions.minecraft, ownerName: world.ownerName }, () => {
         if (desired !== this.#target()) throw new Error('Minecraft dedicated world changed while the bot was connecting.');

@@ -54,7 +54,7 @@ const NIGHT_HUNT_MS = 5 * 60 * 1000;
 // Goals that bring food themselves: hunger leaves the body to them. Following
 // the owner keeps hunting close by too: chasing food 145 blocks off left the
 // owner it had just been asked to guard to the zombies.
-const FEEDING_GOALS = new Set(['farm', 'stock_food', 'follow_owner']);
+const FEEDING_GOALS = new Set(['farm', 'harvest_wheat', 'stock_food', 'follow_owner']);
 
 // Out after dark only with a sword in the bag and a chestplate on.
 function fitForNight(bot) {
@@ -150,7 +150,7 @@ function configureMovements(bot) {
  * `home`: { load(), save(value) } for this world's house across connections
  * (core-host keeps one per world), or null to remember it only while connected.
  */
-function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = false, retirementTimeoutMs = 20000, ownerName = null, home = null, autonomyRange = 'end' } = {}) {
+function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = false, retirementTimeoutMs = 20000, ownerName = null, home = null, autonomyRange = 'nether' } = {}) {
   if (!bot) throw new TypeError('bot is required');
   if (!Number.isFinite(retirementTimeoutMs) || retirementTimeoutMs <= 0 || retirementTimeoutMs > 2147483647) {
     throw new TypeError('retirementTimeoutMs must be a positive timer duration');
@@ -166,7 +166,8 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   const configuredMovements = configureMovements(bot);
 
   // Stuck bodies, full bags and death loops are recovered for every goal alike.
-  const recovery = createRecovery({ bot, activeGoal: () => brain?.status().goal?.name });
+  const recovery = createRecovery({ bot, activeGoal: () => brain?.status().goal?.name,
+    stopOnDeathLoop: () => !director?.ownsGoal() });
   // Animals the current goal keeps (a ranch's herd) are not hunted for food.
   let spare = () => false;
   let director = null;
@@ -273,7 +274,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     goalOwner = owner;
     usedGoals.add(goal);
     spare = goal.spares || (() => false);
-    try { brain.setGoal(goal, metadata); } catch (error) { retireGoal(owner); throw error; }
+    try { return brain.setGoal(goal, metadata); } catch (error) { retireGoal(owner); throw error; }
   };
   brain = createBrain({
     abandonMs: retirementTimeoutMs,
@@ -286,7 +287,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       if (event.type === 'goal_set' && goalOwner) goalOwner.generation = event.generation;
       // Release invocation-owned listeners/movement hooks, not a historical
       // list of all goals ever submitted to this long-lived companion.
-      if (['goal_done', 'goal_failed', 'goal_cleared', 'stopped'].includes(event.type)) {
+      if (['goal_done', 'goal_failed', 'goal_cleared', 'goal_yielded', 'stopped'].includes(event.type)) {
         spare = () => false;
         if (goalOwner && event.generation === goalOwner.generation) retireGoal(goalOwner);
       }
@@ -299,7 +300,11 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   recovery.attach(brain);
   // With no player task the director picks the next goal itself; off unless asked for.
   const { cards, stageOf, range, litEnd } = createDefaultCards({ bot, progression: autonomy });
-  const progressionFields = ['milestones', 'announced', 'announcementTimes', 'routeDeaths', 'stagePauses', 'extraChests', 'wheatFarmDone', 'endPortal'];
+  const progressionFields = ['milestones', 'announced', 'announcementTimes', 'routeDeaths', 'stagePauses', 'extraChests', 'wheatFarmDone', 'wheatPlots', 'cautiousAfterDeath', 'endPortal'];
+  function setRisk(risk) {
+    bot.companionSetRisk?.(risk);
+    policy.risk = risk;
+  }
   const announcement = {
     diamond_pickaxe: '做出钻石镐了', nether: '第一次进了下界', blaze_rod: '拿到了烈焰棒',
     end: '找到了要塞并进了末地', dragon: '打败了末影龙',
@@ -339,7 +344,21 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   }
   // Its goals go through useGoal too, so an autonomous ranch also spares its herd.
   const directorBrain = { status: () => brain.status(), setGoal: useGoal, clearGoal: (reason) => brain.clearGoal(reason) };
-  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, stageOf, scope: range, onEvent });
+  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, stageOf, scope: range, onEvent,
+    onOverworldDeath(death, deaths, memory) {
+      if (!memory.cautiousAfterDeath) {
+        setRisk('cautious');
+        memory.cautiousAfterDeath = true;
+        onEvent({ type: 'autonomy_risk_changed', at: death.at, card: death.card, risk: policy.risk, reason: 'overworld_death' });
+      }
+      const goal = memory.homestead;
+      const anchor = goal?.memory.house?.anchor;
+      if (!anchor || !death.position || goal.memory.established || goal.memory.pinned) return;
+      const near = (d) => d.position && Math.hypot(d.position.x - anchor.x, d.position.z - anchor.z) <= 40;
+      if (near(death) && deaths.filter((d) => !d.expedition && d.dimension === 'overworld' && death.at - d.at < 60 * 60_000 && near(d)).length >= 2) {
+        goal.memory.relocate = true;
+      }
+    } });
   // The house built on an earlier connection: its plan follows from the corner.
   let savedHome = null;
   try { savedHome = home?.load() ?? null; } catch { /* a home store that cannot be read is no home */ }
@@ -359,7 +378,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     for (const key of progressionFields) if (savedHome?.progression?.[key] !== undefined) {
       director.memory[key] = savedHome.progression[key];
     }
+    if (!director.memory.wheatPlots?.length) director.memory.wheatFarmDone = false;
     director.memory.homePending = Boolean(corner);
+    if (director.memory.cautiousAfterDeath) setRisk('cautious');
     if (director.memory.endPortal) bot.companionEndPortal = director.memory.endPortal;
     director.enable();
   }
@@ -394,10 +415,11 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   const onDeath = () => {
     if (disposed) return;
     // Survival's death listener has already checked which life just ended.
-    if (autonomy) {
+    if (autonomy && director.isEnabled()) {
       routeDeathAt = Date.now();
       const cause = recovery.lastDeathCause();
-      if (director.noteDeath(cause, { at: routeDeathAt, dimension: dimension(bot) })) {
+      const position = bot.entity?.position?.floored();
+      if (director.noteDeath(cause, { at: routeDeathAt, dimension: dimension(bot), position })) {
         brain.failGoal('death_loop: autonomy stage paused').catch(() => {});
       }
     }
@@ -668,7 +690,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
      */
     setPolicy({ risk, guard } = {}) {
       assertActive();
-      if (risk !== undefined) { bot.companionSetRisk?.(risk); policy.risk = risk; }
+      if (risk !== undefined) setRisk(risk);
       if (guard !== undefined) { bot.companionGuardOwnerFirst = guard === 'owner_first'; policy.guard = guard; }
       return { ...policy };
     },

@@ -18,8 +18,8 @@ const { exitPortalLit } = require('../end');
 const RANGE = { overworld: 3, nether: 4, end: 6 };
 const ARMOR = ['helmet', 'chestplate', 'leggings', 'boots'];
 const key = (key, count = 1) => ({ key, count });
-const IRON = [...ARMOR.map((piece) => key(`iron_${piece}`)), key('iron_sword'), key('iron_pickaxe'),
-  key('shield'), key('bow'), key('arrow', 32), key('water_bucket'), key('lava_bucket')];
+const OVERWORLD_IRON = [...ARMOR.map((piece) => key(`iron_${piece}`)), key('iron_sword'), key('iron_pickaxe'), key('shield')];
+const IRON = [...OVERWORLD_IRON, key('bow'), key('arrow', 32), key('water_bucket'), key('lava_bucket')];
 const DIAMOND = [key('diamond_pickaxe'), key('diamond_sword')];
 const TRAVEL = [key('food', 16), key('cobblestone', 64), key('arrow', 32)];
 const END = [key('bed'), key('ender_eye', 14), key('food', 24), key('cobblestone', 64), key('arrow', 64)];
@@ -39,12 +39,20 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
   const total = (s, m, item) => (s.inventory[item] || 0) + (chestCounts(m)[item] || 0);
   const blaze = (s, m) => eyes(s) + total(s, m, 'blaze_powder') + 2 * total(s, m, 'blaze_rod');
   const pearls = (s, m) => eyes(s) + total(s, m, 'ender_pearl');
-  const range = (m) => RANGE[m.range] ?? RANGE.end;
-  const farm = (m) => (m.wheatFarm ||= createFarmGoal({
-    bot, kb, center: homeOf(m).centre, plots: 24, bread: 12,
+  const range = (m) => RANGE[m.range] ?? RANGE.nether;
+  const farmOptions = (m) => ({
+    bot, kb, center: homeOf(m).centre, plots: 9,
     home: { table: homeOf(m).stations.crafting_table },
     exclude: (p) => avoidFor(m, homeOf(m), 'wheatFarm')(p) || bot.companionNearPlayerBuild?.(p),
-  }));
+  });
+  const farm = (m) => {
+    if (!m.wheatFarm) {
+      m.wheatFarm = createFarmGoal({ ...farmOptions(m), mode: 'sow' });
+      if (m.wheatPlots?.length) m.wheatFarm.memory.plots = m.wheatPlots;
+    }
+    return m.wheatFarm;
+  };
+  const harvest = (m) => (m.wheatHarvest ||= createFarmGoal({ ...farmOptions(m), mode: 'harvest', sharedMemory: farm(m).memory }));
   const outfit = (m, items) => createOutfitGoal({ bot, items, home: { ...homeOf(m), chest: m.extraChests?.at(-1) || homeOf(m).chest }, kb });
   const netherKit = () => findPortal(bot, 48) || bot.companionNetherSearch?.overworldPortal
     ? TRAVEL : [...TRAVEL, key('obsidian', 10), key('flint_and_steel')];
@@ -63,7 +71,7 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
     if (here() === 'the_nether') return 4;
     if (!m.homestead?.isDone(s)) return 0;
     if (!m.wheatFarmDone || !built(m, 'cobbleGenerator', s) || !built(m, 'autoSmelter', s)) return 1;
-    if (!holds(s, IRON)) return 2;
+    if (!holds(s, OVERWORLD_IRON)) return 2;
     if (!holds(s, DIAMOND) || range(m) === 3) return 3;
     if (milestones(m).dragon) return 7;
     if (bot.companionEndPortal && milestones(m).end) return 5;
@@ -84,7 +92,8 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
         const destination = new Vec3(home.centre.x + 0.5, home.centre.y, home.centre.z + 0.5);
         if (from.distanceTo(destination) > 8) return goNear(bot, ctx, destination, 5, { timeoutMs: 120000 });
         const { inventory } = ctx.perceive();
-        const wants = Object.entries(inventory).filter(([name, count]) => VALUABLES.includes(name) || (SUPPLIES.has(name) && count > 16))
+        const wants = Object.entries(inventory).filter(([name, count]) =>
+          (VALUABLES.includes(name) && (name !== 'diamond' || holds({ inventory }, DIAMOND))) || (SUPPLIES.has(name) && count > 16))
           .map(([name, count]) => ({ match: (n) => n === name, count: VALUABLES.includes(name) ? count : count - 16 }));
         m.autonomyStock = {};
         for (const position of chests(m)) {
@@ -162,15 +171,20 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
     need: (s, m) => need(s, m) ? score : 0, create,
   });
   const cards = [
-    card('wheat_farm', 1, (s, m) => inOverworld() && (!m.wheatFarmDone || (s.inventory.bread || 0) < 4),
+    card('wheat_farm', 1, (s, m) => inOverworld() && !m.wheatFarmDone,
       (m) => farm(m), { score: 72, maintenance: true }),
+    card('harvest_wheat', 1, (s, m) => inOverworld() && m.wheatFarmDone && homeOf(m) && farm(m).harvestNeeded(),
+      (m) => harvest(m), { score: 30, maintenance: true }),
+    card('guest_bed', 1, (s, m) => inOverworld() && m.homestead?.wantsGuestBed?.(s),
+      (m) => m.homestead.guestBedGoal(), { score: 25, maintenance: true }),
     card('return_home', 0, (s, m) => inOverworld() && Boolean(m.homestead?.memory.established)
-      && (m.homePending || VALUABLES.some((item) => (s.inventory[item] || 0) > 0)),
+      && (m.homePending || VALUABLES.some((item) => (s.inventory[item] || 0) > 0 && (item !== 'diamond' || holds(s, DIAMOND)))),
       (m) => { m.homePending = true; return homeStep(m); }, { score: 100, safeReturn: true }),
-    card('iron_outfit', 2, (s) => inOverworld() && !holds(s, IRON), (m) => outfit(m, IRON), { maintenance: true }),
-    card('diamond_tools', 3, (s) => inOverworld() && !holds(s, DIAMOND), (m) => outfit(m, DIAMOND), { expedition: true }),
-    card('nether_supplies', 4, (s, m) => inOverworld() && !m.homePending && blaze(s, m) < 14 && !holds(s, netherKit()),
-      (m) => outfit(m, netherKit()), { maintenance: true }),
+    card('iron_outfit', 2, (s) => inOverworld() && (!holds(s, OVERWORLD_IRON) || upgrades(bot).some(([item]) => item.name.startsWith('iron_'))),
+      (m) => outfit(m, OVERWORLD_IRON), { maintenance: true }),
+    card('diamond_tools', 3, (s) => inOverworld() && !holds(s, DIAMOND), (m) => outfit(m, DIAMOND)),
+    card('nether_supplies', 4, (s, m) => inOverworld() && !m.homePending && blaze(s, m) < 14 && !holds(s, [...IRON, ...netherKit()]),
+      (m) => outfit(m, [...IRON.filter((r) => r.key !== 'arrow'), ...netherKit()]), { maintenance: true }),
     card('nether_fortress', 4, (s, m) => inOverworld() && range(m) >= 4 && blaze(s, m) < 14 && ready(s, m, netherKit()),
       (m) => createNetherExpeditionGoal({ bot, blazeRods: Math.max(1, Math.ceil((14 - (chestCounts(m).blaze_powder || 0)) / 2) - (chestCounts(m).blaze_rod || 0)), witherSkulls: 0, trades: 0,
         returnOnRespawn: true,
@@ -196,7 +210,7 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
     card('dragon_return', 6, () => here() === 'the_end',
       () => createEndJourneyGoal({ bot, withCity: false, home: true, alreadyInside: true }), { score: 100, expedition: true, safeReturn: true, budgetStage: 6 }),
     card('diamond_armor', 6, (s, m) => inOverworld() && milestones(m).dragon && !holds(s, ARMOR.map((piece) => key(`diamond_${piece}`))),
-      (m) => outfit(m, ARMOR.map((piece) => key(`diamond_${piece}`))), { score: 45, expedition: true }),
+       (m) => outfit(m, ARMOR.map((piece) => key(`diamond_${piece}`))), { score: 45 }),
   ];
   return { cards, stageOf, range, litEnd };
 }

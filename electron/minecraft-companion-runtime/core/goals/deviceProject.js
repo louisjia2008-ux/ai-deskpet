@@ -36,6 +36,7 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
   const onDeath = () => {
     const mine = memory.mine;
     if (!mine || bot.entity.position.y >= mine.surfaceY - 3) return;
+    mining.coolEntrance(bot, null, mine.entrance, 'death_in_mine');
     memory.mine = null;
     memory.mineDir = (mine.dir + 1) % 4;
     if (memory.gather?.memory) Object.assign(memory.gather.memory, { mine: null, mineDir: memory.mineDir });

@@ -494,8 +494,16 @@ function entityInside(bot, target) {
     && overlaps(entity, target));
 }
 
-function pickFuel(bot, items) {
-  const inventory = inventoryCounts(bot);
+function furnaceInventory(window) {
+  const counts = {};
+  for (const item of window.slots.slice(window.inventoryStart, window.inventoryEnd)) {
+    if (item) counts[item.name] = (counts[item.name] || 0) + item.count;
+  }
+  return counts;
+}
+
+function pickFuel(window, items) {
+  const inventory = furnaceInventory(window);
   for (const [name, rate] of FUELS) {
     if ((inventory[name] || 0) * rate >= items) return { name, count: Math.ceil(items / rate) };
   }
@@ -520,17 +528,13 @@ async function smelt(bot, ctx, { input, count, furnacePosition, memory }) {
     if (isAbort(error)) throw error;
     return fail('furnace_open_failed');
   }
-  // bot.inventory is only resynced when the window closes, so what was taken
-  // is measured against a snapshot from before opening.
-  const before = inventoryCounts(bot);
-  const outputs = new Set();
   let taken = 0;
   try {
     const takeAll = async () => {
       const out = furnace.outputItem();
       if (out) {
-        outputs.add(out.name);
-        await furnace.takeOutput();
+        const result = await furnace.takeOutput();
+        taken += result?.count ?? out.count;
       }
     };
     await takeAll();
@@ -543,38 +547,40 @@ async function smelt(bot, ctx, { input, count, furnacePosition, memory }) {
     }
     const inputInfo = bot.registry.itemsByName[input];
     const inside = furnace.inputItem()?.count || 0;
-    const carried = actions.countItems(bot, (n) => n === input);
+    const carried = furnaceInventory(furnace)[input] || 0;
+    const needsFuel = !furnace.fuelItem() && !(furnace.fuel > 0);
     const toAdd = Math.max(0, Math.min(carried, count - inside));
     if (toAdd > 0) await furnace.putInput(inputInfo.id, null, toAdd);
-    const queued = (furnace.inputItem()?.count || 0);
-    if (queued > 0 && !furnace.fuelItem() && furnace.fuel <= 0) {
-      const fuel = pickFuel(bot, queued);
-      if (!fuel) return fail('no_fuel');
+    const queued = inside + toAdd;
+    const refuel = async () => {
+      const waiting = furnace.inputItem()?.count || 0;
+      if (!waiting || furnace.fuelItem() || furnace.fuel > 0) return true;
+      const fuel = pickFuel(furnace, waiting);
+      if (!fuel) return false;
       await furnace.putFuel(bot.registry.itemsByName[fuel.name].id, null, fuel.count);
-    }
-    memory.input = furnace.inputItem()?.count || 0;
+      return true;
+    };
+    if (needsFuel && !await refuel() && !taken) return fail('no_fuel');
     // About 10 s per item; wait for the batch, collecting as it completes.
     const deadline = Date.now() + queued * 10500 + 4000;
     while (Date.now() < deadline && (furnace.inputItem() || furnace.outputItem())) {
       await sleep(1000, ctx.signal);
       if ((furnace.outputItem()?.count || 0) >= Math.min(queued, 64) || !furnace.inputItem()) await takeAll();
-      memory.input = furnace.inputItem()?.count || 0;
-      memory.output = furnace.outputItem()?.count || 0;
       if (!furnace.inputItem() && !furnace.outputItem()) break;
+      // Fuel may be split across stacks/types, or a previous batch may already
+      // have left the furnace burning. Refill only after that fuel runs out.
+      if (!await refuel()) break;
     }
     await takeAll();
-    memory.input = furnace.inputItem()?.count || 0;
-    memory.output = furnace.outputItem()?.count || 0;
   } catch (error) {
     if (isAbort(error)) throw error;
     return fail('smelt_failed');
   } finally {
+    memory.item = furnace.inputItem()?.name || input;
+    memory.input = furnace.inputItem()?.count || 0;
+    memory.output = furnace.outputItem()?.count || 0;
     try { furnace.close(); } catch { /* ignore */ }
   }
-  const gained = () => [...outputs].reduce((sum, name) => sum + Math.max(0,
-    actions.countItems(bot, (n) => n === name) - (before[name] || 0)), 0);
-  await waitUntil(() => gained() > 0, { timeoutMs: 2000, signal: ctx.signal });
-  taken = gained();
   return taken > 0 ? { ok: true, taken } : fail('smelt_no_output');
 }
 

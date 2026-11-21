@@ -138,7 +138,7 @@ const KNOWLEDGE = {
     count: (inv) => Math.max(0, ...COLORS.map((c) => inv[`${c}_wool`] || 0)),
     // Four string make a white wool: where there are no sheep, spiders still are.
     sources: [
-      { kind: 'craft', yields: 1, needs: { string: 4 }, table: false, pick: () => 'white_wool', when: (inv) => (inv.string || 0) >= 4 },
+      { kind: 'craft', yields: 1, maxBatch: 1, needs: { string: 4 }, table: false, pick: () => 'white_wool', when: (inv) => (inv.string || 0) >= 4 },
       { kind: 'hunt', mobs: ['sheep'] },
     ],
   },
@@ -170,7 +170,7 @@ const KNOWLEDGE = {
   },
   diamond: {
     match: exact('diamond'),
-    sources: [{ kind: 'gather', blocks: exact('diamond_ore', 'deepslate_diamond_ore'), tool: 'iron_tier_pickaxe', mineY: -53 }],
+    sources: [{ kind: 'gather', blocks: exact('diamond_ore', 'deepslate_diamond_ore'), tool: 'iron_tier_pickaxe', mineY: -58 }],
   },
   // The way to the Nether: a portal of obsidian lit with flint and steel.
   diamond_pickaxe: {
@@ -284,9 +284,8 @@ const KNOWLEDGE = {
 };
 
 // Fuel accepted by the furnace, in preference order, with items smelted per unit.
-const FUELS = [['coal', 8], ['charcoal', 8], ['oak_log', 1.5], ['spruce_log', 1.5], ['birch_log', 1.5],
-  ['jungle_log', 1.5], ['acacia_log', 1.5], ['dark_oak_log', 1.5], ['mangrove_log', 1.5], ['cherry_log', 1.5],
-  ...WOODS.map((w) => [`${w}_planks`, 1.5])];
+const FUELS = [['coal', 8], ['charcoal', 8], ...WOODS.map((w) => [`${w}_planks`, 1.5]),
+  ...WOODS.map((w) => [`${w}_log`, 1.5]), ['stick', 0.5]];
 
 function countKey(key, inventory, kb = KNOWLEDGE) {
   const entry = kb[key];

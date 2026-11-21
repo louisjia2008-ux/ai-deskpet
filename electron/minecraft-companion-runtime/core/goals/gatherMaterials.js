@@ -30,7 +30,7 @@ const obsidian = require('../obsidian');
 const nether = require('../nether');
 const { quartzToolReserve } = require('../quartzTools');
 const { createNetherQuartzGoal, QUARTZ_MIN_FOOD, quartzFoodMatch, quartzFoodCount, quartzProtection } = require('./netherQuartz');
-const { createPlannerRunner } = require('./common');
+const { createPlannerRunner, runPlanned } = require('./common');
 
 const DOWN = [new Vec3(0, -1, 0)];
 // Out on the surface only after dark: string waits for night, not for a cave.
@@ -88,6 +88,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
   const blacklist = createBlacklist({ ttlMs: 120000 });
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   const nameAt = (p) => blockAt(p)?.name || null;
+  const plan = (ctx, args) => planNext({ ...args, kb, stepBlocked: ctx.stepBlocked });
   // Stations put down along the way join the caller's (a copy: never theirs to keep).
   stations = { ...stations };
   const portableMemory = {};
@@ -191,20 +192,23 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     let start = null;
     if (!memory.mine) {
       const at = bot.entity.position.floored();
-      if (Math.hypot(at.x - chest.x, at.z - chest.z) < MINE_FROM_HOME || bot.companionNearPlayerBuild?.(at)) {
-        // Each new mine on another side of the house, and farther out after
-        // one that came to nothing: always the same spot, on sand, every
-        // staircase was blocked by gravel and sand and the goal failed.
-        const reach = MINE_FROM_HOME + 2 + 8 * (memory.barrenMines || 0);
-        const candidates = SIDES.map((_, i) => SIDES[((memory.mineDir ?? 0) + i) % 4])
-          .map(([sx, sz]) => new Vec3(chest.x + sx * reach, chest.y, chest.z + sz * reach));
-        const away = candidates.find((p) => !bot.companionNearPlayerBuild?.(p));
+      const allowed = (p) => Math.hypot(p.x - chest.x, p.z - chest.z) >= MINE_FROM_HOME
+        && !bot.companionNearPlayerBuild?.(p) && !bot.companionHomeSite?.(p) && !mining.entranceCooling(bot, p);
+      if (!allowed(at)) {
+        const reach = MINE_FROM_HOME + 4 + Math.min(5, memory.barrenMines || 0) * 8;
+        const candidates = [reach, reach + 8, reach + 16].flatMap((r) => SIDES.map((_, i) => SIDES[((memory.mineDir ?? 0) + i) % 4])
+          .map(([sx, sz]) => new Vec3(chest.x + sx * r, chest.y, chest.z + sz * r)));
+        const away = candidates.find(allowed);
         if (!away) {
           memory.barrenMines = (memory.barrenMines || 0) + 1;
-          return { ok: false, reason: 'mine_entrance_near_player_build' };
+          return { ok: false, reason: 'no_available_mine_entrance' };
         }
         const moved = await actions.goNear(bot, ctx, away, 1, { timeoutMs: 30000 });
-        if (!moved.ok) return moved;
+        if (!moved.ok) { mining.coolEntrance(bot, ctx, away, moved.reason); return moved; }
+        if (!allowed(bot.entity.position.floored())) {
+          mining.coolEntrance(bot, ctx, away, 'invalid_mine_approach');
+          return { ok: false, reason: 'invalid_mine_approach' };
+        }
       }
       start = bot.entity.position.floored();
     }
@@ -325,7 +329,9 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     return result;
   }
 
-  async function runStep(ctx, step) {
+  const runStep = (ctx, step) => runPlanned(ctx, step, () => executeStep(ctx, step));
+
+  async function executeStep(ctx, step) {
     ctx.record('plan_step', { kind: step.kind, key: step.key, for: step.for, item: step.item, count: step.count ?? step.times });
     // Night rest stays out of the way while a night mob is hunted (companion.js).
     bot.companionNightHunt = step.kind === 'hunt' && (step.mobs || []).some((m) => NIGHT_MOBS.has(m))
@@ -335,7 +341,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     // rather than letting the pathfinder dig straight up to it.
     if (step.kind !== 'gather' || !Number.isFinite(step.mineY)) {
       const up = await climbOut(ctx);
-      if (up) return up;
+      if (up) return { ...up, transit: true };
     }
     switch (step.kind) {
       case 'place_station': {
@@ -389,7 +395,6 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         if (!stations.furnace) return { ok: false, reason: 'no_spot:furnace' };
         const result = await skills.smelt(bot, ctx, { input: step.input, count: step.count,
           furnacePosition: stations.furnace, memory: memory.furnace });
-        memory.furnace.item = step.input;
         return result;
       }
       case 'fill': {
@@ -501,7 +506,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       if (!['air', 'cave_air'].includes(nameAt(chest))) return { ok: false, reason: 'chest_missing' };
       const state = ctx.perceive();
       if (countKey('chest', state.inventory, kb) < 1) {
-        const step = planNext({ requirements: [{ key: 'chest', count: 1 }], inventory: plannerInventory(state), stations: placedStations(), kb });
+        const step = plan(ctx, { requirements: [{ key: 'chest', count: 1 }], inventory: plannerInventory(state), stations: placedStations() });
         return step ? runStep(ctx, step) : { ok: false, reason: 'chest_missing' };
       }
       ctx.record('chest_replaced', { position: posKey(chest) });
@@ -531,7 +536,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       if (entry.until < Date.now()) { delete memory.shortfall[key]; continue; }
       reqs.unshift({ key, count: countKey(key, inventory, kb) + entry.extra });
     }
-    let step = planNext({ requirements: reqs, inventory, stations: placedStations(), kb });
+    let step = plan(ctx, { requirements: reqs, inventory, stations: placedStations() });
     // About to go (back) down a mine from up top: take its supplies along.
     // Down there, running out of stone pickaxes sends the bot to the depot,
     // and only up for more when the depot cannot help.
@@ -545,13 +550,13 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       }
       if (!belowSurface || outOfPicks) {
         const kit = belowSurface ? [{ key: 'stone_pickaxe', count: SPARE_PICKS }] : supplies(step);
-        step = planNext({ requirements: [...kit, ...reqs], inventory, stations: placedStations(), kb }) || step;
+        step = plan(ctx, { requirements: [...kit, ...reqs], inventory, stations: placedStations() }) || step;
       }
     }
     if (step?.kind === 'gather' && step.dimension === 'the_nether') {
       const kit = portalKit(inventory);
       if (kit.length) {
-        const prepared = planNext({ requirements: [...kit, ...reqs], inventory, stations: placedStations(), kb });
+        const prepared = plan(ctx, { requirements: [...kit, ...reqs], inventory, stations: placedStations() });
         if (prepared) step = { ...prepared, quartzSupply: prepared.for === 'food' };
       }
     }
@@ -560,7 +565,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     // whole item of the list in the bag: store it now, a death would lose it.
     const whole = carried.some((w) => w.count >= debts.find((r) => r.key === w.key).count);
     const nearChest = bot.entity.position.distanceTo(new Vec3(chest.x + 0.5, chest.y, chest.z + 0.5)) <= NEAR_CHEST;
-    if (carried.length && (!step || freeSlots <= FREE_SLOTS_TO_STORE || (whole && nearChest))) {
+    if (carried.length && (!step || step.kind === 'blocked' || freeSlots <= FREE_SLOTS_TO_STORE || (whole && nearChest))) {
       // The last trip home also empties the bag of ore found on the way.
       return (await climbOut(ctx)) || store(ctx, carried, { loot: !step });
     }
@@ -612,6 +617,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         return { ok: true };
       }
       const result = await runOnce(ctx);
+      if (result.waited) return result;
       if (result.ok) {
         if (result.progress !== false) memory.steps += 1;
         memory.pathFailures = 0;

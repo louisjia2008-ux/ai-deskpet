@@ -27,7 +27,7 @@ const storedSchema = z.object({
     const settings = value as Record<string, unknown>;
     const limit = settings.offlineModelDailyLimit;
     return {
-      autonomyRange: 'end', ...settings,
+      autonomyRange: defaultMinecraftDedicatedSettings.autonomyRange, ...settings,
       offlineModelDailyLimit: typeof limit === 'number' && Number.isInteger(limit) ? Math.min(limit, MINECRAFT_OFFLINE_MODEL_LIMIT_MAX) : limit,
     };
   }, minecraftDedicatedSettingsSchema),

@@ -19,9 +19,12 @@ const { createPlannerRunner } = require('./common');
 const FAR_FROM_FARM = 48;
 
 function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = null,
-  skills = defaultSkills, farming = defaultFarming, kb = KNOWLEDGE, exclude = () => false, waitMs = 3000 } = {}) {
+  skills = defaultSkills, farming = defaultFarming, kb = KNOWLEDGE, exclude = () => false, waitMs = 3000,
+  mode = 'bread', sharedMemory = null, minRipe = 3 } = {}) {
   const blacklist = createBlacklist({ ttlMs: 60000 });
-  const memory = { center: center || null, barren: false, plots: null, table: home?.table || null, steps: 0, harvested: 0, shortfall: {} };
+  const memory = sharedMemory || { center: center || null, barren: false, plots: null, table: home?.table || null, steps: 0, harvested: 0, shortfall: {} };
+  const stateAt = (p) => farming.plotState(bot, p);
+  const count = (states) => (memory.plots || []).filter((p) => states.includes(stateAt(p))).length;
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   // Never put the crafting table on a plot.
   const onPlot = (p) => (memory.plots || []).some((q) => q.x === p.x && q.z === p.z);
@@ -45,7 +48,7 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     // instead of going back. Walk back to the farm first.
     const c = memory.center;
     const at = bot.entity.position;
-    const enough = Math.min(4, plotCount);
+    const enough = mode === 'sow' ? plotCount : Math.min(4, plotCount);
     const fits = (p) => farming.choosePlots(blockAt, p, { count: plotCount, exclude: (q) => exclude(q),
       findWater: (w, r) => farming.findWater(bot, w, r) }).length >= enough;
     const moveTo = (ground) => {
@@ -55,7 +58,8 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
       memory.barren = false;
       return farming.returnTo(bot, ctx, ground);
     };
-    if (c && Math.hypot(at.x - c.x, at.z - c.z) > FAR_FROM_FARM) {
+    if (mode === 'harvest' && !memory.plots?.length) return { ok: true };
+    if (mode !== 'harvest' && c && Math.hypot(at.x - c.x, at.z - c.z) > FAR_FROM_FARM) {
       // Out looking for soil, the old centre has none to go back to: the
       // nearest soil here that holds a farm, or further on.
       if (memory.barren && farming.findGround) {
@@ -65,8 +69,8 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
       ctx.record('farm', { action: 'return', distance: Math.round(Math.hypot(at.x - c.x, at.z - c.z)) });
       return farming.returnTo(bot, ctx, c);
     }
-    let list = plots();
-    if (list.length < enough && farming.findGround) {
+    const list = mode === 'harvest' ? memory.plots : plots();
+    if (mode !== 'harvest' && list.length < enough && farming.findGround) {
       // No soil around the centre (sand, stone): move the farm to the nearest soil that holds one.
       const ground = farming.findGround(bot, memory.center, FAR_FROM_FARM, { fits });
       if (ground) return moveTo(ground);
@@ -87,13 +91,15 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
 
     // Bread first whenever three wheat are in the bag: with a large farm
     // something is always ripe, and the harvest would never end.
-    if (countKey('bread', state.inventory, kb) < bread && (inventory.wheat || 0) >= 3) {
-      const breadStep = planNext({ requirements: [{ key: 'bread', count: countKey('bread', state.inventory, kb) + 1 }], inventory, stations, kb });
+    if (mode !== 'sow' && (mode === 'harvest' || countKey('bread', state.inventory, kb) < bread) && (inventory.wheat || 0) >= 3) {
+      const breadStep = planNext({ requirements: [{ key: 'bread', count: countKey('bread', state.inventory, kb) + 1 }], inventory, stations, kb,
+        stepBlocked: ctx.stepBlocked });
       if (breadStep && breadStep.kind !== 'farm') return step(ctx, { ...breadStep, for: 'bread' });
     }
-    const ripe = byState('ripe')[0];
+    const ripe = mode !== 'sow' && byState('ripe')[0];
     if (ripe) {
       ctx.record('farm', { action: 'harvest', plot: posKey(ripe) });
+      if (mode === 'harvest') memory.harvestPending = true;
       const result = await farming.harvest(bot, ctx, ripe);
       if (result.ok) memory.harvested += result.gained || 0; else blacklist.add(posKey(ripe), result.reason, 15000);
       return result;
@@ -109,7 +115,7 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     // farm short of seeds in the desert tilled the same plots 400 times.
     const untilled = byState('untilled')[0];
     if (untilled && (inventory.wheat_seeds || 0) > 0) {
-      const hoeStep = planNext({ requirements: [{ key: 'hoe', count: 1 }], inventory, stations, kb });
+      const hoeStep = planNext({ requirements: [{ key: 'hoe', count: 1 }], inventory, stations, kb, stepBlocked: ctx.stepBlocked });
       if (hoeStep) return step(ctx, { ...hoeStep, for: 'hoe' });
       ctx.record('farm', { action: 'till', plot: posKey(untilled) });
       const result = await farming.till(bot, ctx, untilled);
@@ -125,16 +131,25 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     }
     // Everything sown: the crops grow on their own.
     await sleep(waitMs, ctx.signal);
-    return { ok: true, waited: true };
+    return { ok: true, waited: true, reason: mode === 'bread' ? 'crops_growing' : 'no_available_plot' };
   }
 
   return {
-    name: 'farm',
+    name: mode === 'harvest' ? 'harvest_wheat' : 'farm',
     noProgressLimit: 30,
     memory,
-    // Done with the bread in the bag and the farm left sown behind it.
-    isDone: (state) => countKey('bread', state.inventory, kb) >= bread
-      && (!(state.inventory.wheat_seeds > 0) || !(memory.plots || []).some((p) => farming.plotState(bot, p) === 'empty')),
+    harvestNeeded: () => Boolean(memory.harvestPending || count(['ripe']) >= minRipe),
+    isDone(state) {
+      if (mode === 'sow') return count(['growing', 'ripe']) >= plotCount;
+      if (mode === 'harvest') {
+        if (!memory.harvestPending && count(['ripe']) < minRipe) return true;
+        if (count(['unknown', 'ripe', 'empty', 'untilled']) || (state.inventory.wheat || 0) >= 3) return false;
+        memory.harvestPending = false;
+        return true;
+      }
+      return countKey('bread', state.inventory, kb) >= bread
+        && (!(state.inventory.wheat_seeds > 0) || !count(['empty']));
+    },
     progress: () => memory.steps,
     async run(ctx) {
       const result = await runOnce(ctx);

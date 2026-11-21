@@ -83,6 +83,7 @@ function createRecovery({
   now = Date.now,
   thresholds = {},
   activeGoal = () => null,
+  stopOnDeathLoop = () => true,
 } = {}) {
   if (!bot) throw new TypeError('bot is required');
   const t = {
@@ -261,12 +262,12 @@ function createRecovery({
     const limit = dimension === 'overworld' ? t.maxDeaths : t.maxDeathsAway;
     const own = deaths.filter((d) => d.at >= goalTrack.since);
     const counted = own.filter((d) => !d.respawn).length;
-    if ((counted > limit || own.length > limit + t.respawnDeathsAllowed) && brain && goalTrack.active) {
+    if ((counted > limit || own.length > limit + t.respawnDeathsAllowed) && brain && goalTrack.active && stopOnDeathLoop()) {
       // The server's death message ("was shot by Skeleton") arrives around the
       // death itself: wait for it, so whoever reviews the failure knows why.
       clearTimeout(failTimer);
       failTimer = setTimeout(() => {
-        if (!goalTrack.active) return;
+        if (!goalTrack.active || !stopOnDeathLoop()) return;
         const causes = own.map((d) => `${d.cause || 'died'} at ${Math.round(d.position.x)},${Math.round(d.position.y)},${Math.round(d.position.z)}${d.respawn ? ' just after respawning' : ''}`);
         brain.failGoal(`death_loop: ${causes.join('; ')}`).catch(() => {});
       }, 1500);
