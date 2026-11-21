@@ -26,7 +26,6 @@ import type { ModelPricing, ProviderDiscoveryInput } from './provider-catalog';
 import type { ProviderUsageTokenDetails } from './providers';
 import type { BackgroundJob, BackgroundJobInput } from './background-jobs';
 import type { ProactiveConfig, ProactiveState } from './proactive';
-import type { MinecraftConnectionConfig, MinecraftControlAction, MinecraftSnapshot } from './minecraft';
 import type { MinecraftCompanionConfig, MinecraftCompanionSnapshot, MinecraftCompanionTaskInput } from './minecraft-companion';
 import type { MinecraftDedicatedIdentity, MinecraftDedicatedSettings, MinecraftDedicatedSnapshot } from './minecraft-dedicated';
 import type { CompanionRecentAPI } from './companion-recent';
@@ -633,15 +632,6 @@ export interface DeskPetApi {
     configure(config: ProactiveConfig): Promise<ProactiveState>;
     noteInteraction(): Promise<void>;
     onChanged(listener: (state: ProactiveState) => void): Unsubscribe;
-  };
-  minecraft: {
-    getState(): Promise<MinecraftSnapshot>;
-    connect(config: MinecraftConnectionConfig): Promise<MinecraftSnapshot>;
-    disconnect(): Promise<MinecraftSnapshot>;
-    submit(command: string): Promise<MinecraftSnapshot>;
-    control(action: MinecraftControlAction): Promise<MinecraftSnapshot>;
-    sendChat(message: string): Promise<MinecraftSnapshot>;
-    onChanged(listener: (state: MinecraftSnapshot) => void): Unsubscribe;
   };
   minecraftCompanion?: {
     getState(): Promise<MinecraftCompanionSnapshot>;

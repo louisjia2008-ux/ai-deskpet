@@ -126,11 +126,11 @@ describe('independent core Companion service', () => {
     expect(worker.writes.some(message => message.type === 'shutdown')).toBe(false);
   });
 
-  it('spawns only on connect with explicit core, isolated paths and a secret-free environment', async () => {
+  it('spawns only on connect with isolated paths and a secret-free environment', async () => {
     const { service, workers, captured } = await fixture();
     expect(captured).toHaveLength(0);
     const state = await service.connect(config);
-    expect(captured[0]?.args).toEqual([expect.stringContaining('/runtime/index.js'), '--engine', 'core', '--data-dir', expect.stringContaining('/independent-companion')]);
+    expect(captured[0]?.args).toEqual([expect.stringContaining('/runtime/index.js'), '--data-dir', expect.stringContaining('/independent-companion')]);
     expect(captured[0]?.options.env).toEqual({ PATH: '/bin', HOME: '/user', ELECTRON_RUN_AS_NODE: '1' });
     expect(captured[0]?.options.shell).toBeUndefined();
     expect(state.runtimeState).toBe('ready'); expect(state.connectionState).toBe('connecting');

@@ -295,7 +295,7 @@ export class MinecraftCompanionService {
       this.#ready = { resolve, reject, timer };
     });
     try {
-      const args = [this.#options.runtimePath, '--engine', 'core', '--data-dir', managed?.dataDirectory ?? this.#options.dataDirectory];
+      const args = [this.#options.runtimePath, '--data-dir', managed?.dataDirectory ?? this.#options.dataDirectory];
       if (managed) args.push('--managed-world-autonomy', '--survey-plan-observe');
       if (managed?.execute) args.push('--survey-plan-execute');
       const worker = (this.#options.spawnRuntime ?? spawn)(this.#options.executablePath ?? process.execPath, args,

@@ -59,7 +59,6 @@ const config: ForgeConfig = {
       ...(process.platform === 'darwin' ? ['./wechat-runtime'] : []),
       ...(process.platform === 'darwin' ? ['./voice-runtime'] : []),
       ...(process.env.DESKPET_REA_BUNDLE_CONFIG ? [process.env.DESKPET_REA_BUNDLE_CONFIG] : []),
-      './.minecraft-package/minecraft-runtime',
       './.minecraft-package/minecraft-companion-runtime',
       './.minecraft-package/minecraft-dedicated',
       './.minecraft-package/node_modules',

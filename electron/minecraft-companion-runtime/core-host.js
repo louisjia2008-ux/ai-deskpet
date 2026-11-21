@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { validateConfig, MAX_LINE_BYTES } = require('./protocol');
-const { withMinecraftProtocolCompatibility, installMinecraftBedWakeCompatibility } = require('./protocolCompatibility');
-const { acknowledgePlayerLoaded, flattenReason } = require('./runtime');
+const { withMinecraftProtocolCompatibility, installMinecraftBedWakeCompatibility,
+  acknowledgePlayerLoaded, flattenReason } = require('./protocolCompatibility');
 const { GOAL_SCHEMAS, TOOLS, validateTool } = require('./core-tools');
 const { perceive } = require('./core/perception');
 const { installSurveyPlanReceiver } = require('./core/survey-plan-receiver');

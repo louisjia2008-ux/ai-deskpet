@@ -161,7 +161,7 @@ session scope ∩ per-operation confirmation ∩ live revocation state. A deskto
   queued revision/permission races, capacity races, actual interval spacing,
   per-run model/token/time limits, local-tool/nested-Cron denial, result-delivery
   invalidation, reconnect lifecycle and portable-archive exclusion.
-- The earlier full `npm run lint` run failed with 1,527 errors in untouched `minecraft-runtime/`
+- The earlier full `npm run lint` run failed with 1,527 errors in the former Minecraft engine
   JavaScript files; no `src/` or `tests/security/` errors in that run. The QQ work
   does not change or suppress these unrelated lint rules/findings. Per the user's
   scope, Minecraft and the full `npm run verify` release gate were not run again.

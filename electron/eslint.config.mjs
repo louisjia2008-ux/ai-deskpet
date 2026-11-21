@@ -7,7 +7,7 @@ export default [
   {
     // Imported Minecraft fixtures use the CommonJS/no-undef gate below instead
     // of application style rules, just like the imported engine itself.
-    ignores: ['.webpack/**', '.swiftpm-cache/**', '.minecraft-package/**', '**/.ralph/**', 'minecraft-runtime/vendor/**', 'minecraft-runtime/test/**', 'minecraft-runtime/test-support/**', 'minecraft-runtime/tools/**', 'minecraft-runtime/node_modules/**', 'minecraft-companion-runtime/**', 'coverage/**', 'node_modules/**', 'out/**', 'playwright-report/**', 'test-results/**'],
+    ignores: ['.webpack/**', '.swiftpm-cache/**', '.minecraft-package/**', '**/.ralph/**', 'minecraft-companion-runtime/**', 'coverage/**', 'node_modules/**', 'out/**', 'playwright-report/**', 'test-results/**'],
   },
   eslint.configs.recommended,
   {

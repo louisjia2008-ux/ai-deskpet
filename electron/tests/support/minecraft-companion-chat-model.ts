@@ -36,6 +36,11 @@ export async function minecraftCompanionChatModel() {
         chunks.push(Buffer.from(chunk));
       }
       const wire = JSON.parse(Buffer.concat(chunks).toString('utf8')) as MinecraftChatWire;
+      if (wire.messages.some(message => message.role === 'system' && message.content.startsWith('Summarize the owner’s recent plans'))) {
+        if (wire.tools?.length) throw new Error('Background recent-summary request offered tools');
+        send(response, { content: JSON.stringify({ summary: 'Requested a read-only Minecraft status check.' }) });
+        return;
+      }
       wires.push(wire);
       const calls = new Map(wire.messages.flatMap(message => message.tool_calls ?? []).map(call => [call.id, call.function.name]));
       const results = wire.messages.filter(message => message.role === 'tool');

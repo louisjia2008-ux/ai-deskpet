@@ -2,7 +2,9 @@ Project-owned source code and documentation in this repository are licensed unde
 the MIT License below. This license does not apply to third-party code, Live2D
 Cubism Core or SDK components, models, artwork, images, audio, fonts, or other
 materials identified in THIRD_PARTY_NOTICES.md, ASSETS_AND_MODELS.md,
-ASSET_LICENSE.md, ThirdParty/, or their own notices.
+ASSET_LICENSE.md, ThirdParty/, or their own notices. The Minecraft Companion
+Core runtime and the Minecraft server Mod are licensed under AGPL-3.0-only.
+See electron/minecraft-companion-runtime/LICENSE and minecraft-mod/LICENSE.
 
 MIT License
 

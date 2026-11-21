@@ -29,23 +29,17 @@ if (Number(process.versions.node.split('.')[0]) < 22) {
   emit({ version: 1, type: 'reply', ok: false, error: 'Minecraft 陪玩需要 Node.js 22 或更新版本' });
   process.exit(1);
 }
-let runtime;
+let host;
 try {
-  const engineIndex = process.argv.indexOf('--engine');
-  const engine = engineIndex < 0 ? 'legacy' : process.argv[engineIndex + 1];
-  if (!['legacy', 'core'].includes(engine)) throw new Error('--engine must be legacy or core');
   const execute = process.argv.includes('--survey-plan-execute');
   const dryRun = process.argv.includes('--survey-plan-dry-run');
   const observe = process.argv.includes('--survey-plan-observe');
   const managedWorld = process.argv.includes('--managed-world-autonomy');
-  if (execute && (dryRun || engine !== 'core')) throw new Error('--survey-plan-execute requires the Core engine and cannot be combined with dry run');
-  if ((observe || managedWorld) && engine !== 'core') throw new Error('Managed world features require the Core engine');
-  runtime = engine === 'core'
-    ? require('./core-host').createCoreHost({
-      dataDir, emit, surveyPlanMode: execute ? 'execute' : dryRun ? 'dry_run' : 'off',
-      observeSurveyPlans: observe, managedWorldAutonomy: managedWorld,
-    })
-    : require('./runtime').createRuntime({ dataDir, emit });
+  if (execute && dryRun) throw new Error('--survey-plan-execute cannot be combined with dry run');
+  host = require('./core-host').createCoreHost({
+    dataDir, emit, surveyPlanMode: execute ? 'execute' : dryRun ? 'dry_run' : 'off',
+    observeSurveyPlans: observe, managedWorldAutonomy: managedWorld,
+  });
 } catch (error) {
   emit({ version: 1, type: 'reply', ok: false, error: `Minecraft 运行时启动失败：${error.message}` });
   process.exit(1);
@@ -60,7 +54,7 @@ async function shutdown(exitCode = 0) {
   // third-party teardown is a failed shutdown, never a claimed clean exit.
   armShutdownDeadline();
   let code = exitCode;
-  try { await runtime.close(); } catch (error) { console.error(error.message); code = 1; }
+  try { await host.close(); } catch (error) { console.error(error.message); code = 1; }
   process.stdout.write('', () => process.exit(code));
 }
 process.stdin.on('data', (chunk) => {
@@ -76,12 +70,11 @@ process.stdin.on('data', (chunk) => {
       emit({ version: 1, type: 'reply', ok: false, error: 'Minecraft 消息不是有效 JSON' });
       continue;
     }
-    void runtime.handle(message).then((result) => {
-      // Legacy returns a boolean; core returns the structured receipt. A
-      // rejected shutdown (including an idempotency conflict) does no work.
+    void host.handle(message).then((result) => {
+      // A rejected shutdown (including an idempotency conflict) does no work.
       if (message?.type === 'shutdown') {
-        if (result === true || result?.ok === true) void shutdown();
-        else if (runtime.status?.().connection?.state === 'disposed') void shutdown(1);
+        if (result?.ok === true) void shutdown();
+        else if (host.status().connection?.state === 'disposed') void shutdown(1);
       }
     });
   }

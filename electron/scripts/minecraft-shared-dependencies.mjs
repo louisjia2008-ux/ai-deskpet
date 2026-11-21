@@ -1,16 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile, readdir, rename, rm, stat } from 'node:fs/promises';
+import { lstat, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
-
-const dependencyGraph = lock => {
-  if (lock.lockfileVersion !== 3 || !lock.packages?.['']) throw new Error('Minecraft dependencies require a reviewed v3 lockfile.');
-  // Package identity/license belong to each engine; dependency resolution must
-  // match exactly, including nested versions, URLs, integrity and platforms.
-  const { dependencies, engines, optionalDependencies } = lock.packages[''];
-  return { dependencies, engines, optionalDependencies,
-    packages: Object.fromEntries(Object.entries(lock.packages).filter(([path]) => path !== '')) };
-};
 
 const treeIdentity = async root => {
   const hash = createHash('sha256'); let bytes = 0, files = 0;
@@ -29,19 +19,15 @@ const treeIdentity = async root => {
   return { digest: hash.digest('hex'), bytes, files };
 };
 
-/** Operates only on generated staging directories, never source or profiles.
- * Node's normal parent lookup lets both unchanged engines use this one tree. */
+/** Move the reviewed Companion dependency tree within generated package staging. */
 export const shareMinecraftDependencies = async root => {
-  const names = ['minecraft-runtime', 'minecraft-companion-runtime'];
-  const locks = await Promise.all(names.map(async name => JSON.parse(await readFile(join(root, name, 'package-lock.json'), 'utf8'))));
-  if (!isDeepStrictEqual(dependencyGraph(locks[0]), dependencyGraph(locks[1]))) throw new Error('Minecraft dependency locks differ; review before sharing dependencies.');
   const staging = join(root, '.minecraft-package');
-  const trees = names.map(name => join(staging, name, 'node_modules'));
-  const [legacy, core] = await Promise.all(trees.map(treeIdentity));
-  if (legacy.digest !== core.digest || legacy.files === 0) throw new Error('Minecraft staged dependency bytes differ; sharing refused.');
+  const tree = join(staging, 'minecraft-companion-runtime', 'node_modules');
+  if (!(await lstat(tree)).isDirectory()) throw new Error('Minecraft staged dependencies must be a real directory.');
+  const dependencies = await treeIdentity(tree);
+  if (dependencies.files === 0) throw new Error('Minecraft staged dependencies are empty.');
   const shared = join(staging, 'node_modules');
   await rm(shared, { recursive: true, force: true });
-  await rename(trees[0], shared);
-  await rm(trees[1], { recursive: true, force: true });
-  return { sharedFiles: legacy.files, savedBytes: legacy.bytes, dependencySHA256: legacy.digest };
+  await rename(tree, shared);
+  return { sharedFiles: dependencies.files, sharedBytes: dependencies.bytes, dependencySHA256: dependencies.digest };
 };

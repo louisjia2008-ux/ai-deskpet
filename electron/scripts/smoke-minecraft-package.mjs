@@ -27,23 +27,24 @@ if (mod.packaged === false) {
   assert.equal(createHash('sha256').update(await readFile(join(dedicated, mod.jar))).digest('hex'), mod.sha256);
   process.stdout.write(`Packaged Minecraft dedicated Mod ${mod.modVersion} SHA-256 verified.\n`);
 }
-for (const engine of ['minecraft-runtime', 'minecraft-companion-runtime']) {
-  await assert.rejects(stat(join(resources, engine, 'node_modules')), { code: 'ENOENT' });
-  const require = createRequire(join(resources, engine, 'package.json'));
-  for (const name of ['mineflayer', 'mineflayer-pathfinder', 'vec3']) {
-    assert.ok(relative(resources, require.resolve(name)).startsWith(`node_modules${sep}`), `${engine} must resolve ${name} from the packaged shared dependency tree.`);
-  }
+const runtime = join(resources, 'minecraft-companion-runtime');
+await assert.rejects(stat(join(resources, 'minecraft-runtime')), { code: 'ENOENT' });
+for (const entry of ['node_modules', 'bridge.js', 'runtime.js', 'vendor']) {
+  await assert.rejects(stat(join(runtime, entry)), { code: 'ENOENT' });
 }
-async function smoke(core) {
+const require = createRequire(join(runtime, 'package.json'));
+for (const name of ['mineflayer', 'mineflayer-pathfinder', 'vec3']) {
+  assert.ok(relative(resources, require.resolve(name)).startsWith(`node_modules${sep}`), `Companion must resolve ${name} from the packaged shared dependency tree.`);
+}
+
+async function smoke() {
   const profile = await mkdtemp(join(tmpdir(), 'deskpet-packaged-minecraft-'));
   const server = createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  const child = spawn(executable, core
-    ? [join(resources, 'minecraft-companion-runtime', 'index.js'), '--engine', 'core', '--data-dir', profile]
-    : [join(resources, 'minecraft-runtime', 'bridge.js'), '--data-dir', profile], {
+  const child = spawn(executable, [join(runtime, 'index.js'), '--data-dir', profile], {
     env: { ELECTRON_RUN_AS_NODE: '1', PATH: process.env.PATH, HOME: process.env.HOME, SystemRoot: process.env.SystemRoot },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -64,22 +65,16 @@ async function smoke(core) {
           let message;
           try { message = JSON.parse(line); } catch { reject(new Error('Packaged helper stdout is not JSONL.')); return; }
           if (message.type === 'ready') {
-            if (core && (message.engine !== 'core' || message.capabilities?.automaticReconnect !== false || !message.capabilities?.taskLifecycle)) {
+            if (message.engine !== 'core' || message.capabilities?.automaticReconnect !== false || !message.capabilities?.taskLifecycle) {
               reject(new Error('Packaged Companion did not start the reviewed core engine.')); return;
             }
             ready = true;
             child.stdin.write(JSON.stringify({ version: 1, id: 'smoke-connect', type: 'connect', config: {
               host: '127.0.0.1', port: address.port, username: 'DeskPetSmoke', auth: 'offline',
-              version: '1.21.8', ownerName: '', executorMode: 'strict',
+              version: '1.21.8',
             } }) + '\n');
           }
-          if (message.type === 'event' && message.event?.type === 'mc_status' && message.event.status?.connected) {
-            reject(new Error('A refused connection must never report a spawned player.')); return;
-          }
-          if (message.type === 'event' && message.event?.type === 'mc_error' && /ECONNREFUSED/u.test(message.event.message)) {
-            refused = true; resolve();
-          }
-          if (core && message.type === 'event' && message.event?.type === 'connection') {
+          if (message.type === 'event' && message.event?.type === 'connection') {
             if (message.event.state === 'ready') { reject(new Error('A refused connection must never report ready.')); return; }
             if (message.event.state === 'error' && /ECONNREFUSED/u.test(message.event.error?.message)) { refused = true; resolve(); }
           }
@@ -89,7 +84,7 @@ async function smoke(core) {
     assert.ok(ready && refused);
     child.stdin.end(JSON.stringify({ version: 1, id: 'smoke-shutdown', type: 'shutdown' }) + '\n');
     assert.equal(await Promise.race([exit, deadline]), 0);
-    process.stdout.write(`Packaged Minecraft ${core ? 'Companion core' : 'legacy'} smoke passed: Electron Node runtime, shared dependencies, refused connection and clean exit.\n`);
+    process.stdout.write(`Packaged Minecraft Companion core smoke passed: Electron Node runtime, shared dependencies, refused connection and clean exit.\n`);
   } finally {
     clearTimeout(timer);
     if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await exit; }
@@ -97,5 +92,4 @@ async function smoke(core) {
   }
 }
 
-await smoke(false);
-await smoke(true);
+await smoke();

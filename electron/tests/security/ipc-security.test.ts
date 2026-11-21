@@ -77,11 +77,12 @@ describe('IPC security policy', () => {
   });
 
   it('restricts Minecraft controls to the console with strict schemas', () => {
-    const request = { ...valid, channel: 'minecraft:control' as const, envelope: { version: 1, payload: { action: 'stop' } } };
-    expect(authorizeIpcRequest(request)).toEqual({ action: 'stop' });
+    const request = { ...valid, channel: 'minecraft-dedicated:stop' as const, envelope: { version: 1, payload: {} } };
+    expect(authorizeIpcRequest(request)).toEqual({});
+    expect(isKnownInvokeChannel('minecraft:control')).toBe(false);
     expect(() => authorizeIpcRequest({ ...request, senderRole: 'overlay' })).toThrow('role');
     expect(() => authorizeIpcRequest({ ...request, senderUrl: 'https://server.example/' })).toThrow('origin');
-    expect(() => authorizeIpcRequest({ ...request, envelope: { version: 1, payload: { action: 'stop', shell: true } } })).toThrow();
+    expect(() => authorizeIpcRequest({ ...request, envelope: { version: 1, payload: { shell: true } } })).toThrow();
   });
 
   it('rejects an oversized payload before schema dispatch', () => {

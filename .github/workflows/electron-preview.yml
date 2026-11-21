@@ -54,7 +54,7 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Dependency vulnerability audit
-        run: npm audit --audit-level=high && npm audit --prefix minecraft-runtime --omit=dev --audit-level=high && npm audit --prefix minecraft-companion-runtime --omit=dev --audit-level=high
+        run: npm audit --audit-level=high && npm audit --prefix minecraft-companion-runtime --omit=dev --audit-level=high
       - name: Lint and typecheck
         run: npm run lint && npm run typecheck
       - name: Unit and coverage tests
@@ -62,7 +62,7 @@ jobs:
       - name: Security contract tests
         run: npm run test:security && npm run test:release-policy
       - name: Minecraft engine and bridge tests
-        run: npm run test:minecraft && npm run test:minecraft-companion
+        run: npm run test:minecraft-companion
       - name: Build renderer, main process, and unsigned package
         run: npm run build
       - name: Packaged Minecraft legacy and Companion core smoke

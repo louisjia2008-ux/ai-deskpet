@@ -8,7 +8,6 @@ export * from './providers';
 export * from './provider-catalog';
 export * from './provider-errors';
 export * from './schemas';
-export * from './minecraft';
 export * from './conversation-import';
 export * from './automation';
 export * from './rea';

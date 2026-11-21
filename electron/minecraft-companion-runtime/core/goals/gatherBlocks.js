@@ -9,7 +9,7 @@ const { goals } = require('mineflayer-pathfinder');
 const { abortError } = require('../confirm');
 const { countMatching } = require('../perception');
 const { createBlacklist, posKey } = require('../blacklist');
-const { loadedSurfaceFeet, naturalWalkingFoot } = require('../../vendor/server/minecraft/houseSurfaceGraph');
+const { loadedSurfaceFeet, naturalWalkingFoot } = require('../surfaceFeet');
 const { recoverFromLogWater, isLogScoutInWater } = require('../logWaterRecovery');
 
 const isLog = (name) => name.endsWith('_log') && !name.startsWith('stripped_');

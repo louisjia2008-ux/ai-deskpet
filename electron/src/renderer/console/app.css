@@ -257,40 +257,6 @@ pre { max-height: 420px; overflow: auto; padding: 14px; border-radius: 9px; colo
 .migration-preview { margin-top: 22px; display: grid; gap: 16px; }.migration-categories { display: grid; gap: 8px; }.migration-categories .check-row { justify-content: flex-start; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; }.migration-categories .check-row strong { margin-left: auto; color: var(--muted); }.warning-check { color: var(--warning); }.migration-progress { display: grid; gap: 8px; margin-top: 18px; }.migration-progress progress { width: 100%; accent-color: var(--blue); }.success-card { margin-top: 18px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; color: var(--success); background: var(--success-soft); }
 
 .minecraft-page { max-width: 1200px; }
-.minecraft-help { margin: 0; color: #a2a8ba; font-size: 12px; line-height: 1.6; }
-.minecraft-page .panel > .minecraft-help { margin-bottom: 18px; }
-.minecraft-connection-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 24px; margin-bottom: 18px; color: #9ba0b1; font-size: 12px; }
-.minecraft-connection-summary > span { display: flex; align-items: center; gap: 10px; }
-.minecraft-connection-summary strong { color: #dde1ec; font-size: 11px; }
-.minecraft-form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 18px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.minecraft-full-width { grid-column: 1 / -1; }
-.minecraft-form-grid:disabled input, .minecraft-form-grid:disabled select { opacity: .65; }
-.minecraft-page .button-row { flex-wrap: wrap; margin-top: 4px; }
-.minecraft-page h3 { margin: 24px 0 12px; font-size: 14px; }
-.minecraft-observations { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; margin: 20px 0 0; }
-.minecraft-observations > div { min-width: 0; padding: 14px; border-radius: 12px; background: #131720; }
-.minecraft-page dt { color: #9299ad; font-size: 11px; }
-.minecraft-page dd { margin: 7px 0 0; color: #edf1f8; font-size: 14px; overflow-wrap: anywhere; }
-.minecraft-current-task { display: grid; gap: 7px; margin: 20px 0; overflow-wrap: anywhere; }
-.minecraft-current-task > span { color: #a8ffce; font-size: 12px; }
-.minecraft-current-task > p { margin: 0; font-size: 12px; line-height: 1.6; }
-.minecraft-task-controls button { padding: 9px 11px; font-size: 11px; }
-button.minecraft-stop { color: #ffc0cb; background: #40232b; }
-.minecraft-inventory { max-height: 240px; overflow: auto; }
-.minecraft-inventory li { justify-content: space-between; font-size: 12px; }
-.minecraft-auth { border-color: #445f54; }
-.minecraft-auth > p { color: #b6bfcd; font-size: 13px; line-height: 1.6; }
-.minecraft-auth dl { display: flex; flex-wrap: wrap; gap: 20px 36px; }
-.minecraft-auth code { user-select: all; }
-.minecraft-auth .minecraft-device-code { color: #a8ffce; font-size: 24px; font-weight: 750; letter-spacing: .12em; }
-.minecraft-log-list { display: grid; gap: 0; max-height: 360px; overflow-y: auto; list-style: none; margin: 0; padding: 0; }
-.minecraft-log-list li { display: grid; grid-template-columns: auto auto 1fr; align-items: start; gap: 10px; padding: 11px 0; border-bottom: 1px solid #292d38; }
-.minecraft-log-list li:last-child { border-bottom: 0; }
-.minecraft-log-list time { padding-top: 4px; color: #8d95a9; font-size: 10px; }
-.minecraft-log-list .tag { margin: 0; }
-.minecraft-log-list p { margin: 2px 0 0; color: #c1c8d7; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-
-
 @media (max-width: 1280px) { .app-shell { grid-template-columns: 164px minmax(0, 1fr); }.sidebar { padding-inline: 12px; }.chat-layout.with-companion { grid-template-columns: minmax(0, 1fr) 285px; }.chat-header { padding-inline: 24px; }.transcript-inner { padding-inline: 28px; }.composer-region { padding-inline: 24px; }.companion-panel { padding-inline: 21px; } }
 @media (max-width: 1100px) { .hero-grid { grid-template-columns: 1fr 1fr; }.hero-card { grid-column: span 2; }.companion-page-grid { grid-template-columns: minmax(210px, .8fr) minmax(0, 1fr); }.settings-layout { grid-template-columns: 1fr; }.settings-tabs { display: flex; flex-wrap: wrap; gap: 5px; }.settings-tab-group { display: contents; }.settings-tab-heading { display: none; }.page-scroll { padding: 28px; } }
 @media (max-width: 900px) { .app-shell { grid-template-columns: 74px minmax(0, 1fr); }.sidebar { padding-inline: 10px; }.brand { justify-content: center; padding: 0; }.brand strong, .nav-item span, .nav-section-label, .sidebar-session-heading > span, .sidebar-sessions, .utility-item span, .relationship-summary { display: none; }.primary-navigation { margin-top: 36px; }.nav-item { justify-content: center; padding: 0; }.sidebar-session-heading { justify-content: center; margin-inline: 0; }.utility-navigation { grid-template-columns: 1fr; }.utility-item { justify-content: center; padding-block: 10px; }.page-scroll { padding: 25px; }.two-column, .companion-page-grid { grid-template-columns: 1fr; }.companion-preview-card { height: 380px; }.sidebar-bottom { gap: 4px; } }

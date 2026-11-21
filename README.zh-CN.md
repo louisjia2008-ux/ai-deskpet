@@ -9,7 +9,7 @@ DeskPet 是一个本地优先的 AI 桌面伙伴，仓库内并行保留两套�
 
 Electron 版包含单一 Live2D 伙伴、透明桌面悬浮层、托盘、Companion Console、聊天、AI Provider、任务与专注、记忆、关系、定时任务、可审计的权限门控 Agent Runtime，以及英文/简体中文界面。它使用独立标识 `com.deskpet.companion.electron` 和数据目录 `DeskPet Electron`，可与原生版同时安装运行。
 
-Electron 控制台新增 **Minecraft 陪玩**：迁入 [`minecraft-companion`](https://github.com/louisjia2008-ux/minecraft-companion)（原名 `live2d-mc-companion`）的任务引擎，支持 Java 版入服、任务控制、状态/背包/聊天同步，以及复用 DeskPet 模型的混合规划。使用方法、进程和数据边界见 [Minecraft 陪玩指南](electron/docs/MINECRAFT_COMPANION.md)。
+Electron 控制台的 **Minecraft 陪玩** 使用 Core 引擎。可让机器人连接 Java 版服务器，也可启动带 DeskPet 法杖 Mod 的本地专用服。使用方法见 [Minecraft 陪玩指南](electron/docs/MINECRAFT_COMPANION.md)。
 
 ## 状态与支持矩阵
 
@@ -160,7 +160,7 @@ ThirdParty/       现有第三方来源与 Live2D 通知
 
 顶层 [MIT 许可](LICENSE) 只适用于项目自有源码与文档，不重新许可 Live2D Cubism Core、Cubism SDK 组件、用户模型、角色美术、图片、音频、字体或任何第三方作品。保留的项目自有创意素材单独采用“保留所有权利”。再分发前请阅读 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)、[ASSETS_AND_MODELS.md](ASSETS_AND_MODELS.md) 和 [ASSET_LICENSE.md](ASSET_LICENSE.md)。
 
-`electron/minecraft-companion-runtime/` 和 `electron/minecraft-runtime/` 下的 Minecraft 运行时来自独立仓库 [louisjia2008-ux/minecraft-companion](https://github.com/louisjia2008-ux/minecraft-companion)（原名 `live2d-mc-companion`），采用 **AGPL-3.0-only**，不适用 MIT。见各目录的 `LICENSE`、`COMPANION_SOURCE.json` 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+[Minecraft 陪玩 Core 引擎](electron/minecraft-companion-runtime/)和 [DeskPet Minecraft 专用服 Mod](minecraft-mod/) 采用 **AGPL-3.0-only**。Core 引擎来自独立仓库 [louisjia2008-ux/minecraft-companion](https://github.com/louisjia2008-ux/minecraft-companion)。来源与分发条款见[第三方声明](THIRD_PARTY_NOTICES.md)。
 
 AIRI 派生 Live2D 算法保留固定来源 `moeru-ai/airi@00c6867b7fd8064938de1805814578db8273dafe`、版权通知和 `ThirdParty/` 下 MIT 文本。
 

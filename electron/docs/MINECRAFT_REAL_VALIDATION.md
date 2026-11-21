@@ -1,5 +1,7 @@
 # Minecraft 真实服验证记录 — 2026-10-12 至 2026-10-14
 
+本页记录已退役引擎的历史测试。当前 Core 和法杖 Mod 的操作见 [Minecraft 陪玩指南](MINECRAFT_COMPANION.md)。
+
 ## 2026-10-14：固定25仅修测试，准备地图无关植被适配
 
 固定25仅在原24覆盖两个已独立复核的测试文件，198固定文件，manifest `d8c0efe2a2f4e4f3d84497378560a451a7727949545f872fe420c1386dfc8127`；运行时及原生依赖与24逐字节一致。两个文件完整专项working **66/66 PASS、Node0、226802.882ms**；隔离固定24仅覆盖这两个测试 **66/66 PASS、Node0、227755.178ms**。原32选址合同正文和nativefixture保持，旧无营地原19语句/7断言保持，另增危险实际出生的完整目标/零原生写入负例。完整25 QA未运行，下一草类生产修正后在26一次运行完整QA；不会把24原FAIL改为通过。
@@ -286,7 +288,7 @@ v4复核发现投影字段冲突：creeper的position随后被actor frame.positi
 - [完整事件 events.jsonl](../../../.minecraft-local-test/worlds/real-diamond-05/events.jsonl)
 - [官方服务端完整日志](../../../.minecraft-local-test/worlds/real-diamond-05/server.log)
 
-服务端已通过 `stop` 正常保存所有维度并退出；实际矿道与世界保留。安装、重新从零验收和重新打开该存档的命令见 [本地测试服指南](MINECRAFT_LOCAL_SERVER.md)。
+服务端已通过 `stop` 正常保存所有维度并退出；实际矿道与世界保留。早期重跑命令保存在本页对应实验记录和当时的 Git 版本里。
 
 ## 真实失败与修复
 

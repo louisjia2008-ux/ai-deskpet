@@ -103,24 +103,6 @@ export const memoryInputSchema = z
   })
   .strict();
 
-export const minecraftConnectionSchema = z.object({
-  host: z.string().trim().min(1).max(253).refine((value) => !/[\s/\\?#@]/u.test(value) && !hasControlCharacters(value), 'Use a server hostname or IP address.'),
-  port: z.number().int().min(1).max(65535),
-  username: z.string().trim().min(1).max(254).refine((value) => !hasControlCharacters(value)),
-  auth: z.enum(['offline', 'microsoft']),
-  version: z.string().trim().max(32).regex(/^(auto|1\.\d+(?:\.\d+)?)$/u),
-  ownerName: z.string().trim().max(16).regex(/^[A-Za-z0-9_]*$/u),
-  executorMode: z.enum(['strict', 'hybrid']),
-  providerId: idSchema.nullable(),
-}).strict().superRefine((value, context) => {
-  if (value.auth === 'offline' && !/^[A-Za-z0-9_]{1,16}$/u.test(value.username)) {
-    context.addIssue({ code: 'custom', path: ['username'], message: 'Offline player names use 1–16 letters, numbers or underscores.' });
-  }
-  if (value.executorMode === 'hybrid' && value.providerId === null) {
-    context.addIssue({ code: 'custom', path: ['providerId'], message: 'Select an AI provider for hybrid mode.' });
-  }
-});
-
 export const invokePayloadSchemas = {
   'media:snapshot': emptySchema,
   'media:import-images': emptySchema,
@@ -274,7 +256,6 @@ export const invokePayloadSchemas = {
   'proactive:configure': proactiveConfigSchema,
   'proactive:interaction': emptySchema,
   'chat:open-session': z.object({ sessionId: idSchema }).strict(),
-  'minecraft:get-state': emptySchema,
   'minecraft-companion:get-state': emptySchema,
   'minecraft-companion:connect': minecraftCompanionConfigSchema,
   'minecraft-companion:start': minecraftCompanionTaskSchema,
@@ -289,11 +270,6 @@ export const invokePayloadSchemas = {
   'minecraft-dedicated:restart': emptySchema,
   'minecraft-dedicated:backup': emptySchema,
   'minecraft-dedicated:open-backups': emptySchema,
-  'minecraft:connect': minecraftConnectionSchema,
-  'minecraft:disconnect': emptySchema,
-  'minecraft:submit': z.object({ command: z.string().trim().min(1).max(2000) }).strict(),
-  'minecraft:control': z.object({ action: z.enum(['pause', 'resume', 'cancel', 'stop', 'refresh']) }).strict(),
-  'minecraft:chat': z.object({ message: z.string().trim().min(1).max(240).refine((value) => !value.startsWith('/') && !hasControlCharacters(value), 'Enter a chat message, without server commands.') }).strict(),
   'app:get-state': emptySchema,
   'app:set-locale': z.object({ locale: localeSchema }).strict(),
   'app:set-theme': z.object({ theme: themeSchema }).strict(),
@@ -472,7 +448,6 @@ export const eventChannels = [
   'attention:open-requested',
   'proactive:changed',
   'chat:open-requested',
-  'minecraft:changed',
   'minecraft-companion:changed',
   'minecraft-dedicated:changed',
   'app:changed',

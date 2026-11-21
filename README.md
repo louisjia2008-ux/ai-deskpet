@@ -1,6 +1,6 @@
 # DeskPet
 
-The Electron console includes **Minecraft companion play** using the migrated Mineflayer task engine: Java server connection, task controls, observed status/inventory/chat, and optional planning through a selected DeskPet AI provider. Read the [bilingual Minecraft guide](electron/docs/MINECRAFT_COMPANION.md) for setup and validation limits.
+The Electron console includes **Minecraft companion play** with the Core engine. Connect a bot to a Java Edition server, or run a managed local server with the DeskPet survey-wand Mod. See the [Minecraft guide](electron/docs/MINECRAFT_COMPANION.md).
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -205,7 +205,7 @@ Rights Reserved. Read [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md),
 [ASSETS_AND_MODELS.md](ASSETS_AND_MODELS.md), and
 [ASSET_LICENSE.md](ASSET_LICENSE.md) before redistribution.
 
-The Minecraft runtimes in `electron/minecraft-companion-runtime/` and `electron/minecraft-runtime/` come from the separate repository [louisjia2008-ux/minecraft-companion](https://github.com/louisjia2008-ux/minecraft-companion) (formerly `live2d-mc-companion`) and are licensed under **AGPL-3.0-only**, not MIT. See each directory's `LICENSE`, `COMPANION_SOURCE.json` and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The [Minecraft Companion Core runtime](electron/minecraft-companion-runtime/) and the [DeskPet Minecraft server Mod](minecraft-mod/) are licensed under **AGPL-3.0-only**. The Core runtime is derived from [louisjia2008-ux/minecraft-companion](https://github.com/louisjia2008-ux/minecraft-companion). Source provenance and redistribution terms are recorded in the [third-party notices](THIRD_PARTY_NOTICES.md).
 
 The AIRI-derived Live2D algorithms retain the pinned origin `moeru-ai/airi@00c6867b7fd8064938de1805814578db8273dafe`, copyright notice, and MIT text under `ThirdParty/`.
 

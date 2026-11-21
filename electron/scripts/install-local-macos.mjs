@@ -43,6 +43,8 @@ if (appArgument !== undefined && source !== undefined) throw new Error('Reviewed
 const migrationRoots = ['profile.enc.json', 'settings.json', 'managed', 'vault', 'events', 'workspace', 'migration'];
 // Rollback on this machine also needs the local channel bindings, outboxes,
 // knowledge index and capability vaults. These grants are not portable.
+// The retired Minecraft profile subtree is retained in rollback checkpoints
+// for earlier binaries. The current app uses the independent Core subtree.
 const roots = source === undefined ? [
   ...migrationRoots, 'qq-channel-state.enc.json', 'qq-channel-vault',
   'telegram-channel-state.enc.json', 'telegram-channel-vault', 'knowledge', 'knowledge-vault', 'stdio-bridge-vault', 'mcp-auth-vault',

@@ -26,13 +26,11 @@ const install = (state = initialMinecraftCompanionSnapshot()) => {
 afterEach(cleanup);
 
 describe('MinecraftCompanionPanel', () => {
-  it('handles a build without the companion API without invoking legacy Minecraft', async () => {
-    const legacy = vi.fn();
-    Object.defineProperty(window, 'deskpet', { configurable: true, value: { minecraft: { getState: legacy } } });
+  it('shows when the companion API is unavailable', async () => {
+    Object.defineProperty(window, 'deskpet', { configurable: true, value: {} });
     render(createElement(MinecraftCompanionPanel, { locale: 'en' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Minecraft Companion is unavailable in this app build.');
     expect(screen.getByRole('button', { name: 'Connect basic chat' })).toBeDisabled();
-    expect(legacy).not.toHaveBeenCalled();
   });
 
   it('connects using explicit local defaults and does not present transport ready as world ready', async () => {

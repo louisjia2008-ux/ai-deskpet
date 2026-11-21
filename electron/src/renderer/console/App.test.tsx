@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { axe } from 'vitest-axe';
 
-import type { AppState, CharacterState, ChatEvent, ChatMessage, ChatInteractionState, ChatApprovalRequest, DeskPetApi, DeskTask, MinecraftSnapshot, ResolvedLocale } from '../../shared';
+import type { AppState, CharacterState, ChatEvent, ChatMessage, ChatInteractionState, ChatApprovalRequest, DeskPetApi, DeskTask, ResolvedLocale } from '../../shared';
 import { defaultPluginSettings } from '../../shared/plugins';
 import { initialMinecraftCompanionSnapshot } from '../../shared/minecraft-companion';
 import type { MinecraftCompanionSnapshot } from '../../shared/minecraft-companion';
@@ -67,10 +67,6 @@ const api = (locale: ResolvedLocale): DeskPetApi => ({
   delegations: { openDraft: vi.fn(), submit: vi.fn(), list: vi.fn(async () => []), getResult: vi.fn(), cancelBatch: vi.fn(), cancelChild: vi.fn(), replace: vi.fn(), onChanged: on },
   jobs: { submit: vi.fn(), list: vi.fn(async () => []), get: vi.fn(), cancel: vi.fn(), onChanged: on },
   proactive: { getState: vi.fn(async () => ({ enabled: false, frequency: 'occasional' as const, status: 'off' as const, nextAt: null, attemptsToday: 0, dailyLimit: 6, sessionId: null, lastMessageAt: null })), configure: vi.fn(), noteInteraction: vi.fn(async () => undefined), onChanged: on },
-  minecraft: {
-    getState: vi.fn(async (): Promise<MinecraftSnapshot> => ({ runtimeState: 'stopped', connectionState: 'idle', config: null, status: null, task: null, history: [], inventory: [], logs: [], auth: null, lastError: null })),
-    connect: vi.fn(), disconnect: vi.fn(), submit: vi.fn(), control: vi.fn(), sendChat: vi.fn(), onChanged: on,
-  },
   app: {
     getState: vi.fn(async () => appState(locale)), setLocale: vi.fn(), setTheme: vi.fn(), setHotkey: vi.fn(), setAutoLaunch: vi.fn(),
     showConsole: vi.fn(), setOverlayVisible: vi.fn(), getDiagnostics: vi.fn(), openLoginSettings: vi.fn(), onChanged: on,

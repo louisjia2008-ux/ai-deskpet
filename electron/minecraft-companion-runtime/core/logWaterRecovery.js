@@ -1,7 +1,7 @@
 'use strict';
 
 const { abortError, sleep } = require('./confirm');
-const { naturalWalkingFoot } = require('../vendor/server/minecraft/houseSurfaceGraph');
+const { naturalWalkingFoot } = require('./surfaceFeet');
 
 const WATER = new Set(['water', 'bubble_column', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass']);
 const AIR = new Set(['air', 'cave_air', 'void_air']);

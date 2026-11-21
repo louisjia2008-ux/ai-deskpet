@@ -128,7 +128,6 @@ import { OpenAICompatibleAdapter } from './providers/openai-compatible';
 import { wechatReplyContext } from './channels/wechat/wechat-context';
 import { wechatAssistantSessionIds, wechatLightweightMessageId, WeChatTranscript } from './channels/wechat/wechat-transcript';
 import { contentSecurityPolicy } from './content-security-policy';
-import { MinecraftService } from './minecraft';
 import { MinecraftCompanionService } from './minecraft/companion-service';
 import { MinecraftDedicatedServer } from './minecraft/dedicated-server';
 import { MinecraftDedicatedCompanion } from './minecraft/dedicated-companion';
@@ -406,7 +405,6 @@ export class AppController {
   readonly #mediaOperations = new Set<Promise<unknown>>();
   readonly #mediaAbort = new AbortController();
   readonly #migration: NativeMigrationService;
-  readonly #minecraft: MinecraftService;
   readonly #minecraftCompanion: MinecraftCompanionService;
   readonly #minecraftDedicated: MinecraftDedicatedServer;
   readonly #minecraftDedicatedCompanion: MinecraftDedicatedCompanion;
@@ -662,17 +660,6 @@ export class AppController {
       changed: () => this.windows.send('console', 'memory:changed', this.#memory.list()),
     });
     this.#consolidation = new ConsolidationService(this.#repository, this.#providers, this.#jobs, () => this.windows.send('console', 'consolidation:changed', undefined), () => !this.#closing && !this.#profileMaintenance);
-    const runtimePaths = app.isPackaged
-      ? [join(process.resourcesPath, 'minecraft-runtime', 'bridge.js')]
-      : [app.getAppPath(), __dirname].flatMap((base) => [0, 1, 2, 3, 4].map((depth) =>
-        join(base, ...Array<string>(depth).fill('..'), 'minecraft-runtime', 'bridge.js')));
-    this.#minecraft = new MinecraftService({
-      runtimePath: runtimePaths.find((path) => existsSync(path)) ?? runtimePaths[0] as string,
-      dataDirectory: join(this.#dataRoot, 'minecraft'),
-      providers: this.#providers,
-      onChanged: (state) => this.windows.send('console', 'minecraft:changed', state),
-      onSpeech: (text) => { this.#character.setBubble(text); void this.#emitCharacter(); },
-    });
     const companionRuntimePaths = app.isPackaged
       ? [join(process.resourcesPath, 'minecraft-companion-runtime', 'index.js')]
       : [app.getAppPath(), __dirname].flatMap(base => [0, 1, 2, 3, 4].map(depth =>
@@ -2378,17 +2365,6 @@ export class AppController {
       this.windows.showConsole();
       this.windows.send('console', 'chat:open-requested', sessionId);
     });
-    this.#ipc.register('minecraft:get-state', consoleOnly, () => this.#minecraft.getState());
-    this.#ipc.register('minecraft:connect', consoleOnly, (config) => {
-      this.#assertExternalMinecraftAvailable();
-      const core = this.#minecraftCompanion.getState();
-      if (core.runtimeState !== 'stopped' && core.runtimeState !== 'error') throw new Error('请先断开 Minecraft 基础聊天模式，再连接原有陪玩模式。');
-      return this.#minecraft.connect(config);
-    });
-    this.#ipc.register('minecraft:disconnect', consoleOnly, () => this.#minecraft.disconnect());
-    this.#ipc.register('minecraft:submit', consoleOnly, ({ command }) => this.#minecraft.submit(command));
-    this.#ipc.register('minecraft:control', consoleOnly, ({ action }) => this.#minecraft.control(action));
-    this.#ipc.register('minecraft:chat', consoleOnly, ({ message }) => this.#minecraft.sendChat(message));
     this.#ipc.register('minecraft-companion:get-state', consoleOnly, () => this.#minecraftCompanion.getState());
     this.#ipc.register('minecraft-companion:connect', consoleOnly, config => this.#connectMinecraftCompanion(config));
     this.#ipc.register('minecraft-companion:start', consoleOnly, input => this.#minecraftCompanion.start(input, () => this.#assertMinecraftCompanionAvailable()));
@@ -3473,9 +3449,6 @@ export class AppController {
   }
   #assertMinecraftCompanionAvailable(): void {
     if (this.#closing || this.#profileMaintenance) throw new Error('Minecraft 当前不可用，请稍后重试。');
-    if (['connecting', 'connected', 'disconnecting'].includes(this.#minecraft.getState().connectionState)) {
-      throw new Error('请先断开原有 Minecraft 陪玩模式，再使用基础聊天模式。');
-    }
   }
 
   #minecraftDedicatedState(): MinecraftDedicatedSnapshot {
@@ -5038,7 +5011,6 @@ export class AppController {
     if (this.#focusTimer !== null) clearInterval(this.#focusTimer);
     this.#focusTimer = null;
     this.#ipc.dispose();
-    this.#minecraft.dispose();
     void this.#minecraftCompanion.dispose().catch(() => undefined);
     this.#utility.dispose();
     globalShortcut.unregisterAll();

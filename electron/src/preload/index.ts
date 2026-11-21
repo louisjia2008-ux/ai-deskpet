@@ -16,7 +16,6 @@ import type {
   DeskPetApi,
   ImportProgress,
   MemoryItem,
-  MinecraftSnapshot,
   PermissionDescriptor,
   ProviderConfig,
   RelationshipState,
@@ -268,15 +267,6 @@ const api: DeskPetApi = {
     configure: (config) => invoke('proactive:configure', config),
     noteInteraction: () => invoke('proactive:interaction', {}),
     onChanged: (listener) => on<ProactiveState>('proactive:changed', listener),
-  },
-  minecraft: {
-    getState: () => invoke('minecraft:get-state', {}),
-    connect: (config) => invoke('minecraft:connect', config),
-    disconnect: () => invoke('minecraft:disconnect', {}),
-    submit: (command) => invoke('minecraft:submit', { command }),
-    control: (action) => invoke('minecraft:control', { action }),
-    sendChat: (message) => invoke('minecraft:chat', { message }),
-    onChanged: (listener) => on<MinecraftSnapshot>('minecraft:changed', listener),
   },
   minecraftCompanion: {
     getState: () => invoke('minecraft-companion:get-state', {}),

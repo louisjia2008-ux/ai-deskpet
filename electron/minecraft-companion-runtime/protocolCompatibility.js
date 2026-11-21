@@ -76,5 +76,42 @@ function withMinecraftProtocolCompatibility(options) {
   return { ...options, Client: CompatibleClient };
 }
 
+function flattenReason(value) {
+  if (typeof value === 'string') {
+    try { return flattenReason(JSON.parse(value)); } catch { return value.slice(0, 2000); }
+  }
+  if (Array.isArray(value)) return value.map(flattenReason).join('').slice(0, 2000);
+  if (value && typeof value === 'object') {
+    return [value.text || value.translate || '', ...(value.extra || []), ...(value.with || [])]
+      .map(flattenReason).join(' ').trim().slice(0, 2000);
+  }
+  return '';
+}
+
+function supportsPlayerLoaded(bot) {
+  // minecraft-data has no dedicated supportFeature for this acknowledgement.
+  // Gate on the resolved version's actual PLAY packet map and empty payload,
+  // so legacy clients never serialize an unknown packet or guess a version.
+  const types = bot.registry?.protocol?.play?.toServer?.types;
+  const payload = types?.packet_player_loaded;
+  const packetFields = types?.packet?.[1];
+  if (payload?.[0] !== 'container' || !Array.isArray(payload[1]) || payload[1].length !== 0
+    || !Array.isArray(packetFields)) return false;
+  const names = packetFields.find((field) => field.name === 'name')?.type?.[1]?.mappings;
+  const parameters = packetFields.find((field) => field.name === 'params')?.type?.[1]?.fields;
+  return Object.values(names || {}).includes('player_loaded') && parameters?.player_loaded === 'packet_player_loaded';
+}
+
+async function acknowledgePlayerLoaded(bot, isCurrent = () => true) {
+  if (!supportsPlayerLoaded(bot)) return false;
+  await bot.waitForChunksToLoad();
+  if (!isCurrent()) return false;
+  if (bot._client?.state !== 'play' || typeof bot._client.write !== 'function') {
+    throw new Error('Minecraft 世界加载确认时连接已不可写');
+  }
+  bot._client.write('player_loaded', {});
+  return true;
+}
+
 module.exports = { withMinecraftProtocolCompatibility, correctedEntityMetadataProtocol,
-  installMinecraftBedWakeCompatibility };
+  installMinecraftBedWakeCompatibility, acknowledgePlayerLoaded, flattenReason };

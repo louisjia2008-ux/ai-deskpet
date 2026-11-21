@@ -25,7 +25,6 @@ Live2DRuntime/node_modules/
 Live2DRuntime/.cache/
 electron/node_modules/
 electron/.vitest/
-electron/minecraft-runtime/node_modules/
 electron/minecraft-companion-runtime/node_modules/
 electron/playwright-mcp-runtime/node_modules/
 electron/.minecraft-package/

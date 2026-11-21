@@ -6,7 +6,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const EXPOSED_DOMAINS = ['app', 'attention', 'autoMemory', 'automation', 'backup', 'character', 'chat', 'chatWork', 'coding', 'companionRecent', 'consolidation', 'delegations', 'imports', 'jobs', 'journal', 'knowledge', 'media', 'memory', 'memoryRecall', 'memorySleep', 'migration', 'minecraft', 'minecraftCompanion', 'permissions', 'persona', 'plugins', 'proactive', 'providers', 'qq', 'rea', 'recovery', 'relationship', 'research', 'speech', 'tasks', 'telegram', 'timers', 'usage', 'vmSandbox', 'wechat', 'wechatDigests', 'wechatFollowup', 'wechatInbox'];
+const EXPOSED_DOMAINS = ['app', 'attention', 'autoMemory', 'automation', 'backup', 'character', 'chat', 'chatWork', 'coding', 'companionRecent', 'consolidation', 'delegations', 'imports', 'jobs', 'journal', 'knowledge', 'media', 'memory', 'memoryRecall', 'memorySleep', 'migration', 'minecraftCompanion', 'minecraftDedicated', 'permissions', 'persona', 'plugins', 'proactive', 'providers', 'qq', 'rea', 'recovery', 'relationship', 'research', 'speech', 'tasks', 'telegram', 'timers', 'usage', 'vmSandbox', 'wechat', 'wechatDigests', 'wechatFollowup', 'wechatInbox'];
 
 
 let application: ElectronApplication;
@@ -135,12 +135,12 @@ test('switches language, surfaces capabilities, and keeps preload narrow', async
 test('exposes Minecraft play without connecting or enabling a model on first run', async () => {
   await consolePage.locator('nav').getByRole('button', { name: /^(Tools|工具)$/ }).click();
   await consolePage.getByRole('tab', { name: /Minecraft|陪玩/ }).click();
-  const state = await consolePage.evaluate(() => window.deskpet.minecraft.getState());
+  const state = await consolePage.evaluate(() => window.deskpet.minecraftCompanion!.getState());
   expect(state.runtimeState).toBe('stopped');
-  expect(state.connectionState).toBe('idle');
+  expect(state.connectionState).toBe('disconnected');
   expect(state.config).toBeNull();
   expect(state.auth).toBeNull();
-  await expect(consolePage.locator('.minecraft-page').getByRole('button', { name: /^(Connect|连接)$/ })).toBeVisible();
+  await expect(consolePage.locator('.minecraft-page').getByRole('button', { name: /^(Connect basic chat|连接机器人)$/ })).toBeVisible();
   const fit = await consolePage.locator('.minecraft-page').evaluate((element) => ({ width: element.clientWidth, scrollWidth: element.scrollWidth }));
   expect(fit.scrollWidth).toBeLessThanOrEqual(fit.width + 1);
   await mkdir(join(process.cwd(), 'evidence'), { recursive: true });
@@ -149,7 +149,7 @@ test('exposes Minecraft play without connecting or enabling a model on first run
   await expect(consolePage.getByRole('tab', { name: '陪玩', exact: true })).toBeVisible();
   await consolePage.screenshot({ path: join(process.cwd(), 'evidence', 'minecraft-console-zh.png') });
   await consolePage.evaluate(() => window.deskpet.app.setLocale('en'));
-  await expect(consolePage.getByLabel('Server port', { exact: true })).toBeVisible();
+  await expect(consolePage.getByLabel('Port', { exact: true })).toBeVisible();
 });
 
 test('starts the real Minecraft helper and shows a refused connection without inventing world state', async () => {
@@ -159,17 +159,17 @@ test('starts the real Minecraft helper and shows a refused connection without in
   if (address === null || typeof address === 'string') throw new Error('Expected a fixture TCP port.');
   const port = address.port;
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  await consolePage.getByLabel('Server port', { exact: true }).fill(String(port));
-  await consolePage.getByLabel('Server version', { exact: true }).fill('1.21.8');
-  await consolePage.getByRole('button', { name: 'Connect', exact: true }).click();
-  await expect.poll(async () => (await consolePage.evaluate(() => window.deskpet.minecraft.getState())).lastError).toBeTruthy();
-  const state = await consolePage.evaluate(() => window.deskpet.minecraft.getState());
-  expect(state.status?.connected).not.toBe(true);
-  expect(state.connectionState).not.toBe('connected');
-  expect(state.lastError).toMatch(/ECONNREFUSED|connect|连接/iu);
+  await consolePage.getByLabel('Port', { exact: true }).fill(String(port));
+  await consolePage.getByLabel('Version', { exact: true }).fill('1.21.8');
+  await consolePage.getByRole('button', { name: 'Connect basic chat', exact: true }).click();
+  await expect.poll(async () => (await consolePage.evaluate(() => window.deskpet.minecraftCompanion!.getState())).connectionState).toBe('error');
+  const state = await consolePage.evaluate(() => window.deskpet.minecraftCompanion!.getState());
+  expect(state.observation).toBeNull();
+  expect(state.connectionState).toBe('error');
+  expect(state.lastError).toMatch(/ECONNREFUSED/u);
   await expect(consolePage.getByRole('alert')).toBeVisible();
-  await consolePage.evaluate(() => window.deskpet.minecraft.disconnect());
-  await expect.poll(async () => (await consolePage.evaluate(() => window.deskpet.minecraft.getState())).runtimeState).toBe('stopped');
+  await consolePage.evaluate(() => window.deskpet.minecraftCompanion!.disconnect());
+  await expect.poll(async () => (await consolePage.evaluate(() => window.deskpet.minecraftCompanion!.getState())).runtimeState).toBe('stopped');
 });
 
 test('persists a task across an application restart when secure storage is available', async () => {

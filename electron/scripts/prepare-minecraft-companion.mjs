@@ -39,4 +39,4 @@ await cp(source, target, {
       && !/\.(?:test|spec)\.[cm]?js$/u.test(parts.at(-1) ?? '');
   },
 });
-process.stdout.write('Pinned Minecraft Companion core prepared separately from the legacy runtime.\n');
+process.stdout.write('Pinned Minecraft Companion core prepared.\n');
