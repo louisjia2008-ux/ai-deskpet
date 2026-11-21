@@ -55,7 +55,7 @@ function createTargetMemory({ now = Date.now, load = [], onChange = () => {}, em
         if (!found || found.failures !== 3) return null;
         return retry(found, observe(spec)) ? null : { reason: found.reason, until: found.until };
       },
-      async run(spec, attempt, recover = null) {
+      async run(spec, attempt, recover = null, reviewFailure = null) {
         if (!valid()) return { ok: false, reason: 'aborted' };
         const fields = context(spec);
         let found = entries.get(fields.key);
@@ -85,10 +85,16 @@ function createTargetMemory({ now = Date.now, load = [], onChange = () => {}, em
         const failures = (found?.failures || 0) + 1;
         const reason = reasonOf(result.reason);
         const sameReasonFailures = found?.reason === reason ? found.sameReasonFailures + 1 : 1;
-        const until = now() + (fields.step === 'chase' ? HUNT_TTL : TTL);
+        const failureAt = now();
+        const until = failureAt + (fields.step === 'chase' ? HUNT_TTL : TTL);
         const state = { key: fields.key, failures, sameReasonFailures, reason, until, witness: observe(spec) };
+        if (reviewFailure?.(fields, reason, () => {
+          if (entries.get(fields.key) !== state) return;
+          save(fields.key, found || null);
+          return { ...fields, originalReason: reason, excluded: failures === 3, failureAt };
+        })) return { ok: false, reason: 'self_stuck', sourceHandled: true };
         save(fields.key, state);
-        record('target_failure', { ...fields, reason, failures, sameReasonFailures, recovery: extending });
+        record('target_failure', { ...fields, reason, failures, sameReasonFailures, recovery: extending, failureAt });
         if (sameReasonFailures > 3) record('target_invariant', { ...fields, reason, failures, sameReasonFailures });
         if (failures === 3) record('target_excluded', { ...fields, reason, failures, until });
         return { ...result, sourceHandled: true, ...(failures === 3 ? { targetExcluded: true, retryAt: until } : {}) };
@@ -100,10 +106,24 @@ function createTargetMemory({ now = Date.now, load = [], onChange = () => {}, em
 
 const fallback = new WeakMap();
 function targetsFor(bot, ctx = {}) {
-  if (ctx.adapt?.targets) return ctx.adapt.targets;
-  const memory = bot.companionTargets || fallback.get(bot) || createTargetMemory();
-  if (!bot.companionTargets) fallback.set(bot, memory);
-  return memory.scope(() => !ctx.signal?.aborted, ctx.record);
+  let scope = ctx.adapt?.targets;
+  if (!scope) {
+    const memory = bot.companionTargets || fallback.get(bot) || createTargetMemory();
+    if (!bot.companionTargets) fallback.set(bot, memory);
+    scope = memory.scope(() => !ctx.signal?.aborted, ctx.record);
+  }
+  const tracker = bot.companionSelfStuck;
+  if (!tracker || ctx.selfRescue) return scope;
+  return {
+    excluded: scope.excluded,
+    run(spec, attempt, recover) {
+      const origin = bot.entity?.position?.clone();
+      return tracker.target(() => scope.run(spec, attempt, recover,
+        (fields, reason, undo) => tracker.failed(posTarget(fields), reason, origin, undo)));
+    },
+  };
 }
+
+const posTarget = ({ position, step, target }) => step === 'chase' ? target : `${position.x},${position.y},${position.z}`;
 
 module.exports = { createTargetMemory, targetsFor };

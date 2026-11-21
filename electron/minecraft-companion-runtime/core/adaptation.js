@@ -179,7 +179,7 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
   }
 
   function outcome(p, result, { threshold = LIMIT, valid = () => true, learn = null } = {}) {
-    if (!valid() || !result || result.waited || result.reason === 'aborted') return result;
+    if (!valid() || !result || result.waited || ['aborted', 'self_stuck'].includes(result.reason)) return result;
     const e = entry(p);
     // Do not let late/cancelled outcomes change a newer decision.
     if (e.index !== p.index || e.revision !== p.revision) return { ...result, sourceHandled: true };

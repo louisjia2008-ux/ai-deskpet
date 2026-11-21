@@ -65,7 +65,7 @@ function fitForNight(bot) {
 // nights, pearls are hunted in the dark, and the owner is guarded where they
 // stand. Once the house was built, a guard at night went home to bed and left
 // the owner to the zombies.
-const NIGHT_GOALS = new Set(['homestead', 'hunt_pearls', 'follow_owner', 'come_to_owner']);
+const NIGHT_GOALS = new Set(['homestead', 'guest_bed', 'hunt_pearls', 'follow_owner', 'come_to_owner']);
 
 /**
  * Where night rest takes the bot: { bed, centre } of the finished house,
@@ -123,6 +123,7 @@ function configureMovements(bot) {
   const KEEP = /(_fence|_fence_gate|_bed|_door|^chest|^trapped_chest|^furnace|^crafting_table|^hopper|^barrel)$/;
   for (const block of Object.values(bot.registry.blocksByName)) {
     if (KEEP.test(block.name)) movements.blocksCantBreak.add(block.id);
+    if (block.name.endsWith('_bed')) movements.blocksToAvoid.add(block.id);
   }
   // Water is allowed but costly: banning it left the bot unable to reach
   // anything across a lake (all the animals on the far shore).
@@ -133,6 +134,7 @@ function configureMovements(bot) {
   movements.exclusionAreasStep.push((block) => {
     if (!block?.position) return 0;
     const below = bot.blockAt(block.position.offset(0, -1, 0));
+    if (block.name?.endsWith('_bed') || below?.name.endsWith('_bed')) return 1000;
     return below && leaves.has(below.type) ? 25 : 0;
   });
   trackReturnPositions(bot, movements);
@@ -185,6 +187,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   let survey = null;
   const adaptation = autonomy ? require('./adaptation').createAdaptation({ store: adaptationStore, onEvent }) : null;
   if (adaptation) bot.companionTargets = adaptation.targets;
+  const selfStuck = require('./self-stuck').createSelfStuck(bot, { emit: (type, data) => onEvent({ type, at: Date.now(), ...data }) });
+  const priorSelfStuck = bot.companionSelfStuck;
+  bot.companionSelfStuck = selfStuck;
   const policy = { risk: 'normal', guard: 'self_first' };
   let goalOwner = null;
   // The connection owns this evidence even while a cached goal is retired.
@@ -227,6 +232,8 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     } });
   const homeMaintenance = createHomeMaintenance({ bot, home: () => director?.memory.homestead,
     activeGoal: () => brain?.status().goal?.name });
+  const homeEscape = require('./behaviors/homeEscape').createHomeEscape({ bot, tracker: selfStuck,
+    home: () => goalOwner?.goal?.name === 'homestead' ? goalOwner.goal : director?.memory.homestead });
   const behaviors = [...createSurvivalBehaviors({ bot, spare: (entity) => spare(entity),
     feeding: () => FEEDING_GOALS.has(brain?.status().goal?.name),
     // The departure gate is 18; the ordinary survival threshold is 14.
@@ -236,7 +243,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     surveyArea: () => survey?.area ?? null,
     suppressDeathDrops: () => surveyDeathEpoch === bodyLifeEpoch,
     home: () => (director ? homeOf(director.memory)?.centre || null : null) }), ...recovery.behaviors,
-    nightRest, homeMaintenance, ...createEndHazards({ bot, onEvent: (event) => onEvent(event) }),
+    homeEscape, nightRest, homeMaintenance, ...createEndHazards({ bot, onEvent: (event) => onEvent(event) }),
     ...(adaptation ? [require('./behaviors/mineRetreat').createMineRetreat({ bot, adaptation,
       enabled: () => !survey && director?.ownsGoal() })] : [])];
   const usedGoals = new Set();
@@ -272,6 +279,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     if (!home || !memory?.house) return;
     const value = { anchor: memory.house.anchor, variant: memory.house.variant, established: memory.established === true,
       pinned: memory.pinned === true, verified: { ...memory.verified },
+      construction: { owned: memory.owned, temporary: memory.temporary, breach: memory.breach,
+        furniture: Object.fromEntries(['crafting_table', 'furnace', 'chest', 'bed', 'guestBed']
+          .map(id => [id, memory.house.furniture[id]])) },
       ...(autonomy ? { progression: Object.fromEntries(progressionFields.filter((key) => director.memory[key] !== undefined)
         .map((key) => [key, director.memory[key]])) } : {}) };
     const text = JSON.stringify(value);
@@ -300,6 +310,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       // list of all goals ever submitted to this long-lived companion.
       if (['goal_done', 'goal_failed', 'goal_cleared', 'goal_yielded', 'stopped'].includes(event.type)) {
         spare = () => false;
+        if (event.goal === 'homestead' || goalOwner?.goal?.name === 'homestead') {
+          (goalOwner?.goal || director?.memory.homestead)?.requestCleanup?.();
+        }
         if (goalOwner && event.generation === goalOwner.generation) retireGoal(goalOwner);
       }
       recovery.observe(event);
@@ -356,6 +369,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   // Its goals go through useGoal too, so an autonomous ranch also spares its herd.
   const directorBrain = { status: () => brain.status(), setGoal: useGoal, clearGoal: (reason) => brain.clearGoal(reason) };
   director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, stageOf, scope: range, onEvent, adaptation,
+    onIdle(state, reason) {
+      if (reason === 'no_eligible_card_until_retry' && state.isDay !== false && !state.sheltered) selfStuck.requestProbe();
+    },
     onOverworldDeath(death, deaths, memory) {
       if (!memory.cautiousAfterDeath) {
         setRisk('cautious');
@@ -390,6 +406,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     goal.memory.established = savedHome.established === true;
     // A site the bot chose itself may still be given up, as before the reconnect.
     goal.memory.pinned = savedHome.pinned !== false;
+    goal.restoreConstruction(savedHome.construction);
     for (const key of Object.keys(goal.memory.verified)) goal.memory.verified[key] = savedHome.verified?.[key] === true;
     director.memory.homestead = goal;
   }
@@ -415,7 +432,9 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
         observeProgress();
         rememberHome();
       }
-      if (!survey && !paused && !dispatching && !retiring && !retirementFailed && !brain.status().blocked) director.tick();
+      selfStuck.moved();
+      if (!survey && !paused && !dispatching && !retiring && !retirementFailed && !brain.status().blocked
+        && !selfStuck.state() && !selfStuck.probe() && !director.memory.homestead?.needsCleanup?.()) director.tick();
     } catch (error) { onEvent({ type: 'autonomy_error', at: Date.now(), reason: String(error?.message || error) }); }
     brain.tick().catch(() => {});
   }, tickMs);
@@ -436,6 +455,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   if (autonomy) bot.on('messagestr', onDeathMessage);
   const onDeath = () => {
     if (disposed) return;
+    selfStuck.release();
     // Survival's death listener has already checked which life just ended.
     if (autonomy && director.isEnabled()) {
       routeDeathAt = Date.now();
@@ -622,6 +642,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
         if (priorBodyLife) Object.defineProperty(bot, 'companionBodyLife', priorBodyLife);
         else delete bot.companionBodyLife;
       }
+      if (bot.companionSelfStuck === selfStuck) bot.companionSelfStuck = priorSelfStuck;
       if (bot.companionProtectBlock === director.memory.homestead?.memory.protectBlock) {
         if (priorHomeProtection === undefined) delete bot.companionProtectBlock;
         else bot.companionProtectBlock = priorHomeProtection;
@@ -732,7 +753,8 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       await joinRetirement();
       haltBody(bot);
     },
-    status: () => ({ ...brain.status(), paused, disposed, cleanupFailed: retirementFailed, recovery: recovery.status(), autonomy: director.status() }),
+    status: () => ({ ...brain.status(), paused, disposed, cleanupFailed: retirementFailed, recovery: recovery.status(),
+      selfStuck: selfStuck.state(), autonomy: director.status() }),
     /** Terminal all-stop; construct a new companion to restart. Does not disconnect the bot. */
     stopAll: dispose,
     dispose,

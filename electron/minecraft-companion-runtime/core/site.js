@@ -99,7 +99,8 @@ function evaluateSite(blockAt, corner, around, { variant = 'starter', protectedC
 }
 
 /** Best nearby site within `radius` of `around`, or null. */
-function chooseSite(blockAt, around, { radius = 32, step = 3, maxWork = 12, avoid = () => false, variant = 'starter', protectedCell } = {}) {
+function chooseSite(blockAt, around, { radius = 32, step = 3, maxWork = 12, avoid = () => false, variant = 'starter',
+  protectedCell, access = () => ({}) } = {}) {
   let best = null;
   const center = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
   for (let dx = -radius; dx <= radius; dx += step) {
@@ -108,7 +109,10 @@ function chooseSite(blockAt, around, { radius = 32, step = 3, maxWork = 12, avoi
       const corner = { x: center.x + dx - half, z: center.z + dz - half };
       const site = evaluateSite(blockAt, corner, center, { variant, protectedCell });
       if (!site || site.fills + site.digs > maxWork || avoid(site.anchor)) continue;
-      if (!best || site.cost < best.cost) best = site;
+      if (!best || site.cost < best.cost) {
+        const route = access(createStarterHouse(site.anchor, site));
+        if (route) best = { ...site, route };
+      }
     }
   }
   return best;
@@ -128,7 +132,7 @@ function canClearTerrain(blockAt, p) {
   return (GROUND.has(block?.name) || caveRock(block)) && safeCaveDig(blockAt, p);
 }
 
-function chooseHillside(blockAt, around, { avoid = () => false, protectedCell = () => false } = {}) {
+function chooseHillside(blockAt, around, { avoid = () => false, protectedCell = () => false, access = () => ({}) } = {}) {
   const x0 = Math.floor(around.x), y0 = Math.floor(around.y), z0 = Math.floor(around.z);
   const read = (p) => blockAt(p.x, p.y, p.z);
   for (const distance of [0, 4, 8, 12, 16, 20, 24]) {
@@ -145,7 +149,9 @@ function chooseHillside(blockAt, around, { avoid = () => false, protectedCell = 
           const b = read(p);
           return b && (isSoft(b) || caveRock(b) || (p.z < anchor.z && canClearTerrain(blockAt, p))) && safeCaveDig(blockAt, p);
         })) continue;
-        return { anchor, variant: 'hillside', fills: 0, digs: house.clearance.filter((p) => !isSoft(read(p))).length };
+        const route = access(house);
+        if (!route) continue;
+        return { anchor, variant: 'hillside', fills: 0, digs: house.clearance.filter((p) => !isSoft(read(p))).length, route };
       }
     }
   }

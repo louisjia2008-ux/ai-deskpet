@@ -350,7 +350,8 @@ function createCoreHost({ dataDir, emit = () => {}, createBot = require('minefla
       return clone({ at: state.at, alive: state.alive, health: state.health, food: state.food,
         position: state.position, dimension: bot.game?.dimension ?? null,
         inventory: state.inventory, freeSlots: state.freeSlots, isDay: state.isDay, timeOfDay: state.timeOfDay,
-        home: companion?.home?.() ?? null });
+        sleeping: bot.isSleeping === true, sheltered: state.sheltered, inWater: state.inWater,
+        mining: bot.targetDigBlock?.name ?? null, home: companion?.home?.() ?? null });
     } catch { return null; } // World transitions can temporarily invalidate a client snapshot.
   }
   function status() {

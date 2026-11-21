@@ -69,6 +69,7 @@ function createDirector({
   waitBudgetMs = MINUTE,
   yieldCooldownMs = 30_000,
   onOverworldDeath = () => {},
+  onIdle = () => {},
   adaptation = null,
 } = {}) {
   if (!brain || typeof perceive !== 'function') throw new TypeError('brain and perceive are required');
@@ -229,6 +230,7 @@ function createDirector({
         const scores = [...choice.scores, ...excluded];
         const until = Math.min(...scores.filter((s) => s.until > now()).map((s) => s.until));
         const reason = Number.isFinite(until) ? 'no_eligible_card_until_retry' : 'no_current_demand_or_prerequisites';
+        onIdle(state, reason);
         const signature = JSON.stringify([stage, scores]);
         if (lastIdle !== signature) emit('autonomy_idle', { stage, reason, until: Number.isFinite(until) ? until : null, scores });
         lastIdle = signature;

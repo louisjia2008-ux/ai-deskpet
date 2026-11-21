@@ -1,0 +1,60 @@
+'use strict';
+
+const { Vec3 } = require('vec3');
+const { posKey } = require('./blacklist');
+
+const SIDES = [[0, -1], [-1, 0], [1, 0], [0, 1]];
+const isBed = (block) => Boolean(block?.name?.endsWith('_bed'));
+const unsafe = (b) => /^(water|lava|bubble_column|fire|soul_fire|powder_snow|cobweb|cactus|magma_block|.*campfire)$/.test(b.name);
+const clear = (b) => Boolean(b && b.boundingBox === 'empty' && !unsafe(b));
+const supports = (b) => Boolean(b && b.boundingBox === 'block' && !isBed(b) && !unsafe(b));
+
+function safeStand(read, p) {
+  const v = new Vec3(p.x, p.y, p.z);
+  return supports(read(v.offset(0, -1, 0))) && clear(read(v)) && clear(read(v.offset(0, 1, 0)));
+}
+
+// A house has one walking level. Only cardinal steps through full-height
+// openings count; beds aren't suitable floor under a two-block-high ceiling.
+// A door itself is operable, not a piece of furniture that partitions the room.
+function topology(house, read, { occupy = [], remove = [] } = {}) {
+  const { x, y, z } = house.anchor;
+  const door = house.furniture.door.position;
+  const occupied = new Set(occupy.map(posKey)), removed = new Set(remove.map(posKey));
+  const get = (p) => {
+    const key = posKey(p);
+    if (occupied.has(key)) return { name: 'planned_furniture', boundingBox: 'block' };
+    if (removed.has(key)) return { name: 'air', boundingBox: 'empty' };
+    return read(p);
+  };
+  let known = true;
+  const walkable = (p, isDoor = false) => {
+    const floor = get(p.offset(0, -1, 0));
+    const space = [get(p), get(p.offset(0, 1, 0))];
+    known &&= Boolean(floor && space.every(Boolean));
+    return supports(floor) && space.every((b) => clear(b) || (isDoor && b?.name.endsWith('_door')));
+  };
+  const cells = new Map();
+  for (let dx = 1; dx < house.size - 1; dx++) {
+    for (let dz = 1; dz < house.size - 1; dz++) {
+      const p = new Vec3(x + dx, y, z + dz);
+      if (walkable(p)) cells.set(posKey(p), p);
+    }
+  }
+  const threshold = new Vec3(door.x, door.y, door.z);
+  const porch = new Vec3(house.entrance.x, house.entrance.y, house.entrance.z);
+  const open = walkable(threshold, true) && walkable(porch);
+  const reachable = new Set();
+  const queue = open ? [threshold] : [];
+  for (let i = 0; i < queue.length; i++) {
+    for (const [dx, dz] of SIDES) {
+      const p = queue[i].offset(dx, 0, dz);
+      const key = posKey(p);
+      if (cells.has(key) && !reachable.has(key)) { reachable.add(key); queue.push(p); }
+    }
+  }
+  const disconnected = [...cells.values()].filter(p => !reachable.has(posKey(p)));
+  return { known, open, cells, reachable, disconnected, connected: known && open && cells.size > 0 && !disconnected.length };
+}
+
+module.exports = { topology, safeStand, supports, clear, isBed, SIDES };

@@ -138,7 +138,7 @@ function createBrain({
     }
     // Being interrupted by survival is not a lack of progress, and neither is
     // waiting out the night: a wait neither spends nor refills the budget.
-    if (preempted) return;
+    if (preempted || result?.reason === 'self_stuck') return;
     const yielded = entry.autonomy?.outcome(result, now() - entry.startedAt);
     if (yielded) {
       goal = null;

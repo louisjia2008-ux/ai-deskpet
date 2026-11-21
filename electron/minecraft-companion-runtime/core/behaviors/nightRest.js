@@ -127,7 +127,7 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, a
         }
       }
       await sleep(3000, ctx.signal);
-      return { ok: true, waited: true };
+      return { ok: true, waited: true, reason: 'sheltering_until_daylight' };
     },
   };
   const onDeath = () => { bunker = null; shutForSleep = false; };

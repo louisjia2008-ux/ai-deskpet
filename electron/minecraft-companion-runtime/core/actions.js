@@ -124,17 +124,35 @@ function offCentre(bot) {
 }
 
 async function goTo(bot, ctx, goal, options = {}) {
+  const exclusions = bot.pathfinder?.movements?.exclusionAreasStep;
+  if (ctx.dryRoute && exclusions && !options.dryScoped) {
+    const { wet } = require('./dry-route');
+    const avoidWater = b => wet(b) || (b?.position && wet(bot.blockAt(b.position.offset(0, 1, 0)))) ? 1000 : 0;
+    exclusions.push(avoidWater);
+    try { return await goTo(bot, ctx, goal, { ...options, dryScoped: true }); }
+    finally {
+      const i = exclusions.indexOf(avoidWater);
+      if (i >= 0) exclusions.splice(i, 1);
+    }
+  }
   const { targetY } = options;
   if (Number.isFinite(targetY) && targetY - bot.entity.position.y > 3 && underground(bot)) {
     return withClimbing(bot, targetY, () => goTo(bot, ctx, goal, { ...options, targetY: undefined }));
   }
+  const before = !ctx.selfRescue && !ctx.nearDestination && bot.companionSelfStuck ? bot.entity.position.clone() : null;
+  const done = (result) => {
+    const p = goal.pos || (Number.isFinite(goal.x) && Number.isFinite(goal.z)
+      ? { x: goal.x, y: Number.isFinite(goal.y) ? goal.y : Math.floor(bot.entity.position.y), z: goal.z } : null);
+    if (before && bot.companionSelfStuck.pathFailed(p, result, before)) return { ok: false, reason: 'self_stuck', sourceHandled: true };
+    return result;
+  };
   if (offCentre(bot) && !goal.isEnd(bot.entity.position.floored())) await recentre(bot, ctx);
   const first = await goToOnce(bot, ctx, goal, options);
   // A caller with its own shared recovery deadline can own the next attempt.
-  if (first.reason !== 'no_progress' || options.retryNoProgress === false) return first;
+  if (first.reason !== 'no_progress' || options.retryNoProgress === false) return done(first);
   // Stuck at the start: step into an open neighbouring cell and try once more.
   await nudge(bot, ctx);
-  return goToOnce(bot, ctx, goal, options);
+  return done(await goToOnce(bot, ctx, goal, options));
 }
 
 async function goToOnce(bot, ctx, goal, { timeoutMs = 30000, arrived } = {}) {
@@ -167,6 +185,14 @@ async function goToOnce(bot, ctx, goal, { timeoutMs = 30000, arrived } = {}) {
 }
 
 async function goNear(bot, ctx, position, range = 2, options = {}) {
+  const tracker = !ctx.selfRescue && bot.companionSelfStuck;
+  const before = tracker && bot.entity.position.clone();
+  const result = await goNearAdapted(bot, before ? { ...ctx, nearDestination: true } : ctx, position, range, options);
+  if (!result.ok && tracker?.pathFailed(position, result, before)) return { ok: false, reason: 'self_stuck', sourceHandled: true };
+  return result;
+}
+
+async function goNearAdapted(bot, ctx, position, range, options) {
   if (!ctx.adapt || options.skipAdaptation || String(bot.game?.dimension || '').replace('minecraft:', '') !== 'overworld'
     || bot.entity.position.distanceTo(position) <= range + 1.5) return goNearOnce(bot, ctx, position, range, options);
   const task = { position, target: 'walk' };
@@ -273,8 +299,9 @@ function withinReach(bot, position, reach = 4.5) {
   return eye.distanceTo(position.offset(0.5, 0.5, 0.5)) <= reach;
 }
 
-async function digBlock(bot, ctx, block, { timeoutMs = 12000, tool: chosen = null, point = null, face = null } = {}) {
-  if (bot.companionProtectBlock?.(block)) return fail('protected_home');
+async function digBlock(bot, ctx, block, { timeoutMs = 12000, tool: chosen = null, point = null, face = null, ownedHomeRemoval = null } = {}) {
+  if (ownedHomeRemoval && !ownedHomeRemoval(block)) return fail('not_owned_home_block');
+  if (bot.companionProtectBlock?.(block) && !ownedHomeRemoval?.(block)) return fail('protected_home');
   const position = block.position;
   if (bot.companionPlayerBlock?.(position)) return fail('protected_player_block');
   const initialPermit = surveyDigPermit(bot, ctx, position);
@@ -291,6 +318,9 @@ async function digBlock(bot, ctx, block, { timeoutMs = 12000, tool: chosen = nul
   }
   const current = bot.blockAt(position);
   if (!current || current.name !== originalName) return fail('block_changed');
+  if (bot.companionPlayerBlock?.(position)) return fail('protected_player_block');
+  if (ownedHomeRemoval && !ownedHomeRemoval(current)) return fail('not_owned_home_block');
+  if (bot.companionProtectBlock?.(current) && !ownedHomeRemoval?.(current)) return fail('protected_home');
   if (initialPermit ? !current.diggable : !bot.canDigBlock(current)) return fail('cannot_dig');
   // Mid-air digging is five times slower on the server than the client's
   // timing assumes, and the break is rejected. Wait to land (not in water).
