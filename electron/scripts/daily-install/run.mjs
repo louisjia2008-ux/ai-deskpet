@@ -108,6 +108,11 @@ async function install(context, approvedAsar) {
   worker('pause');
   // Quit the exact configured bundle, never another app selected only by its title.
   command('/usr/bin/osascript', ['-e', `tell application ${JSON.stringify(config.installedApp)} to quit`]);
+  // Quitting saves and stops the local Minecraft server first (up to 60 s); wait for every bundle process to exit.
+  const bundle = config.installedApp + '/Contents/';
+  const running = () => command('/bin/ps', ['-axo', 'command='], { capture: true }).split('\n').some(line => line.startsWith(bundle));
+  for (const until = Date.now() + 120_000; running() && Date.now() < until;) execFileSync('/bin/sleep', ['1']);
+  check(!running(), 'daily-app-did-not-exit');
   worker('backup');
   command(config.python, ['-B', join(here, 'prepare-copy.py')]);
   node('review.cjs');
