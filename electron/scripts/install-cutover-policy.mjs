@@ -388,6 +388,11 @@ const sameSelfDoctorV3Runtime = {
   mainSHA256: 'a27031d9231af0d1cc62e848b24a5c06fcde91e439a093952c83d29f6366d5f0',
   asarSHA256: '5a5608877086fad515877421f04c6d037f0c50e97422e362fb020f8331ee69eb',
 };
+const modelFollowMomentsRuntime = {
+  sourceSHA256: 'ef1fce4de3b18e9de6f85a201f912f8f5ea65b6d185ea22cd59ea494559acf78',
+  mainSHA256: 'c16f742b61c59e7fa705fc478fa7862a4f8fb549bab3789606d93c9ed8e211a9',
+  asarSHA256: '1c22b8c40a4cd5eb94270f666f53573c09d60a163de2764753569b7b9bade464',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -501,6 +506,8 @@ const reviewedRuntimeManifest = [
   { runtime: minecraftProxyDownloadRuntime, previous: minecraftDedicatedRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   // Shared owner identity, recent context and mood, doctor v3 auto-repair and the legacy Minecraft engine retired, over the proxy-download build, diary still on (2026-11-21).
   { runtime: sameSelfDoctorV3Runtime, previous: minecraftProxyDownloadRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Feature models follow service defaults and owner WeChat desktop operations queue ahead of polling, over the shared-self build, diary still on (2026-11-21).
+  { runtime: modelFollowMomentsRuntime, previous: sameSelfDoctorV3Runtime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
