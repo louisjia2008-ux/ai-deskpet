@@ -931,6 +931,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         }
       }
       if (['occupied', 'protected_player_block', 'no_support'].includes(reason)) return { ok: false, reason };
+      const entrance = memory.house.entrance;
+      const exteriorLight = what === 'torch' && position.z < memory.house.anchor.z;
+      if ((exteriorLight || (options.stand && posKey(options.stand) === posKey(entrance)))
+        && (await crossDoorstep(ctx)).ok) return place(position, { ...options, stand: entrance });
       const walked = await alternateStand(bot, ctx, actions, options.stand || position,
         { avoid: q => optionalStep(what) && idAt(memory.house.furniture.torches, q) });
       return walked.ok ? place() : { ok: false, reason };
@@ -985,6 +989,49 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     try { await bot.activateBlock(blockAt(position)); } catch { /* checked below */ }
     const done = await waitUntil(() => doorOpen() === open, { timeoutMs: 1500, signal: ctx.signal });
     return done ? { ok: true } : { ok: false, reason: 'door_unchanged' };
+  }
+
+  // The planner treats the upper half of an open wooden door as a solid
+  // block. A short, level walk along the verified centreline can still pass it.
+  async function crossDoorstep(ctx) {
+    const { entrance, furniture } = memory.house;
+    const { x, y, z } = entrance;
+    const inside = new Vec3(x, y, z + 2);
+    const outside = new Vec3(x, y, z);
+    const door = furniture.door.position;
+    const feet = () => bot.entity.position.floored();
+    if (feet().equals(outside)) return { ok: true };
+    if (!insideRoom(feet()) || !actions.goTo || !bot.lookAt || !bot.setControlState) return { ok: false, reason: 'not_inside' };
+    const passable = () => {
+      const state = blockAt(door)?.getProperties?.();
+      return state?.open && ['north', 'south'].includes(state.facing)
+        && [outside, inside, door].every(q => blockAt(below(q))?.boundingBox === 'block')
+        && [outside, inside].every(q => [q, top(q)].every(cell => {
+          const block = blockAt(cell);
+          return block && isSoft(block);
+        }));
+    };
+    if (!passable()) return { ok: false, reason: 'doorway_not_clear' };
+    if (!feet().equals(inside)) {
+      const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(inside.x, inside.y, inside.z),
+        { timeoutMs: 5000, retryNoProgress: false });
+      if (!moved.ok || !feet().equals(inside)) return { ok: false, reason: moved.reason || 'not_in_doorway' };
+    }
+    if (Math.abs(bot.entity.position.x - (x + 0.5)) > 0.15) await actions.recentre?.(bot, ctx, { accept: p => p.equals(inside) });
+    if (!passable() || !feet().equals(inside) || Math.abs(bot.entity.position.x - (x + 0.5)) > 0.16) {
+      return { ok: false, reason: 'doorway_not_clear' };
+    }
+    try {
+      await bot.lookAt(outside.offset(0.5, 1.62, 0.5), true);
+      ctx.signal?.throwIfAborted();
+      bot.setControlState('forward', true);
+      const reached = await waitUntil(() => feet().equals(outside) || !passable(), { timeoutMs: 1500, signal: ctx.signal });
+      if (!reached || !feet().equals(outside)) return { ok: false, reason: 'doorstep_unreached' };
+    } finally {
+      bot.setControlState('forward', false);
+    }
+    ctx.record('home_doorway_crossed', { position: posKey(entrance) });
+    return { ok: true };
   }
 
   async function nightStep(ctx, hs, state) {
