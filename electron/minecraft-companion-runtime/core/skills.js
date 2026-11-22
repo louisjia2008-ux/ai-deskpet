@@ -63,7 +63,7 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () 
       walkOnly: Boolean(bot.pathfinder?.movements?.companionWalkOnly) });
   };
   if (block.harvestTools && !bot.inventory.items().some((item) => block.harvestTools[item.type])) {
-    blacklist.add(key, 'no_tool', 30000);
+    if (!actions.isHomeTarget(bot, block.position)) blacklist.add(key, 'no_tool', 30000);
     return fail('no_tool');
   }
   // Far targets: walk most of the way in legs first, then the precise approach.
@@ -72,8 +72,8 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () 
     trace('far_approach', null, from, 'start');
     const near = await actions.goNear(bot, ctx, block.position.offset(0.5, 0, 0.5), 6, { timeoutMs: 90000 });
     trace('far_approach', near, from);
-    if (!near.ok && block.position.distanceTo(bot.entity.position) > 24) {
-      blacklist.add(key, near.reason);
+    if (!near.ok && (near.sourceHandled || near.waited || block.position.distanceTo(bot.entity.position) > 24)) {
+      if (!near.sourceHandled && !near.waited && !actions.isHomeTarget(bot, block.position)) blacklist.add(key, near.reason);
       return near;
     }
   }
@@ -83,16 +83,18 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () 
   trace('mining_stance', reach, from);
   if (!reach.ok) {
     // The rest of the same tree or vein is almost always just as unreachable.
+    if (reach.sourceHandled || reach.waited) return reach;
     for (const other of candidates) {
-      if (other.name === block.name && other.position.distanceTo(block.position) <= 4) blacklist.add(posKey(other.position), reach.reason);
+      if (other.name === block.name && other.position.distanceTo(block.position) <= 4 && !actions.isHomeTarget(bot, other.position)) {
+        blacklist.add(posKey(other.position), reach.reason);
+      }
     }
-    blacklist.add(key, reach.reason);
     return reach;
   }
   const dig = await actions.digBlock(bot, ctx, bot.blockAt(block.position) || block);
   trace('dig', dig, { ...bot.entity.position });
   if (!dig.ok) {
-    blacklist.add(key, dig.reason);
+    if (!actions.isHomeTarget(bot, block.position)) blacklist.add(key, dig.reason);
     return dig;
   }
   return actions.collectDrops(bot, ctx, block.position.offset(0.5, 0.5, 0.5), dropMatch);
@@ -620,7 +622,7 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, blacklist, acce
   const target = Object.values(bot.entities)
     .filter((e) => mobs.includes(e.name) && e.position && e.position.distanceTo(here) <= radius
        && Math.abs(e.position.y - here.y) <= HUNT_HEIGHT && !blacklist?.has(`mob:${e.id}`) && accept(e)
-       && !targets?.excluded(spec(e)))
+       && !targets?.excluded(spec(e)) && !ctx.adapt?.avoids?.('hard_route', e.position))
     .sort((a, b) => score(a) - score(b))[0];
   if (!target) return fail('no_mob_in_range');
   const chase = async () => {
@@ -628,9 +630,10 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, blacklist, acce
     // Far animals: walk over first; the fight itself has a short timeout.
     if (target.position.distanceTo(bot.entity.position) > 12) {
       const near = await actions.goNear(bot, ctx, target.position.clone(), 4, { timeoutMs: 60000 });
+      if (!near.ok && (near.sourceHandled || near.waited)) return near;
       if (!bot.entities[target.id]) return near.ok ? fail('mob_gone') : near;
       if (!near.ok && bot.entities[target.id].position.distanceTo(bot.entity.position) > 8) {
-        if (!targets) blacklist?.add(`mob:${target.id}`, near.reason, HUNT_UNREACHABLE_MS);
+        if (!targets && !actions.isHomeTarget(bot, target.position)) blacklist?.add(`mob:${target.id}`, near.reason, HUNT_UNREACHABLE_MS);
         return near;
       }
     }
@@ -643,7 +646,7 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, blacklist, acce
       clearInterval(tracker);
     }
     if (!result.ok) {
-      if (!targets) blacklist?.add(`mob:${target.id}`, result.reason, 60000);
+      if (!targets && !result.sourceHandled && !actions.isHomeTarget(bot, target.position)) blacklist?.add(`mob:${target.id}`, result.reason, 60000);
       return result;
     }
     // Pick up everything it dropped: a sheep killed for mutton also gives the wool a bed needs.
@@ -712,6 +715,7 @@ async function explore(bot, ctx, memory, { distance = 32, timeoutMs = 40000, ret
   const result = await actions.goTo(bot, ctx, goal, { timeoutMs, retryNoProgress, arrived: () => true });
   const moved = bot.entity.position.distanceTo(here);
   if (moved < 10) memory.blocked = true;
+  if (!result.ok && result.sourceHandled) return result;
   return moved >= 10 ? { ok: true, moved: Math.round(moved) } : fail(result.ok ? 'explore_blocked' : result.reason);
 }
 

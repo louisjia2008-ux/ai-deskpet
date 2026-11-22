@@ -8,7 +8,6 @@
 // With no house and nothing to do (a task just ended), it digs in where it is.
 
 const { Vec3 } = require('vec3');
-const { goals } = require('mineflayer-pathfinder');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
 const { BAND } = require('../brain');
@@ -113,7 +112,7 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, a
       const centre = new Vec3(spot.centre.x + 0.5, spot.centre.y, spot.centre.z + 0.5);
       if (spot.inside === false) {
         ctx.record('night_rest', { action: 'shelter' });
-        return actions.goTo(bot, ctx, new goals.GoalBlock(spot.centre.x, spot.centre.y, spot.centre.z), { timeoutMs: 40000 });
+        return actions.goNear(bot, ctx, centre, 0, { timeoutMs: 40000, exact: true });
       }
       if (bot.entity.position.distanceTo(centre) > 2) {
         ctx.record('night_rest', { action: 'shelter' });

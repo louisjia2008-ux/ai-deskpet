@@ -19,8 +19,8 @@ async function runPlanned(ctx, step, execute) {
   const result = await execute();
   if (ctx.adapt && result?.ok && !result.waited && !result.transit && !result.moved && !result.skipped
     && !result.idle && result.progress !== false && !result.sourceHandled) ctx.adapt.progress();
-  if (!result?.transit && !result?.sourceHandled) ctx.stepOutcome?.(step, result);
-  return result;
+  const handled = !result?.transit && !result?.sourceHandled ? ctx.stepOutcome?.(step, result) : null;
+  return handled?.sourceHandled ? handled : result;
 }
 
 function createPlannerRunner({ bot, skills, kb, memory, blacklist, avoid = () => false }) {

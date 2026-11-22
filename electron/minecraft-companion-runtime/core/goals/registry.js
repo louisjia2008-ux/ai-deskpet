@@ -10,6 +10,7 @@
 
 const { createHomesteadGoal } = require('./homestead');
 const { createStockFoodGoal } = require('./stockFood');
+const { createGatherBlocksGoal, createGatherLogsGoal } = require('./gatherBlocks');
 const { createCobbleGeneratorGoal } = require('./cobbleGenerator');
 const { createAutoSmelterGoal } = require('./autoSmelter');
 const { createDeviceProjectGoal } = require('./deviceProject');
@@ -44,6 +45,38 @@ function avoidFor(memory, home, self) {
     }
     return false;
   };
+}
+
+function createReserveCards(bot, kb, food, inOverworld) {
+  const hasRoom = (state) => state.freeSlots !== 0 && inOverworld();
+  const cobble = (state) => countKey('cobblestone', state.inventory, kb);
+  const faces = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  return [food, {
+    id: 'stock_wood', stage: 0, risk: 'medium', requires: hasRoom,
+    need: (state) => {
+      const logs = countKey('log', state.inventory, kb);
+      return logs < 8 ? 65 : logs < 64 ? 10 : 0;
+    },
+    create: () => createGatherLogsGoal({ bot, count: 1 }),
+  }, {
+    id: 'stock_cobblestone', stage: 0, risk: 'medium',
+    requires: (state) => hasRoom(state) && countKey('pickaxe', state.inventory, kb) > 0,
+    need: (state) => cobble(state) < 16 ? 55 : cobble(state) < 64 ? 12 : 0,
+    create: (memory) => {
+      const home = homeOf(memory);
+      const protect = home && avoidFor(memory, home);
+      return createGatherBlocksGoal({ bot, name: 'stock_cobblestone', count: 1, searchRadius: 20,
+        itemMatch: kb.cobblestone.match, blockMatch: kb.cobblestone.sources[0].blocks,
+        acceptTarget(block) {
+          const p = block.position;
+          if (p.y < Math.floor(bot.entity.position.y) - 2 || protect?.(p)
+            || bot.companionProtectBlock?.(block) || bot.companionPlayerBlock?.(p)) return false;
+          const neighbors = faces.map((face) => bot.blockAt(p.offset(...face)));
+          return neighbors.some((b) => b?.name === 'air') && neighbors.every((b) => b && !/water|lava/.test(b.name));
+        },
+      });
+    },
+  }];
 }
 
 function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = FOOD_TARGET, progression = false } = {}) {
@@ -115,7 +148,7 @@ function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = 
       const requires = device.requires;
       device.requires = (state, memory) => overworld() && requires(state, memory);
     }
-    return { ...route, cards: [...route.cards, ...cards] };
+    return { ...route, cards: [...route.cards, ...cards], reserveCards: createReserveCards(bot, kb, cards[1], overworld) };
   }
   const stageOf = (state, memory) => (memory.homestead?.isDone(state) ? 1 : 0);
   return { cards, stageOf };

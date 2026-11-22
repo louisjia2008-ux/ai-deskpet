@@ -5,6 +5,7 @@ const { test } = require('node:test');
 const { createAdaptation, LADDERS, FALLBACK, NEW_AREA } = require('../core/adaptation');
 const { createDirector } = require('../core/director');
 const { createBrain } = require('../core/brain');
+const { runPlanned } = require('../core/goals/common');
 
 const location = { position: { x: 33, y: 65, z: -10 }, target: 'log' };
 const failure = { ok: false, reason: 'not_arrived' };
@@ -34,6 +35,77 @@ test('three consecutive failures advance the real execution choice, scoped by ar
   assert.equal(events.filter((e) => e.type === 'adaptation_switch').length, 2);
   assert.equal(events.filter((e) => e.type === 'adaptation_invariant').length, 0);
 });
+
+test('deterministic checks advance immediately on the same unchanged world', async () => {
+  const { restart, events } = fixture();
+  const adaptation = restart();
+  const use = adaptation.scope(() => true);
+  for (const method of LADDERS.home_site.slice(0, -1)) {
+    await use.run('home_site', location, (actual) => {
+      assert.equal(actual, method);
+      return { ok: false, reason: 'no_suitable_site' };
+    });
+  }
+  assert.deepEqual(events.filter(e => e.type === 'adaptation_attempt').map(e => e.failures), [1, 1, 1, 1]);
+  assert.equal(adaptation.plan('home_site', location).method, 'relocate');
+});
+
+test('the inner route owns its failures through exhaustion and the subsequent wait', async () => {
+  const { restart, events } = fixture();
+  const adaptation = restart();
+  const use = adaptation.scope(() => true);
+  const run = () => use.run('wood', location, () => use.run('route', location, () => failure, { threshold: 1 }));
+  let result;
+  for (const _ of LADDERS.route) result = await run();
+  assert.equal(result.adaptationExhausted?.task, 'route');
+  assert.ok(events.filter(e => e.type === 'adaptation_attempt').every(e => e.task === 'route'));
+  assert.equal(adaptation.plan('wood', location).failures, 0);
+  const deferred = await run();
+  assert.equal(deferred.waited, true);
+  assert.equal(deferred.adaptationExhausted, undefined);
+});
+
+for (const [task, rungs] of Object.entries(LADDERS)) {
+  test(`${task} executes its final rung before the director can yield for a repeated failure`, async () => {
+    const { restart, now, events } = fixture();
+    const adaptation = restart();
+    const called = [];
+    let director;
+    const perceive = () => ({ alive: true, position: location.position });
+    const brain = createBrain({ perceive, now, goalRetryDelayMs: 0, noProgressLimit: 1, onEvent: (event) => {
+      events.push(event);
+      director.handleEvent(event);
+    } });
+    const card = { id: `test_${task}`, stage: 0, risk: 'low', need: () => 100, create: () => ({
+      name: task, isDone: () => false, progress: () => 0,
+      run: (ctx) => runPlanned(ctx, { kind: 'gather', key: 'log' }, () => ctx.adapt.run(task, location, (method) => {
+        called.push(method);
+        return failure;
+      })),
+    }) };
+    director = createDirector({ brain, perceive, now, idleMs: 0, waitLimit: 1, adaptation, cards: [card] });
+    director.enable();
+    assert.equal(director.tick(), card.id);
+    try {
+      for (let i = 0; i < rungs.length * 3 + 3 && brain.status().goal; i++) {
+        await brain.tick();
+        await brain.idle();
+      }
+      assert.deepEqual([...new Set(called)], rungs);
+      const terminal = events.filter(e => e.type === 'adaptation_exhausted');
+      assert.equal(terminal.length, 1);
+      assert.equal(terminal[0].method, rungs.at(-1));
+      const yielded = events.find(e => e.type === 'goal_yielded');
+      assert.equal(yielded?.reason, 'adaptation_exhausted');
+      assert.equal(yielded.key, terminal[0].key);
+      assert.equal(yielded.method, rungs.at(-1));
+      assert.ok(events.indexOf(terminal[0]) < events.indexOf(yielded));
+      assert.ok(!events.some(e => ['goal_failed', 'step_blocked'].includes(e.type)));
+    } finally {
+      await brain.dispose();
+    }
+  });
+}
 
 test('the exhausted method yields, rejects unlisted/replayed IDs and executes a fixed model choice', async () => {
   const { restart, events } = fixture();
@@ -95,13 +167,16 @@ test('persisted lessons and the hourly quota survive restart; late responses and
   assert.equal(second.avoids('no_sheep', location.position), false);
 });
 
-test('a card without a recovery implementation yields the brain to useful work on the third failure', async () => {
-  const { restart, now } = fixture();
+test('a card without a recovery implementation executes other work after the three standard failures', async () => {
+  const { restart, now, events } = fixture();
   const adaptation = restart();
   const calls = [];
   let director;
   const perceive = () => ({ alive: true, position: location.position });
-  const brain = createBrain({ perceive, now, goalRetryDelayMs: 0, onEvent: (event) => director.handleEvent(event) });
+  const brain = createBrain({ perceive, now, goalRetryDelayMs: 0, onEvent: (event) => {
+    events.push(event);
+    director.handleEvent(event);
+  } });
   const card = (id, score) => ({
     id, stage: 0, risk: 'low', need: () => score, create: () => ({ name: id, isDone: () => false, progress: () => 0,
       run() { calls.push(id); return failure; } }),
@@ -109,8 +184,10 @@ test('a card without a recovery implementation yields the brain to useful work o
   director = createDirector({ brain, perceive, now, idleMs: 0, adaptation, cards: [card('blocked', 100), card('food', 80)] });
   director.enable();
   assert.equal(director.tick(), 'blocked');
-  for (let i = 0; i < 4; i += 1) { await brain.tick(); await brain.idle(); }
+  for (let i = 0; i < 5; i += 1) { await brain.tick(); await brain.idle(); }
   assert.equal(calls.filter((id) => id === 'blocked').length, 3);
+  assert.ok(events.some(e => e.type === 'adaptation_attempt' && e.method === 'recover' && e.reason === 'no_recovery_available'));
+  assert.ok(events.some(e => e.type === 'goal_yielded' && e.method === 'other_work'));
   assert.equal(director.tick(), 'food');
   await brain.dispose();
 });

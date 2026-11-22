@@ -246,7 +246,10 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
           return { ok: false, reason: 'no_available_mine_entrance' };
         }
         const moved = await actions.goNear(bot, ctx, away, 1, { timeoutMs: 30000 });
-        if (!moved.ok) { mining.coolEntrance(bot, ctx, away, moved.reason); return moved; }
+        if (!moved.ok) {
+          if (!moved.sourceHandled && !moved.waited) mining.coolEntrance(bot, ctx, away, moved.reason);
+          return moved;
+        }
         if (!allowed(bot.entity.position.floored())) {
           mining.coolEntrance(bot, ctx, away, 'invalid_mine_approach');
           return { ok: false, reason: 'invalid_mine_approach' };
@@ -372,7 +375,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     if (typeof actions.surface !== 'function' || blacklist.has('surface')) return null;
     const result = await actions.surface(bot, ctx);
     if (result) ctx.record('surface', { ok: result.ok });
-    if (result && !result.ok && !result.adaptationSwitched) blacklist.add('surface', result.reason, 60000);
+    if (result && !result.ok && !result.sourceHandled && !result.waited) blacklist.add('surface', result.reason, 60000);
     return result;
   }
 
@@ -449,19 +452,26 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       }
       case 'fill': {
         const isLava = step.liquid === 'lava';
+        const findLiquid = async (exclude) => {
+          const args = { liquid: step.liquid, blacklist, exclude };
+          const result = await skills.fillBucket(bot, ctx, args);
+          return result.reason === 'no_target_in_range' ? skills.fillBucket(bot, ctx, { ...args, radius: 128 }) : result;
+        };
+        if (isLava && ctx.adapt) {
+          return ctx.adapt.run('lava_pool', { position: adaptationAnchor }, async (method) => {
+            const result = await findLiquid(p => ctx.adapt.avoids('lava_pool', p));
+            if (result.reason === 'no_target_in_range') return explore(ctx, step.key);
+            if (method === 'different_pool') {
+              ctx.record('adaptation_use', { task: 'lava_pool', method, ok: result.ok, result: result.filled });
+            }
+            return result;
+          }, { learn: result => result.sourcePosition && { kind: 'lava_pool', position: result.sourcePosition, radius: 10 } });
+        }
         const now = Date.now();
         if (isLava) lavaPools = lavaPools.filter((pool) => pool.until ? pool.until > now : pool.last > now - POOL_FAILURE_WINDOW_MS);
-        const avoidLearned = (p) => ctx.adapt?.avoids('lava_pool', p);
-        const exclude = (p) => isLava && (avoidLearned(p) || lavaPools.some((pool) => pool.until > Date.now() && samePool(p, pool.position)));
-        const args = { liquid: step.liquid, blacklist, exclude };
-        let result = await skills.fillBucket(bot, ctx, args);
-        if (result.reason === 'no_target_in_range') result = await skills.fillBucket(bot, ctx, { ...args, radius: 128 });
+        const result = await findLiquid(p => isLava && lavaPools.some((pool) => pool.until > Date.now() && samePool(p, pool.position)));
         if (result.reason === 'no_target_in_range') return explore(ctx, step.key);
         if (isLava && result.ok) {
-          if (memory.lavaAlternate) {
-            ctx.record('adaptation_use', { task: 'lava_pool', method: 'different_pool', ok: true, result: 'lava_bucket' });
-            memory.lavaAlternate = false;
-          }
           lavaPools = lavaPools.filter((pool) => pool.until);
         }
         if (isLava && result.sourcePosition && !result.ok && result.reason !== 'aborted' && !ctx.signal?.aborted) {
@@ -472,15 +482,6 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
             lavaPools = [...lavaPools.slice(-15), pool];
           }
           pool.last = Date.now();
-          if (ctx.adapt) {
-            const plan = ctx.adapt.plan('lava_pool', { position: pool.position });
-            const outcome = ctx.adapt.outcome(plan, result, { learn: { kind: 'lava_pool', radius: 10 } });
-            if (outcome.adaptationSwitched) {
-              pool.until = pool.last + POOL_COOLDOWN_MS;
-              memory.lavaAlternate = true;
-            }
-            return outcome;
-          }
           pool.failures = pool.failures.filter((at) => at > pool.last - POOL_FAILURE_WINDOW_MS);
           pool.failures.push(pool.last);
           if (pool.failures.length >= 3) {
@@ -488,8 +489,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
             ctx.record('recovery_switch', { task: 'fill_lava_bucket', to: 'different_pool', at: posKey(pool.position),
               reason: result.reason, failures: pool.failures.length, until: pool.until });
           }
-          // This source has its own cooldown. Keep the goal-wide failure
-          // window but don't block other pools as the same planning step.
+          // This pool has its own cooldown. Leave other pools eligible.
           return { ...result, sourceHandled: true };
         }
         return result;
@@ -724,7 +724,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         if (result.progress !== false) memory.steps += 1;
         memory.pathFailures = 0;
         if (!result.moved) memory.exploreStreak = 0;
-      } else if (['NoPath', 'Timeout', 'path_timeout', 'not_arrived', 'no_progress', 'chase_stuck'].includes(result.reason)) {
+      } else if ((!ctx.adapt || nether.inNether(bot))
+        && ['NoPath', 'Timeout', 'path_timeout', 'not_arrived', 'no_progress', 'chase_stuck'].includes(result.reason)) {
         memory.pathFailures += 1;
       }
       return result;

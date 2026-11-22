@@ -20,6 +20,13 @@ const FALLBACK = 'do_other_work';
 const NEW_AREA = 'move_to_fresh_area';
 // Only tasks with an executable fresh-area strategy may offer it to the model.
 const MOVABLE = new Set(['home_site', 'wood', 'diamond']);
+const IMMEDIATE_FAILURES = {
+  home_site: new Set(['no_suitable_site']),
+  wood: new Set(['no_target_in_range']),
+  bed: new Set(['no_mob_in_range', 'bed_hunt_exhausted']),
+  route: new Set(['choose_another_target', 'route_region_avoided']),
+  goal: new Set(['no_recovery_available', 'goal_methods_exhausted']),
+};
 const LEARN_TTL = { mine_danger: 24 * 60 * MINUTE, rejected_site: 6 * 60 * MINUTE,
   no_sheep: 45 * MINUTE, hard_route: 30 * MINUTE, lava_pool: 10 * MINUTE };
 const TTL = 90 * MINUTE;
@@ -34,7 +41,7 @@ const reasonCode = (value) => typeof value === 'string'
   ? (value.slice(0, 80).match(/^[a-z][a-z_0-9-]*/i)?.[0] || 'failed').toLowerCase() : 'failed';
 
 function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, stallMs = 45 * MINUTE,
-  helpIntervalMs = 60 * MINUTE, helpTimeoutMs = 20_000 } = {}) {
+  helpIntervalMs = 60 * MINUTE, helpTimeoutMs = 20_000, atHome = () => false } = {}) {
   let saved = {};
   try { saved = store?.load() || {}; } catch { /* start with no lessons */ }
   const states = new Map();
@@ -45,7 +52,7 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
   let lastProof = now();
   let lastContext = null;
   const emit = (type, fields) => { try { onEvent({ type, at: now(), ...fields }); } catch { /* observers do not own the body */ } };
-  const targets = createTargetMemory({ now, load: saved.targets, onChange: persist, emit });
+  const targets = createTargetMemory({ now, load: saved.targets, onChange: persist, emit, protectedTarget: atHome });
   for (const e of Array.isArray(saved.states) ? saved.states.slice(-MAX_ENTRIES) : []) {
     if (typeof e?.key === 'string' && e.key.length <= 150 && Object.hasOwn(LADDERS, e.task) && e.until > now()
       && Number.isInteger(e.index) && e.index >= 0 && e.index <= LADDERS[e.task].length) {
@@ -76,10 +83,13 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
     if (!Object.hasOwn(LADDERS, task)) throw new TypeError('Unknown adaptation task');
     const p = position(input.position);
     const dimension = token(input.dimension, 'overworld');
-    const size = task === 'route' ? 8 : task === 'lava_pool' ? 16 : task === 'bed' ? 128 : 64;
-    const region = p ? `${Math.floor(p.x / size)},${task === 'pit' || task === 'lava_pool' ? Math.floor(p.y / 8) : 0},${Math.floor(p.z / size)}` : 'unknown';
+    const size = task === 'pit' ? 1 : task === 'route' ? 8 : task === 'lava_pool' ? 16 : task === 'bed' ? 128 : 64;
+    const region = p ? `${Math.floor(p.x / size)},${task === 'lava_pool' ? Math.floor(p.y / 8) : 0},${Math.floor(p.z / size)}` : 'unknown';
+    const origin = task === 'route' ? position(input.origin) : null;
+    const departure = origin ? `:${Math.floor(origin.x / 16)},${Math.floor(origin.y / 8)},${Math.floor(origin.z / 16)}` : '';
     const target = token(input.target);
-    return { task, dimension, position: p, region, target, key: `${task}:${dimension}:${region}:${target}` };
+    return { task, dimension, position: p, region, target, ...(origin ? { origin } : {}),
+      key: `${task}:${dimension}:${region}:${target}${departure}` };
   }
 
   function entry(c) {
@@ -128,7 +138,7 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
         const old = LADDERS[e.task][e.index] || FALLBACK;
         e.index = index >= 0 ? index : LADDERS[e.task].length;
         e.fresh = choice === NEW_AREA;
-        const yields = choice === FALLBACK || choice === 'other_work' || choice === 'shelter_first';
+        const yields = choice === FALLBACK;
         e.retryAt = yields ? now() + 5 * MINUTE : 0;
         e.until = yields ? e.retryAt : now() + TTL;
         e.revision += 1;
@@ -170,16 +180,24 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
       ok: result.ok === true, reason: result.reason ? reasonCode(result.reason) : null });
   }
 
-  function defer(p) {
+  function retryAt(p) {
     const req = [...pending.values()].find((r) => r.context.key === p.key);
-    const result = { ok: true, waited: true, reason: 'adaptation_other_work',
-      retryAt: req ? Math.min(p.retryAt, req.deadline) : Math.max(now() + 30_000, p.retryAt) };
+    return req ? Math.min(p.retryAt, req.deadline) : Math.max(now() + 30_000, p.retryAt);
+  }
+
+  function exhaustion(p, method, reason) {
+    return { task: p.task, method, key: p.key, reason, retryAt: retryAt(p) };
+  }
+
+  function defer(p) {
+    const result = { ok: true, waited: true, reason: 'adaptation_other_work', retryAt: retryAt(p) };
     helpEffect(p, result);
     return result;
   }
 
   function outcome(p, result, { threshold = LIMIT, valid = () => true, learn = null } = {}) {
     if (!valid() || !result || result.waited || ['aborted', 'self_stuck'].includes(result.reason)) return result;
+    if (result.sourceHandled && (!result.ok || result.adaptFailure || result.adaptationExhausted)) return result;
     const e = entry(p);
     // Do not let late/cancelled outcomes change a newer decision.
     if (e.index !== p.index || e.revision !== p.revision) return { ...result, sourceHandled: true };
@@ -193,15 +211,19 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
       return { ...result, sourceHandled: true };
     }
     const reason = reasonCode(result.adaptFailure || result.reason);
-    const cap = Math.max(1, Math.min(LIMIT, threshold));
+    if (p.method === FALLBACK) return defer(p);
+    const cap = IMMEDIATE_FAILURES[p.task]?.has(reason) ? 1 : Math.max(1, Math.min(LIMIT, threshold));
     const failures = e.count + 1;
-    const fields = { task: p.task, method: p.method, region: p.region, dimension: p.dimension, target: p.target, position: p.position };
+    const fields = { task: p.task, method: p.method, key: p.key, region: p.region, dimension: p.dimension,
+      target: p.target, position: p.position };
     emit('adaptation_attempt', { ...fields, outcome: 'failure', failures, reason });
     if (failures > LIMIT) emit('adaptation_invariant', { ...fields, failures, reason });
     e.failed = reason;
     e.until = now() + TTL;
+    let adaptationExhausted;
     if (failures >= cap) {
-      if (learn) teach(learn.kind, learn.position || p.position, p.dimension, reason, learn.radius);
+      const lesson = typeof learn === 'function' ? learn(result, p) : learn;
+      if (lesson) teach(lesson.kind, lesson.position || p.position, p.dimension, reason, lesson.radius);
       e.index = Math.min(LADDERS[p.task].length, e.index + 1);
       e.revision += 1;
       e.count = 0;
@@ -209,24 +231,27 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
         e.fresh = false;
         e.retryAt = now() + 5 * MINUTE;
         e.until = e.retryAt;
-      } else if (LADDERS[p.task][e.index] === 'other_work' || LADDERS[p.task][e.index] === 'shelter_first') {
-        e.until = now() + (p.task === 'bed' ? LEARN_TTL.no_sheep : 5 * MINUTE);
-        e.retryAt = e.until;
       }
       put(e);
       emit('adaptation_switch', { ...fields, from: p.method, to: LADDERS[p.task][e.index] || FALLBACK, reason, failures });
-      if (!LADDERS[p.task][e.index]) ask(p, e, 'ladder_exhausted');
+      if (!LADDERS[p.task][e.index]) {
+        ask(p, e, 'ladder_exhausted');
+        adaptationExhausted = exhaustion({ ...p, retryAt: e.retryAt }, p.method, reason);
+        emit('adaptation_exhausted', { ...fields, ...adaptationExhausted });
+      }
     } else {
       e.count = failures;
       put(e);
     }
     poll();
-    return { ...result, sourceHandled: true, ...(failures >= cap ? { adaptationSwitched: true } : {}) };
+    return { ...result, sourceHandled: true, ...(failures >= cap ? { adaptationSwitched: true } : {}),
+      ...(adaptationExhausted ? { adaptationExhausted } : {}) };
   }
 
   function teach(kind, p, dimension, reason, radius = 32) {
     const where = position(p);
     if (!where || !Object.hasOwn(LEARN_TTL, kind)) return;
+    if (kind === 'hard_route' && atHome(where, dimension)) return;
     const lesson = { kind, dimension: token(dimension, 'overworld'), position: where,
       reason: reasonCode(reason), radius: Math.min(500, Math.max(1, radius)), until: now() + LEARN_TTL[kind] };
     lessons = lessons.filter((e) => e.kind !== kind || e.dimension !== lesson.dimension
@@ -237,9 +262,16 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
     emit('adaptation_lesson', lesson);
   }
   function avoids(kind, p, dimension = 'overworld') {
-    return position(p) !== null && lessons.some((e) => e.kind === kind && e.dimension === dimension && e.until > now()
+    if (!position(p)) return false;
+    if (kind === 'hard_route' && atHome(p, dimension)) return false;
+    return lessons.some((e) => e.kind === kind && e.dimension === dimension && e.until > now()
       && Math.hypot(e.position.x - p.x, e.position.z - p.z) <= e.radius
       && (kind !== 'lava_pool' || Math.abs(e.position.y - p.y) <= 4));
+  }
+  function pruneHome() {
+    const previous = lessons.length;
+    lessons = lessons.filter(e => e.kind !== 'hard_route' || !atHome(e.position, e.dimension));
+    if (!targets.pruneProtected() && lessons.length !== previous) persist();
   }
   function promote(task, input, method, reason) {
     const p = plan(task, input);
@@ -250,13 +282,15 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
     e.revision += 1;
     e.count = 0;
     e.failed = reasonCode(reason);
-    e.until = method === 'other_work' ? (e.retryAt = now() + 5 * MINUTE) : now() + TTL;
+    e.retryAt = 0;
+    e.until = now() + TTL;
     put(e);
     emit('adaptation_switch', { ...p, from: p.method, to: method, reason: e.failed });
     return true;
   }
   function scope(valid) {
-    return { plan, avoids, targets: targets.scope(valid), progress: () => { if (valid()) lastProof = now(); },
+    return { plan, avoids, targets: targets.scope(valid), pruneHome: () => { if (valid()) pruneHome(); },
+      progress: () => { if (valid()) lastProof = now(); },
       teach: (...args) => valid() && teach(...args), promote: (...args) => valid() && promote(...args),
       outcome: (p, result, options) => outcome(p, result, { ...options, valid }),
       async run(task, input, execute, options) {
@@ -266,7 +300,8 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
         return outcome(p, await execute(p.method, p), { ...options, valid });
       } };
   }
-  return { plan, scope, promote, teach, avoids, reply, poll, defer, targets, progress: () => { lastProof = now(); }, pending: () => pending.size };
+  return { plan, scope, promote, teach, avoids, reply, poll, defer, targets, pruneHome,
+    progress: () => { lastProof = now(); }, pending: () => pending.size };
 }
 
 module.exports = { createAdaptation, LADDERS, FALLBACK, NEW_AREA };

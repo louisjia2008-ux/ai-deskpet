@@ -13,6 +13,9 @@ const { posKey } = require('../core/blacklist');
 const { createProgression } = require('../core/goals/progression');
 const { chooseNext } = require('../core/director');
 const { KNOWLEDGE } = require('../core/knowledge');
+const { createAdaptation } = require('../core/adaptation');
+const { homeContains } = require('../core/home-topology');
+const actions = require('../core/actions');
 
 function compact() {
   const blocks = new Map();
@@ -129,6 +132,100 @@ test('a waterfront sighting does not count as accessible wood across a river', (
   assert.equal(access(house, false), null);
   assert.equal(access(house, true).stocked, true);
   assert.equal(drySiteAccess(read, house.entrance, [new Vec3(2, 0, -1)])(house, false).tree.x, 2);
+});
+
+test('nearby reachable daylight distinguishes a canopy and a ledge from a sealed cave and open shaft', () => {
+  const bot = { entity: { position: new Vec3(0.5, 64, 0.5) }, companionSurfaceY: 85 };
+  const terrain = (classify) => p => {
+    const name = classify(p);
+    return { position: p, name, boundingBox: name === 'air' ? 'empty' : 'block' };
+  };
+  const ground = (p, above) => p.y < 64 ? 'stone' : above;
+  bot.blockAt = terrain(p => ground(p, p.x === 0 && p.z === 0 && p.y === 66 ? 'oak_log' : 'air'));
+  assert.equal(actions.underground(bot), false);
+  bot.blockAt = terrain(p => ground(p, p.x <= 0 && p.y === 66 ? 'stone' : 'air'));
+  assert.equal(actions.underground(bot), false);
+  bot.blockAt = terrain(p => ground(p, p.y === 66 ? 'stone' : 'air'));
+  assert.equal(actions.underground(bot), true);
+  bot.blockAt = terrain(p => ground(p, p.y <= 67 && (p.x !== 0 || p.z !== 0) ? 'stone' : 'air'));
+  assert.equal(actions.underground(bot), true);
+});
+
+test('saved home positions are purged from route and target memory when home becomes available', async () => {
+  const { house } = compact();
+  const p = house.entrance;
+  const far = { ...p, x: p.x + 40 };
+  const spec = position => ({ goal: 'homestead', step: 'place_torch', position });
+  let saved;
+  let activeHome = null;
+  const options = { now: () => 10, atHome: (position, dimension) => dimension === 'overworld' && homeContains(activeHome, position),
+    store: { load: () => saved, save: profile => { saved = JSON.parse(JSON.stringify(profile)); } } };
+  let adaptation = createAdaptation(options);
+  for (const position of [p, far]) {
+    adaptation.teach('hard_route', position, 'overworld', 'NoPath', 6);
+    const targets = adaptation.targets.scope();
+    for (let i = 0; i < 3; i += 1) await targets.run(spec(position), () => ({ ok: false, reason: 'NoPath' }));
+  }
+  delete saved.targets[0].position; // Legacy coordinate-keyed profile.
+  adaptation = createAdaptation(options);
+  activeHome = house;
+  adaptation.pruneHome();
+  adaptation.teach('hard_route', p, 'overworld', 'NoPath', 6);
+  const targets = adaptation.targets.scope();
+  assert.equal(targets.excluded(spec(p)), null);
+  assert.ok(targets.excluded(spec(far)));
+  assert.equal(adaptation.avoids('hard_route', p), false);
+  assert.equal(adaptation.avoids('hard_route', far), true);
+  assert.deepEqual(saved.lessons.map(e => e.position), [far]);
+  assert.deepEqual(saved.targets.map(e => e.position), [far]);
+  await targets.run(spec(p), () => ({ ok: false, reason: 'NoPath' }));
+  assert.equal(saved.targets.length, 1);
+});
+
+test('route ladders distinguish starting regions while one shaft keeps its learned rung across heights', async () => {
+  const adaptation = createAdaptation();
+  const pos = { x: 3, y: 30, z: 7 };
+  const shaft = { position: pos };
+  await adaptation.scope(() => true).run('pit', shaft, () => ({ ok: false, reason: 'NoPath' }), { threshold: 1 });
+  assert.equal(adaptation.plan('pit', { position: { ...pos, y: 54 } }).method, 'direct_pillar');
+  assert.equal(adaptation.plan('pit', { position: { ...pos, x: pos.x + 1 } }).method, 'pathfinder');
+  const routeFrom = origin => ({ position: pos, origin, target: 'walk' });
+  const a = routeFrom({ x: 22, y: 70, z: 7 });
+  const b = routeFrom({ x: 54, y: 70, z: 7 });
+  await adaptation.scope(() => true).run('route', a, () => ({ ok: false, reason: 'NoPath' }), { threshold: 1 });
+  assert.equal(adaptation.plan('route', a).method, 'waypoint');
+  assert.equal(adaptation.plan('route', b).method, 'direct');
+});
+
+test('returning from underground accepts local daylight below the home height before walking home in legs', async () => {
+  const { house } = compact();
+  const seen = [];
+  const bot = {
+    entity: { position: new Vec3(122.5, 54, 28.5), onGround: true },
+    companionSurfaceY: 76,
+    companionHomestead: () => ({ memory: { house } }),
+    registry: { itemsByName: {} },
+    blockAt(p) {
+      const name = p.y <= 69 && p.x >= 100 && p.y !== 54 && p.y !== 55 ? 'stone'
+        : p.y < 76 && p.x < 100 ? 'grass_block' : 'air';
+      return { position: p, name, boundingBox: name === 'air' ? 'empty' : 'block' };
+    },
+    pathfinder: { movements: {}, async goto(goal) {
+      seen.push(goal.constructor.name);
+      if (goal.constructor.name === 'GoalY') bot.entity.position = bot.entity.position.offset(0, 16, 0);
+      else bot.entity.position = new Vec3(goal.x + 0.5, goal.y ?? 76, goal.z + 0.5);
+    } },
+  };
+  const events = [];
+  const adaptation = createAdaptation({ onEvent: event => events.push(event) });
+  const result = await actions.goNear(bot, { adapt: adaptation.scope(() => true), record: (type, fields) => events.push({ type, ...fields }) },
+    new Vec3(house.entrance.x, house.entrance.y, house.entrance.z), 0, { exact: true });
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(seen[0], 'GoalY');
+  assert.ok(seen.slice(1, -1).length >= 3 && seen.slice(1, -1).every(s => s === 'GoalNearXZ'));
+  assert.deepEqual(posKey(bot.entity.position), posKey(house.entrance));
+  assert.equal(events.find(e => e.type === 'home_route_recovery' && e.phase === 'finish').position.y, 70);
+  assert.equal(events.filter(e => e.type === 'adaptation_lesson' || e.type === 'target_excluded').length, 0);
 });
 
 test('iron armor cannot run ahead of the farm or unfinished house, even with other cards on cooldown', () => {

@@ -14,6 +14,7 @@ const { createEndHazards } = require('./behaviors/endHazards');
 const { createHomeMaintenance } = require('./behaviors/homeMaintenance');
 const { createGatherLogsGoal } = require('./goals/gatherBlocks');
 const { createHomesteadGoal } = require('./goals/homestead');
+const { homeContains } = require('./home-topology');
 const { createFarmGoal } = require('./goals/farm');
 const { createRanchGoal } = require('./goals/ranch');
 const { installDigTimeFix } = require('./digTime');
@@ -185,13 +186,21 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   let retiring = 0;
   let retirementFailed = false;
   let survey = null;
-  const adaptation = autonomy ? require('./adaptation').createAdaptation({ store: adaptationStore, onEvent }) : null;
+  let goalOwner = null;
+  const priorHomestead = bot.companionHomestead;
+  const priorHomeTarget = bot.companionHomeTarget;
+  const homestead = () => goalOwner?.goal?.name === 'homestead' ? goalOwner.goal : director?.memory.homestead;
+  bot.companionHomestead = homestead;
+  const atHome = (position, world) => String(world || 'overworld').replace(/^minecraft:/, '') === 'overworld'
+    && (homeContains(homestead()?.memory?.house, position) || (position && director?.memory.extraChests
+      ?.some(p => p.x === Math.floor(position.x) && p.y === Math.floor(position.y) && p.z === Math.floor(position.z))));
+  bot.companionHomeTarget = atHome;
+  const adaptation = autonomy ? require('./adaptation').createAdaptation({ store: adaptationStore, onEvent, atHome }) : null;
   if (adaptation) bot.companionTargets = adaptation.targets;
   const selfStuck = require('./self-stuck').createSelfStuck(bot, { emit: (type, data) => onEvent({ type, at: Date.now(), ...data }) });
   const priorSelfStuck = bot.companionSelfStuck;
   bot.companionSelfStuck = selfStuck;
   const policy = { risk: 'normal', guard: 'self_first' };
-  let goalOwner = null;
   // The connection owns this evidence even while a cached goal is retired.
   // Goal-local death listeners cannot witness deaths during other tasks.
   const priorBodyLife = Object.getOwnPropertyDescriptor(bot, 'companionBodyLife');
@@ -232,8 +241,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     } });
   const homeMaintenance = createHomeMaintenance({ bot, home: () => director?.memory.homestead,
     activeGoal: () => brain?.status().goal?.name });
-  const homeEscape = require('./behaviors/homeEscape').createHomeEscape({ bot, tracker: selfStuck,
-    home: () => goalOwner?.goal?.name === 'homestead' ? goalOwner.goal : director?.memory.homestead });
+  const homeEscape = require('./behaviors/homeEscape').createHomeEscape({ bot, tracker: selfStuck, home: homestead });
   const behaviors = [...createSurvivalBehaviors({ bot, spare: (entity) => spare(entity),
     feeding: () => FEEDING_GOALS.has(brain?.status().goal?.name),
     // The departure gate is 18; the ordinary survival threshold is 14.
@@ -274,14 +282,21 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     return retirement;
   }
   let homeSaved = null;
+  const releaseHomeJobs = () => {
+    for (const key of ['wheatFarm', 'wheatHarvest', 'wheatFarmDone', 'wheatPlots', 'cobbleGenerator', 'autoSmelter',
+      'extraChests', 'autonomyStock']) delete director.memory[key];
+    director.memory.homePending = true;
+    homeSaved = null;
+  };
   function rememberHome() {
     const memory = director?.memory.homestead?.memory;
-    if (!home || !memory?.house) return;
-    const value = { anchor: memory.house.anchor, variant: memory.house.variant, established: memory.established === true,
+    if (!home || (!memory?.house && !memory?.relocation)) return;
+    const structure = memory.house ? { anchor: memory.house.anchor, variant: memory.house.variant, established: memory.established === true,
       pinned: memory.pinned === true, verified: { ...memory.verified },
       construction: { owned: memory.owned, temporary: memory.temporary, breach: memory.breach,
         furniture: Object.fromEntries(['crafting_table', 'furnace', 'chest', 'bed', 'guestBed']
-          .map(id => [id, memory.house.furniture[id]])) },
+          .map(id => [id, memory.house.furniture[id]])) } } : { anchor: null };
+    const value = { ...structure,
       ...(autonomy ? { progression: Object.fromEntries(progressionFields.filter((key) => director.memory[key] !== undefined)
         .map((key) => [key, director.memory[key]])) } : {}) };
     const text = JSON.stringify(value);
@@ -305,6 +320,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       Boolean(survey.restoreMovements && !survey.grant.signal.aborted && !survey.closing && enabledDuringSurvey(behavior)),
     onEvent: (event) => {
       if (event.type === 'behavior_abandoned') haltBody(bot);
+      if (event.type === 'home_access_relocated') releaseHomeJobs();
       if (event.type === 'goal_set' && goalOwner) goalOwner.generation = event.generation;
       // Release invocation-owned listeners/movement hooks, not a historical
       // list of all goals ever submitted to this long-lived companion.
@@ -323,7 +339,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   });
   recovery.attach(brain);
   // With no player task the director picks the next goal itself; off unless asked for.
-  const { cards, stageOf, range, litEnd } = createDefaultCards({ bot, progression: autonomy });
+  const { cards, reserveCards, stageOf, range, litEnd } = createDefaultCards({ bot, progression: autonomy });
   const progressionFields = ['milestones', 'announced', 'announcementTimes', 'routeDeaths', 'stagePauses', 'extraChests', 'wheatFarmDone', 'wheatPlots', 'cautiousAfterDeath', 'endPortal'];
   function setRisk(risk) {
     bot.companionSetRisk?.(risk);
@@ -368,7 +384,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   }
   // Its goals go through useGoal too, so an autonomous ranch also spares its herd.
   const directorBrain = { status: () => brain.status(), setGoal: useGoal, clearGoal: (reason) => brain.clearGoal(reason) };
-  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, stageOf, scope: range, onEvent, adaptation,
+  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, reserveCards, stageOf, scope: range, onEvent, adaptation,
     onIdle(state, reason) {
       if (reason === 'no_eligible_card_until_retry' && state.isDay !== false && !state.sheltered) selfStuck.requestProbe();
     },
@@ -417,6 +433,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     for (const key of progressionFields) if (savedHome?.progression?.[key] !== undefined) {
       director.memory[key] = savedHome.progression[key];
     }
+    adaptation?.pruneHome();
     if (!director.memory.wheatPlots?.length) director.memory.wheatFarmDone = false;
     director.memory.homePending = Boolean(director.memory.homestead);
     if (director.memory.cautiousAfterDeath) setRisk('cautious');
@@ -561,6 +578,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
         const goal = Object.keys(options).length === 0 && director.memory.homestead
           ? director.memory.homestead : createHomesteadGoal({ bot, ...options });
         director.memory.homestead = goal;
+        adaptation?.pruneHome();
         // Asked again: the search for a site starts over.
         if (goal.memory) goal.memory.exploreStreak = 0;
         return goal;
@@ -643,6 +661,14 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
         else delete bot.companionBodyLife;
       }
       if (bot.companionSelfStuck === selfStuck) bot.companionSelfStuck = priorSelfStuck;
+      if (bot.companionHomestead === homestead) {
+        if (priorHomestead === undefined) delete bot.companionHomestead;
+        else bot.companionHomestead = priorHomestead;
+      }
+      if (bot.companionHomeTarget === atHome) {
+        if (priorHomeTarget === undefined) delete bot.companionHomeTarget;
+        else bot.companionHomeTarget = priorHomeTarget;
+      }
       if (bot.companionProtectBlock === director.memory.homestead?.memory.protectBlock) {
         if (priorHomeProtection === undefined) delete bot.companionProtectBlock;
         else bot.companionProtectBlock = priorHomeProtection;

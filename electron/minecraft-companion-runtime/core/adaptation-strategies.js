@@ -17,7 +17,7 @@ async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, time
   const moved = Math.hypot(bot.entity.position.x - from.x, bot.entity.position.z - from.z);
   if (!result.ok || moved < 6 || !goal.isEnd(bot.entity.position.floored())) {
     memory.heading = (memory.heading || 0) + 1;
-    return { ok: false, reason: result.ok ? 'not_arrived' : result.reason };
+    return result.ok ? { ok: false, reason: 'not_arrived' } : result;
   }
   return { ok: true, moved, progress: false };
 }
@@ -44,7 +44,7 @@ async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blacklist
       return move;
     }
     const found = await skills.gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude: avoid, radius: near ? 48 : 128 });
-    if (found.ok || near || found.reason === 'aborted') return found;
+    if (found.ok || near || found.sourceHandled || found.waited || found.reason === 'aborted') return found;
     if (!['no_target_in_range', 'not_arrived', 'path_timeout', 'no_progress', 'NoPath', 'Timeout', 'choose_another_target',
       'route_region_avoided'].includes(found.reason)) return found;
     const moved = await outwardLeg(bot, ctx, actions, route, route.from, { distance: far ? 28 : 20 });

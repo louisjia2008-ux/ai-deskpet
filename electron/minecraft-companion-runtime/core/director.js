@@ -11,10 +11,12 @@
 // A card: { id, stage, risk: 'low'|'medium'|'high', requires?(state, memory),
 //           need(state, memory) -> 0..100, create(memory) -> goal }
 
+const { createAdaptation } = require('./adaptation');
+
 const RISKS = new Set(['low', 'medium', 'high']);
 const MINUTE = 60_000;
 const STEP_COOLDOWN = 10 * MINUTE;
-const FAILURE_WINDOW = 30 * MINUTE;
+const RESERVE_WORK_MS = 45_000;
 const stepKey = (kind, item) => `${kind}/${item}`;
 
 /** How far a card's need counts right now; risky work waits for daylight and a healthy body. */
@@ -56,6 +58,7 @@ function createDirector({
   brain,
   perceive,
   cards = [],
+  reserveCards = [],
   stageOf = () => 0,
   scope = () => Infinity,
   memory = {},
@@ -70,13 +73,12 @@ function createDirector({
   yieldCooldownMs = 30_000,
   onOverworldDeath = () => {},
   onIdle = () => {},
-  adaptation = null,
+  adaptation = createAdaptation({ now, onEvent }),
 } = {}) {
   if (!brain || typeof perceive !== 'function') throw new TypeError('brain and perceive are required');
-  for (const card of cards) validateCard(card);
+  for (const card of [...cards, ...reserveCards]) validateCard(card);
   const cooldowns = new Map(); // card id -> { count, until }
   const blockedSteps = new Map();
-  const failureWindows = new Map(); // card -> reason -> failure timestamps
   let enabled = false;
   let own = null; // { id, goal }: the goal the director handed the brain
   let playerActive = false;
@@ -102,10 +104,11 @@ function createDirector({
       return;
     }
     if (type === 'goal_yielded') {
-      cooldowns.set(id, { count: 0, until: event.until });
+      cooldowns.set(id, { count: event.reason === 'adaptation_exhausted' ? 1 : 0, until: event.until });
       return;
     }
     if (type !== 'goal_failed') return;
+    if (event.reasons?.includes('home_site_relocated')) return;
     const count = (cooldowns.get(id)?.count || 0) + 1;
     const delay = Math.min(maxCooldownMs, failureCooldownMs * 2 ** (count - 1));
     cooldowns.set(id, { count, until: now() + delay });
@@ -114,14 +117,13 @@ function createDirector({
 
   function governor(card, definition) {
     let waits = 0, waitMs = 0, streak = null, failures = 0;
-    const byReason = failureWindows.get(card) || new Map();
-    failureWindows.set(card, byReason);
-    const generic = (state) => adaptation?.plan('goal', { position: state?.position, target: card });
+    const generic = () => adaptation?.plan('goal', { target: card });
     let recoveredRevision = null;
     return {
       adapt: adaptation && ((valid) => adaptation.scope(valid)),
+      managesFailures: Boolean(adaptation),
       async before(ctx) {
-        const p = generic(ctx.perceive());
+        const p = generic();
         if (!p) return null;
         if (p.method === 'recover' && recoveredRevision !== `${p.key}:${p.revision}`) {
           if (typeof definition.recover === 'function') {
@@ -130,10 +132,13 @@ function createDirector({
             await definition.recover();
             return null;
           }
-          adaptation.promote('goal', p, 'other_work', 'no_recovery_available');
-          return adaptation.defer(generic(ctx.perceive()));
+          return ctx.adapt.outcome(p, { ok: false, reason: 'no_recovery_available' });
         }
-        if (['other_work', 'do_other_work'].includes(p.method)) return adaptation.defer(p);
+        if (p.method === 'other_work') {
+          ctx.record('adaptation_use', { task: 'goal', method: p.method, card });
+          return ctx.adapt.outcome(p, { ok: false, reason: 'goal_methods_exhausted' });
+        }
+        if (p.method === 'do_other_work') return adaptation.defer(p);
         return null;
       },
       stepBlocked(kind, item) {
@@ -144,17 +149,29 @@ function createDirector({
         return 0;
       },
       stepOutcome(step, result, record) {
-        if (result?.waited || result?.reason === 'aborted') return;
+        if (!result || result.waited || result.sourceHandled || ['aborted', 'self_stuck'].includes(result.reason)) return result;
         const key = stepKey(step.kind, step.key || step.station);
         if (key !== streak || result?.ok) { streak = key; failures = 0; }
-        if (result?.ok !== false || ++failures < 3) return;
-        const until = now() + STEP_COOLDOWN;
-        blockedSteps.set(key, until);
-        record('step_blocked', { card, step: key, count: failures, reason: result.reason, until });
-        failures = 0;
+        if (result.ok !== false || result.giveUp) return result;
+        failures += 1;
+        if (failures === 3) {
+          const until = now() + STEP_COOLDOWN;
+          blockedSteps.set(key, until);
+          record('step_blocked', { card, step: key, count: failures, reason: result.reason, until });
+          failures = 0;
+        }
+        return { ...result, sourceHandled: true };
       },
       outcome(result, elapsedMs) {
         const at = now();
+        const p = !result?.sourceHandled && result?.ok === false && !result.waited && !result.giveUp
+          && !['aborted', 'self_stuck'].includes(result.reason) ? generic() : null;
+        const handled = p ? adaptation.scope(() => true).outcome(p, result) : result;
+        const exhausted = handled?.adaptationExhausted;
+        if (exhausted) {
+          return { card, reason: 'adaptation_exhausted', task: exhausted.task, method: exhausted.method, key: exhausted.key,
+            failure: exhausted.reason, until: Math.max(at + yieldCooldownMs, exhausted.retryAt) };
+        }
         if (result?.waited) {
           waits += 1;
           waitMs += Math.max(0, elapsedMs);
@@ -164,19 +181,7 @@ function createDirector({
           return null;
         }
         waits = 0;
-        if (adaptation && !result?.sourceHandled && result?.reason !== 'aborted') {
-          const p = generic(perceive());
-          adaptation.scope(() => true).outcome(p, result?.ok ? { ...result, progress: false } : result);
-        }
-        if (result?.ok !== false || !result.reason || result.reason === 'aborted') return null;
-        for (const [reason, times] of byReason) if (times.at(-1) <= at - FAILURE_WINDOW) byReason.delete(reason);
-        const times = (byReason.get(result.reason) || []).filter((t) => t > at - FAILURE_WINDOW);
-        times.push(at);
-        byReason.set(result.reason, times);
-        if (times.length < 10) return null; // cool before an eleventh repeat
-        const until = Math.max(at + STEP_COOLDOWN, times[0] + FAILURE_WINDOW);
-        emit('autonomy_loop_blocked', { card, reason: result.reason, count: times.length, until });
-        return { card, reason: 'repeated_failure', failure: result.reason, until };
+        return null;
       },
     };
   }
@@ -202,7 +207,14 @@ function createDirector({
     tick() {
       if (!enabled) return null;
       if (!playerActive) adaptation?.poll();
-      if (brain.status().goal) { idleSince = null; return null; }
+      if (brain.status().goal) {
+        idleSince = null;
+        if (own?.reserveUntil != null && now() >= own.reserveUntil) {
+          void brain.clearGoal('reserve_work_ended').catch((error) =>
+            emit('autonomy_error', { reason: String(error?.message || error) }));
+        }
+        return null;
+      }
       // A player goal can also end without an event (stop, clear).
       if (playerActive) { playerActive = false; pausedUntil = now() + resumeDelayMs; }
       own = null;
@@ -225,25 +237,36 @@ function createDirector({
         return false;
       });
       const choice = chooseNext(state, memory, available, { stage, cooldowns, now: now() });
-      if (!choice.card) {
+      const scores = [...choice.scores, ...excluded];
+      const at = now();
+      const retryAt = Math.min(...scores.filter((score) => score.until > at).map((score) => score.until));
+      let card = choice.card;
+      let reserveUntil = null;
+      if (Number.isFinite(retryAt) && (!card || reserveCards.includes(card))) {
+        card = state.isDay === true
+          ? chooseNext(state, memory, reserveCards, { stage, cooldowns, now: at }).card || card
+          : null;
+        if (card) reserveUntil = Math.min(retryAt, at + RESERVE_WORK_MS);
+      }
+      if (!card) {
         idleSince = now();
-        const scores = [...choice.scores, ...excluded];
-        const until = Math.min(...scores.filter((s) => s.until > now()).map((s) => s.until));
-        const reason = Number.isFinite(until) ? 'no_eligible_card_until_retry' : 'no_current_demand_or_prerequisites';
+        const until = Number.isFinite(retryAt) ? retryAt : null;
+        const reason = until === null ? 'no_current_demand_or_prerequisites' : 'no_eligible_card_until_retry';
         onIdle(state, reason);
         const signature = JSON.stringify([stage, scores]);
-        if (lastIdle !== signature) emit('autonomy_idle', { stage, reason, until: Number.isFinite(until) ? until : null, scores });
+        if (lastIdle !== signature) emit('autonomy_idle', { stage, reason, until, scores });
         lastIdle = signature;
         return null;
       }
       lastIdle = null;
-      const goal = choice.card.create(memory);
-      emit('autonomy_choice', { card: choice.card.id, goal: goal.name, stage, scores: choice.scores });
-      const generation = brain.setGoal(goal, { autonomy: governor(choice.card.id, goal) });
-      own = { id: choice.card.id, goal: goal.name, generation, expedition: choice.card.expedition, stage: choice.card.budgetStage ?? choice.card.stage, cardStage: choice.card.stage,
-        safeReturn: choice.card.safeReturn };
+      const goal = card.create(memory);
+      emit('autonomy_choice', { card: card.id, goal: goal.name, stage, scores,
+        ...(reserveUntil === null ? {} : { reserveUntil, retryAt }) });
+      const generation = brain.setGoal(goal, { autonomy: governor(card.id, goal) });
+      own = { id: card.id, goal: goal.name, generation, expedition: card.expedition, stage: card.budgetStage ?? card.stage,
+        cardStage: card.stage, safeReturn: card.safeReturn, reserveUntil };
       idleSince = null;
-      return choice.card.id;
+      return card.id;
     },
     enable() {
       if (enabled) return;

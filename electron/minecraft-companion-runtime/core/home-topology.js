@@ -14,6 +14,14 @@ function safeStand(read, p) {
   return supports(read(v.offset(0, -1, 0))) && clear(read(v)) && clear(read(v.offset(0, 1, 0)));
 }
 
+function homeContains(house, position) {
+  if (!house || !position) return false;
+  const { anchor, size } = house;
+  const { x, y, z } = position;
+  return x >= anchor.x - 1 && x < anchor.x + size + 1 && z >= anchor.z - 1 && z < anchor.z + size + 1
+    && y >= anchor.y - 1 && y < anchor.y + 4;
+}
+
 // A house has one walking level. Only cardinal steps through full-height
 // openings count; beds aren't suitable floor under a two-block-high ceiling.
 // A door itself is operable, not a piece of furniture that partitions the room.
@@ -57,4 +65,4 @@ function topology(house, read, { occupy = [], remove = [] } = {}) {
   return { known, open, cells, reachable, disconnected, connected: known && open && cells.size > 0 && !disconnected.length };
 }
 
-module.exports = { topology, safeStand, supports, clear, isBed, SIDES };
+module.exports = { topology, safeStand, supports, clear, isBed, SIDES, homeContains };

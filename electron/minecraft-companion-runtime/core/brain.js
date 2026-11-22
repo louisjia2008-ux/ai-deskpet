@@ -149,7 +149,7 @@ function createBrain({
     const progress = safeProgress(entry.def, state);
     // The goal knows it cannot go on here (nothing to build with in reach of
     // the site): end it now and say why, rather than burn the stall budget.
-    if (result?.giveUp) {
+    if (result?.giveUp && (!result.sourceHandled || result.reason === 'home_site_relocated')) {
       goal = null;
       emit('goal_failed', { goal: entry.def.name, progress, reasons: [result.reason], ...correlation(entry) });
       return;
@@ -159,6 +159,11 @@ function createBrain({
       entry.stalls = 0;
       return;
     }
+    // A concrete action, planning source, or the goal's adaptation ladder
+    // already owns this failed attempt. Use the stall budget for runs that
+    // reported success without advancing, and for ordinary non-autonomous goals.
+    if (entry.autonomy && ((!result.ok && (result.sourceHandled || entry.autonomy.managesFailures))
+      || (result.sourceHandled && result.adaptFailure))) return;
     entry.stalls += 1;
     if (!result.ok) entry.reasons.push(result.reason);
     if (entry.stalls >= (entry.def.noProgressLimit ?? noProgressLimit)) {
@@ -223,7 +228,7 @@ function createBrain({
       ctx.adapt = autonomous.adapt?.(() => running === entry && isCurrent() && !controller.signal.aborted);
       ctx.stepBlocked = autonomous.stepBlocked;
       ctx.stepOutcome = (step, result) => {
-        if (isCurrent() && !controller.signal.aborted) autonomous.stepOutcome(step, result, ctx.record);
+        if (isCurrent() && !controller.signal.aborted) return autonomous.stepOutcome(step, result, ctx.record);
       };
     }
     entry.promise = Promise.resolve()

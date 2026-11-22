@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Vec3 } = require('vec3');
+const { createAdaptation } = require('../core/adaptation');
 const { createGatherMaterialsGoal } = require('../core/goals/gatherMaterials');
 
 // A flat world of stone at y 63 with a chest on it, the bot ten blocks off.
@@ -62,7 +63,8 @@ test('with a search radius, no tree near the chest ends the task with what is mi
   assert.equal(legs, 8);
 });
 
-test('three bad approaches within a lava pool switch to a different pool without blocking all buckets', async () => {
+for (const autonomous of [false, true]) {
+test(`three bad approaches switch lava pools (${autonomous ? 'autonomous' : 'manual'})`, async () => {
   const { bot, chest, skills } = world([]);
   const inventory = { bucket: 1 };
   const bad = [new Vec3(1, 60, 1), new Vec3(2, 60, 1), new Vec3(1, 60, 3)];
@@ -90,10 +92,18 @@ test('three bad approaches within a lava pool switch to a different pool without
   const outcomes = [];
   const ctx = { perceive: () => ({ inventory }), record: (type, data) => records.push({ type, ...data }),
     stepOutcome: (step, result) => outcomes.push({ step, result }) };
+  if (autonomous) ctx.adapt = createAdaptation({ onEvent: e => records.push(e) }).scope(() => true);
   for (let i = 0; i < 10 && !goal.isDone(ctx.perceive()); i += 1) await goal.run(ctx);
   assert.equal(goal.isDone(ctx.perceive()), true);
   assert.equal(inventory.lava_bucket, 1);
   assert.equal(attempts, 4);
   assert.equal(outcomes.filter(({ result }) => !result.ok).length, 0);
-  assert.ok(records.some((e) => e.type === 'recovery_switch' && e.to === 'different_pool' && e.failures === 3));
+  if (autonomous) {
+    assert.ok(records.some(e => e.type === 'adaptation_switch' && e.to === 'different_pool' && e.failures === 3));
+    assert.ok(records.some(e => e.type === 'adaptation_use' && e.method === 'different_pool' && e.ok));
+    assert.ok(!records.some(e => e.type === 'recovery_switch'));
+  } else {
+    assert.ok(records.some(e => e.type === 'recovery_switch' && e.to === 'different_pool' && e.failures === 3));
+  }
 });
+}

@@ -143,19 +143,6 @@ test('three failed planning attempts block the source and the planner moves on',
   assert.equal(ctx.stepBlocked('smelt', 'charcoal'), 0);
 });
 
-test('a repeated goal failure is cooled before an eleventh repeat within 30 minutes', () => {
-  const { director, governor, events, advance } = fixture();
-  director.tick();
-  for (let i = 0; i < 9; i++) {
-    assert.equal(governor().outcome({ ok: false, reason: 'same_failure' }, 200), null);
-    advance(100);
-  }
-  const result = governor().outcome({ ok: false, reason: 'same_failure' }, 200);
-  assert.equal(result.reason, 'repeated_failure');
-  assert.equal(events.at(-1).type, 'autonomy_loop_blocked');
-  assert.equal(result.until, 1_801_000);
-});
-
 test('charcoal planning reserves its log before choosing fuel', () => {
   const plan = (inventory, count = 1) => planNext({ requirements: [{ key: 'charcoal', count }], inventory, stations: { furnace: true } });
   assert.equal(plan({ oak_log: 1 }).kind, 'gather');

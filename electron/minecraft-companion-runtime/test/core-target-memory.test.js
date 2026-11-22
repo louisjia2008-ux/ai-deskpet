@@ -132,7 +132,7 @@ test('blocked optional lighting cannot gate completion and a protected obstacle 
     skills: { placeAt: () => assert.fail('player cell received a placement') } });
   assert.equal(goal.isDone(state), true);
   for (let i = 0; i < 3; i++) await goal.lightingGoal().run(ctx);
-  assert.equal(records.filter(e => e.type === 'target_failure').length, 3);
+  assert.equal(records.filter(e => e.type === 'target_failure' || e.type === 'target_excluded').length, 0);
   assert.equal(goal.maintenance(state).blocked.find(e => posKey(e.position) === posKey(torch)).reason, 'protected_player_block');
   assert.equal(goal.isDone(state), true);
   assert.equal(bot.blockAt(torch).name, 'podzol');
