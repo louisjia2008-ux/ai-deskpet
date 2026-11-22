@@ -1,6 +1,7 @@
 'use strict';
 
 const { Vec3 } = require('vec3');
+const { isSurveyPlant, isSurveyReplaceable } = require('./natural-cover');
 
 // Mirror PlanCompiler.matchesExpect and TerrainRules. The same fixture is
 // exercised against Minecraft's block registry by the Mod JUnit suite.
@@ -9,15 +10,6 @@ const NATURAL_GROUND = new Set([
   'stone', 'granite', 'diorite', 'andesite', 'deepslate', 'tuff', 'calcite', 'dripstone_block',
   'sand', 'red_sand', 'gravel', 'sandstone', 'red_sandstone', 'clay', 'snow', 'snow_block',
 ]);
-const NATURAL_PLANTS = new Set([
-  'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'bush', 'firefly_bush',
-  'short_dry_grass', 'tall_dry_grass', 'dandelion', 'poppy', 'blue_orchid', 'allium',
-  'azure_bluet', 'red_tulip', 'orange_tulip', 'white_tulip', 'pink_tulip', 'oxeye_daisy',
-  'cornflower', 'lily_of_the_valley', 'wither_rose', 'torchflower', 'pink_petals', 'wildflowers',
-  'sunflower', 'lilac', 'rose_bush', 'peony', 'open_eyeblossom', 'closed_eyeblossom', 'leaf_litter',
-]);
-const REPLACEABLE = new Set(['air', 'cave_air', 'void_air', 'snow', 'short_grass', 'tall_grass', 'fern', 'large_fern',
-  'dead_bush', 'bush', 'short_dry_grass', 'tall_dry_grass', 'leaf_litter']);
 const BENIGN_OPEN = /^(?:minecraft:.*_(?:door|trapdoor|fence_gate)|minecraft:barrel)$/;
 const id = (state) => state?.split('[', 1)[0];
 const name = (state) => id(state)?.startsWith('minecraft:') ? id(state).slice(10) : '';
@@ -53,17 +45,17 @@ function matchesTarget(block, target) {
   return matchesState(target, stateName(block));
 }
 
-const replaceable = (state) => REPLACEABLE.has(name(state)) && !/\bwaterlogged=true(?=[,\]])/.test(state);
+const replaceable = (state) => isSurveyReplaceable(name(state)) && !/\bwaterlogged=true(?=[,\]])/.test(state);
 
 function matchesExpectState({ kind, expect: expected, target }, actual, hasNaturalCanopy = () => false) {
   if (!actual) return false;
   if (kind === 'clear' || kind === 'cut') {
-    return NATURAL_GROUND.has(name(actual)) || NATURAL_PLANTS.has(name(actual)) || naturalLeaves(actual)
+    return NATURAL_GROUND.has(name(actual)) || isSurveyPlant(name(actual)) || naturalLeaves(actual)
       || (log(actual) && (expected === actual || hasNaturalCanopy()));
   }
   if (kind === 'fill') return replaceable(actual);
   if (kind === 'build' || kind === 'furnish' || kind === 'scaffold') {
-    return matchesState(expected, actual) || (replaceable(actual) && REPLACEABLE.has(name(expected)))
+    return matchesState(expected, actual) || (replaceable(actual) && isSurveyReplaceable(name(expected)))
       || (kind === 'build' && expected === 'minecraft:dirt' && target === 'minecraft:farmland[moisture=0]'
         && id(actual) === 'minecraft:grass_block');
   }
@@ -135,7 +127,7 @@ function supportsBlock(attached, attachedPos, support) {
   if (name === 'vine') {
     return ['up', 'north', 'south', 'east', 'west'].some((side) => props[side] && support.equals(attachedPos.offset(...FACE[side])));
   }
-  if (onFloor) return NATURAL_PLANTS.has(name) || FLOOR.test(name) || FLOOR_SET.has(name);
+  if (onFloor) return isSurveyPlant(name) || FLOOR.test(name) || FLOOR_SET.has(name);
   return name === 'sugar_cane' && support.y === attachedPos.y - 1
     && Math.abs(support.x - attachedPos.x) + Math.abs(support.z - attachedPos.z) === 1;
 }

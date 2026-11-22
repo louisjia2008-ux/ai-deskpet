@@ -11,11 +11,11 @@ const { FUELS, COLORS } = require('./knowledge');
 const { ownedItems } = require('./perception');
 const { withCursorConfirmation } = require('./inventory');
 const { isLog, isSurfaceLog } = require('./goals/gatherBlocks');
+const { isAir, naturalCover, plantPartner, isWaterlogged } = require('./natural-cover');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
 const v = (p) => new Vec3(p.x, p.y, p.z);
-const AIR = new Set(['air', 'cave_air', 'void_air']);
 
 function inventoryCounts(bot) {
   const counts = {};
@@ -250,32 +250,59 @@ function shortBy(ingredients, have) {
  *   sneak  - hold sneak while clicking, so a chest, hopper or furnace can be
  *            the supporting block instead of opening it. Hoppers point at the
  *            block they are placed against, so device parts rely on this.
+ *   requireAir - accept air and natural cover, rather than clearing unrelated
+ *                non-colliding blocks
+ *   protectedCell - additional placement and clearing protection
  *   passable - the block has no collision (a rail): it goes in where the bot
  *            or a mob stands, so neither has to move out first
  */
 const INTERACTIVE = /(_door|_trapdoor|_fence_gate|_bed|_button|chest|barrel|crafting_table|furnace|smoker|anvil|lever|hopper|dispenser|dropper|lectern|loom|_table|enchanting|shulker_box|stonecutter|grindstone|cartography|brewing|beacon|bell|_sign|note_block|jukebox|composter|cauldron)$/;
 
-async function placeAt(bot, ctx, position, itemMatch, { faces, stand, verify, sneak = false, alsoClear = [], passable = false, requireAir = false } = {}) {
+function inspectCover(bot, cell, { protectedCell, clearReplaceable = false, legacy = false, existing } = {}) {
+  const block = bot.blockAt(cell);
+  const protectedAt = p => protectedCell?.(p) || bot.companionPlayerBlock?.(p);
+  const partner = plantPartner(block, cell, p => bot.blockAt(p));
+  if (protectedAt(cell) || (partner && protectedAt(partner))) return fail('protected_player_block');
+  if (!block) return legacy ? { ok: true } : fail('occupied');
+  const kind = naturalCover(block);
+  if (kind === 'air' || (kind === 'replace' && !clearReplaceable) || existing?.(block.name)) return { ok: true };
+  if (kind || (legacy && block.boundingBox === 'empty' && !/water|lava/.test(block.name) && !isWaterlogged(block))) {
+    return { ok: true, block };
+  }
+  return fail('occupied');
+}
+
+async function clearCoverAt(bot, ctx, cell, options) {
+  const first = inspectCover(bot, cell, options);
+  if (!first.block) return first;
+  const reach = await actions.goToDig(bot, ctx, first.block, { timeoutMs: 20000 });
+  if (!reach.ok) return reach;
+  const ready = inspectCover(bot, cell, options);
+  if (!ready.block) return ready;
+  if (ready.block.name !== first.block.name) return fail('block_changed');
+  const dug = await actions.digBlock(bot, ctx, ready.block);
+  if (!dug.ok) return dug;
+  const cleared = await waitUntil(() => isAir(bot.blockAt(cell)?.name), { timeoutMs: 1500, signal: ctx.signal });
+  return cleared ? { ok: true } : fail('cover_not_cleared');
+}
+
+async function placeAt(bot, ctx, position, itemMatch, { faces, stand, verify, sneak = false, alsoClear = [], passable = false,
+  requireAir = false, protectedCell } = {}) {
   const target = v(position);
   const current = bot.blockAt(target);
   if (current && itemMatch(current.name)) return { ok: true, already: true };
-  // Grass or flowers: break them first, also where a bed's head or a door's
-  // top half goes (a flower bed there makes the server refuse the bed).
-  for (const cell of [target, ...alsoClear.map(v)]) {
-    const block = bot.blockAt(cell);
-    if (requireAir && (!block || !AIR.has(block.name))) return fail('occupied');
-    if (!block || AIR.has(block.name) || (cell !== target && itemMatch(block.name))) continue;
-    if (block.boundingBox !== 'empty' || block.name === 'water' || block.name === 'lava') {
-      if (cell === target) return fail('occupied');
-      continue;
-    }
-    const reach = await actions.goToDig(bot, ctx, block, { timeoutMs: 20000 });
-    if (!reach.ok) return reach;
-    const dug = await actions.digBlock(bot, ctx, block);
-    if (!dug.ok) return dug;
-  }
+  const cells = [target, ...alsoClear.map(v)].map(cell => ({ cell,
+    options: { protectedCell, legacy: !requireAir, ...(cell !== target && !requireAir ? { existing: itemMatch } : {}) } }));
+  const inspect = () => cells.map(({ cell, options }) => inspectCover(bot, cell, options));
+  // Check the whole footprint before changing either half of a bed or door.
+  const blocked = inspect().find(result => !result.ok);
+  if (blocked) return blocked;
   const item = bot.inventory.items().find((i) => itemMatch(i.name));
   if (!item) return fail('no_material');
+  for (const { cell, options } of cells) {
+    const cleared = await clearCoverAt(bot, ctx, cell, options);
+    if (!cleared.ok) return cleared;
+  }
   // Standing in the very cell to fill (a foundation hole): climb out first.
   // A rail or other block without collision goes in under anyone standing there.
   if (!passable && (bot.entity.position.floored().equals(target) || bot.entity.position.floored().offset(0, 1, 0).equals(target))) {
@@ -314,7 +341,6 @@ async function placeAt(bot, ctx, position, itemMatch, { faces, stand, verify, sn
   }
   if (!ref || ref.boundingBox !== 'block') return fail('no_support');
   // Multi-block items (a bed's head) need their other cells free of creatures too.
-  if (requireAir && [target, ...alsoClear.map(v)].some((p) => !AIR.has(bot.blockAt(p)?.name))) return fail('occupied');
   if ((!passable && entityInside(bot, target)) || alsoClear.some((p) => entityInside(bot, v(p)))) return fail('cell_occupied_by_entity');
   try {
     await bot.equip(item, 'hand');
@@ -322,6 +348,9 @@ async function placeAt(bot, ctx, position, itemMatch, { faces, stand, verify, sn
       bot.setControlState('sneak', true);
       await sleep(150, ctx.signal); // the server must see the sneak before the click
     }
+    // A walk/equip can take time. Validate the live world before clicking.
+    const invalid = inspect().find(result => !result.ok || result.block);
+    if (invalid) return invalid.ok ? fail('occupied') : invalid;
     await runCancellable(() => bot.placeBlock(ref, face), { signal: ctx.signal, timeoutMs: 6000, timeoutCode: 'place_timeout' });
   } catch (error) {
     if (isAbort(error)) throw error;
@@ -362,7 +391,7 @@ async function pourLiquid(bot, ctx, position, fluid, { against = null } = {}) {
   if (isFluidSource(bot.blockAt(target), fluid)) return { ok: true, already: true };
   const current = bot.blockAt(target);
   if (!current) return fail('unloaded');
-  if (!AIR.has(current.name) && current.name !== fluid) return fail('occupied', { block: current.name });
+  if (!isAir(current.name) && current.name !== fluid) return fail('occupied', { block: current.name });
   const floor = bot.blockAt(target.offset(0, -1, 0));
   if (!floor || floor.boundingBox !== 'block') return fail('no_support');
   const bucket = bot.inventory.items().find((i) => i.name === `${fluid}_bucket`);
@@ -440,7 +469,7 @@ function rimCells(bot, target) {
     for (let dy = 0; dy <= 2; dy += 1) {
       const feet = target.offset(dx, dy, dz);
       const below = bot.blockAt(feet.offset(0, -1, 0));
-      if (below?.boundingBox !== 'block' || !AIR.has(bot.blockAt(feet)?.name) || !AIR.has(bot.blockAt(feet.offset(0, 1, 0))?.name)) continue;
+      if (below?.boundingBox !== 'block' || !isAir(bot.blockAt(feet)?.name) || !isAir(bot.blockAt(feet.offset(0, 1, 0))?.name)) continue;
       cells.push(feet);
     }
   }
@@ -886,7 +915,7 @@ async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48, exclude = 
     .filter((p) => !blacklist.has(posKey(p)) && !exclude(p))
     .map((p) => bot.blockAt(p))
     // A still source with open air above it, so the bucket can be aimed from the side or above.
-    .filter((b) => b && sourceLevel(b) === 0 && AIR.has(bot.blockAt(b.position.offset(0, 1, 0))?.name || ''))
+    .filter((b) => b && sourceLevel(b) === 0 && isAir(bot.blockAt(b.position.offset(0, 1, 0))?.name || ''))
     .sort((a, b) => a.position.distanceTo(here) - b.position.distanceTo(here));
   if (sources.length === 0) return fail('no_target_in_range');
   const target = sources[0];
@@ -937,6 +966,47 @@ const SIDES4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const RING2 = [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 1], [-2, -1], [1, -2], [-1, 2]];
 // A lid that stays up: four sand make one in the inventory grid.
 const SANDSTONE = { sand: 'sandstone', red_sand: 'red_sandstone' };
+const SHELTER_SEALS = new Set(['dirt', 'cobblestone', 'cobbled_deepslate', 'coarse_dirt', ...Object.values(SANDSTONE)]);
+const SEAL_SOIL = /^(dirt|grass_block|coarse_dirt|podzol|rooted_dirt|mycelium)$/;
+const SEAL_ROCK = /^(stone|cobblestone|deepslate|cobbled_deepslate|sandstone|red_sandstone)$/;
+
+const shelterSealCount = (inventory = {}) => [...SHELTER_SEALS].reduce((n, name) => n + (inventory[name] || 0), 0);
+
+async function craftShelterSeal(bot, ctx, times) {
+  const sand = Object.keys(SANDSTONE).find(name => actions.countItems(bot, n => n === name) >= 4);
+  if (!sand) return null;
+  return craft(bot, ctx, { item: SANDSTONE[sand], times: Math.min(times, Math.floor(actions.countItems(bot, n => n === sand) / 4)) });
+}
+
+/** Top up the night shelter with one short local gathering action. */
+async function prepareShelterSeal(bot, ctx, { want = 2 } = {}) {
+  const countSeals = () => actions.countItems(bot, n => SHELTER_SEALS.has(n));
+  const before = countSeals();
+  if (before >= want) return { ok: true, already: true };
+  const crafted = await craftShelterSeal(bot, ctx, want - before);
+  if (crafted?.ok) return { ok: true, gained: countSeals() - before, method: 'craft_sandstone' };
+  const feet = bot.entity.position.floored();
+  const pickaxe = bot.inventory.items().some(item => item.name.endsWith('_pickaxe'));
+  const stable = b => b && (SEAL_SOIL.test(b.name) || (pickaxe && SEAL_ROCK.test(b.name)));
+  const sand = b => b && Object.hasOwn(SANDSTONE, b.name);
+  const nearby = (matching) => (bot.findBlocks?.({ matching, maxDistance: 8, count: 32 }) || [])
+    .filter(p => Math.abs(p.y - feet.y) <= 2 && !p.equals(feet.offset(0, -1, 0))
+      && !bot.companionHomeSite?.(p) && !bot.companionNearPlayerBuild?.(p) && !bot.companionPlayerBlock?.(p) && !touchesLiquid(bot, p))
+    .map(p => bot.blockAt(p)).find(matching);
+  const target = nearby(stable) || nearby(sand);
+  if (!target) return fail('no_local_seal_material');
+  const reach = await actions.goToDig(bot, { ...ctx, dryRoute: true }, target, { timeoutMs: 4000, retryNoProgress: false });
+  if (!reach.ok) return reach;
+  const tool = SEAL_ROCK.test(target.name) && bot.inventory.items().find(item => item.name.endsWith('_pickaxe'));
+  const dug = await actions.digBlock(bot, ctx, target, { timeoutMs: 3500, tool });
+  if (!dug.ok) return dug;
+  const takesSand = sand(target);
+  const gained = await actions.collectDrops(bot, { ...ctx, dryRoute: true }, target.position.offset(0.5, 0.5, 0.5),
+    n => takesSand ? n === target.name : SHELTER_SEALS.has(n), { timeoutMs: 2500, radius: 3 });
+  if (takesSand) return gained.ok ? { ...gained, method: 'gather_sand' } : gained;
+  const count = countSeals() - before;
+  return count > 0 ? { ok: true, gained: count, method: 'gather' } : gained;
+}
 
 /** A spot where a sealed shaft can be dug: solid ground all around, nothing that flows. */
 function bunkerSpot(bot, top) {
@@ -949,14 +1019,17 @@ function bunkerSpot(bot, top) {
   return SHAFT_SOLID(bot.blockAt(top.offset(0, -4, 0)));
 }
 
-async function digIn(bot, ctx, { sealMatch: baseSeal, avoid = () => false }) {
+async function digIn(bot, ctx, { sealMatch: baseSeal, avoid = () => false, prepareSeal = false }) {
   const sealMatch = (n) => baseSeal(n) || Object.values(SANDSTONE).includes(n);
   const hasSeal = () => bot.inventory.items().some((i) => sealMatch(i.name));
   const count = (name) => actions.countItems(bot, (n) => n === name);
   // With nothing to seal with (just respawned), the shaft itself supplies it:
   // its dirt drops by hand, its stone with a pickaxe.
-  const yieldsSeal = (b) => b && (/^(dirt|grass_block|coarse_dirt|podzol|rooted_dirt|mycelium)$/.test(b.name)
-    || (/^(stone|cobblestone|deepslate|cobbled_deepslate)$/.test(b.name) && bot.inventory.items().some((i) => i.name.endsWith('_pickaxe'))));
+  const yieldsSeal = (b) => b && (SEAL_SOIL.test(b.name)
+    || (SEAL_ROCK.test(b.name) && bot.inventory.items().some((i) => i.name.endsWith('_pickaxe'))));
+  // The carrying reserve counts as a usable lid, even if the shoreline
+  // supplies no more sand and the shaft is still only being considered.
+  if (prepareSeal && !hasSeal()) await craftShelterSeal(bot, ctx, 1);
   let top = bot.entity.position.floored();
   // Sand for a sandstone lid: what is carried, the shaft's own three, and
   // when one short (an empty bag), a block of ground two steps away.
@@ -1003,8 +1076,7 @@ async function digIn(bot, ctx, { sealMatch: baseSeal, avoid = () => false }) {
     await waitUntil(() => bot.entity.position.y <= top.y - dy + 0.1 && bot.entity.onGround, { timeoutMs: 2000, signal: ctx.signal });
   }
   if (!hasSeal()) await waitUntil(() => hasSeal() || Object.keys(SANDSTONE).some((sand) => count(sand) >= 4), { timeoutMs: 2000, signal: ctx.signal });
-  const sand = Object.keys(SANDSTONE).find((name) => count(name) >= 4);
-  if (!hasSeal() && sand) await craft(bot, ctx, { item: SANDSTONE[sand] });
+  if (!hasSeal()) await craftShelterSeal(bot, ctx, 1);
   if (!hasSeal()) return fail('no_seal_block');
   // Seal the old ground block above the head, resting on the shaft wall beside it.
   const seal = top.offset(0, -1, 0);
@@ -1096,5 +1168,6 @@ async function useBed(bot, ctx, { position }) {
   }
 }
 
-module.exports = { gatherOne, craft, placeAt, pourLiquid, scoopLiquid, isFluidSource, smelt, huntOne, sheepWool, pickBerries, explore, useChest,
-  storeItems, storeInChest, takeItems, fillBucket, useBed, digIn, digOut, tossStacks, inventoryCounts, entityInside, aimAtFace };
+module.exports = { gatherOne, craft, placeAt, clearCoverAt, pourLiquid, scoopLiquid, isFluidSource, smelt, huntOne, sheepWool, pickBerries, explore, useChest,
+  storeItems, storeInChest, takeItems, fillBucket, useBed, digIn, digOut, prepareShelterSeal, shelterSealCount,
+  tossStacks, inventoryCounts, entityInside, aimAtFace };

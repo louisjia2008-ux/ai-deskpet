@@ -4,13 +4,14 @@
 // trees, water or steep ground are skipped rather than terraformed.
 
 const { createStarterHouse, SIZE, WALL_HEIGHT } = require('./blueprints/starterHouse');
+const { isAir: airName } = require('./natural-cover');
 
 const GROUND = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'stone',
   'andesite', 'diorite', 'granite', 'sand', 'red_sand', 'terracotta', 'snow_block', 'moss_block', 'mud', 'clay']);
 const TREE = (name) => name.endsWith('_log') || name.endsWith('_leaves') || name.endsWith('_wood');
 const LIQUID = new Set(['water', 'lava', 'bubble_column']);
 
-const isAir = (block) => !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
+const isAir = (block) => !block || airName(block.name);
 const isSoft = (block) => isAir(block) || (block.boundingBox === 'empty' && !LIQUID.has(block.name));
 const isSolid = (block) => Boolean(block) && block.boundingBox === 'block' && !LIQUID.has(block.name);
 
@@ -167,7 +168,7 @@ function siteWork(blockAt, house, isCorrect) {
   const digs = [];
   for (const p of house.clearance) {
     const block = blockAt(p.x, p.y, p.z);
-    // Plants are simply replaced when a block is placed into them.
+    // Non-colliding cover is handled at the individual placement.
     if (isSoft(block) || isCorrect(p, block)) continue;
     digs.push({ position: p, name: block.name });
   }

@@ -10,6 +10,7 @@ const { createNightRest } = require('../core/behaviors/nightRest');
 const { perceive } = require('../core/perception');
 const { isSurveyNight } = require('../core/survey-plan-actions');
 const { createStance } = require('../core/stance');
+const { prepareShelterSeal, digIn } = require('../core/skills');
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -71,6 +72,48 @@ test('with no house and no task the bot digs in where it stands at night', async
   assert.equal(dug.length, 1);
   assert.equal(bot.companionSheltered, true);
   rest.dispose();
+});
+
+test('autonomous night rest replenishes the seal reserve during daylight only', async () => {
+  const bot = { game: { dimension: 'overworld' } };
+  const state = { inventory: { sand: 7 }, isDay: true, timeOfDay: 11000, onGround: true };
+  const rest = createNightRest({ bot, home: () => null, prepareSeals: () => true,
+    actions: { underground: () => false },
+    skills: { prepareShelterSeal: async () => {
+      state.inventory.sand = 3;
+      state.inventory.sandstone = 1;
+      state.inventory.dirt = 1;
+      return { ok: true };
+    } } });
+  const records = [];
+  assert.equal(rest.want({ ...state, timeOfDay: 1000 }), 0);
+  assert.equal(rest.want({ ...state, inWater: true }), 0);
+  assert.equal(rest.want({ ...state, timeOfDay: 12200 }), 0);
+  assert.ok(rest.want(state) > 0);
+  assert.equal((await rest.run({ perceive: () => state, record: (type, event) => records.push({ type, ...event }) })).ok, true);
+  assert.equal(rest.want(state), 0);
+  assert.equal(records.at(-1).action, 'prepare_seal');
+});
+
+test('the carried sand can become a stable lid before the bunker site is selected', async () => {
+  function sandyBot() {
+    const items = [{ name: 'sand', count: 7 }];
+    const bot = { inventory: { items: () => items, slots: [] }, registry: { itemsByName: { sandstone: { id: 1 } } },
+      entity: { position: new Vec3(0, 64, 0) },
+      recipesFor: () => [{}], blockAt: () => ({ name: 'water', boundingBox: 'empty' }),
+      async craft() { items[0].count -= 4; items.push({ name: 'sandstone', count: 1 }); } };
+    return { bot, items };
+  }
+  const first = sandyBot();
+  const result = await prepareShelterSeal(first.bot, {}, { want: 1 });
+  assert.deepEqual(result, { ok: true, gained: 1, method: 'craft_sandstone' });
+  assert.equal(first.items[0].count, 3);
+  const automatic = sandyBot();
+  assert.equal((await digIn(automatic.bot, {}, { sealMatch: () => false, prepareSeal: true })).reason, 'no_bunker_spot');
+  assert.equal(automatic.items[1].name, 'sandstone');
+  const manual = sandyBot();
+  assert.equal((await digIn(manual.bot, {}, { sealMatch: () => false })).reason, 'no_seal_block');
+  assert.equal(manual.items[0].count, 7);
 });
 
 test('the finished roof does not suppress night rest; shut the shelter and open it at dawn', async () => {

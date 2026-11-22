@@ -5,10 +5,9 @@
 
 const { Vec3 } = require('vec3');
 const { familyOf } = require('../knowledge');
+const { naturalCover } = require('../natural-cover');
 
 const DOWN = [new Vec3(0, -1, 0)];
-// Never broken to make room for a station.
-const CROPS = /^(wheat|carrots|potatoes|beetroots|melon_stem|pumpkin_stem|attached_.*_stem|sweet_berry_bush|.*_sapling)$/;
 // A table this close is used rather than another one made.
 const TABLE_NEAR = 16;
 
@@ -36,8 +35,6 @@ function createPlannerRunner({ bot, skills, kb, memory, blacklist, avoid = () =>
     if (found) memory.table = { x: found.x, y: found.y, z: found.z };
     return Boolean(found);
   };
-  // Room for a station: air, or grass and leaf litter placeAt breaks first; never a crop.
-  const room = (b) => b && (b.name === 'air' || (b.boundingBox === 'empty' && !/water|lava/.test(b.name) && !CROPS.test(b.name)));
 
   // `station`: a crafting table by default; a furnace goes down the same way.
   async function placeNearby(ctx, station = 'crafting_table') {
@@ -50,10 +47,10 @@ function createPlannerRunner({ bot, skills, kb, memory, blacklist, avoid = () =>
         for (let dz = -r; dz <= r; dz += 1) {
           if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
           const p = [0, 1, -1].map((dy) => here.offset(dx, dy, dz))
-            .find((q) => room(blockAt(q)) && blockAt(q.offset(0, -1, 0))?.boundingBox === 'block'
-              && blockAt(q.offset(0, -1, 0))?.name !== 'farmland' && !avoid(q));
+            .find((q) => naturalCover(blockAt(q)) && blockAt(q.offset(0, -1, 0))?.boundingBox === 'block'
+              && blockAt(q.offset(0, -1, 0))?.name !== 'farmland' && !avoid(q) && !bot.companionPlayerBlock?.(q));
           if (!p) continue;
-          const placed = await skills.placeAt(bot, ctx, p, (n) => n === station, { faces: DOWN });
+          const placed = await skills.placeAt(bot, ctx, p, (n) => n === station, { faces: DOWN, requireAir: true });
           // An animal (or the bot) standing there: try the next spot.
           if (placed.reason === 'cell_occupied_by_entity') continue;
           return placed.ok ? { ...placed, position: { x: p.x, y: p.y, z: p.z } } : placed;

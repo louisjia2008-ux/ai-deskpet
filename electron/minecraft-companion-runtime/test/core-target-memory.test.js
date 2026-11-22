@@ -195,6 +195,19 @@ test('usable and decorated are distinct; only seeing every upgrade counts as fin
   assert.equal(goal.status(state).finished, true);
 });
 
+test('an established home protects its guest bed rather than plants in the planned bed cells', () => {
+  const { h, install, bot, state } = finishedShell({ allTorches: true });
+  const goal = createHomesteadGoal({ bot, anchor, autonomous: true });
+  assert.equal(goal.isDone(state), true);
+  const { position, head } = h.furniture.guestBed;
+  for (const p of [position, head]) {
+    install(p, 'poppy');
+    assert.equal(goal.protects(p), false);
+    install(p, 'white_bed');
+    assert.equal(goal.protects(p), true);
+  }
+});
+
 for (const [id, create] of [['cobble_generator', createCobbleGeneratorGoal], ['auto_smelter', createAutoSmelterGoal]]) {
   test(`${id}: an excluded required cell is not completed or retried by a fresh pinned goal`, async () => {
     const events = [];

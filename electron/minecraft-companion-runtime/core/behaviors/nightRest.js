@@ -18,12 +18,15 @@ const dimensionOf = (bot) => String(bot?.game?.dimension || 'overworld').replace
 
 // Within this the bed is used straight away (useBed walks to it).
 const NEAR_BED = 16;
+const SEAL_PREPARE_START = 10800;
+const SEAL_PREPARE_END = 12100;
 
 /**
  * `home()` returns { bed, centre, inside? } once the house is finished (bed
  * null if it is gone), { bed: null, centre: null } to dig in in place, or null.
  */
-function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, actions = defaultActions, skills = defaultSkills, now = Date.now,
+function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, prepareSeals = () => false,
+  actions = defaultActions, skills = defaultSkills, now = Date.now,
   farDistance = 64, retryBedMs = 20000 } = {}) {
   if (!bot || typeof home !== 'function') throw new TypeError('bot and home are required');
   let bunker = null;
@@ -33,6 +36,9 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, a
   const where = () => {
     try { return home(); } catch { return null; }
   };
+  const needsSeal = state => state.isDay === true && state.timeOfDay >= SEAL_PREPARE_START && state.timeOfDay < SEAL_PREPARE_END
+    && !state.sheltered && !state.inWater && state.onGround !== false && !state.hostiles?.some(e => e.distance <= 8)
+    && prepareSeals() && defaultSkills.shelterSealCount(state.inventory) < 2 && !actions.underground?.(bot);
 
   const behavior = {
     name: 'night_rest',
@@ -41,6 +47,7 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, a
       if (dimensionOf(bot) !== 'overworld') return 0;
       if (bunker) return 0.8;
       if (shutForSleep && state.isDay === true) return 0.8;
+      if (needsSeal(state)) return 0.5;
       if (state.isDay !== false || state.sheltered) return 0;
       const spot = where();
       if (!spot) return 0;
@@ -70,6 +77,11 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, a
         bot.companionSheltered = false;
         return out;
       }
+      if (needsSeal(state)) {
+        const stock = await skills.prepareShelterSeal(bot, ctx);
+        ctx.record('night_rest', { action: 'prepare_seal', ...stock });
+        return stock;
+      }
       const spot = where();
       if (!spot) return { ok: true };
       // No bed left (broken, not yet replaced): the house itself is the shelter.
@@ -78,7 +90,7 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, a
       const distance = bed ? bot.entity.position.distanceTo(bed) : Infinity;
       if (distance > farDistance) {
         ctx.record('night_rest', { action: 'dig_in', distance: Math.round(distance) });
-        const dug = await skills.digIn(bot, ctx, { sealMatch: (n) => SEALS.has(n) });
+        const dug = await skills.digIn(bot, ctx, { sealMatch: (n) => SEALS.has(n), prepareSeal: prepareSeals() });
         if (!dug.ok) return dug;
         ctx.record('night_rest', { action: 'dug_in' });
         bunker = dug.bunker;

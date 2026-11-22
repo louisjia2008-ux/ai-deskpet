@@ -232,6 +232,8 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   const nightRest = createNightRest({ bot,
     shelterDoor: (ctx, open) => director?.memory.homestead?.shelterDoor?.(ctx, open),
     enterShelter: (ctx) => director?.memory.homestead?.enterShelter?.(ctx),
+    prepareSeals: () => Boolean(autonomy && director?.isEnabled() && !survey && !paused && (!goalOwner || director.ownsGoal())
+      && !director.memory.homestead?.memory.established),
     home: () => {
       const homestead = director?.memory.homestead;
       const built = homestead?.memory;
@@ -290,7 +292,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
   };
   function rememberHome() {
     const memory = director?.memory.homestead?.memory;
-    if (!home || (!memory?.house && !memory?.relocation)) return;
+    if (!home || (!memory?.house && !memory?.relocation?.anchor)) return;
     const structure = memory.house ? { anchor: memory.house.anchor, variant: memory.house.variant, established: memory.established === true,
       pinned: memory.pinned === true, verified: { ...memory.verified },
       construction: { owned: memory.owned, temporary: memory.temporary, breach: memory.breach,
@@ -356,6 +358,14 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     const { inventory, alive } = state;
     if (!alive) return;
     const at = Date.now();
+    const homeGoal = memory.homestead;
+    if (homeGoal && !homeGoal.memory.house && director.isEnabled() && !survey && !paused && (!goalOwner || director.ownsGoal())
+      && dimension(bot) === 'overworld') {
+      const behavior = brain.status().running;
+      if (behavior && behavior !== 'goal:homestead') {
+        homeGoal.scoutSite?.(state, adaptation, (type, fields) => onEvent({ type, ...fields, behavior, at }));
+      }
+    }
     if (bot.companionEndPortal) memory.endPortal = bot.companionEndPortal;
     const facts = {
       diamond_pickaxe: inventory.diamond_pickaxe,

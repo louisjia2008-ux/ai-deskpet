@@ -3,14 +3,14 @@
 const { goals } = require('mineflayer-pathfinder');
 
 const OUTWARD_HEADINGS = Object.freeze([0, 1, -1, 2, -2, 3, -3, 4]);
-async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, timeoutMs = 15000 } = {}) {
+async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, timeoutMs = 15000, bearing } = {}) {
   const from = bot.entity.position.clone();
-  const base = Math.atan2(from.z - away.z, from.x - away.x);
+  const base = bearing ?? Math.atan2(from.z - away.z, from.x - away.x);
   const turn = OUTWARD_HEADINGS[(memory.heading || 0) % OUTWARD_HEADINGS.length];
   const angle = base + turn * Math.PI / 4;
   const x = Math.round(from.x + Math.cos(angle) * distance);
   const z = Math.round(from.z + Math.sin(angle) * distance);
-  ctx.record?.('adaptation_route', { x, z, heading: turn });
+  ctx.record?.('adaptation_route', { x, z, heading: turn, bearing: angle });
   const goal = new goals.GoalNearXZ(x, z, 3);
   const result = await actions.goTo(bot, ctx, goal, { timeoutMs, retryNoProgress: false });
   if (ctx.signal?.aborted || result.reason === 'aborted') return result;

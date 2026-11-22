@@ -57,19 +57,24 @@ test('raised bed fails the standing check; escape only releases after stepping d
   const { house, put, read } = compact();
   const bed = new Vec3(34, 76, 31), landing = bed.offset(0, 0, -1), panel = landing.offset(0, 2, 0);
   const out = new Vec3(house.entrance.x, house.entrance.y, house.entrance.z);
+  const aisle = out.offset(0, 0, 2);
   // No opening except above the bed itself. An unchanged tile is required.
   const hit = []; let look;
   const bot = {
-    entity: { position: bed.offset(0.5, 0.5625, 0.5) }, blockAt: read,
+    entity: { position: bed.offset(0.5, 0.5625, 0.5), onGround: true }, blockAt: read,
     inventory: { items: () => [{ name: 'spruce_planks' }] },
     lookAt: async (p) => { look = p; },
     setControlState: (key, on) => {
-      if (key === 'forward' && on && Math.floor(look.z) === landing.z) bot.entity.position = landing.offset(0.5, 0, 0.5);
+      if (key === 'forward' && on && Math.floor(look.z) === landing.z) {
+        const stand = Math.floor(look.x) === aisle.x ? aisle : landing;
+        bot.entity.position = stand.offset(0.5, 0, 0.5);
+      }
     },
   };
   const actions = {
     goTo: async () => {
       if (bot.entity.position.floored().equals(bed)) return { ok: false, reason: 'not_arrived' };
+      assert.ok(bot.entity.position.floored().equals(aisle));
       bot.entity.position = out.offset(0.5, 0, 0.5);
       return { ok: true };
     },
@@ -84,6 +89,7 @@ test('raised bed fails the standing check; escape only releases after stepping d
     assert.equal(posKey(bot.entity.position.floored()), posKey(out));
     assert.equal(predicate('spruce_planks'), true);
     put(p.x, p.y, p.z, 'spruce_planks');
+    bot.entity.position = landing.offset(0.5, 0, 0.5);
     return { ok: true };
   } };
   const goal = createHomesteadGoal({ bot, autonomous: true, anchor: house.anchor, variant: 'compact', gear: [], actions, skills });

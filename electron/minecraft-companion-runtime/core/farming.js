@@ -5,6 +5,8 @@
 
 const { Vec3 } = require('vec3');
 const actions = require('./actions');
+const { clearCoverAt } = require('./skills');
+const { naturalCover } = require('./natural-cover');
 const { waitUntil } = require('./confirm');
 const { posKey } = require('./blacklist');
 
@@ -12,7 +14,6 @@ const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
 const v = (p) => new Vec3(p.x, p.y, p.z);
 const TILLABLE = new Set(['grass_block', 'dirt', 'dirt_path', 'coarse_dirt', 'rooted_dirt']);
-const SOFT_ABOVE = (b) => !b || b.boundingBox === 'empty' && !/water|lava/.test(b.name);
 const RIPE = 7;
 
 const isSourceWater = (b) => b?.name === 'water' && Number(b.getProperties?.().level ?? b.metadata ?? 0) === 0;
@@ -27,8 +28,10 @@ function choosePlots(blockAt, center, { count = 16, radius = 24, exclude = () =>
   const c = { x: Math.floor(center.x), y: Math.floor(center.y), z: Math.floor(center.z) };
   const usable = (p) => {
     const ground = blockAt(p);
+    const above = blockAt({ ...p, y: p.y + 1 });
     // Farmland already tilled (a farm planted on an earlier trip) is the best plot of all.
-    return ground && (TILLABLE.has(ground.name) || ground.name === 'farmland') && SOFT_ABOVE(blockAt({ ...p, y: p.y + 1 }))
+    return ground && (TILLABLE.has(ground.name) || ground.name === 'farmland')
+      && (naturalCover(above) || (ground.name === 'farmland' && above?.name === 'wheat'))
       && !exclude(p);
   };
   const waters = (findWater ? findWater(c, radius) : []).filter((w) => w.y >= c.y - 6 && w.y <= c.y + 2);
@@ -73,7 +76,7 @@ function findWater(bot, center, radius) {
   if (id === undefined) return [];
   return bot.findBlocks({ matching: id, point: v(center), maxDistance: radius, count: 64 })
     .map((p) => bot.blockAt(p))
-    .filter((b) => isSourceWater(b) && SOFT_ABOVE(bot.blockAt(b.position.offset(0, 1, 0))))
+    .filter((b) => isSourceWater(b) && naturalCover(bot.blockAt(b.position.offset(0, 1, 0))))
     .map((b) => ({ x: b.position.x, y: b.position.y, z: b.position.z }));
 }
 
@@ -89,7 +92,11 @@ function findGround(bot, center, radius = 64, { fits = () => true } = {}) {
   const danger = bot.companionDanger || [];
   const c = v(center);
   const found = bot.findBlocks({ matching: ids, point: c, maxDistance: radius, count: 256 })
-    .filter((p) => SOFT_ABOVE(bot.blockAt(p.offset(0, 1, 0))) && SOFT_ABOVE(bot.blockAt(p.offset(0, 2, 0))))
+    .filter((p) => {
+      const above = bot.blockAt(p.offset(0, 1, 0));
+      return (naturalCover(above) || (above?.name === 'wheat' && bot.blockAt(p)?.name === 'farmland'))
+        && naturalCover(bot.blockAt(p.offset(0, 2, 0)));
+    })
     .filter((p) => !danger.some((d) => Math.hypot(d.x - p.x, d.z - p.z) < 32))
     .sort((a, b) => a.distanceTo(c) - b.distanceTo(c))
     .map((p) => ({ x: p.x, y: p.y + 1, z: p.z }))
@@ -105,9 +112,9 @@ function plotState(bot, plot) {
   if (!ground || !above) return 'unknown';
   if (ground.name === 'farmland') {
     if (above.name === 'wheat') return Number(above.getProperties?.().age ?? 0) >= RIPE ? 'ripe' : 'growing';
-    return SOFT_ABOVE(above) ? 'empty' : 'blocked';
+    return naturalCover(above) ? 'empty' : 'blocked';
   }
-  if (TILLABLE.has(ground.name)) return SOFT_ABOVE(above) ? 'untilled' : 'blocked';
+  if (TILLABLE.has(ground.name)) return naturalCover(above) ? 'untilled' : 'blocked';
   return 'lost';
 }
 
@@ -142,23 +149,31 @@ async function useOn(bot, ctx, block) {
 
 /** Hoe a grass or dirt block into farmland; plants on top are cleared first. */
 async function till(bot, ctx, plot) {
+  if (bot.companionPlayerBlock?.(v(plot))) return fail('protected_player_block');
   const moved = await reach(bot, ctx, plot);
   if (!moved.ok) return moved;
-  const above = bot.blockAt(v(plot).offset(0, 1, 0));
-  if (above && above.name !== 'air' && SOFT_ABOVE(above)) {
-    const cleared = await actions.digBlock(bot, ctx, above);
-    if (!cleared.ok) return cleared;
-  }
+  // Hoeing needs air over the soil even when a block item could replace the plant.
+  const cleared = await clearCoverAt(bot, ctx, v(plot).offset(0, 1, 0), { clearReplaceable: true });
+  if (!cleared.ok) return cleared;
   if (!await equip(bot, (n) => n.endsWith('_hoe'))) return fail('no_hoe');
+  if (bot.companionPlayerBlock?.(v(plot))) return fail('protected_player_block');
   await useOn(bot, ctx, bot.blockAt(v(plot)));
   const done = await waitUntil(() => bot.blockAt(v(plot))?.name === 'farmland', { timeoutMs: 1500, signal: ctx.signal });
   return done ? { ok: true } : fail('till_unconfirmed');
 }
 
 async function plant(bot, ctx, plot, seed = 'wheat_seeds') {
+  if (bot.companionPlayerBlock?.(v(plot))) return fail('protected_player_block');
   const moved = await reach(bot, ctx, plot);
   if (!moved.ok) return moved;
   if (!await equip(bot, (n) => n === seed)) return fail('no_seeds');
+  const cleared = await clearCoverAt(bot, ctx, v(plot).offset(0, 1, 0));
+  if (!cleared.ok) return cleared;
+  // Clearing can equip a tool; the interaction must still hold the seed.
+  if (!bot.heldItem || bot.heldItem.name !== seed) {
+    if (!await equip(bot, (n) => n === seed)) return fail('no_seeds');
+  }
+  if (bot.companionPlayerBlock?.(v(plot))) return fail('protected_player_block');
   await useOn(bot, ctx, bot.blockAt(v(plot)));
   const done = await waitUntil(() => bot.blockAt(v(plot).offset(0, 1, 0))?.name === 'wheat', { timeoutMs: 1500, signal: ctx.signal });
   return done ? { ok: true } : fail('plant_unconfirmed');

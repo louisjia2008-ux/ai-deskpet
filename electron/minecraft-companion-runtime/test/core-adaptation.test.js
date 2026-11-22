@@ -8,7 +8,7 @@ const { createDirector } = require('../core/director');
 const { createBrain } = require('../core/brain');
 const { runPlanned } = require('../core/goals/common');
 const { createHomesteadGoal } = require('../core/goals/homestead');
-const { OUTWARD_HEADINGS } = require('../core/adaptation-strategies');
+const { outwardLeg, OUTWARD_HEADINGS } = require('../core/adaptation-strategies');
 
 const location = { position: { x: 33, y: 65, z: -10 }, target: 'log' };
 const failure = { ok: false, reason: 'not_arrived' };
@@ -103,6 +103,75 @@ test('relocation reports one exhausted method only after every outward direction
   assert.equal(new Set(wanted.map(String)).size, OUTWARD_HEADINGS.length);
   assert.equal(result.adaptationExhausted?.reason, 'relocation_routes_exhausted');
   assert.equal(events.filter(e => e.type === 'adaptation_attempt').length, 1);
+});
+
+test('turning away from water keeps a fixed axis instead of the former four-point circuit', async () => {
+  const origin = new Vec3(427.5, 64, 30.5);
+  const turnAt = new Vec3(437.5, 64, 15.5);
+  const bot = { entity: { position: turnAt.clone() }, blockAt: () => null };
+  // The native GoalNearXZ completes just inside a three-block radius.
+  const advance = async (_bot, _ctx, target) => {
+    const p = bot.entity.position;
+    const dx = target.x - p.x, dz = target.z - p.z;
+    const step = 1 - 1.5 / Math.hypot(dx, dz);
+    bot.entity.position = p.offset(dx * step, 0, dz * step);
+    return { ok: true };
+  };
+  const old = { heading: OUTWARD_HEADINGS.indexOf(3) };
+  for (let i = 0; i < 4; i++) await outwardLeg(bot, {}, { goTo: advance }, old, origin, { distance: 28 });
+  assert.ok(bot.entity.position.distanceTo(turnAt) < 6, 'the old relative bearing returns after four legs');
+
+  bot.entity.position = turnAt.clone();
+  let legs = 0;
+  const { restart, events } = fixture();
+  const adaptation = restart();
+  const goal = createHomesteadGoal({ bot, autonomous: true, actions: {
+    goTo(_bot, ctx, target) {
+      if (++legs === 1) return { ok: false, reason: 'Timeout' };
+      return advance(_bot, ctx, target);
+    },
+  } });
+  goal.memory.searchOrigin = origin;
+  goal.memory.homesteadRoute = { method: 'relocate', heading: OUTWARD_HEADINGS.indexOf(-2), bearing: 0 };
+  adaptation.promote('home_site', { position: origin }, 'relocate', 'fixture');
+  const ctx = { adapt: adaptation.scope(() => true), record: (type, e) => events.push({ type, ...e }),
+    perceive: () => ({ position: bot.entity.position, inventory: {}, isDay: true, inWater: legs === 1 }) };
+  let farthest = 0;
+  for (let i = 0; i < 7; i++) {
+    assert.equal((await goal.run(ctx)).ok, true);
+    const distance = bot.entity.position.distanceTo(turnAt);
+    assert.ok(distance > farthest + 20);
+    farthest = distance;
+  }
+  assert.deepEqual([...new Set(events.filter(e => e.type === 'adaptation_route').map(e => e.heading))], [-2, 3]);
+  assert.ok(farthest > 150);
+});
+
+test('a spaced dry scout stores one candidate for homestead to revalidate and use', async () => {
+  const { restart, events } = fixture();
+  const adaptation = restart();
+  const bot = { entity: { position: new Vec3(0.5, 64, 0.5) },
+    blockAt: p => ({ name: p.y < 64 ? 'dirt' : 'air', boundingBox: p.y < 64 ? 'block' : 'empty' }) };
+  const goal = createHomesteadGoal({ bot, autonomous: true, actions: {} });
+  let inventory = {};
+  const state = () => ({ position: bot.entity.position, inventory, isDay: true, onGround: true });
+  const record = (type, e) => events.push({ type, ...e });
+  const scout = () => goal.scoutSite(state(), adaptation, record);
+  scout();
+  bot.entity.position = new Vec3(10.5, 64, 0.5);
+  scout();
+  assert.equal(events.filter(e => e.type === 'home_site_scout').length, 1);
+  assert.equal(goal.memory.relocation, undefined);
+  bot.entity.position = new Vec3(25.5, 64, 0.5);
+  inventory = { oak_planks: 400 };
+  scout();
+  const saved = goal.memory.relocation.candidate.site;
+  assert.equal(goal.memory.house, null);
+  assert.ok(saved.route.porch);
+  assert.equal((await goal.run({ adapt: adaptation.scope(() => true), perceive: state, record })).ok, true);
+  assert.deepEqual(goal.memory.house.anchor, saved.anchor);
+  assert.equal(events.find(e => e.type === 'site_chosen')?.method, 'scouted');
+  assert.equal(goal.memory.relocation, null);
 });
 
 test('the inner route owns its failures through exhaustion and the subsequent wait', async () => {
