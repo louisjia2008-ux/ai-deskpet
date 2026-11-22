@@ -156,10 +156,16 @@ function routeOrigin(bot) {
   return null;
 }
 
-function originFailure(bot, result, before) {
+function originFailure(bot, result, before, destination) {
   if (!before || !result || result.ok || result.sourceHandled || !ROUTE_FAILURE.test(result.reason)
     || bot.entity.position.distanceTo(before) >= 2) return result;
-  const cause = routeOrigin(bot);
+  // A stationary attempt to leave a completed home may have failed before
+  // the doorstep. Give the existing escape behavior the body before teaching
+  // any route or target memory about the destination.
+  const home = bot.companionHomestead?.();
+  const blockedExit = bot.companionSelfStuck && /^nopath$/i.test(result.reason) && destination && dimensionOf(bot) === 'overworld'
+    && home?.isInside?.() && homeContains(home.memory?.house, before) && !isHomeTarget(bot, destination);
+  const cause = routeOrigin(bot) || (blockedExit ? 'home_exit_blocked' : null);
   if (!cause) return result;
   // A known mine route owns its recovery while deliberately working below ground.
   if (cause === 'underground' && bot.companionMineRoute
@@ -186,9 +192,9 @@ async function goTo(bot, ctx, goal, options = {}) {
   }
   const before = !ctx.selfRescue && !ctx.nearDestination && bot.companionSelfStuck ? bot.entity.position.clone() : null;
   const done = (result) => {
-    if (before) result = originFailure(bot, result, before);
     const p = goal.pos || (Number.isFinite(goal.x) && Number.isFinite(goal.z)
       ? { x: goal.x, y: Number.isFinite(goal.y) ? goal.y : Math.floor(bot.entity.position.y), z: goal.z } : null);
+    if (before) result = originFailure(bot, result, before, p);
     if (!result.sourceHandled && before && bot.companionSelfStuck.pathFailed(p, result, before)) {
       return fail('self_stuck', { sourceHandled: true, sourceFailure: 'self_stuck' });
     }
@@ -239,7 +245,7 @@ async function goNear(bot, ctx, position, range = 2, options = {}) {
   const tracker = !ctx.selfRescue && bot.companionSelfStuck;
   const before = tracker && bot.entity.position.clone();
   let result = await goNearAdapted(bot, before ? { ...ctx, nearDestination: true } : ctx, position, range, options);
-  if (before) result = originFailure(bot, result, before);
+  if (before) result = originFailure(bot, result, before, position);
   if (!result.ok && !result.sourceHandled && tracker?.pathFailed(position, result, before)) {
     return fail('self_stuck', { sourceHandled: true, sourceFailure: 'self_stuck' });
   }
@@ -261,7 +267,7 @@ async function goNearAdapted(bot, ctx, position, range, options) {
     if (method === 'alternate_target') return fail('choose_another_target');
     return goNearOnce(bot, ctx, position, range, { ...options,
       lateral: method === 'waypoint' ? (plan.failures % 2 === 0 ? 1 : -1) : 0 })
-      .then(result => originFailure(bot, result, before));
+      .then(result => originFailure(bot, result, before, position));
   }, plan.method === 'avoid_region' ? { threshold: 1, learn: { kind: 'hard_route', radius: 6 } } : undefined)
     .then(result => result.waited ? { ...result, ok: false, reason: 'route_region_avoided' } : result);
 }

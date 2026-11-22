@@ -173,6 +173,10 @@ function createDirector({
             failure: exhausted.reason, until: Math.max(at + yieldCooldownMs, exhausted.retryAt) };
         }
         if (result?.waited) {
+          if (card === 'homestead' && result.reason === 'sheltering_until_daylight') {
+            const state = perceive();
+            if (state?.isDay === false && state.sheltered) return null;
+          }
           waits += 1;
           waitMs += Math.max(0, elapsedMs);
           if (result.retryAt > at || waits >= waitLimit || waitMs >= waitBudgetMs) {

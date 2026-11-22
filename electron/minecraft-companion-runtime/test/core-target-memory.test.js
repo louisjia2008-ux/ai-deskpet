@@ -7,6 +7,7 @@ const { createAdaptation } = require('../core/adaptation');
 const { createStarterHouse } = require('../core/blueprints/starterHouse');
 const { chooseSite, evaluateSite, chooseHillside, siteWork } = require('../core/site');
 const { createHomesteadGoal } = require('../core/goals/homestead');
+const { createHomeMaintenance } = require('../core/behaviors/homeMaintenance');
 const { createFarmGoal } = require('../core/goals/farm');
 const { createStockFoodGoal } = require('../core/goals/stockFood');
 const { createAutoSmelterGoal } = require('../core/goals/autoSmelter');
@@ -96,6 +97,26 @@ function finishedShell({ allTorches = false } = {}) {
   return { h, install, bot, state, ctx };
 }
 
+test('maintenance on an established autonomous home leaves its door open before night rest', async () => {
+  const { bot, state, ctx } = finishedShell();
+  const plan = [];
+  const door = [];
+  bot.activateBlock = async () => { door.push('activated'); };
+  state.inventory = { crafting_table: 1 };
+  const goal = createHomesteadGoal({ bot, anchor, autonomous: true, gear: [],
+    actions: { withinReach: () => true },
+    skills: { useChest: async () => { plan.push('use_chest'); return { ok: true }; } } });
+  assert.equal(goal.isDone(state), true);
+  const maintenance = createHomeMaintenance({ bot, home: () => goal, activeGoal: () => 'stock_food' });
+  state.timeOfDay = 12019;
+  assert.ok(maintenance.want(state) > 0);
+  const result = await maintenance.run({ ...ctx, behavior: maintenance.name });
+  assert.equal(result.ok, true);
+  assert.deepEqual(plan, ['use_chest']);
+  assert.deepEqual(door, []);
+  assert.equal(bot.companionSheltered, false);
+});
+
 test('earthwork actually removes doorway and podzol torch obstructions, then lighting can place the torch', async () => {
   const { bot, h, install, state, ctx } = finishedShell({ allTorches: true });
   const torch = h.furniture.torches.find(p => p.z < 0);
@@ -116,6 +137,31 @@ test('earthwork actually removes doorway and podzol torch obstructions, then lig
   assert.equal(goal.status(state).finished, false, 'the guest bed is still missing');
   assert.equal((await goal.lightingGoal().run(ctx)).ok, true);
   assert.equal(bot.blockAt(torch).name, 'torch');
+});
+
+test('a standalone home processes lighting at its floor and still surfaces from below the foundation', async () => {
+  const { bot, state, ctx } = finishedShell();
+  state.inventory = { oak_log: 3, oak_planks: 12 };
+  const surfaceFailure = { ok: false, reason: 'still_below_surface' };
+  let ascents = 0, smelts = 0;
+  const goal = createHomesteadGoal({ bot, anchor, autonomous: true,
+    actions: { async surface() { ascents++; return surfaceFailure; } },
+    skills: { async smelt(_bot, _ctx, step) {
+      assert.equal(step.input, 'oak_log');
+      smelts++;
+      return { ok: true };
+    } },
+  });
+  assert.equal(goal.isDone(state), true);
+  assert.equal((await goal.lightingGoal().run(ctx)).ok, true);
+  assert.equal(smelts, 1);
+  assert.equal(ascents, 0);
+
+  bot.entity.position = bot.entity.position.offset(0, -3, 0);
+  const below = await goal.lightingGoal().run(ctx);
+  assert.equal(below.reason, 'still_below_surface');
+  assert.equal(smelts, 1);
+  assert.equal(ascents, 1);
 });
 
 test('blocked optional lighting cannot gate completion and a protected obstacle is never dug', async () => {

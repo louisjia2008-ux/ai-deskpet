@@ -11,6 +11,8 @@ const { topology, safeStand } = require('../core/home-topology');
 const { drySiteAccess } = require('../core/dry-route');
 const { posKey } = require('../core/blacklist');
 const { createProgression } = require('../core/goals/progression');
+const { createDefaultCards } = require('../core/goals/registry');
+const { createHomeEscape } = require('../core/behaviors/homeEscape');
 const { chooseNext } = require('../core/director');
 const { KNOWLEDGE } = require('../core/knowledge');
 const { createAdaptation } = require('../core/adaptation');
@@ -117,6 +119,68 @@ test('three different path failures roll back only the stationary cluster, inclu
   assert.equal(bot.companionTargets.snapshot().length, 1);
   assert.ok(events.some(e => e.type === 'target_failure_revoked' && e.target === '4,12,5' && e.excluded));
   assert.deepEqual(events.find(e => e.type === 'self_stuck').targets, ['4,12,5', '5,12,5', '6,12,5']);
+});
+
+test('one animal with three blocked approaches sends the body out through the closed home door without exclusions', async () => {
+  const { house, read } = compact();
+  const position = new Vec3(33.5, 76, 30.5);
+  const door = house.furniture.door;
+  const porch = new Vec3(house.entrance.x, house.entrance.y, house.entrance.z);
+  const pig = { id: 2, uuid: 'same-pig', name: 'pig', position: new Vec3(49.5, 76, 30.5) };
+  let open = false;
+  const bot = {
+    entity: { position, onGround: true },
+    entities: { 2: pig },
+    blockAt(p) {
+      if ([door.position, door.upper].some(cell => p.equals(cell))) {
+        return { ...read(p), name: 'oak_door', getProperties: () => ({ open, facing: 'north' }) };
+      }
+      return read(p);
+    },
+    async activateBlock(block) {
+      assert.ok(block.position.equals(door.position));
+      open = !open;
+    },
+    pathfinder: { async goto(target) {
+      if (target.constructor.name === 'GoalBlock' && open) {
+        assert.ok(target.isEnd(porch));
+        bot.entity.position = porch.offset(0.5, 0, 0.5);
+        return;
+      }
+      throw Object.assign(new Error('closed door prevents native path'), { name: 'NoPath' });
+    } },
+  };
+  const home = createHomesteadGoal({ bot, autonomous: true, anchor: house.anchor, variant: 'compact', gear: [] });
+  home.memory.established = true;
+  bot.companionHomestead = () => home;
+  const events = [];
+  const record = (type, data) => events.push({ type, ...data });
+  bot.companionTargets = createTargetMemory();
+  bot.companionSelfStuck = createSelfStuck(bot, { emit: record });
+  const failPath = { ok: false, reason: 'NoPath' };
+  assert.equal(actions.originFailure(bot, failPath, position, house.interiorCenter), failPath);
+  assert.equal(actions.originFailure(bot, failPath, position.offset(3, 0, 0), pig.position), failPath);
+
+  const food = createDefaultCards({ bot, progression: true }).cards.find(c => c.id === 'stock_food');
+  const state = { alive: true, isDay: true, health: 20, food: 20, inventory: {}, position };
+  const selection = chooseNext(state, { homestead: home }, [food], { stage: 0 });
+  assert.equal(selection.card?.id, 'stock_food');
+  const goal = selection.card.create();
+  const ctx = { perceive: () => state, record };
+  assert.equal(open, false);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    assert.equal((await goal.run(ctx)).reason, 'self_stuck');
+  }
+  assert.deepEqual(bot.companionTargets.snapshot(), []);
+  assert.equal(events.filter(e => e.type === 'hunt_target' && e.mob === 'pig').length, 3);
+  assert.equal(events.filter(e => e.type === 'target_failure' || e.type === 'target_excluded').length, 0);
+  assert.equal(events.find(e => e.type === 'self_stuck')?.reason, 'route_origin_home_exit_blocked');
+  const escape = createHomeEscape({ bot, tracker: bot.companionSelfStuck, home: () => home });
+  assert.equal(escape.want(state), 1);
+  assert.equal((await escape.run(ctx)).ok, true);
+  assert.equal(open, true);
+  assert.ok(bot.entity.position.floored().equals(porch));
 });
 
 test('a waterfront sighting does not count as accessible wood across a river', () => {
@@ -226,6 +290,38 @@ test('returning from underground accepts local daylight below the home height be
   assert.deepEqual(posKey(bot.entity.position), posKey(house.entrance));
   assert.equal(events.find(e => e.type === 'home_route_recovery' && e.phase === 'finish').position.y, 70);
   assert.equal(events.filter(e => e.type === 'adaptation_lesson' || e.type === 'target_excluded').length, 0);
+});
+
+test('compact roof can place a connecting panel in the same build turn as an unreachable corner', async () => {
+  const { house, put, read } = compact();
+  const corner = new Vec3(35, 78, 29);
+  const connector = corner.offset(0, 0, 1);
+  const place = (p, block) => put(p.x, p.y, p.z, block);
+  for (const entry of house.blocks) place(entry.position, entry.phase === 'roof' ? 'spruce_planks' : 'dirt');
+  for (const p of house.scaffold) place(p, 'coarse_dirt');
+  place(corner, 'air');
+  place(connector, 'air');
+  const bot = { entity: { position: new Vec3(33.5, 79, 31.5) }, blockAt: read };
+  const inventory = { spruce_planks: 20, crafting_table: 1, oak_door: 1 };
+  const state = { inventory, position: bot.entity.position, isDay: true, timeOfDay: 1000, health: 20, food: 20 };
+  const places = [];
+  const noPath = () => ({ ok: false, reason: 'NoPath' });
+  const goal = createHomesteadGoal({ bot, autonomous: true, anchor: house.anchor, variant: 'compact', gear: [],
+    actions: { goTo: async () => noPath() },
+    skills: { async placeAt(_bot, _ctx, position) {
+      places.push(posKey(position));
+      if (posKey(position) === posKey(corner) && read(connector).name === 'air') return noPath();
+      place(position, 'spruce_planks');
+      return { ok: true };
+    } },
+  });
+  const ctx = { perceive: () => state, record() {} };
+  assert.equal((await goal.run(ctx)).ok, true);
+  assert.deepEqual(places, [corner, connector].map(posKey));
+  assert.equal(read(corner).name, 'air');
+  assert.equal(read(connector).name, 'spruce_planks');
+  assert.equal((await goal.run(ctx)).ok, true);
+  assert.equal(read(corner).name, 'spruce_planks');
 });
 
 test('iron armor cannot run ahead of the farm or unfinished house, even with other cards on cooldown', () => {

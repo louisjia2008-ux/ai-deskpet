@@ -51,8 +51,9 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, a
     async run(ctx) {
       const state = ctx.perceive();
       if (shutForSleep && state.isDay === true) {
-        shutForSleep = false;
-        return await shelterDoor?.(ctx, true) || { ok: true };
+        const opened = await shelterDoor?.(ctx, true);
+        if (opened?.ok !== false) shutForSleep = false;
+        return opened || { ok: true };
       }
       if (bunker) {
         // Dug in only for want of anything to do: a task given meanwhile (the
@@ -119,11 +120,12 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, a
         return actions.goNear(bot, ctx, centre, 1, { timeoutMs: 40000 });
       }
       if (shelterDoor && !shutForSleep) {
+        // A cancelled close may already have reached the server. Take
+        // ownership before awaiting it so dawn can still reopen the door.
+        shutForSleep = true;
         const shut = await shelterDoor(ctx, false);
-        if (shut) {
-          shutForSleep = shut.ok;
-          return shut;
-        }
+        if (!shut?.ok && !ctx.signal?.aborted) shutForSleep = false;
+        if (shut) return shut;
       }
       await sleep(3000, ctx.signal);
       return { ok: true, waited: true, reason: 'sheltering_until_daylight' };

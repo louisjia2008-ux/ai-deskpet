@@ -2,10 +2,13 @@
 
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
+const { Vec3 } = require('vec3');
 const { createAdaptation, LADDERS, FALLBACK, NEW_AREA } = require('../core/adaptation');
 const { createDirector } = require('../core/director');
 const { createBrain } = require('../core/brain');
 const { runPlanned } = require('../core/goals/common');
+const { createHomesteadGoal } = require('../core/goals/homestead');
+const { OUTWARD_HEADINGS } = require('../core/adaptation-strategies');
 
 const location = { position: { x: 33, y: 65, z: -10 }, target: 'log' };
 const failure = { ok: false, reason: 'not_arrived' };
@@ -48,6 +51,58 @@ test('deterministic checks advance immediately on the same unchanged world', asy
   }
   assert.deepEqual(events.filter(e => e.type === 'adaptation_attempt').map(e => e.failures), [1, 1, 1, 1]);
   assert.equal(adaptation.plan('home_site', location).method, 'relocate');
+});
+
+test('relocation turns after individual timeouts and checks new dry ground reached before the leg ends', async () => {
+  const { restart, events } = fixture();
+  const adaptation = restart();
+  const bot = {
+    entity: { position: new Vec3(0.5, 64, 0.5) },
+    blockAt: p => ({ name: p.y < 64 ? 'dirt' : 'air', boundingBox: p.y < 64 ? 'block' : 'empty' }),
+  };
+  const wanted = [];
+  const goal = createHomesteadGoal({ bot, autonomous: true, actions: {
+    async goTo(_bot, _ctx, end) {
+      wanted.push([end.x, end.z]);
+      if (wanted.length === 4) {
+        const start = bot.entity.position;
+        bot.entity.position = new Vec3((end.x - start.x) * 0.7 + start.x, start.y, (end.z - start.z) * 0.7 + start.z);
+      }
+      return { ok: false, reason: 'Timeout' };
+    },
+  } });
+  const location = { position: bot.entity.position };
+  adaptation.promote('home_site', location, 'relocate', 'fixture');
+  const ctx = { adapt: adaptation.scope(() => true), record: (type, e) => events.push({ type, ...e }),
+    perceive: () => ({ position: bot.entity.position, inventory: { oak_planks: 400 }, isDay: true, inWater: false }) };
+
+  assert.equal((await goal.run(ctx)).ok, true);
+  assert.equal(new Set(wanted.map(String)).size, 4);
+  assert.equal(events.filter(e => e.type === 'home_relocation_leg').at(-1).reason, 'Timeout');
+  assert.equal(events.some(e => e.type === 'adaptation_attempt'), false);
+  assert.ok(events.some(e => e.type === 'site_chosen' && e.method === 'relocate' && e.route?.porch));
+});
+
+test('relocation reports one exhausted method only after every outward direction is blocked', async () => {
+  const { restart, events } = fixture();
+  const adaptation = restart();
+  const position = new Vec3(0.5, 64, 0.5);
+  const wanted = [];
+  const bot = { entity: { position }, blockAt: () => null };
+  const goal = createHomesteadGoal({ bot, autonomous: true, actions: {
+    async goTo(_bot, _ctx, end) {
+      wanted.push([end.x, end.z]);
+      return { ok: false, reason: 'Timeout' };
+    },
+  } });
+  adaptation.promote('home_site', { position }, 'relocate', 'fixture');
+  const ctx = { adapt: adaptation.scope(() => true), record: (type, e) => events.push({ type, ...e }),
+    perceive: () => ({ position, inventory: {}, isDay: true }) };
+
+  const result = await goal.run(ctx);
+  assert.equal(new Set(wanted.map(String)).size, OUTWARD_HEADINGS.length);
+  assert.equal(result.adaptationExhausted?.reason, 'relocation_routes_exhausted');
+  assert.equal(events.filter(e => e.type === 'adaptation_attempt').length, 1);
 });
 
 test('the inner route owns its failures through exhaustion and the subsequent wait', async () => {

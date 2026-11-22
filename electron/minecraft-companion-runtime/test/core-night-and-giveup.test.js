@@ -7,9 +7,20 @@ const { Vec3 } = require('vec3');
 const { createBrain, BAND } = require('../core/brain');
 const { createRecovery } = require('../core/behaviors/recovery');
 const { createNightRest } = require('../core/behaviors/nightRest');
+const { perceive } = require('../core/perception');
+const { isSurveyNight } = require('../core/survey-plan-actions');
 const { createStance } = require('../core/stance');
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('perception and survey share the day and night boundaries', () => {
+  const bot = { entity: { position: new Vec3(0, 64, 0) }, health: 20, time: {} };
+  for (const [timeOfDay, day] of [[undefined, null], [11800, true], [12541, true], [12542, false], [23460, false], [23461, true]]) {
+    bot.time.timeOfDay = timeOfDay;
+    assert.equal(perceive(bot).isDay, day);
+    assert.equal(isSurveyNight(bot), day === false);
+  }
+});
 
 test('a goal that gives up ends at once with its reason, not after the stall budget', async () => {
   const events = [];
@@ -81,6 +92,27 @@ test('the finished roof does not suppress night rest; shut the shelter and open 
   await rest.run({ perceive });
   assert.deepEqual(door, [false, true]);
   assert.equal(rest.want(perceive()), 0);
+});
+
+test('night rest reopens its door at dawn when the server processed a canceled close', async () => {
+  const centre = new Vec3(5, 70, 5);
+  const bot = { entity: { position: centre.offset(0.5, 0, 0.5) }, game: { dimension: 'overworld' } };
+  let closed = false;
+  let state = { isDay: false, timeOfDay: 13000 };
+  const rest = createNightRest({ bot, home: () => ({ bed: null, centre, inside: true }),
+    shelterDoor: async (_ctx, open) => {
+      closed = !open;
+      if (!open) throw new Error('canceled after server close');
+      return { ok: true };
+    } });
+  const ctx = { perceive: () => state };
+  await assert.rejects(rest.run(ctx), /canceled after server close/);
+  assert.equal(closed, true);
+  state = { isDay: true, timeOfDay: 1000 };
+  assert.equal(rest.want(state), 0.8);
+  assert.equal((await rest.run(ctx)).ok, true);
+  assert.equal(closed, false);
+  assert.equal(rest.want(state), 0);
 });
 
 test('holding ground (owner first) takes on worse odds, and leaves before one more round of hits could kill', () => {

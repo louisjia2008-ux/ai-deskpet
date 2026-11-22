@@ -3,6 +3,7 @@
 const { once } = require('node:events');
 const { Vec3 } = require('vec3');
 const { abortError, waitUntil } = require('./confirm');
+const { isDaylight } = require('./perception');
 const { matchesExpect, matchesTarget, positionKey, replaceable, removalConflict, stateName } = require('./survey-plan-rules');
 
 const scopes = new WeakMap();
@@ -21,7 +22,7 @@ const LAST_NON_MUTATING_POTION = 41;
 const faceOffsets = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
 const fail = (reason) => ({ ok: false, reason });
 const asVec = ({ x, y, z }) => new Vec3(x, y, z);
-const isSurveyNight = (bot) => bot.time?.timeOfDay >= 12542 && bot.time.timeOfDay <= 23460;
+const isSurveyNight = (bot) => isDaylight(bot.time?.timeOfDay) === false;
 
 function isSurveySurvivalItem(bot, item) {
   if (!item || item.name === 'chorus_fruit' || item.removedComponents?.length) return false;

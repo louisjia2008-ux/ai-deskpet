@@ -31,6 +31,10 @@ function countInventory(items) {
   return counts;
 }
 
+function isDaylight(timeOfDay) {
+  return Number.isFinite(timeOfDay) ? timeOfDay < 12542 || timeOfDay > 23460 : null;
+}
+
 function perceive(bot, { hostileRange = 16, now = Date.now } = {}) {
   const self = bot?.entity;
   if (!self || !self.position || !Number.isFinite(bot.health)) return { alive: false, at: now() };
@@ -46,6 +50,7 @@ function perceive(bot, { hostileRange = 16, now = Date.now } = {}) {
     }
   }
   hostiles.sort((a, b) => a.distance - b.distance);
+  const timeOfDay = Number.isFinite(bot.time?.timeOfDay) ? bot.time.timeOfDay : null;
   return {
     at: now(),
     alive: bot.health > 0,
@@ -55,8 +60,8 @@ function perceive(bot, { hostileRange = 16, now = Date.now } = {}) {
     onGround: self.onGround === true,
     inWater: self.isInWater === true,
     oxygen: Number.isFinite(bot.oxygenLevel) ? bot.oxygenLevel : null,
-    isDay: Number.isFinite(bot.time?.timeOfDay) ? bot.time.timeOfDay < 12542 || bot.time.timeOfDay > 23460 : null,
-    timeOfDay: Number.isFinite(bot.time?.timeOfDay) ? bot.time.timeOfDay : null,
+    isDay: isDaylight(timeOfDay),
+    timeOfDay,
     // Set by a goal while the bot waits out the night in a sealed bunker or the finished house.
     sheltered: bot.companionSheltered === true,
     inventory: countInventory(ownedItems(bot)),
@@ -73,4 +78,4 @@ function countMatching(inventory, match) {
   return total;
 }
 
-module.exports = { perceive, isHostile, ownedItems, countInventory, countMatching, HOSTILE_NAMES };
+module.exports = { perceive, isDaylight, isHostile, ownedItems, countInventory, countMatching, HOSTILE_NAMES };

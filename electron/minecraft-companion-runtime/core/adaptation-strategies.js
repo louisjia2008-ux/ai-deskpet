@@ -2,11 +2,11 @@
 
 const { goals } = require('mineflayer-pathfinder');
 
-const HEADINGS = [0, 1, -1, 2, -2, 3, -3, 4];
+const OUTWARD_HEADINGS = Object.freeze([0, 1, -1, 2, -2, 3, -3, 4]);
 async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, timeoutMs = 15000 } = {}) {
   const from = bot.entity.position.clone();
   const base = Math.atan2(from.z - away.z, from.x - away.x);
-  const turn = HEADINGS[(memory.heading || 0) % HEADINGS.length];
+  const turn = OUTWARD_HEADINGS[(memory.heading || 0) % OUTWARD_HEADINGS.length];
   const angle = base + turn * Math.PI / 4;
   const x = Math.round(from.x + Math.cos(angle) * distance);
   const z = Math.round(from.z + Math.sin(angle) * distance);
@@ -53,4 +53,4 @@ async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blacklist
   });
 }
 
-module.exports = { outwardLeg, gatherWood };
+module.exports = { outwardLeg, gatherWood, OUTWARD_HEADINGS };

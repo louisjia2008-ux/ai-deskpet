@@ -126,6 +126,23 @@ test('autonomous waits yield via the brain and select another card', async () =>
   await brain.dispose();
 });
 
+test('confirmed night shelter keeps the same homestead card until daylight', () => {
+  let state = { alive: true, isDay: false, sheltered: true };
+  const { director, governor, advance } = fixture({ perceive: () => state, waitLimit: 1, waitBudgetMs: 1,
+    cards: [{ id: 'homestead', stage: 0, risk: 'low', need: () => 100, create: () => ({ name: 'homestead' }) }] });
+  assert.equal(director.tick(), 'homestead');
+  for (let run = 0; run < 10; run++) {
+    advance(60_000);
+    assert.equal(governor().outcome({ ok: true, waited: true, reason: 'sheltering_until_daylight', retryAt: 1 }, 3_000), null);
+    assert.equal(director.tick(), null);
+    assert.equal(director.status().current, 'homestead');
+  }
+  state = { ...state, isDay: true };
+  assert.equal(governor().outcome({ ok: true, surfaced: true }, 500), null);
+  assert.equal(governor().outcome({ ok: true, waited: true, reason: 'sheltering_until_daylight' }, 3_000)?.reason,
+    'sheltering_until_daylight');
+});
+
 test('three failed planning attempts block the source and the planner moves on', async () => {
   const { director, advance, governor, events } = fixture();
   director.tick();

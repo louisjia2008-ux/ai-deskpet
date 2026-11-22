@@ -144,7 +144,7 @@ function targetsFor(bot, ctx = {}) {
     run(spec, attempt, recover) {
       const origin = bot.entity?.position?.clone();
       return tracker.target(() => scope.run(spec, attempt, recover,
-        (fields, reason, undo) => require('./actions').originFailure(bot, { ok: false, reason }, origin).sourceFailure
+        (fields, reason, undo) => require('./actions').originFailure(bot, { ok: false, reason }, origin, fields.position).sourceFailure
           || tracker.failed(posTarget(fields), reason, origin, undo)));
     },
   };
