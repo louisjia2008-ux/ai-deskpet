@@ -1,0 +1,166 @@
+const { strict: assert } = require('node:assert');
+const { test } = require('node:test');
+const { createDoctor } = require('../core/doctor');
+
+const position = (x, z = 0) => ({ x, y: 64, z });
+const observation = { type: 'doctor_observation', position: position(0), dimension: 'overworld', isDay: true };
+
+function replay(rows) {
+  const doctor = createDoctor();
+  const alerts = rows.flatMap(([seconds, event], index) => doctor.accept({ ...event, at: seconds * 1000 }, index + 1));
+  return { alerts, active: doctor.getStatus().active };
+}
+function ofRule(rows, rule) { return replay(rows).alerts.filter((event) => event.rule === rule); }
+
+test('D2 reports repeated failures in the same area and clears after arrival', () => {
+  const failedLeg = { type: 'home_route_leg', from: position(2), position: position(3),
+    advanced: false, reason: 'path_timeout' };
+  const result = replay([[0, failedLeg], [12, failedLeg], [24, failedLeg], [25, { type: 'home_route_arrived' }]]);
+  const alert = result.alerts.find((event) => event.rule === 'D2');
+  assert.equal(alert.at, 24_000);
+  assert.equal(alert.since, 0);
+  assert.deepEqual(alert.evidence, [1, 2, 3]);
+  assert.equal(result.active.some((alert) => alert.rule === 'D2'), false);
+});
+
+test('D2 ignores normal shelter and isolated failures at different targets', () => {
+  const targetFailure = { type: 'target_failure', reason: 'path_timeout', goal: 'homestead' };
+  const rows = [[0, { ...observation, isDay: false, sleeping: true, sheltered: true }]];
+  for (let i = 0; i < 3; i++) rows.push([i * 10 + 1, { ...targetFailure, position: position(3) }]);
+  rows.push([31, observation]);
+  for (let i = 0; i < 3; i++) rows.push([i * 10 + 32, { ...targetFailure, position: position(i * 18) }]);
+  assert.deepEqual(ofRule(rows, 'D2'), []);
+});
+
+test('D3 detects repeated unchanged inventory work and repeated blocked placement', () => {
+  const plan = { type: 'plan_step', kind: 'gather', key: 'log', for: 'planks', count: 2, behavior: 'goal:homestead' };
+  const unchanged = [[0, { ...observation, inventory: { oak_planks: 2 } }], [1, plan], [11, plan], [21, plan], [31, plan]];
+  assert.equal(ofRule(unchanged, 'D3')[0].since, 1000);
+  assert.deepEqual(ofRule(unchanged, 'D3')[0].evidence, [2, 3, 4, 5]);
+
+  const blocked = [];
+  for (let i = 0; i < 4; i++) {
+    blocked.push([i * 10, { type: 'build', what: 'wall', position: '1,64,2', behavior: 'goal:homestead' }],
+      [i * 10 + 1, { type: 'behavior_finished', behavior: 'goal:homestead', ok: false, reason: 'no_material' }]);
+  }
+  assert.match(ofRule(blocked, 'D3')[0].summary, /wall build at \(1, 64, 2\)/);
+});
+
+test('D3 recognizes decreasing demand and a paused owner task', () => {
+  const plan = { type: 'plan_step', kind: 'gather', key: 'cobblestone', for: 'cobblestone', behavior: 'goal:homestead' };
+  const rows = [[0, observation]];
+  for (let i = 0; i < 5; i++) rows.push([i * 10 + 1, { ...plan, count: 5 - i }]);
+  rows.push([52, { ...observation, paused: true }]);
+  for (let i = 0; i < 5; i++) rows.push([i * 8 + 53, { ...plan, count: 2 }]);
+  assert.deepEqual(ofRule(rows, 'D3'), []);
+});
+
+test('D4 recognizes an out-and-back loop and repeated bank returns', () => {
+  const rows = [];
+  for (let i = 0; i < 7; i++) rows.push([i * 16, { ...observation, position: position(i % 2 ? 12 : 0),
+    engine: { running: i % 2 ? 'home_escape' : 'goal:homestead' } }]);
+  assert.match(ofRule(rows, 'D4')[0].summary, /2 local positions/);
+  const bankEvent = { type: 'home_route_shore', phase: 'alternate', returns: 2 };
+  assert.match(ofRule([[0, { ...bankEvent, bank: position(0) }],
+    [40, { ...bankEvent, bank: position(10) }], [80, { ...bankEvent, bank: position(0) }]], 'D4')[0].summary, /banks/);
+});
+
+test('D4 does not confuse survey work or one ordinary reroute with a loop', () => {
+  const rows = [[0, { type: 'goal_set', goal: 'survey_plan' }]];
+  for (let i = 0; i < 8; i++) rows.push([i * 16, { ...observation, position: position(i % 2 ? 12 : 0),
+    engine: { running: i % 2 ? 'survey' : 'observe' } }]);
+  rows.push([120, { type: 'goal_cleared', goal: 'survey_plan' }]);
+  for (const [i, x] of [0, 12, 0, 22, 35].entries()) rows.push([130 + i * 20, { type: 'home_route_leg', position: position(x) }]);
+  assert.deepEqual(ofRule(rows, 'D4'), []);
+});
+
+test('D5 detects sustained work in daylight with no milestone', () => {
+  const rows = [[0, { type: 'goal_set', goal: 'homestead' }],
+    [0, { type: 'behavior_started', behavior: 'goal:homestead' }]];
+  for (let i = 0; i <= 10; i++) rows.push([i * 30, observation]);
+  assert.equal(ofRule(rows, 'D5')[0].at, 300_000);
+});
+
+test('D5 starts a new clock after a milestone or a night sheltered in place', () => {
+  const rows = [[0, { type: 'goal_set', goal: 'homestead' }],
+    [0, { type: 'behavior_started', behavior: 'goal:homestead' }]];
+  for (let i = 0; i <= 22; i++) {
+    if (i === 8) rows.push([i * 30, { type: 'autonomy_milestone', milestone: 'home_usable' }],
+      [i * 30, { type: 'behavior_started', behavior: 'goal:homestead' }]);
+    rows.push([i * 30, i === 15 ? { ...observation, isDay: false, sheltered: true } : observation]);
+  }
+  assert.deepEqual(ofRule(rows, 'D5'), []);
+});
+
+test('D6 detects moving away at dusk and remaining far away after dark', () => {
+  const home = { anchor: position(0) };
+  const atDusk = [[0, { ...observation, position: position(50), home, timeOfDay: 10_800 }],
+    [51, { ...observation, position: position(80), home, timeOfDay: 11_820 }]];
+  assert.match(ofRule(atDusk, 'D6')[0].summary, /30 blocks farther/);
+  const afterDark = [[0, { ...observation, position: position(101), home, timeOfDay: 12_600, isDay: false }]];
+  assert.match(ofRule(afterDark, 'D6')[0].summary, /101 blocks from home after dark/);
+});
+
+test('D6 does not flag moving home before dark or sleeping under cover', () => {
+  const home = { anchor: position(0) };
+  const rows = [[0, { ...observation, position: position(115), home, timeOfDay: 10_800 }],
+    [55, { ...observation, position: position(61), home, timeOfDay: 11_900 }],
+    [90, { ...observation, position: position(4), home, timeOfDay: 12_600, sheltered: true, sleeping: true, isDay: false }]];
+  assert.deepEqual(ofRule(rows, 'D6'), []);
+});
+
+test('D7 detects two minutes idling for a retry and clears when a goal starts', () => {
+  const rows = [[0, { type: 'autonomy_idle', reason: 'no_eligible_card_until_retry', until: 200_000 }],
+    [119, observation], [120, observation], [121, { type: 'goal_set', goal: 'homestead' }]];
+  const result = replay(rows);
+  assert.equal(result.alerts.find((alert) => alert.rule === 'D7').at, 120_000);
+  assert.equal(result.active.some((alert) => alert.rule === 'D7'), false);
+});
+
+test('D7 does not count time waiting under shelter or idle with no demand', () => {
+  const rows = [[0, { type: 'autonomy_idle', reason: 'no_current_demand_or_prerequisites' }], [120, observation],
+    [125, { type: 'autonomy_idle', reason: 'no_eligible_card_until_retry', until: 400_000 }]];
+  for (let i = 5; i < 13; i++) rows.push([i * 30, { ...observation, isDay: false, sheltered: true }]);
+  assert.deepEqual(ofRule(rows, 'D7'), []);
+});
+
+function switching(reason) {
+  const rows = [];
+  for (let i = 0; i < 6; i++) {
+    rows.push([i * 54, { type: 'autonomy_choice', card: 'homestead', goal: 'homestead' }],
+      [i * 54 + 2, { type: 'goal_yielded', card: 'homestead', goal: 'homestead', reason, until: (i * 54 + 52) * 1000 }]);
+  }
+  return rows;
+}
+
+test('D8 pairs each selection with a yield and reports sustained switching once', () => {
+  const alerts = ofRule(switching('adaptation_exhausted'), 'D8');
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].at, 218_000);
+  assert.deepEqual(alerts[0].evidence, [1, 3, 5, 7, 9, 2, 4, 6, 8, 10]);
+});
+
+test('D8 exempts intentional waits and ignores a yield without a preceding selection', () => {
+  const rows = switching('waiting_for_daylight');
+  rows.push([330, { type: 'goal_yielded', card: 'homestead', reason: 'adaptation_exhausted' }]);
+  assert.deepEqual(ofRule(rows, 'D8'), []);
+});
+
+test('D2 through D8 bound their retained evidence under bursts of distinct tasks and positions', () => {
+  const doctor = createDoctor();
+  let line = 0;
+  const apply = (event) => doctor.accept({ ...event, at: 1000 + line }, ++line);
+  for (let i = 0; i < 1500; i++) {
+    const card = 'card_' + i;
+    const behavior = 'goal:' + card;
+    apply({ type: 'autonomy_choice', card, goal: card });
+    apply({ type: 'plan_step', kind: 'gather', key: card, count: 1, behavior });
+    apply({ type: 'target_failure', goal: card, position: position(i * 16), reason: 'path_timeout' });
+    apply({ type: 'home_route_shore', phase: 'alternate', bank: position(i * 10), returns: 2 });
+    apply({ type: 'build', what: 'wall', behavior, position: '1,64,2' });
+    apply({ type: 'goal_yielded', card, goal: card, reason: 'adaptation_exhausted' });
+  }
+  assert.ok(doctor.size().rules <= 48 * 13 + 32 * 5 + 256 + 48 * 2 + 242 + 16 + 24 * 5 + 32);
+  doctor.reset();
+  assert.equal(doctor.size().rules, 0);
+});

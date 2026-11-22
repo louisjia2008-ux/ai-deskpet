@@ -411,7 +411,9 @@ export class MinecraftCompanionService {
       if (uri && code && /^https:\/\//i.test(uri)) this.#state.auth = { userCode: code, verificationURI: uri, expiresIn: finite(event.expiresIn) };
     } else if (event.type === 'core' && event.connectionGeneration === this.#state.connectionGeneration) {
       const payload = record(event.payload); const kind = text(payload?.type, 80);
-      if (kind) this.#event(kind, text(payload?.reason, 500) ?? text(payload?.milestone, 80) ?? kind, text(event.taskId, 128));
+      if (kind === 'doctor_observation') return; // Replay telemetry is not a user-facing event.
+      if (kind) this.#event(kind, text(payload?.reason, 500) ?? text(payload?.milestone, 80)
+        ?? (kind === 'doctor_alert' ? text(payload?.summary, 500) : null) ?? kind, text(event.taskId, 128));
       if (managed && kind === 'adaptation_help' && this.#state.connectionState === 'ready') {
         const parsed = adaptationHelpSchema.safeParse(payload);
         if (parsed.success) {

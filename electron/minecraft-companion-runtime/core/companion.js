@@ -6,7 +6,8 @@ const { dimension } = require('./nether');
 const { Vec3 } = require('vec3');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { createBrain } = require('./brain');
-const { perceive } = require('./perception');
+const { perceive, isDaylight, ownedItems, countInventory } = require('./perception');
+const { createDoctor, D1 } = require('./doctor');
 const { createSurvivalBehaviors, enabledDuringSurvey } = require('./behaviors/survival');
 const { createRecovery } = require('./behaviors/recovery');
 const { createNightRest } = require('./behaviors/nightRest');
@@ -153,11 +154,23 @@ function configureMovements(bot) {
  * `home`: { load(), save(value) } for this world's house across connections
  * (core-host keeps one per world), or null to remember it only while connected.
  */
-function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = false, retirementTimeoutMs = 20000, ownerName = null,
+function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, autonomy = false, retirementTimeoutMs = 20000, ownerName = null,
   home = null, adaptationStore = null, autonomyRange = 'overworld' } = {}) {
   if (!bot) throw new TypeError('bot is required');
   if (!Number.isFinite(retirementTimeoutMs) || retirementTimeoutMs <= 0 || retirementTimeoutMs > 2147483647) {
     throw new TypeError('retirementTimeoutMs must be a positive timer duration');
+  }
+  const doctor = createDoctor();
+  let doctorSequence = 0;
+  function onEvent(event) {
+    const input = { ...event, doctorSequence: ++doctorSequence };
+    if (!Number.isFinite(input.at)) input.doctorAt = Date.now();
+    publish(input);
+    // Diagnostics never feed back into the brain or director, even if an
+    // observation or its transport fails.
+    try {
+      for (const alert of doctor.accept(input)) publish(alert);
+    } catch { /* diagnostic observer */ }
   }
   const priorHomeProtection = bot.companionProtectBlock;
   installInventoryCompatibility(bot);
@@ -451,6 +464,24 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     if (director.memory.endPortal) bot.companionEndPortal = director.memory.endPortal;
     director.enable();
   }
+  let nextDoctorObservation = 0;
+  function observeDoctor() {
+    const at = Date.now();
+    if (at < nextDoctorObservation || !bot.entity?.position) return;
+    nextDoctorObservation = at + D1.sampleIntervalMs;
+    const memory = homestead()?.memory;
+    const house = memory?.house;
+    const position = ({ x, y, z }) => ({ x, y, z });
+    const owner = bot.companionGuarding ? bot.players?.[bot.companionGuarding]?.entity?.position : null;
+    const timeOfDay = bot.time?.timeOfDay ?? null;
+    onEvent({ type: 'doctor_observation', at, position: position(bot.entity.position), dimension: bot.game?.dimension ?? null,
+      alive: bot.health > 0, inventory: countInventory(ownedItems(bot)),
+      isDay: isDaylight(timeOfDay), timeOfDay, home: house ? { anchor: position(house.anchor), size: house.size,
+        usable: memory.established === true, finished: memory.established === true && memory.upgradesComplete === true } : null,
+      sheltered: bot.companionSheltered === true, sleeping: bot.isSleeping === true, mining: bot.targetDigBlock?.name ?? null,
+      ownerPosition: owner ? position(owner) : null, paused, survey: Boolean(survey), inWater: bot.entity.isInWater === true,
+    });
+  }
   let nextProgressObservation = 0;
   const timer = setInterval(() => {
     if (disposed) return;
@@ -465,6 +496,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
         && !selfStuck.state() && !selfStuck.probe() && !director.memory.homestead?.needsCleanup?.()) director.tick();
     } catch (error) { onEvent({ type: 'autonomy_error', at: Date.now(), reason: String(error?.message || error) }); }
     brain.tick().catch(() => {});
+    try { observeDoctor(); } catch { /* diagnostic observer */ }
   }, tickMs);
   timer.unref?.();
   // Death interrupts the current action only: progress lives in the world, so
@@ -791,7 +823,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
       haltBody(bot);
     },
     status: () => ({ ...brain.status(), paused, disposed, cleanupFailed: retirementFailed, recovery: recovery.status(),
-      selfStuck: selfStuck.state(), autonomy: director.status() }),
+      selfStuck: selfStuck.state(), autonomy: director.status(), doctor: doctor.getStatus() }),
     /** Terminal all-stop; construct a new companion to restart. Does not disconnect the bot. */
     stopAll: dispose,
     dispose,
