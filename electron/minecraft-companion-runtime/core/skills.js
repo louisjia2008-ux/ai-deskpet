@@ -26,15 +26,20 @@ function inventoryCounts(bot) {
 
 /** Breaks one matching block (nearest, cheapest first) and collects its drop. */
 async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () => false, radius = 48,
-  selectTarget, navigationTrace = false, destination = null }) {
+  selectTarget, navigationTrace = false, destination = null, eligibleFirst = false }) {
   const ids = Object.values(bot.registry.blocksByName).filter((b) => blocks(b.name)).map((b) => b.id);
   if (ids.length === 0) return fail('unknown_block');
   const here = bot.entity.position;
-  const candidates = bot.findBlocks({ matching: ids, maxDistance: radius, count: radius > 48 && ctx.adapt ? 160 : 64 })
-    .filter((p) => !blacklist.has(posKey(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p))
+  const eligible = p => !blacklist.has(posKey(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p);
+  const unprotected = b => !bot.companionProtectBlock?.(b) && !bot.companionPlacedRecently?.(b.position);
+  // A house and its foundation can fill the native limit with the same
+  // material we need for the roof. Apply protection before that limit there.
+  const candidates = bot.findBlocks({ matching: ids, maxDistance: radius, count: radius > 48 && ctx.adapt ? 160 : 64,
+    ...(eligibleFirst ? { useExtraInfo: b => eligible(b.position) && unprotected(b) } : {}) })
+    .filter(eligible)
     .map((p) => bot.blockAt(p))
     // Digging next to water or lava floods the pit the bot is standing in.
-    .filter((b) => b && !bot.companionProtectBlock?.(b) && !bot.companionPlacedRecently?.(b.position) && !touchesLiquid(bot, b.position))
+    .filter((b) => b && unprotected(b) && !touchesLiquid(bot, b.position))
     // Logs down in a dark cave cost an unarmoured bot its life and its bag:
     // like gatherLogs, take only trees under the sky and explore for more.
     .filter((b) => !isLog(b.name) || isSurfaceLog(bot, b))

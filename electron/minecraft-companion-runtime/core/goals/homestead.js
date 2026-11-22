@@ -524,10 +524,15 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         }
         // Nothing within the usual 48 blocks: look as far as the loaded world
         // reaches before walking off to explore (a felled plain, a treeless hill).
-        let result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch: kb[step.key].match,
-          blacklist, exclude: nearHouseColumn });
+        const forRoof = Boolean(memory.roofMaterial && step.for === memory.roofMaterial);
+        const options = { blocks: step.blocks, dropMatch: kb[step.key].match,
+          blacklist, exclude: nearHouseColumn, ...(forRoof ? { eligibleFirst: true } : {}) };
+        let result = await skills.gatherOne(bot, ctx, options);
         if (result.reason === 'no_target_in_range') {
-          if (step.for === memory.roofMaterial && !ctx.signal?.aborted) {
+          result = await skills.gatherOne(bot, ctx, { ...options, radius: 128 });
+        }
+        if (result.reason === 'no_target_in_range') {
+          if (forRoof && !ctx.signal?.aborted) {
             const index = ROOF_MATERIALS.indexOf(memory.roofMaterial);
             const next = chooseRoofMaterial(ctx.perceive().inventory, ROOF_MATERIALS.slice(index + 1));
             if (next) {
@@ -538,10 +543,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
               return { ok: true, progress: false };
             }
           }
-          result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch: kb[step.key].match,
-            blacklist, exclude: nearHouseColumn, radius: 128 });
-        }
-        if (result.reason === 'no_target_in_range') {
           if (requirement?.optional) { skipped.add(requirement.key, 'unavailable'); return { ok: true, skipped: requirement.key }; }
           return explore(ctx, step.key);
         }

@@ -10,11 +10,12 @@ const { chooseNext } = require('../core/director');
 const { createHomesteadGoal } = require('../core/goals/homestead');
 const { createProgression } = require('../core/goals/progression');
 const { KNOWLEDGE } = require('../core/knowledge');
+const { gatherOne } = require('../core/skills');
 
 const anchor = { x: 0, y: 64, z: 0 };
 const above = (p) => new Vec3(p.x, p.y + 1, p.z);
 
-function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false } = {}) {
+function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false, widerStone = false } = {}) {
   const blueprint = createStarterHouse(anchor, { variant });
   const roof = blueprint.blocks.filter(b => b.phase === 'roof').map(b => b.position);
   const blocks = new Map();
@@ -54,12 +55,19 @@ function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false
     },
   };
   const skills = {
-    async gatherOne(_bot, _ctx, { blocks: accepts, dropMatch }) {
+    async gatherOne(_bot, _ctx, { blocks: accepts, dropMatch, radius = 48, exclude, eligibleFirst }) {
       if (accepts('oak_log')) return { ok: false, reason: 'no_target_in_range' };
       const resource = [['stone', 'cobblestone'], ['grass_block', 'dirt'], ['sand', 'sand']]
         .find(([b, item]) => accepts(b) && dropMatch(item));
       assert.ok(resource, 'uses the existing gather skill and correct drop family');
       const [block, item] = resource;
+      if (block === 'stone' && widerStone) {
+        assert.equal(eligibleFirst, true);
+        assert.equal(exclude(new Vec3(0, anchor.y, 0)), true);
+        assert.equal(exclude(new Vec3(18, anchor.y, 5)), false);
+        worked.push({ kind: 'search', radius, block });
+        if (radius === 48) return { ok: false, reason: 'no_target_in_range' };
+      }
       inventory[item] = (inventory[item] || 0) + 1;
       worked.push({ kind: 'gather', item, block });
       return { ok: true, gained: 1 };
@@ -90,6 +98,37 @@ function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false
   return { roof, setBlock, setWatcher: fn => { afterChange = fn; }, bot, state, ctx, newHome, events, worked };
 }
 
+test('roof stone gathers apply protection before the native candidate cap', async () => {
+  const blocks = new Map();
+  const rock = (x, z) => {
+    const position = new Vec3(x, anchor.y, z);
+    blocks.set(posKey(position), { name: 'stone', position });
+    return position;
+  };
+  for (let i = 0; i < 161; i++) rock(i % 14, Math.floor(i / 14));
+  const player = rock(16, 0), protectedBlock = rock(17, 0), recent = rock(18, 0), stock = rock(19, 0);
+  const bot = {
+    entity: { position: new Vec3(0, anchor.y, 0) },
+    registry: { blocksByName: { stone: { id: 1, name: 'stone' } } },
+    blockAt: p => blocks.get(posKey(p)),
+    findBlocks: ({ matching, count, useExtraInfo }) => {
+      assert.deepEqual(matching, [1]);
+      return [...blocks.values()].filter(b => !useExtraInfo || useExtraInfo(b)).slice(0, count).map(b => b.position);
+    },
+    companionPlayerBlock: p => p.equals(player),
+    companionProtectBlock: b => b.position.equals(protectedBlock),
+    companionPlacedRecently: p => p.equals(recent),
+  };
+  const ctx = { adapt: {}, record() {} };
+  const options = { blocks: n => n === 'stone', blacklist: new Map(), exclude: p => p.x < 14, radius: 128,
+    selectTarget: candidates => {
+      assert.deepEqual(candidates.map(b => b.position), [stock]);
+      return { ok: false, reason: 'observed_candidate' };
+    } };
+  assert.equal((await gatherOne(bot, ctx, options)).reason, 'no_target_in_range');
+  assert.equal((await gatherOne(bot, ctx, { ...options, eligibleFirst: true })).reason, 'observed_candidate');
+});
+
 async function finish(home, fixture) {
   for (let n = 0; n < 95 && !home.isDone(fixture.state); n++) await home.run(fixture.ctx);
   assert.equal(home.status(fixture.state).usable, true);
@@ -97,7 +136,7 @@ async function finish(home, fixture) {
 
 for (const [material, stock] of [['cobblestone', { cobblestone: 44 }], ['sandstone', { sand: 192 }]]) {
   test(`wood-ladder exhaustion builds a complete 49-cell ${material} roof through the native planner`, async () => {
-    const fixture = site({ materials: stock });
+    const fixture = site({ materials: stock, widerStone: material === 'cobblestone' });
     const home = fixture.newHome();
     await finish(home, fixture);
     const triggers = fixture.events.filter(e => e.type === 'home_roof_fallback');
@@ -106,8 +145,12 @@ for (const [material, stock] of [['cobblestone', { cobblestone: 44 }], ['sandsto
     assert.ok(exhausted && fixture.events.indexOf(exhausted) < fixture.events.indexOf(triggers[0]));
     assert.deepEqual(new Set(fixture.roof.map(p => fixture.bot.blockAt(p).name)), new Set([material]));
     assert.equal(home.needsCleanup(), false);
-    if (material === 'cobblestone') assert.equal(fixture.worked.filter(e => e.kind === 'gather' && e.block === 'stone').length, 5);
-    else {
+    if (material === 'cobblestone') {
+      assert.deepEqual(fixture.worked.filter(e => e.kind === 'search').map(e => e.radius),
+        [48, 128, 48, 128, 48, 128, 48, 128, 48, 128]);
+      assert.equal(fixture.worked.filter(e => e.kind === 'gather' && e.block === 'stone').length, 5);
+      assert.ok(!fixture.events.some(e => e.type === 'home_roof_material_changed'));
+    } else {
       assert.equal(fixture.worked.filter(e => e.kind === 'gather' && e.block === 'sand').length, 4);
       assert.equal(fixture.worked.reduce((n, e) => n + (e.kind === 'craft' ? e.times : 0), 0), 49);
       assert.equal(fixture.state.inventory.sand, 0);
