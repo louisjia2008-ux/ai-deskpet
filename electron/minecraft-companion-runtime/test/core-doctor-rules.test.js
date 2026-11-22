@@ -126,9 +126,25 @@ test('D6 verifies loss of ground after two home returns are interrupted by provi
     [60, { ...observation, home, position: position(80), timeOfDay: 12_600, isDay: false }]];
   const alerts = ofRule(rows, 'D6');
   assert.equal(alerts.length, 1);
-  assert.match(alerts[0].summary, /return was interrupted twice/);
-  assert.deepEqual(alerts[0].evidence, [4, 8, 7, 9]);
+  assert.match(alerts[0].summary, /two return or shelter attempts were interrupted/);
+  assert.deepEqual(alerts[0].evidence, [2, 4, 6, 8, 7, 9]);
   assert.deepEqual(ofRule([...rows.slice(0, -1), [60, { ...rows.at(-1)[1], position: position(52) }]], 'D6'), []);
+});
+
+test('D6 uses the prior body sample when a legacy return and shelter are interrupted', () => {
+  const home = { anchor: position(0), size: 5 };
+  const behavior = 'goal:homestead';
+  const preempted = { type: 'preempted', behavior, by: 'provision' };
+  const rows = [[0, { ...observation, home, position: position(38), timeOfDay: 10_900 }],
+    [14, { type: 'night', action: 'dusk_home', behavior }], [19, preempted],
+    [30, { ...observation, home, position: position(95), timeOfDay: 11_500 }],
+    [60, { ...observation, home, position: position(74), timeOfDay: 12_100 }],
+    [89, { type: 'night', action: 'dig_in', behavior }],
+    [90, { ...observation, home, position: position(77), timeOfDay: 12_700, isDay: false }],
+    [93, preempted], [112, { type: 'night', action: 'dig_in', behavior }],
+    [120, { ...observation, home, position: position(106), timeOfDay: 13_300, isDay: false }]];
+  assert.equal(ofRule(rows, 'D6')[0].at, 120_000);
+  assert.deepEqual(ofRule(rows.slice(0, -3).concat([rows.at(-1)]), 'D6'), []);
 });
 
 test('D6 gives a confirmed underground advance or local shelter time to succeed', () => {
@@ -161,6 +177,19 @@ test('D5 treats farm edits, inventory gain and successful mining as steps and cl
     rows.push([i * 30, observation]);
   }
   assert.deepEqual(ofRule(rows, 'D5'), []);
+});
+
+test('D5 treats confirmed grass breaking as work even when no seed drops', () => {
+  const behavior = 'goal:farm';
+  const rows = [[0, { type: 'goal_set', goal: 'farm' }], [0, { type: 'behavior_started', behavior }]];
+  for (let i = 0; i <= 12; i++) {
+    rows.push([i * 30, { ...observation, inventory: {} }]);
+    if (i === 7) rows.push([i * 30 + 1, { type: 'farm', action: 'seeds', behavior }],
+      [i * 30 + 5, { type: 'behavior_finished', ok: true, behavior }]);
+  }
+  assert.deepEqual(ofRule(rows, 'D5'), []);
+  rows.splice(rows.findIndex(([at]) => at === 215), 0, [214, { type: 'explore', behavior, x: 10, z: 20 }]);
+  assert.equal(ofRule(rows, 'D5')[0].at, 300_000);
 });
 
 test('D7 detects two minutes idling for a retry and clears when a goal starts', () => {

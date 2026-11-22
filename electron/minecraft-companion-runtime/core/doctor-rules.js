@@ -19,7 +19,7 @@ const DOCTOR_RULE_THRESHOLDS = Object.freeze({
     duskDistance: 48, nightDistance: 72, growth: 12, legGrowth: 4, minimumMs: 50_000,
     nightMs: 90_000, maxSampleGapMs: 45_000, evidenceMs: 120_000, mineDepth: 12, interruptions: 2,
     departureSamples: 3, homeRadiusSlack: 2 }),
-  D7: Object.freeze({ waitMs: 120_000 }),
+  D7: Object.freeze({ waitMs: 120_000, maxCooldowns: 32 }),
   // Several completed select/yield pairs, excluding the first few fair retries.
   D8: Object.freeze({ count: 5, windowMs: 600_000, minWaitAttempts: 2, maxCards: 24 }),
 });
@@ -570,10 +570,16 @@ function daylightProgress() {
           || (event.type === 'farm' && ['plant', 'harvest', 'till'].includes(event.action));
         if (work && positionKey) boundedSet(pending, behavior,
           event.type + ':' + (event.action ?? '') + ':' + positionKey, settings.maxTargets);
+        if (event.type === 'farm' && event.action === 'seeds') {
+          boundedSet(pending, behavior, 'grass_break', settings.maxTargets);
+        }
+        // A successful seed attempt without an explore fallback confirms a
+        // grass block was broken. Exploring by itself confirms only travel.
+        if (event.type === 'explore' && pending.get(behavior) === 'grass_break') pending.delete(behavior);
         if (event.type === 'behavior_finished') {
           const receipt = pending.get(behavior);
           pending.delete(behavior);
-          if (event.ok === true && receipt && complete(receipt)) advanced = true;
+          if (event.ok === true && receipt && (receipt === 'grass_break' || complete(receipt))) advanced = true;
           if (['crops_growing', 'no_available_plot', 'waiting_for_wheat', 'sheltering_until_daylight'].includes(event.reason)) {
             waiting = true;
           }
@@ -634,14 +640,14 @@ function distanceAtDusk() {
   let departure = [];
   let late = null;
   let shelterStarted = null;
-  let duskReturn = null;
+  let protection = null;
   let interrupted = [];
   let lastLeg = null;
   let lastMineAt = null;
   function clearSamples() { prior = late = null; departure = []; }
   function clear() {
     clearSamples();
-    homeId = shelterStarted = duskReturn = lastLeg = lastMineAt = null;
+    homeId = shelterStarted = protection = lastLeg = lastMineAt = null;
     interrupted = [];
   }
   function recent(witness, at, age = settings.evidenceMs) {
@@ -654,20 +660,29 @@ function distanceAtDusk() {
       const home = point(event.home?.anchor || context.home?.anchor);
       const time = event.timeOfDay ?? frame.context.timeOfDay;
       const dimension = event.dimension ?? frame.dimension;
-      if (frame.inactive || !home || !Number.isFinite(time) || time < settings.duskTick || time >= settings.dawnTick
+      const sampling = event.type === 'doctor_observation';
+      const outsideDusk = !Number.isFinite(time) || time < settings.duskTick || time >= settings.dawnTick;
+      if (frame.inactive || !home || (sampling && outsideDusk)
         || (dimension && !['overworld', 'minecraft:overworld'].includes(dimension))) {
         clear();
         return null;
       }
+      const duskHome = isNightEvent(event) && event.action === 'dusk_home';
+      if (outsideDusk && !homeId && !duskHome) return undefined;
       const id = pointText(home);
       if (homeId !== id) clear();
       homeId = id;
-      if (isNightEvent(event) && event.action === 'dusk_home') duskReturn = { ...mark(frame), behavior: event.behavior };
-      if (event.type === 'preempted' && recent(duskReturn, at) && duskReturn.behavior === event.behavior
+      const diggingShelter = isNightEvent(event) && event.action === 'dig_in';
+      if (duskHome || diggingShelter) protection = { ...mark(frame), behavior: event.behavior };
+      if (event.type === 'preempted' && recent(protection, at) && protection.behavior === event.behavior
         && ['provision', 'hunt'].includes(event.by)) {
         trim(interrupted, at, settings.evidenceMs);
-        append(interrupted, mark(frame), settings.interruptions);
-        duskReturn = null;
+        append(interrupted, { ...mark(frame), intent: protection.evidence }, settings.interruptions);
+        protection = shelterStarted = null;
+      }
+      if ((event.type === 'behavior_finished' && protection?.behavior === event.behavior)
+        || (isNightEvent(event) && ['dug_in', 'sleep'].includes(event.action))) {
+        protection = null;
       }
       if (event.type === 'home_route_leg' || event.type === 'home_route_arrived') {
         const destination = point(event.destination);
@@ -688,29 +703,36 @@ function distanceAtDusk() {
         if (!recent(shelterStarted, at, settings.nightMs)) shelterStarted = mark(frame);
       }
       if (['mine_return', 'mine_progress', 'mine_ore', 'mine_loot'].includes(event.type)) lastMineAt = at;
-      if (event.type !== 'doctor_observation') return undefined;
+      if (!sampling) return undefined;
       const pos = point(event.position);
       const mine = pos && pos.y <= home.y - settings.mineDepth
         && (event.mining || (lastMineAt !== null && at - lastMineAt <= settings.evidenceMs));
       const emergency = ['escape', 'breathe', 'recover_drops', 'defend', 'avoid'].includes(frame.behavior);
-      if (!pos || frame.waiting || mine || emergency || recent(shelterStarted, at, settings.maxSampleGapMs)) {
+      if (!pos || frame.waiting || mine || emergency) {
         clearSamples();
         return null;
       }
       const current = { ...mark(frame), distance: distance(home, pos) };
       if (prior && at - prior.at > settings.maxSampleGapMs) clearSamples();
-      const growth = prior ? current.distance - prior.distance : 0;
+      const lastSample = prior;
+      const growth = lastSample ? current.distance - lastSample.distance : 0;
       if (growth < settings.legGrowth) departure = [current];
       else append(departure, current, settings.departureSamples);
       prior = current;
       const afterDark = event.isDay === false || (event.isDay !== true && time >= settings.nightTick);
       const recentlyReturning = recent(lastLeg, at, settings.maxSampleGapMs);
       trim(interrupted, at, settings.evidenceMs);
+      const lastHomewardPoint = recentlyReturning ? lastLeg : lastSample;
       if (afterDark && current.distance >= settings.nightDistance && interrupted.length >= settings.interruptions
-        && recentlyReturning && current.distance - lastLeg.distance >= settings.growth) {
+        && lastHomewardPoint && current.distance - lastHomewardPoint.distance >= settings.growth) {
         return detect('dusk:' + id, interrupted[0].at,
-          'The bot moved away from home after its dusk return was interrupted twice and is now '
-          + Math.round(current.distance) + ' blocks away after dark.', [...interrupted, lastLeg, current]);
+          'The bot is ' + Math.round(current.distance) + ' blocks from home after dark after two return or shelter attempts were interrupted.',
+          [...interrupted.flatMap(row => [{ evidence: row.intent }, row]), lastHomewardPoint, current]);
+      }
+      if (recent(shelterStarted, at, settings.maxSampleGapMs)) {
+        late = null;
+        departure = [current];
+        return null;
       }
       if (current.distance >= settings.duskDistance && departure.length === settings.departureSamples && !recentlyReturning
         && at - departure[0].at >= settings.minimumMs && current.distance - departure[0].distance >= settings.growth) {
@@ -734,32 +756,62 @@ function distanceAtDusk() {
     reset: clear,
     size() {
       return departure.length + interrupted.length
-        + [prior, late, shelterStarted, duskReturn, lastLeg, lastMineAt].filter(value => value !== null).length;
+        + [prior, late, shelterStarted, protection, lastLeg, lastMineAt].filter(value => value !== null).length;
     },
   };
 }
 
 function directorIdle() {
   const settings = DOCTOR_RULE_THRESHOLDS.D7;
+  const cooldowns = new Map();
   let idle = null;
+
+  function idleDeadline(event, at) {
+    if (event.reason === IDLE_REASON && Number.isFinite(event.until) && event.until > at) return { until: event.until };
+    if (event.reason != null || !Array.isArray(event.scores)) return null;
+    // Old idle records have scores without a reason or deadline. Corroborate
+    // a card skipped for cooldown with an actual, still-live cooldown receipt.
+    let current = null;
+    for (const score of event.scores) {
+      if (!score || typeof score !== 'object') continue;
+      if (!score.skipped && score.score > 0) return null;
+      const cooldown = score.skipped === 'cooldown' && cooldowns.get(shortText(score.id));
+      if (cooldown?.until > at && (!current || cooldown.until < current.until)) current = cooldown;
+    }
+    return current;
+  }
+
   return {
     ingest(event, frame) {
-      if (event.type === 'autonomy_idle') {
-        if (event.reason === IDLE_REASON && Number.isFinite(event.until)) idle ||= mark(frame);
-        else idle = null;
+      if (event.type === 'autonomy_cooldown') {
+        const card = shortText(event.card);
+        if (card && Number.isFinite(event.until) && event.until > frame.at) {
+          boundedSet(cooldowns, card, { until: event.until, receipt: mark(frame) }, settings.maxCooldowns);
+        }
       }
+      if (event.type === 'autonomy_idle') {
+        const deadline = idleDeadline(event, frame.at);
+        const start = idle && frame.at <= idle.until ? idle.start : mark(frame);
+        idle = deadline ? { ...deadline, start } : null;
+      }
+      if (event.type === 'autonomy_disabled') cooldowns.clear();
       if (event.type === 'autonomy_choice' || event.type === 'goal_set' || event.type === 'autonomy_disabled') idle = null;
-      if (frame.waiting && idle) {
-        // A legitimate wait must not contribute to the two-minute idle clock.
-        idle = mark(frame);
+      if (!idle || frame.at >= idle.until) {
+        idle = null;
         return null;
       }
-      if (!idle || frame.at - idle.at < settings.waitMs || frame.context.goal) return null;
-      return detect('idle:' + idle.evidence, idle.at,
-        'The director has spent ' + minutes(frame.at - idle.at) + ' minutes waiting for a card to retry with no task running.',
-      [idle, mark(frame)]);
+      if (frame.waiting) {
+        // A legitimate wait must not contribute to the two-minute idle clock.
+        idle.start = mark(frame);
+        return null;
+      }
+      if (frame.at - idle.start.at < settings.waitMs || frame.context.goal) return null;
+      const receipts = idle.receipt ? [idle.receipt, idle.start, mark(frame)] : [idle.start, mark(frame)];
+      return detect('idle:' + idle.start.evidence, idle.start.at,
+        'The director has spent ' + minutes(frame.at - idle.start.at) + ' minutes waiting for a card to retry with no task running.',
+        receipts);
     },
-    reset() { idle = null; },
+    reset() { idle = null; cooldowns.clear(); },
     isIdle() { return Boolean(idle); },
   };
 }
