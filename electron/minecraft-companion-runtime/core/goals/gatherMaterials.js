@@ -29,6 +29,7 @@ const mining = require('../mining');
 const obsidian = require('../obsidian');
 const nether = require('../nether');
 const { quartzToolReserve } = require('../quartzTools');
+const { blockTarget } = require('../target-recovery');
 const { createNetherQuartzGoal, QUARTZ_MIN_FOOD, quartzFoodMatch, quartzFoodCount, quartzProtection } = require('./netherQuartz');
 const { createPlannerRunner, runPlanned } = require('./common');
 
@@ -194,9 +195,11 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
 
   // A staircase starts at least this far from the chest, so home is never undermined.
   const diamondArea = { position: adaptationAnchor };
+  const entranceTarget = (p) => blockTarget(bot, 'diamond', 'mine_entrance', p,
+    { cells: [p.offset(0, -1, 0), p.offset(0, 1, 0)] });
   async function mine(ctx, step, dropMatch) {
     if (ctx.adapt && step.key === 'diamond') {
-      return ctx.adapt.run('diamond', diamondArea, async (method) => {
+      return ctx.adapt.run('diamond', diamondArea, async (method, _plan, observeDestination) => {
         const previousMine = memory.mine;
         const mode = ['sealed_mine', 'different_region', 'move_to_fresh_area'].includes(method) ? 'sealed' : 'normal';
         if (previousMine && (method !== 'current_mine' && previousMine.adaptMethod !== method
@@ -205,7 +208,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
           previousMine.retiring = true;
         }
         const distance = method === 'move_to_fresh_area' ? 116 : method === 'different_region' ? 72 : 0;
-        const result = await mineOnce(ctx, step, dropMatch, { method, closed: mode === 'sealed', distance });
+        const result = await mineOnce(ctx, step, dropMatch, { method, closed: mode === 'sealed', distance, observeDestination });
         if (memory.mine && !memory.mine.retiring) memory.mine.adaptMethod = method;
         if (previousMine?.retiring && result.reason === 'mine_exhausted') return { ok: true, progress: false };
         return ['liquid', 'cave', 'gravity'].includes(result.turned) ? { ...result, adaptFailure: result.turned } : result;
@@ -214,7 +217,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     return mineOnce(ctx, step, dropMatch);
   }
 
-  async function mineOnce(ctx, step, dropMatch, { method = 'current_mine', closed = false, distance = 0 } = {}) {
+  async function mineOnce(ctx, step, dropMatch, { method = 'current_mine', closed = false, distance = 0, observeDestination } = {}) {
     let start = null;
     if (memory.mine) {
       if (bot.entity.position.y >= memory.mine.surfaceY - 1 && memory.mine.safetyRetreat) {
@@ -234,7 +237,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       const allowed = (p) => Math.hypot(p.x - chest.x, p.z - chest.z) >= MINE_FROM_HOME
         && Math.hypot(p.x - chest.x, p.z - chest.z) >= distance
         && !bot.companionNearPlayerBuild?.(p) && !bot.companionHomeSite?.(p) && !mining.entranceCooling(bot, p)
-        && !ctx.adapt?.avoids('mine_danger', p) && !ctx.adapt?.avoids('hard_route', p);
+        && !ctx.adapt?.avoids('mine_danger', p) && !ctx.adapt?.avoids('hard_route', p)
+        && (!observeDestination || !ctx.adapt.targets.avoid(entranceTarget(p)));
       if (!allowed(at)) {
         const reach = (distance ? distance + 8 : MINE_FROM_HOME + 4) + Math.min(5, memory.barrenMines || 0) * 8;
         const turn = method === 'move_to_fresh_area' ? 1 : 0;
@@ -245,7 +249,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
           memory.barrenMines = (memory.barrenMines || 0) + 1;
           return { ok: false, reason: 'no_available_mine_entrance' };
         }
-        const moved = await actions.goNear(bot, ctx, away, 1, { timeoutMs: 30000 });
+        const moved = await actions.goNear(bot, ctx, away, 1, { timeoutMs: 30000,
+          ...(observeDestination ? { destination: { spec: entranceTarget(away), observe: observeDestination } } : {}) });
         if (!moved.ok) {
           if (!moved.sourceHandled && !moved.waited) mining.coolEntrance(bot, ctx, away, moved.reason);
           return moved;
@@ -267,7 +272,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     const m = memory.mine;
     if (m && ctx.adapt) bot.companionMineRoute = m;
     if (m?.junction && !m.depot && m.y === step.mineY && step.mineY <= DEPOT_BELOW) return buildDepot(ctx);
-    const result = await mining.mineStep(bot, ctx, memory, { blocks: step.blocks, dropMatch, y: step.mineY, blacklist, start, actions, skills, closed });
+    const result = await mining.mineStep(bot, ctx, memory, { blocks: step.blocks, dropMatch, y: step.mineY, blacklist, start, actions, skills, closed,
+      observeDestination });
     if (memory.mine && !memory.mine.adaptMethod && method !== 'current_mine') ctx.record('adaptation_use', {
       task: 'diamond', method, position: memory.mine.entrance,
     });
@@ -452,20 +458,22 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       }
       case 'fill': {
         const isLava = step.liquid === 'lava';
-        const findLiquid = async (exclude) => {
-          const args = { liquid: step.liquid, blacklist, exclude };
+        const findLiquid = async (exclude, observeDestination) => {
+          const args = { liquid: step.liquid, blacklist, exclude, observeDestination };
           const result = await skills.fillBucket(bot, ctx, args);
           return result.reason === 'no_target_in_range' ? skills.fillBucket(bot, ctx, { ...args, radius: 128 }) : result;
         };
         if (isLava && ctx.adapt) {
-          return ctx.adapt.run('lava_pool', { position: adaptationAnchor }, async (method) => {
-            const result = await findLiquid(p => ctx.adapt.avoids('lava_pool', p));
+          return ctx.adapt.run('lava_pool', { position: adaptationAnchor }, async (method, _plan, observeDestination) => {
+            const result = await findLiquid(p => ctx.adapt.avoids('lava_pool', p)
+              || ctx.adapt.targets.avoid(blockTarget(bot, 'lava_pool', 'fill_bucket', p)), observeDestination);
             if (result.reason === 'no_target_in_range') return explore(ctx, step.key);
             if (method === 'different_pool') {
               ctx.record('adaptation_use', { task: 'lava_pool', method, ok: result.ok, result: result.filled });
             }
             return result;
-          }, { learn: result => result.sourcePosition && { kind: 'lava_pool', position: result.sourcePosition, radius: 10 } });
+          }, { learn: result => result.destinationObserved && result.sourcePosition
+            && { kind: 'lava_pool', position: result.sourcePosition, radius: 10 } });
         }
         const now = Date.now();
         if (isLava) lavaPools = lavaPools.filter((pool) => pool.until ? pool.until > now : pool.last > now - POOL_FAILURE_WINDOW_MS);

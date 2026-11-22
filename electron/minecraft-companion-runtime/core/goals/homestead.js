@@ -42,6 +42,7 @@ const SCOUT_RADIUS = 12;
 const SCOUT_SPACING = 24;
 const RAW_MEATS = ['beef', 'porkchop', 'mutton', 'chicken', 'rabbit'];
 const STORABLE = ['dirt', 'cobblestone', 'cobbled_deepslate', 'stick', 'rotten_flesh', 'feather', 'leather'];
+const ROOF_MATERIALS = ['roof_cobblestone', 'roof_cobbled_deepslate', 'dirt', 'sandstone', 'red_sandstone'];
 
 function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'starter', autonomous = false, gear = DEFAULT_GEAR, skills = defaultSkills, actions = defaultActions,
   kb = KNOWLEDGE, maxExploreStreak = 20, searchRadius = 128, maxSearchStreak = 8 } = {}) {
@@ -68,6 +69,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   const nameAt = (p) => blockAt(p)?.name || null;
   const v = (p) => new Vec3(p.x, p.y, p.z);
   const matches = (family, name) => Boolean(name) && kb[family].match(name);
+  const roofMaterial = b => b.phase === 'roof' && b.family === 'planks' ? memory.roofMaterial || b.family : b.family;
+  const roofFallbackMatches = name => matches('cave_wall', name) || ['coarse_dirt', 'red_sandstone'].includes(name);
+  const matchesBuilding = (b, name) => matches(b.family, name)
+    || (roofMaterial(b) !== b.family && roofFallbackMatches(name));
 
   const bedKeys = ['bed', 'guestBed'];
   const workSite = () => memory.established ? memory.house
@@ -76,13 +81,16 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   const below = (p) => ({ ...p, y: p.y - 1 });
   const top = (p) => ({ ...p, y: p.y + 1 });
   const room = (opts) => topology(memory.house, blockAt, opts);
+  const scaffoldEntries = () => Object.values(memory.temporary).filter(entry => !entry.roof);
+  const roofCap = () => Object.values(memory.temporary).find(entry => entry.roof);
   const bedsSafe = (hs) => !hs.unknown.length && !hs.missing.some(b => b.phase === 'roof')
-    && !hs.scaffoldLeft && !Object.keys(memory.temporary).length;
-  function ownedRecord(kind, position) {
+    && !hs.scaffoldLeft && !scaffoldEntries().length;
+  function ownedRecord(kind, position, roof) {
     const b = blockAt(position);
     if (!b || bot.companionPlayerBlock?.(position)) return;
     const entry = { position, name: b.name, stateId: b.stateId };
-    if (kind === 'scaffold') memory.temporary[posKey(position)] = entry;
+    if (roof) memory.temporary[posKey(position)] = { ...entry, roof };
+    else if (kind === 'scaffold') memory.temporary[posKey(position)] = entry;
     else memory.owned[posKey(position)] = entry;
   }
   const stillOwned = (entry, block) => Boolean(entry && block?.name === entry.name
@@ -92,14 +100,19 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (!memory.house || !saved || typeof saved !== 'object') return;
     const valid = (p) => p && [p.x, p.y, p.z].every(Number.isInteger);
     const h = memory.house;
-    const ops = new Map(h.blocks.map(b => [posKey(b.position), b.family]));
+    if (h.variant !== 'hillside' && ROOF_MATERIALS.includes(saved.roofMaterial)) memory.roofMaterial = saved.roofMaterial;
+    const ops = new Map(h.blocks.map(b => [posKey(b.position), b]));
     for (const info of Object.values(saved.owned || {}).slice(0, 120)) {
       if (!valid(info?.position) || typeof info.name !== 'string') continue;
-      const key = posKey(info.position), family = ops.get(key);
-      if (family && matches(family, info.name)) memory.owned[key] = info;
+      const key = posKey(info.position), piece = ops.get(key);
+      if (piece && matchesBuilding(piece, info.name)) memory.owned[key] = info;
     }
     for (const info of Object.values(saved.temporary || {}).slice(0, 10)) {
-      if (valid(info?.position) && idAt(h.scaffold, info.position) && FILLERS.has(info.name)) memory.temporary[posKey(info.position)] = info;
+      if (!valid(info?.position)) continue;
+      const panel = valid(info.roof) && ops.get(posKey(info.roof));
+      if (memory.roofMaterial && panel?.phase === 'roof' && posKey(top(info.roof)) === posKey(info.position)
+        && matches('planks', info.name) && !roofCap()) memory.temporary[posKey(info.position)] = info;
+      if (idAt(h.scaffold, info.position) && FILLERS.has(info.name)) memory.temporary[posKey(info.position)] = info;
     }
     const savedPosition = saved.breach?.position;
     if (valid(savedPosition)) memory.breach = memory.owned[posKey(savedPosition)];
@@ -112,11 +125,11 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       h.furniture[id] = { ...h.furniture[id], position: f.position,
         ...(h.furniture[id].head ? { head: f.head, stand: f.stand } : {}) };
     }
-    memory.cleanupRequested = Object.keys(memory.temporary).length > 0;
+    memory.cleanupRequested = scaffoldEntries().length > 0;
   }
 
   async function clearScaffold(ctx) {
-    const ordered = Object.values(memory.temporary).sort((a, b) => b.position.y - a.position.y);
+    const ordered = scaffoldEntries().sort((a, b) => b.position.y - a.position.y);
     if (ordered.some(e => !blockAt(e.position))) {
       const entrance = v(memory.house.entrance);
       const moved = await actions.goNear(bot, { ...ctx, dryRoute: autonomous }, entrance, 4, { timeoutMs: 90000 });
@@ -213,7 +226,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       if (!block) { if (required) unknown.push(p); return null; }
       return match(block.name, block);
     };
-    const missing = house.blocks.filter((b) => check(b.position, (name) => matches(b.family, name)) === false);
+    const cap = roofCap();
+    const missing = house.blocks.filter((b) => check(b.position, (name) => matchesBuilding(b, name)
+      || Boolean(cap && posKey(cap.roof) === posKey(b.position) && air(name) && stillOwned(cap, blockAt(cap.position)))) === false);
     const foundationMissing = house.foundation.filter((p) => check(p,
       (name, block) => block.boundingBox === 'block' && !['water', 'lava', 'bubble_column'].includes(name)) === false);
     const f = house.furniture;
@@ -256,7 +271,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const house = memory.house;
     const key = posKey(p);
     const block = house.blocks.find((b) => posKey(b.position) === key);
-    if (block) return (name) => matches(block.family, name);
+    if (block) return (name) => matchesBuilding(block, name);
     const f = house.furniture;
     if (posKey(f.crafting_table.position) === key) return (n) => n === 'crafting_table';
     if (posKey(f.furnace.position) === key) return (n) => n === 'furnace';
@@ -330,7 +345,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const stair = memory.scaffoldActive ? memory.house.scaffold.filter((p) => !FILLERS.has(nameAt(p))).length : 0;
     if (work.fills.length + stair) reqs.push({ key: 'dirt', count: work.fills.length + stair });
     const remaining = {};
-    for (const block of hs.missing) remaining[block.family] = (remaining[block.family] || 0) + 1;
+    for (const block of hs.missing) {
+      const family = roofMaterial(block);
+      remaining[family] = (remaining[family] || 0) + 1;
+    }
     for (const [family, count] of Object.entries(remaining)) reqs.push({ key: family, count });
     if (!autonomous && bedsSafe(hs) && hs.placed.bed === false) reqs.push({ key: 'bed', count: 1 });
     for (const piece of ['chest', 'door']) if (!hs.placed[piece]) reqs.push({ key: piece, count: 1 });
@@ -349,12 +367,45 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     return inventory;
   }
 
+  function woodForFurniture(hs, inventory) {
+    const unmade = (piece, count = 1) => Math.max(0, count - countKey(piece, inventory, kb));
+    return (!hs.placed.crafting_table ? 4 * unmade('crafting_table') : 0)
+      + (!hs.placed.chest ? 8 * unmade('chest') : 0) + (!hs.placed.door ? 6 * unmade('door') : 0)
+      + 3 * unmade('bed', Number(hs.placed.bed === false) + Number(hs.placed.guestBed === false));
+  }
+
+  function chooseRoofMaterial(inventory, choices = ROOF_MATERIALS) {
+    const count = key => countKey(key, inventory, kb) + (key === 'sandstone' ? Math.floor((inventory.sand || 0) / 4)
+      : key === 'red_sandstone' ? Math.floor((inventory.red_sand || 0) / 4) : 0);
+    const pickaxe = countKey('pickaxe', inventory, kb) > 0;
+    return choices.filter(key => kb[key] && (!key.startsWith('roof_') || pickaxe || count(key) > 0))
+      .sort((a, b) => count(b) - count(a))[0];
+  }
+
+  function selectRoofFallback(ctx, hs, exhaustion) {
+    if (!autonomous || memory.roofMaterial || !hs || ctx.signal?.aborted || exhaustion?.task !== 'wood') return;
+    const needed = hs.missing.filter(b => b.phase === 'roof' && b.family === 'planks').length;
+    if (!needed) return;
+    const { inventory } = ctx.perceive();
+    const furniture = woodForFurniture(hs, inventory);
+    // These items are kept in the bag by the autonomous home and stocking rules.
+    const wood = Object.entries(inventory).reduce((sum, [n, count]) => sum
+      + (matches('planks', n) ? count : matches('log', n) ? count * 4 : 0), 0);
+    if (wood >= needed + furniture) return;
+    const material = chooseRoofMaterial(inventory);
+    if (!material) return;
+    memory.roofMaterial = material;
+    memory.batch = null;
+    ctx.record('home_roof_fallback', { material: memory.roofMaterial.replace(/^roof_/, ''), needed,
+      carried: countKey(memory.roofMaterial, inventory, kb), furniture, wood, method: exhaustion.method });
+  }
+
   function complete(state, hs = memory.house && houseState()) {
     if (!memory.house) return false;
     if (!autonomous && !gear.every((key) => countKey(key, state.inventory, kb) > 0)) return false;
     // An expedition can unload home without damaging it. Only trust this
     // connection's verification: a loaded legacy home still needs its upgrade.
-    if (hs.accessObstructed || hs.scaffoldLeft || Object.keys(memory.temporary).length) return false;
+    if (hs.accessObstructed || hs.scaffoldLeft || scaffoldEntries().length) return false;
     if (hs.unknown.length) return memory.validated === true && !hs.missing.length && !hs.foundationMissing.length
         && !Object.entries(hs.placed).some(([id, placed]) => id !== 'guestBed' && (!autonomous || id !== 'bed') && placed === false);
     if (hs.missing.length || hs.foundationMissing.length || !hs.placed.door || (!autonomous && !hs.placed.bed) || !hs.placed.chest
@@ -463,14 +514,30 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         return result;
       }
       case 'gather': {
-        if (ctx.adapt && step.key === 'log') return gatherWood({ bot, ctx: autonomous ? { ...ctx, dryRoute: true } : ctx,
-          skills, actions, memory, anchor: house?.anchor,
-          blocks: step.blocks, dropMatch: kb.log.match, blacklist, exclude: nearHouseColumn });
+        if (ctx.adapt && step.key === 'log') {
+          const hs = autonomous && house && !memory.established && !memory.roofMaterial ? houseState() : null;
+          const result = await gatherWood({ bot, ctx: autonomous ? { ...ctx, dryRoute: true } : ctx,
+            skills, actions, memory, anchor: house?.anchor,
+            blocks: step.blocks, dropMatch: kb.log.match, blacklist, exclude: nearHouseColumn });
+          selectRoofFallback(ctx, hs, result.adaptationExhausted);
+          return result;
+        }
         // Nothing within the usual 48 blocks: look as far as the loaded world
         // reaches before walking off to explore (a felled plain, a treeless hill).
         let result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch: kb[step.key].match,
           blacklist, exclude: nearHouseColumn });
         if (result.reason === 'no_target_in_range') {
+          if (step.for === memory.roofMaterial && !ctx.signal?.aborted) {
+            const index = ROOF_MATERIALS.indexOf(memory.roofMaterial);
+            const next = chooseRoofMaterial(ctx.perceive().inventory, ROOF_MATERIALS.slice(index + 1));
+            if (next) {
+              const material = next.replace(/^roof_/, '');
+              ctx.record('home_roof_material_changed', { from: memory.roofMaterial.replace(/^roof_/, ''), material, reason: result.reason });
+              memory.roofMaterial = next;
+              memory.batch = null;
+              return { ok: true, progress: false };
+            }
+          }
           result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch: kb[step.key].match,
             blacklist, exclude: nearHouseColumn, radius: 128 });
         }
@@ -609,8 +676,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     for (const b of walls) tasks.push({ what: 'wall', position: b.position, material: b.family,
       match: (n) => matches(b.family, n), batch: Math.min(walls.length, BATCH) });
     const roof = hs.missing.filter((b) => b.phase === 'roof');
-    const roofing = !walls.length ? roof.map((b) => ({ what: 'roof', position: b.position, material: b.family,
-      match: (n) => matches(b.family, n), batch: Math.min(roof.length, BATCH) })) : [];
+    const roofing = !walls.length ? roof.map((b) => ({ what: 'roof', position: b.position, material: roofMaterial(b),
+      match: (n) => matches(roofMaterial(b), n), batch: Math.min(roof.length, BATCH) })) : [];
     // Leave the doorway and floor clear while accessing the compact roof.
     if (memory.house.variant === 'compact' && !memory.established && roofing.length) return [...tasks, ...roofing];
     const addDoor = () => piece('door', f.door.position, 'door', (n) => matches('door', n),
@@ -767,7 +834,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   }
 
   async function abandonSite(ctx, reason, counted = false) {
-    if (Object.keys(memory.temporary).length) {
+    if (scaffoldEntries().length) {
       memory.cleanupRequested = true;
       const cleaned = await clearScaffold(ctx);
       if (!cleaned.ok) return cleaned;
@@ -794,6 +861,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       relocation: { anchor, attempt: 0 }, siteAccessFailures: 0,
       furnace: { item: null, input: 0, output: 0 }, validated: false,
       owned: {}, temporary: {}, cleanupRequested: false,
+      roofMaterial: null,
     });
     for (const key of Object.keys(memory.verified)) memory.verified[key] = false;
     blacklist.clear();
@@ -1118,7 +1186,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     // An occluded corner may be visible from another roof panel after the
     // inner tiles connect the deck. Move on the finished panels, not off it.
     const adjacent = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => new Vec3(position.x + dx, position.y, position.z + dz))
-      .filter((p) => matches('planks', nameAt(p))).sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b));
+      .filter((p) => matches('planks', nameAt(p)) || (memory.roofMaterial && roofFallbackMatches(nameAt(p))))
+      .sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b));
     for (const panel of adjacent.slice(0, 2)) {
       const stand = panel.offset(0, 1, 0);
       const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(stand.x, stand.y, stand.z), { timeoutMs: 5000, retryNoProgress: false });
@@ -1143,7 +1212,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       if ([p, ...(opts.alsoClear || [])].some(q => bot.companionPlayerBlock?.(q) && !match(nameAt(q)))) {
         return { ok: false, reason: 'protected_player_block' };
       }
-      ctx.record('build', { what, position: posKey(p) });
+      ctx.record('build', { what, position: posKey(p), ...(what === 'roof' && memory.roofMaterial
+        ? { material: memory.roofMaterial.replace(/^roof_/, '') } : {}) });
       // A distant hunt/mining trip needs one long walk before local placement.
       if (bot.entity.position.distanceTo(new Vec3(p.x + 0.5, p.y, p.z + 0.5)) > 12) {
         ctx.record('return_home', { for: what });
@@ -1162,7 +1232,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       if (result.ok && !result.already && ['scaffold', 'wall', 'roof'].includes(what) && match(nameAt(p))) ownedRecord(what, p);
       if (what === 'roof' && result.ok && !houseState(ctx).missing.some(b => b.phase === 'roof')) {
         memory.scaffoldActive = false;
-        memory.cleanupRequested = Object.keys(memory.temporary).length > 0;
+        memory.cleanupRequested = scaffoldEntries().length > 0;
       }
       return result;
     };
@@ -1305,6 +1375,117 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     return SIDES.map(([dx, dz]) => new Vec3(dx, 0, dz)).filter(d => supports(blockAt(p.plus(d))));
   }
 
+  function roofWoodWork(state) {
+    if (!memory.roofMaterial || !memory.established || state.isDay !== true || state.sheltered
+      || state.health < 16 || state.food < 12 || state.hostiles?.some(h => h.distance <= 8)) return null;
+    const at = bot.entity.position;
+    const cap = roofCap();
+    const hs = houseState();
+    if (hs.unknown.length || memory.breach || !complete(state, hs) || !status(state).finished) return null;
+    const remaining = memory.house.blocks.filter(b => b.phase === 'roof'
+      && roofFallbackMatches(nameAt(b.position)) && stillOwned(memory.owned[posKey(b.position)], blockAt(b.position)));
+    const planks = countKey('planks', state.inventory, kb);
+    // Enough to finish all owned panels, one temporary cap, and an eight-plank reserve.
+    if (cap ? planks < Number(!matches('planks', nameAt(cap.roof))) : planks < remaining.length + 9) return null;
+    const panels = cap ? [cap.roof] : remaining.map(b => b.position);
+    const candidates = [];
+    for (const p of panels) {
+      const panel = v(p), cover = panel.offset(0, 1, 0);
+      if ([panel, cover].some(q => bot.companionPlayerBlock?.(q)) || (!cap && !air(nameAt(cover)))) continue;
+      for (const [dx, dz] of SIDES) {
+        const stand = cover.offset(dx, 0, dz);
+        if (Math.abs(at.y - stand.y) > 2 || at.distanceTo(stand) > 8 || !safeStand(blockAt, stand)
+          || bot.companionPlayerBlock?.(stand)) continue;
+        candidates.push({ panel, cover, stand, distance: at.distanceTo(stand) });
+      }
+    }
+    return candidates.sort((a, b) => a.distance - b.distance)[0] || null;
+  }
+
+  async function replaceRoofPanel(ctx, work) {
+    const { panel, cover, stand } = work;
+    const ready = () => !ctx.signal?.aborted && ctx.perceive().isDay === true
+      && bot.entity.position.floored().equals(stand) && safeStand(blockAt, stand)
+      && ![panel, cover, stand].some(p => bot.companionPlayerBlock?.(p));
+    const material = n => matches('planks', n);
+    const existing = memory.owned[posKey(panel)];
+    let cap = roofCap();
+    const covered = () => stillOwned(cap, blockAt(cover));
+    const roofPresent = () => material(nameAt(panel));
+    if (!ready()) return { ok: false, reason: 'roof_wood_unsafe_stand' };
+    if (!cap || !covered()) {
+      if (cap) {
+        delete memory.temporary[posKey(cover)];
+        if (roofPresent()) return { ok: true };
+      }
+      if (!stillOwned(existing, blockAt(panel)) || !air(nameAt(cover)) || !ready()) {
+        return { ok: false, reason: 'roof_wood_panel_changed' };
+      }
+      try {
+        await skills.placeAt(bot, ctx, cover, material, { stand, faces: DOWN, requireAir: true });
+      } finally {
+        if (material(nameAt(cover))) ownedRecord('roof_cap', cover, panel);
+      }
+      cap = roofCap();
+      if (!covered()) return { ok: false, reason: 'roof_wood_cap_unconfirmed' };
+      ctx.record('home_roof_wood_cap', { position: posKey(panel), cap: posKey(cover), block: cap.name });
+    }
+    if (!roofPresent()) {
+      if (!ready() || !covered()) return { ok: false, reason: 'roof_wood_cover_unavailable' };
+      const faces = repairFaces(panel);
+      if (!faces.length) return { ok: false, reason: 'roof_wood_no_support' };
+      if (!air(nameAt(panel))) {
+        const dug = await actions.digBlock(bot, ctx, blockAt(panel),
+          { ownedHomeRemoval: b => ready() && covered() && stillOwned(existing, b) });
+        if (!dug.ok) return dug;
+      }
+      if (!ready() || !covered() || !air(nameAt(panel))) return { ok: false, reason: 'roof_wood_opening_changed' };
+      try {
+        await skills.placeAt(bot, ctx, panel, material, { stand, faces, requireAir: true });
+      } finally {
+        if (roofPresent()) ownedRecord('roof', panel);
+      }
+      if (!roofPresent()) return { ok: false, reason: 'roof_wood_replacement_unconfirmed' };
+    }
+    if (!ready() || !covered()) return { ok: false, reason: 'roof_wood_cleanup_blocked' };
+    const cleared = await actions.digBlock(bot, ctx, blockAt(cover),
+      { ownedHomeRemoval: b => ready() && roofPresent() && stillOwned(cap, b) });
+    if (!cleared.ok || !air(nameAt(cover))) return { ok: false, reason: cleared.reason || 'roof_wood_cap_still_present' };
+    delete memory.temporary[posKey(cover)];
+    ctx.record('home_roof_wood_replaced', { position: posKey(panel), from: existing?.name, block: nameAt(panel) });
+    if (memory.house.blocks.every(b => b.phase !== 'roof' || matches('planks', nameAt(b.position)))) memory.roofMaterial = null;
+    return { ok: true };
+  }
+
+  function roofWoodGoal() {
+    let replaced = false;
+    return {
+      name: 'home_roof_wood',
+      isDone: state => replaced || !roofWoodWork(state),
+      progress: () => Number(replaced),
+      async run(ctx) {
+        const work = roofWoodWork(ctx.perceive());
+        if (!work) return { ok: true, skipped: 'roof_wood_unavailable' };
+        const { stand } = work;
+        const movements = bot.pathfinder?.movements;
+        const canDig = movements?.canDig;
+        if (movements) movements.canDig = false;
+        try {
+          if (!bot.entity.position.floored().equals(stand)) {
+            const moved = await actions.goTo(bot, { ...ctx, nearDestination: true }, new goals.GoalBlock(stand.x, stand.y, stand.z),
+              { timeoutMs: 5000, retryNoProgress: false });
+            if (!moved.ok) return { ...moved, giveUp: true };
+          }
+          const result = await replaceRoofPanel(ctx, work);
+          replaced = result.ok;
+          return replaced || ctx.signal?.aborted ? result : { ...result, giveUp: true };
+        } finally {
+          if (movements) movements.canDig = canDig;
+        }
+      },
+    };
+  }
+
   async function repairHomeBreach(ctx) {
     const entry = memory.breach;
     if (!entry) return { ok: true };
@@ -1382,7 +1563,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     };
     let out = await walkOut(rescue);
     if (out.ok) return finish('door');
-    if (Object.keys(memory.temporary).length) {
+    if (scaffoldEntries().length) {
       await clearScaffold(rescue);
       out = await walkOut(rescue);
       if (out.ok) return finish('remove_temporary');
@@ -1646,6 +1827,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     guestBedGoal,
     wantsLighting,
     lightingGoal,
+    wantsRoofWood: (state) => Boolean(roofWoodWork(state)),
+    roofWoodGoal,
     isInside: () => Boolean(memory.established && insideRoom(bot.entity.position.floored())),
     enterShelter,
     trapped,
@@ -1654,7 +1837,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     repairHomeBreach,
     repairHomeAccess,
     nearForSelfRecovery: () => Boolean(memory.house && insideRoom(bot.entity.position.floored())),
-    requestCleanup: () => { memory.cleanupRequested = Object.keys(memory.temporary).length > 0; },
+    requestCleanup: () => { memory.cleanupRequested = scaffoldEntries().length > 0; },
     needsCleanup: () => Boolean(memory.cleanupRequested),
     clearScaffold,
     shelterDoor: (ctx, open) => {
@@ -1866,7 +2049,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     // every climb out of a quarry to craft a tool.
     // Not while it is set aside as unavailable (no tree in reach): re-added at
     // once, it was "skipped" twice a second for good.
-    if (hs.placed.crafting_table && !skipped.has('crafting_table')) early.unshift({ key: 'crafting_table', count: 1, optional: true });
+    const fallbackRoofOpen = memory.roofMaterial && hs.missing.some(b => b.phase === 'roof');
+    if (hs.placed.crafting_table && !skipped.has('crafting_table') && !fallbackRoofOpen) {
+      early.unshift({ key: 'crafting_table', count: 1, optional: true });
+    }
     if (!autonomous && !skipped.has('food')) early.push({ key: 'food', count: 4, optional: true });
     if (!hs.placed.door && hs.placed.crafting_table && !countKey('door', inventory, kb)) {
       const door = plan(ctx, { requirements: [{ key: 'door', count: 1 }], inventory, stations });

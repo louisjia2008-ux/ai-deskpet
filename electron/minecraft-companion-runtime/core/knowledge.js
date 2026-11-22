@@ -284,6 +284,15 @@ const KNOWLEDGE = {
   shelter_wall: { match: exact('dirt', 'cobblestone', 'cobbled_deepslate', 'sandstone'), sources: [{ kind: 'alias', key: 'dirt' }] },
   cave_wall: { match: exact('stone', 'andesite', 'diorite', 'granite', 'deepslate', 'dirt', 'cobblestone', 'cobbled_deepslate', 'sandstone'),
     sources: [{ kind: 'alias', key: 'shelter_wall' }] },
+  roof_cobblestone: { match: exact('cobblestone'),
+    sources: [{ kind: 'gather', blocks: exact('stone', 'cobblestone'), tool: 'pickaxe' }] },
+  roof_cobbled_deepslate: { match: exact('cobbled_deepslate'),
+    sources: [{ kind: 'gather', blocks: exact('deepslate', 'cobbled_deepslate'), tool: 'pickaxe' }] },
+  sandstone: { match: exact('sandstone'),
+    sources: [{ kind: 'craft', yields: 1, maxBatch: 16, needs: { sand: 4 }, table: false, pick: () => 'sandstone' }] },
+  red_sand: { match: exact('red_sand'), sources: [{ kind: 'gather', blocks: exact('red_sand') }] },
+  red_sandstone: { match: exact('red_sandstone'),
+    sources: [{ kind: 'craft', yields: 1, maxBatch: 16, needs: { red_sand: 4 }, table: false, pick: () => 'red_sandstone' }] },
 };
 
 // Fuel accepted by the furnace, in preference order, with items smelted per unit.

@@ -18,6 +18,44 @@ function blockTarget(bot, goal, step, position, { cells = [], tools = /_(pickaxe
     } };
 }
 
+const APPROACH_FAILURE = /^(nopath|timeout|path_timeout|not_arrived|no_progress|leg_blocked|chase_stuck)$/i;
+async function watchDestination(bot, ctx, spec, observe, attempt, { resolves = true,
+  knownMine = null, useFailure = null } = {}) {
+  if (!observe || ctx.selfRescue || bot.companionPlayerBlock?.(spec.position)) return attempt();
+  const actions = require('./actions');
+  const tracker = bot.companionSelfStuck;
+  const blockedOrigin = () => {
+    const cause = actions.routeOrigin(bot);
+    return cause && !(cause === 'underground' && knownMine
+      && require('./mining').knownOpen(knownMine, bot.entity.position.floored()));
+  };
+  if (actions.isHomeTarget(bot, spec.position) || blockedOrigin()) return attempt();
+  const targets = targetsFor(bot, ctx);
+  if (targets.recovering(spec)) {
+    return targets.run(spec, attempt, async (reason) => {
+      const moved = await alternateStand(bot, ctx, actions, spec.position);
+      if (moved.ok) return attempt();
+      return moved.sourceHandled ? moved : { ok: false, reason };
+    });
+  }
+  const before = bot.entity.position.clone();
+  const attempted = await (tracker ? tracker.target(attempt) : attempt());
+  const result = actions.originFailure(bot, attempted, before, spec.position);
+  if (!result || ctx.signal?.aborted || result.waited || result.destinationUnconfirmed || result.sourceFailure || (!result.ok && result.sourceHandled)
+    || bot.companionPlayerBlock?.(spec.position) || blockedOrigin()) return result;
+  if (result.ok) {
+    if (resolves) observe(spec, result);
+    return result;
+  }
+  if (!APPROACH_FAILURE.test(result.reason) && (!useFailure || result.reason !== useFailure)) return result;
+  const undo = observe(spec, result);
+  if (!undo) return result;
+  const key = `${spec.position.x},${spec.position.y},${spec.position.z}`;
+  return tracker?.failed(key, result.reason, before, undo)
+    ? { ok: false, reason: 'self_stuck', sourceHandled: true, sourceFailure: 'self_stuck' }
+    : { ...result, destinationObserved: true };
+}
+
 // One alternate approach from a supported cell. Do not plan a second tunnel
 // just to get there, and do not trample a crop or step on a build footprint.
 async function alternateStand(bot, ctx, actions, position, { avoid = () => false, distance = 2 } = {}) {
@@ -81,4 +119,4 @@ function deviceTargets(bot, actions, goal, memory) {
   };
 }
 
-module.exports = { blockTarget, alternateStand, clearTerrain, dimensionOf, deviceTargets };
+module.exports = { blockTarget, watchDestination, alternateStand, clearTerrain, dimensionOf, deviceTargets };

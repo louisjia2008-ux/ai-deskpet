@@ -14,7 +14,7 @@ const cell = (p) => p && [p.x, p.y, p.z].every(n => Number.isFinite(n) && Math.a
 
 async function tryHomeTarget(attempt, recover) {
   const result = await attempt();
-  return result?.ok === false && !result.sourceHandled && recover && !IGNORED.has(reasonOf(result.reason))
+  return result?.ok === false && !result.sourceHandled && !result.destinationUnconfirmed && recover && !IGNORED.has(reasonOf(result.reason))
     ? recover(result.reason) : result;
 }
 
@@ -25,7 +25,8 @@ function createTargetMemory({ now = Date.now, load = [], onChange = () => {}, em
       && Number.isInteger(e.failures) && e.failures >= 1 && e.failures <= 3
       && (e.witness === null || (typeof e.witness === 'string' && e.witness.length <= 1600))) {
       entries.set(e.key, { key: e.key, failures: e.failures, sameReasonFailures: Math.min(3, Math.max(1, e.sameReasonFailures | 0)),
-        reason: reasonOf(e.reason), until: Math.min(e.until, now() + TTL), witness: e.witness, position: cell(e.position) });
+        reason: reasonOf(e.reason), until: Math.min(e.until, now() + TTL), witness: e.witness, position: cell(e.position),
+        ...(e.handedOff === true ? { handedOff: true } : {}) });
     }
   }
   const snapshot = () => [...entries.values()];
@@ -51,7 +52,9 @@ function createTargetMemory({ now = Date.now, load = [], onChange = () => {}, em
   }
   function retry(entry, witness) {
     if (entry.until <= now()) return 'expired';
-    if (entry.failures === 3 && witness !== null && entry.witness !== null && entry.witness !== witness) return 'environment_changed';
+    if ((entry.failures === 3 || entry.handedOff) && witness !== null && entry.witness !== null && entry.witness !== witness) {
+      return 'environment_changed';
+    }
     return null;
   }
 
@@ -68,6 +71,39 @@ function createTargetMemory({ now = Date.now, load = [], onChange = () => {}, em
   }
 
   function scope(valid = () => true, record = emit) {
+    function read(fields, witness) {
+      const found = entries.get(fields.key);
+      if (!found) return null;
+      const reopens = retry(found, witness);
+      if (!reopens) return found;
+      if (found.failures === 3 || found.handedOff) record('target_retry', { ...fields, reason: reopens });
+      save(fields.key, null);
+      return null;
+    }
+
+    function remember(fields, reason, witness, found, { extending = false, ladder = null, reviewFailure } = {}) {
+      // The third failure may exclude only after a genuine alternate approach.
+      const recoveryPending = Boolean(ladder && found?.failures === 2);
+      const failures = recoveryPending ? 2 : (found?.failures || 0) + 1;
+      const sameReasonFailures = found?.reason === reason ? found.sameReasonFailures + (recoveryPending ? 0 : 1) : 1;
+      const failureAt = now();
+      const until = failureAt + (fields.step === 'chase' ? HUNT_TTL : TTL);
+      const state = { key: fields.key, position: fields.position, failures, sameReasonFailures, reason, until, witness,
+        ...(ladder ? { handedOff: true } : {}) };
+      const undo = () => {
+        if (entries.get(fields.key) !== state) return;
+        save(fields.key, found || null);
+        return { ...fields, originalReason: reason, excluded: failures === 3, failureAt };
+      };
+      if (reviewFailure?.(fields, reason, undo)) return null;
+      save(fields.key, state);
+      record('target_failure', { ...fields, reason, failures, sameReasonFailures, recovery: extending, failureAt,
+        ...(ladder ? { ladder, recoveryPending } : {}) });
+      if (sameReasonFailures > 3) record('target_invariant', { ...fields, reason, failures, sameReasonFailures });
+      if (failures === 3) record('target_excluded', { ...fields, reason, failures, until });
+      return { undo, failures, until };
+    }
+
     return {
       excluded(spec) {
         const fields = context(spec);
@@ -76,27 +112,49 @@ function createTargetMemory({ now = Date.now, load = [], onChange = () => {}, em
         if (!found || found.failures !== 3) return null;
         return retry(found, observe(spec)) ? null : { reason: found.reason, until: found.until };
       },
+      // A completed ladder has already spent its search budget here. Prefer
+      // fresh candidates until the existing target expiry or a changed block.
+      avoid(spec) {
+        if (!valid()) return false;
+        const fields = context(spec);
+        if (protectedTarget(fields.position, fields.dimension)) return false;
+        const found = entries.get(fields.key);
+        return Boolean(found && ((found.handedOff && found.failures < 2) || found.failures === 3) && read(fields, observe(spec)));
+      },
+      recovering(spec) {
+        if (!valid()) return false;
+        const fields = context(spec);
+        if (protectedTarget(fields.position, fields.dimension)) return false;
+        const found = entries.get(fields.key);
+        return Boolean(found?.handedOff && found.failures === 2 && read(fields, observe(spec)));
+      },
+      capture(spec, reason) {
+        if (!valid()) return null;
+        const fields = context(spec);
+        if (!protectedTarget(fields.position, fields.dimension)) return { ...fields, reason: reasonOf(reason), witness: observe(spec) };
+        return null;
+      },
+      handoff(observation, ladder) {
+        if (!valid()) return null;
+        const { reason, witness, ...fields } = observation;
+        if (protectedTarget(fields.position, fields.dimension)) return null;
+        const found = read(fields, witness);
+        if (found?.failures === 3) return null;
+        return remember(fields, reason, witness, found, { ladder })?.undo;
+      },
       async run(spec, attempt, recover = null, reviewFailure = null) {
         if (!valid()) return { ok: false, reason: 'aborted' };
         const fields = context(spec);
         if (protectedTarget(fields.position, fields.dimension)) return tryHomeTarget(attempt, recover);
-        let found = entries.get(fields.key);
-        if (found) {
-          const reopens = retry(found, observe(spec));
-          if (reopens) {
-            if (found.failures === 3) record('target_retry', { ...fields, reason: reopens });
-            save(fields.key, null);
-            found = null;
-          } else if (found.failures === 3) {
-            return { ok: false, reason: 'target_excluded', targetExcluded: true, retryAt: found.until, sourceHandled: true };
-          }
-        }
+        const found = entries.has(fields.key) ? read(fields, observe(spec)) : null;
+        if (found?.failures === 3) return { ok: false, reason: 'target_excluded', targetExcluded: true, retryAt: found.until, sourceHandled: true };
         const extending = found?.failures === 2;
         if (extending) record('target_recovery', { ...fields, reason: found.reason, failures: found.failures });
         const result = extending
           ? await (recover ? recover(found.reason) : Promise.resolve({ ok: false, reason: found.reason }))
           : await attempt();
-        if (!valid() || !result || result.waited || (!result.ok && result.sourceHandled) || IGNORED.has(reasonOf(result.reason))) return result;
+        if (!valid() || !result || result.waited || result.destinationUnconfirmed || (!result.ok && result.sourceHandled)
+          || IGNORED.has(reasonOf(result.reason))) return result;
         if (result.ok) {
           if (found) {
             save(fields.key, null);
@@ -104,21 +162,10 @@ function createTargetMemory({ now = Date.now, load = [], onChange = () => {}, em
           }
           return result;
         }
-        const failures = (found?.failures || 0) + 1;
         const reason = reasonOf(result.reason);
-        const sameReasonFailures = found?.reason === reason ? found.sameReasonFailures + 1 : 1;
-        const failureAt = now();
-        const until = failureAt + (fields.step === 'chase' ? HUNT_TTL : TTL);
-        const state = { key: fields.key, position: fields.position, failures, sameReasonFailures, reason, until, witness: observe(spec) };
-        if (reviewFailure?.(fields, reason, () => {
-          if (entries.get(fields.key) !== state) return;
-          save(fields.key, found || null);
-          return { ...fields, originalReason: reason, excluded: failures === 3, failureAt };
-        })) return { ok: false, reason: 'self_stuck', sourceHandled: true, sourceFailure: 'self_stuck' };
-        save(fields.key, state);
-        record('target_failure', { ...fields, reason, failures, sameReasonFailures, recovery: extending, failureAt });
-        if (sameReasonFailures > 3) record('target_invariant', { ...fields, reason, failures, sameReasonFailures });
-        if (failures === 3) record('target_excluded', { ...fields, reason, failures, until });
+        const saved = remember(fields, reason, observe(spec), found, { extending, reviewFailure });
+        if (!saved) return { ok: false, reason: 'self_stuck', sourceHandled: true, sourceFailure: 'self_stuck' };
+        const { failures, until } = saved;
         return { ...result, sourceHandled: true, ...(failures === 3 ? { targetExcluded: true, retryAt: until } : {}) };
       },
     };
@@ -140,7 +187,7 @@ function targetsFor(bot, ctx = {}) {
   const tracker = bot.companionSelfStuck;
   if (!tracker || ctx.selfRescue) return scope;
   return {
-    excluded: scope.excluded,
+    excluded: scope.excluded, avoid: scope.avoid, recovering: scope.recovering,
     run(spec, attempt, recover) {
       const origin = bot.entity?.position?.clone();
       return tracker.target(() => scope.run(spec, attempt, recover,

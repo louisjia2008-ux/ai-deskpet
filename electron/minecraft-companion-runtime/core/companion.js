@@ -195,7 +195,8 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     && (homeContains(homestead()?.memory?.house, position) || (position && director?.memory.extraChests
       ?.some(p => p.x === Math.floor(position.x) && p.y === Math.floor(position.y) && p.z === Math.floor(position.z))));
   bot.companionHomeTarget = atHome;
-  const adaptation = autonomy ? require('./adaptation').createAdaptation({ store: adaptationStore, onEvent, atHome }) : null;
+  const adaptation = autonomy ? require('./adaptation').createAdaptation({ store: adaptationStore, onEvent, atHome,
+    playerProtected: (position, world) => world === dimension(bot) && bot.companionPlayerBlock?.(position) }) : null;
   if (adaptation) bot.companionTargets = adaptation.targets;
   const selfStuck = require('./self-stuck').createSelfStuck(bot, { emit: (type, data) => onEvent({ type, at: Date.now(), ...data }) });
   const priorSelfStuck = bot.companionSelfStuck;
@@ -295,7 +296,7 @@ function createCompanion({ bot, onEvent = () => {}, tickMs = 250, autonomy = fal
     if (!home || (!memory?.house && !memory?.relocation?.anchor)) return;
     const structure = memory.house ? { anchor: memory.house.anchor, variant: memory.house.variant, established: memory.established === true,
       pinned: memory.pinned === true, verified: { ...memory.verified },
-      construction: { owned: memory.owned, temporary: memory.temporary, breach: memory.breach,
+      construction: { owned: memory.owned, temporary: memory.temporary, breach: memory.breach, roofMaterial: memory.roofMaterial,
         furniture: Object.fromEntries(['crafting_table', 'furnace', 'chest', 'bed', 'guestBed']
           .map(id => [id, memory.house.furniture[id]])) } } : { anchor: null };
     const value = { ...structure,

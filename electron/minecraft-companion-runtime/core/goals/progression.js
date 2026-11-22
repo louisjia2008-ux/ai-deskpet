@@ -192,6 +192,9 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
       && (!holds(s, IRON_ARMOR) || upgrades(bot).some(([item]) => item.name.startsWith('iron_'))),
       (m) => outfit(m, IRON_ARMOR), { maintenance: true }),
     card('diamond_tools', 3, (s) => inOverworld() && !holds(s, DIAMOND), (m) => outfit(m, DIAMOND)),
+    card('home_roof_wood', 3, (s, m) => inOverworld() && !m.homePending && m.wheatFarmDone
+      && holds(s, OVERWORLD_IRON) && holds(s, DIAMOND) && m.homestead?.wantsRoofWood?.(s),
+      (m) => m.homestead.roofWoodGoal(), { score: 5, maintenance: true }),
     card('nether_supplies', 4, (s, m) => inOverworld() && !m.homePending && blaze(s, m) < 14 && !holds(s, [...IRON, ...netherKit()]),
       (m) => outfit(m, [...IRON.filter((r) => r.key !== 'arrow'), ...netherKit()]), { maintenance: true }),
     card('nether_fortress', 4, (s, m) => inOverworld() && range(m) >= 4 && blaze(s, m) < 14 && ready(s, m, netherKit()),

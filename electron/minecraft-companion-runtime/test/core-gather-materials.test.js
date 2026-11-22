@@ -5,6 +5,7 @@ const { test } = require('node:test');
 const { Vec3 } = require('vec3');
 const { createAdaptation } = require('../core/adaptation');
 const { createGatherMaterialsGoal } = require('../core/goals/gatherMaterials');
+const { blockTarget } = require('../core/target-recovery');
 
 // A flat world of stone at y 63 with a chest on it, the bot ten blocks off.
 function world(placedAt) {
@@ -74,11 +75,16 @@ test(`three bad approaches switch lava pools (${autonomous ? 'autonomous' : 'man
   const records = [];
   Object.assign(skills, {
     storeInChest: async () => ({ ok: true, contents: {} }),
-    fillBucket: async (_bot, _ctx, { exclude }) => {
+    fillBucket: async (_bot, _ctx, { exclude, observeDestination }) => {
       const p = bad[attempts++];
       if (p) {
         assert.equal(exclude(p), false);
-        return { ok: false, reason: 'path_timeout', sourcePosition: p };
+        const failure = { ok: false, reason: 'path_timeout', sourcePosition: p };
+        if (observeDestination) {
+          observeDestination(blockTarget(bot, 'lava_pool', 'fill_bucket', p), failure);
+          failure.destinationObserved = true;
+        }
+        return failure;
       }
       assert.equal(exclude(untriedSamePool), true);
       assert.equal(exclude(good), false);

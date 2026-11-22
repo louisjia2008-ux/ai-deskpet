@@ -1,6 +1,7 @@
 'use strict';
 
 const { goals } = require('mineflayer-pathfinder');
+const { blockTarget } = require('./target-recovery');
 
 const OUTWARD_HEADINGS = Object.freeze([0, 1, -1, 2, -2, 3, -3, 4]);
 async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, timeoutMs = 15000, bearing } = {}) {
@@ -27,8 +28,11 @@ const biome = (bot) => bot.blockAt(bot.entity.position.floored())?.biome?.name
 
 async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blacklist, blocks, dropMatch, exclude }) {
   const location = { position: anchor || bot.entity.position, target: 'log' };
-  const avoid = (p) => exclude?.(p) || ctx.adapt.avoids('hard_route', p);
-  return ctx.adapt.run('wood', location, async (method) => {
+  const spec = (p) => blockTarget(bot, 'wood', 'gather_log', p, { cells: [p.offset(0, -1, 0)] });
+  const avoid = (p) => exclude?.(p) || ctx.adapt.avoids('hard_route', p) || ctx.adapt.targets.avoid(spec(p));
+  return ctx.adapt.run('wood', location, async (method, _plan, observe) => {
+    const gather = (radius) => skills.gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude: avoid, radius,
+      destination: { spec, observe } });
     const route = (memory.woodRoute ||= { heading: 0, from: bot.entity.position.clone(), biome: biome(bot) });
     const near = method === 'near_tree';
     const far = method === 'different_biome' || method === 'move_to_fresh_area';
@@ -43,13 +47,13 @@ async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blacklist
       route.departed ||= move.ok;
       return move;
     }
-    const found = await skills.gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude: avoid, radius: near ? 48 : 128 });
+    const found = await gather(near ? 48 : 128);
     if (found.ok || near || found.sourceHandled || found.waited || found.reason === 'aborted') return found;
     if (!['no_target_in_range', 'not_arrived', 'path_timeout', 'no_progress', 'NoPath', 'Timeout', 'choose_another_target',
       'route_region_avoided'].includes(found.reason)) return found;
     const moved = await outwardLeg(bot, ctx, actions, route, route.from, { distance: far ? 28 : 20 });
     if (!moved.ok) return moved;
-    return skills.gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude: avoid, radius: 128 });
+    return gather(128);
   });
 }
 

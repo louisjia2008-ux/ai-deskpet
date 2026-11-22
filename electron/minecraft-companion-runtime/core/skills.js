@@ -12,6 +12,7 @@ const { ownedItems } = require('./perception');
 const { withCursorConfirmation } = require('./inventory');
 const { isLog, isSurfaceLog } = require('./goals/gatherBlocks');
 const { isAir, naturalCover, plantPartner, isWaterlogged } = require('./natural-cover');
+const { blockTarget, watchDestination } = require('./target-recovery');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
@@ -25,7 +26,7 @@ function inventoryCounts(bot) {
 
 /** Breaks one matching block (nearest, cheapest first) and collects its drop. */
 async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () => false, radius = 48,
-  selectTarget, navigationTrace = false }) {
+  selectTarget, navigationTrace = false, destination = null }) {
   const ids = Object.values(bot.registry.blocksByName).filter((b) => blocks(b.name)).map((b) => b.id);
   if (ids.length === 0) return fail('unknown_block');
   const here = bot.entity.position;
@@ -51,6 +52,7 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () 
   const block = selection.block;
   if (!candidates.includes(block)) return fail('invalid_target_selection');
   const key = posKey(block.position);
+  const spec = destination?.spec(block.position);
   ctx.record('target_selected', { block: block.name, position: key, options: candidates.length });
   const trace = (stage, result, from, phase = 'result') => {
     const far = stage === 'far_approach';
@@ -70,7 +72,8 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () 
   if (block.position.distanceTo(here) > 32) {
     const from = { ...bot.entity.position };
     trace('far_approach', null, from, 'start');
-    const near = await actions.goNear(bot, ctx, block.position.offset(0.5, 0, 0.5), 6, { timeoutMs: 90000 });
+    const near = await actions.goNear(bot, ctx, block.position.offset(0.5, 0, 0.5), 6, { timeoutMs: 90000,
+      ...(spec ? { destination: { spec, observe: destination.observe, resolves: false } } : {}) });
     trace('far_approach', near, from);
     if (!near.ok && (near.sourceHandled || near.waited || block.position.distanceTo(bot.entity.position) > 24)) {
       if (!near.sourceHandled && !near.waited && !actions.isHomeTarget(bot, block.position)) blacklist.add(key, near.reason);
@@ -79,7 +82,8 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () 
   }
   const from = { ...bot.entity.position };
   trace('mining_stance', null, from, 'start');
-  const reach = await actions.goToDig(bot, ctx, block, { timeoutMs: 45000, ...(selectTarget ? { retryNoProgress: false } : {}) });
+  const approach = () => actions.goToDig(bot, ctx, block, { timeoutMs: 45000, ...(selectTarget ? { retryNoProgress: false } : {}) });
+  const reach = spec ? await watchDestination(bot, ctx, spec, destination.observe, approach) : await approach();
   trace('mining_stance', reach, from);
   if (!reach.ok) {
     // The rest of the same tree or vein is almost always just as unreachable.
@@ -903,7 +907,7 @@ const sourceLevel = (block) => Number(block?.getProperties?.().level);
  * Fills one empty bucket from a still source of water or lava, seen from dry
  * ground. Confirmed only by the full bucket appearing in the inventory.
  */
-async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48, exclude = () => false }) {
+async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48, exclude = () => false, observeDestination }) {
   const full = `${liquid}_bucket`;
   if (!bot.inventory.items().some((i) => i.name === 'bucket')) return fail('no_bucket');
   // Lava is only approached in good health: a slip costs a lot more than water.
@@ -921,11 +925,20 @@ async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48, exclude = 
   const target = sources[0];
   const key = posKey(target.position);
   ctx.record('target_selected', { block: liquid, position: key, options: sources.length });
+  const fill = () => fillBucketAt(bot, ctx, target, full, liquid, blacklist);
+  return observeDestination
+    ? watchDestination(bot, ctx, blockTarget(bot, 'lava_pool', 'fill_bucket', target.position), observeDestination, fill,
+      { useFailure: 'bucket_unfilled' })
+    : fill();
+}
+
+async function fillBucketAt(bot, ctx, target, full, liquid, blacklist) {
+  const key = posKey(target.position);
   const centre = target.position.offset(0.5, 0.5, 0.5);
   if (!actions.withinReach(bot, target.position, 4)) {
     const moved = await actions.goNear(bot, ctx, target.position.offset(0.5, 1, 0.5), 2, { timeoutMs: 45000, skipAdaptation: liquid === 'lava' });
     if (!moved.ok && !actions.withinReach(bot, target.position, 4.5)) {
-      blacklist.add(key, moved.reason);
+      if (!moved.sourceHandled && !moved.waited && !actions.isHomeTarget(bot, target.position)) blacklist.add(key, moved.reason);
       return { ...moved, sourcePosition: target.position };
     }
   }
@@ -948,7 +961,7 @@ async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48, exclude = 
     const filled = await waitUntil(() => actions.countItems(bot, (n) => n === full) > before, { timeoutMs: 1500, signal: ctx.signal });
     if (filled) return { ok: true, filled: full };
   }
-  blacklist.add(key, 'bucket_unfilled');
+  if (!actions.isHomeTarget(bot, target.position)) blacklist.add(key, 'bucket_unfilled');
   return fail('bucket_unfilled', { sourcePosition: target.position });
 }
 

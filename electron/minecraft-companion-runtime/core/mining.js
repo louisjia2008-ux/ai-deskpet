@@ -18,6 +18,7 @@ const defaultActions = require('./actions');
 const defaultSkills = require('./skills');
 const { posKey } = require('./blacklist');
 const { abortError } = require('./confirm');
+const { blockTarget, watchDestination } = require('./target-recovery');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
@@ -191,7 +192,8 @@ async function tossRubble(bot, ctx) {
  * Does one thing towards ore of `blocks` at height `y`: mine a visible ore,
  * walk back to the tunnel front, or dig one more block of tunnel.
  */
-async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, start = null, closed = false, actions = defaultActions, skills = defaultSkills }) {
+async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, start = null, closed = false,
+  actions = defaultActions, skills = defaultSkills, observeDestination }) {
   const feet = bot.entity.position.floored();
   if (memory.mine?.floorRepair) return repairFloor(bot, ctx, memory.mine, skills);
   if (memory.mine?.retiring) {
@@ -217,8 +219,10 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
   // ore worth taking that the carried pickaxes can harvest.
   if (memory.mine) {
     const wanted = (name) => blocks(name) || LOOT_ORES.has(name);
+    const target = (p) => blockTarget(bot, 'diamond', 'mine_ore', p);
     const ore = visibleOre(bot, wanted, bot.entity.position)
       .filter((b) => !blacklist.has(posKey(b.position)) && harvestable(bot, b)
+        && (!observeDestination || !ctx.adapt.targets.avoid(target(b.position)))
         && (!closed || (actions.withinReach(bot, b.position) && FACES.every(([dx, dy, dz]) => {
           const p = b.position.offset(dx, dy, dz), adjacent = bot.blockAt(p);
           return adjacent && !LIQUID.test(adjacent.name) && (!isPassable(adjacent) || knownOpen(memory.mine, p));
@@ -231,8 +235,13 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
       const filler = routeFloor && bot.inventory.items().find((i) => ['cobblestone', 'cobbled_deepslate', 'dirt'].includes(i.name));
       if (routeFloor && !filler) { blacklist.add(posKey(ore.position), 'route_floor'); return { ok: true, progress: false }; }
       ctx.record(blocks(ore.name) ? 'mine_ore' : 'mine_loot', { block: ore.name, position: posKey(ore.position) });
-      const reach = await actions.goToDig(bot, ctx, ore, { timeoutMs: 15000 });
-      if (!reach.ok) { blacklist.add(posKey(ore.position), reach.reason); return reach; }
+      const approach = () => actions.goToDig(bot, ctx, ore, { timeoutMs: 15000 });
+      const reach = observeDestination ? await watchDestination(bot, ctx, target(ore.position), observeDestination, approach,
+        { knownMine: memory.mine }) : await approach();
+      if (!reach.ok) {
+        if (!reach.sourceHandled && !reach.waited && !actions.isHomeTarget?.(bot, ore.position)) blacklist.add(posKey(ore.position), reach.reason);
+        return reach;
+      }
       const block = bot.blockAt(ore.position) || ore;
       const dug = await actions.digBlock(bot, ctx, block, { tool: pickFor(bot, block) });
       if (!dug.ok) { blacklist.add(posKey(ore.position), dug.reason); return dug; }

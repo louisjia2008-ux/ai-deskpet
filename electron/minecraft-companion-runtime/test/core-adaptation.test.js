@@ -8,7 +8,12 @@ const { createDirector } = require('../core/director');
 const { createBrain } = require('../core/brain');
 const { runPlanned } = require('../core/goals/common');
 const { createHomesteadGoal } = require('../core/goals/homestead');
-const { outwardLeg, OUTWARD_HEADINGS } = require('../core/adaptation-strategies');
+const { gatherWood, outwardLeg, OUTWARD_HEADINGS } = require('../core/adaptation-strategies');
+const { createBlacklist, posKey } = require('../core/blacklist');
+const { createSelfStuck } = require('../core/self-stuck');
+const { blockTarget, watchDestination } = require('../core/target-recovery');
+const actions = require('../core/actions');
+const skills = require('../core/skills');
 
 const location = { position: { x: 33, y: 65, z: -10 }, target: 'log' };
 const failure = { ok: false, reason: 'not_arrived' };
@@ -187,6 +192,175 @@ test('the inner route owns its failures through exhaustion and the subsequent wa
   const deferred = await run();
   assert.equal(deferred.waited, true);
   assert.equal(deferred.adaptationExhausted, undefined);
+});
+
+test('homestead yields after the wood ladder and its next card skips both timed-out seed 2 logs', async (t) => {
+  const { restart, now, advance, events } = fixture();
+  const adaptation = restart();
+  const logs = [new Vec3(236, 72, -60), new Vec3(232, 71, -60)];
+  const other = new Vec3(240, 72, -55);
+  let loaded = logs;
+  const bot = {
+    entity: { position: new Vec3(234.5, 72, -46.5) }, inventory: { items: () => [] },
+    registry: { blocksByName: { oak_log: { name: 'oak_log', id: 1 } } }, game: { dimension: 'overworld', minY: 60, height: 32 },
+    findBlocks: () => loaded,
+    blockAt(p) {
+      const log = loaded.some(q => q.equals(p));
+      return { name: log ? 'oak_log' : p.y < 71 ? 'dirt' : 'air', position: p,
+        boundingBox: log || p.y < 71 ? 'block' : 'empty' };
+    },
+  };
+  const attempts = [];
+  t.mock.method(actions, 'goToDig', async (_bot, _ctx, block) => {
+    attempts.push(posKey(block.position));
+    return { ok: false, reason: 'path_timeout' };
+  });
+  let director;
+  const perceive = () => ({ alive: true, position: bot.entity.position });
+  const brain = createBrain({ perceive, now, goalRetryDelayMs: 0, noProgressLimit: 1, onEvent(event) {
+    events.push(event);
+    director.handleEvent(event);
+  } });
+  const card = { id: 'homestead', stage: 0, risk: 'low', need: () => 100, create() {
+    const memory = {};
+    const blacklist = createBlacklist({ ttlMs: 100, now });
+    return { name: 'homestead', isDone: () => false, progress: () => 0, run: ctx => runPlanned(ctx,
+      { kind: 'gather', key: 'log' }, () => gatherWood({ bot, ctx, skills, memory, blacklist, anchor: new Vec3(232, 72, -41),
+        actions: { goTo: async () => ({ ok: false, reason: 'path_timeout' }) }, blocks: n => n === 'oak_log', dropMatch: () => true })) };
+  } };
+  director = createDirector({ brain, perceive, now, idleMs: 0, adaptation, cards: [card] });
+  director.enable();
+  assert.equal(director.tick(), 'homestead');
+  for (let i = 0; i < 20 && brain.status().goal; i += 1) {
+    await brain.tick();
+    await brain.idle();
+    if (i % 2 === 1) advance(101);
+  }
+  const yielded = events.find(e => e.type === 'goal_yielded');
+  assert.equal(yielded?.task, 'wood');
+  assert.equal(yielded?.method, 'different_biome');
+  assert.ok(logs.every(p => attempts.filter(key => key === posKey(p)).length >= 2),
+    JSON.stringify({ attempts, reasons: events.filter(e => e.type === 'adaptation_attempt').map(e => e.reason) }));
+  const failures = events.filter(e => e.type === 'target_failure' && e.ladder === 'wood');
+  assert.deepEqual(failures.map(e => e.target).sort(), logs.map(posKey).sort());
+  assert.ok(failures.every(e => e.failures === 1 && e.reason === 'path_timeout'));
+  assert.ok(failures.every(e => events.indexOf(e) < events.indexOf(yielded)));
+  assert.equal(adaptation.targets.snapshot().length, 2);
+  assert.equal(restart().targets.snapshot().length, 2);
+
+  advance(Math.max(yielded.until, yielded.at + 5 * minute) - now() + 1);
+  const before = attempts.length;
+  loaded = [...logs, other];
+  assert.equal(director.tick(), 'homestead');
+  await brain.tick();
+  await brain.idle();
+  assert.deepEqual(attempts.slice(before), [posKey(other)]);
+  await brain.dispose();
+});
+
+test('destination handoff ignores known wet, trapped, home, player, or self-rescue attempts and revokes a dry source cluster', async () => {
+  const home = p => p.x === 10;
+  const player = p => p.x === 11;
+  const { restart, events, now } = fixture({ atHome: home, playerProtected: player });
+  const bot = {
+    entity: { position: new Vec3(0.5, 72, 0.5), isInWater: false }, companionHomeTarget: home, companionPlayerBlock: player,
+    game: { dimension: 'overworld' }, blockAt: () => ({ name: 'air', boundingBox: 'empty' }),
+  };
+  bot.companionSelfStuck = createSelfStuck(bot, { now, emit: (type, fields) => events.push({ type, ...fields }) });
+  let adaptation = restart();
+  let use = adaptation.scope(() => true);
+  const attempt = (x, flags = {}) => (method, _plan, observe) => watchDestination(bot, { adapt: use, ...flags },
+    blockTarget(bot, 'wood', 'gather_log', new Vec3(x, 72, 0)), observe, async () => ({ ok: false, reason: 'path_timeout' }));
+
+  bot.entity.isInWater = true;
+  await use.run('wood', location, attempt(8), { threshold: 1 });
+  bot.entity.isInWater = false;
+  await use.run('wood', location, attempt(10), { threshold: 1 });
+  await use.run('wood', location, attempt(11), { threshold: 1 });
+  assert.equal(adaptation.targets.snapshot().length, 0);
+
+  const elsewhere = { ...location, target: 'independent_wood' };
+  await use.run('wood', elsewhere, attempt(17), { threshold: 1 });
+  await use.run('wood', elsewhere, attempt(18), { threshold: 1 });
+  const trapped = await use.run('wood', elsewhere, attempt(19), { threshold: 1 });
+  assert.equal(trapped.reason, 'self_stuck');
+  assert.equal(events.filter(e => e.type === 'self_stuck').length, 1);
+  await use.run('wood', { ...elsewhere, target: 'still_trapped' }, attempt(20), { threshold: 1 });
+  assert.equal(adaptation.targets.snapshot().length, 0);
+  bot.companionSelfStuck.release();
+  adaptation = restart();
+  use = adaptation.scope(() => true);
+  const reloaded = await use.run('wood', elsewhere, attempt(21, { selfRescue: true }), { threshold: 1 });
+  assert.equal(reloaded.adaptationExhausted?.task, 'wood');
+  assert.equal(adaptation.targets.snapshot().length, 0);
+  assert.equal(events.filter(e => e.type === 'target_failure').length, 0);
+});
+
+test('handed-off targets reopen on change or expiry and still need a real target recovery to exclude', async () => {
+  const { restart, advance, events } = fixture();
+  const adaptation = restart();
+  const targets = adaptation.scope(() => true).targets;
+  let witness = 'oak_log';
+  const spec = { goal: 'wood', step: 'gather_log', position: { x: 14, y: 71, z: 5 }, witness: () => witness };
+  const remember = () => targets.handoff(targets.capture(spec, 'path_timeout'), 'wood');
+  remember();
+  assert.equal(targets.avoid(spec), true);
+  witness = 'spruce_log';
+  assert.equal(targets.avoid(spec), false);
+  remember();
+  advance(31 * minute);
+  assert.equal(targets.avoid(spec), false);
+  assert.deepEqual(events.filter(e => e.type === 'target_retry').map(e => e.reason), ['environment_changed', 'expired']);
+
+  await targets.run(spec, () => failure);
+  await targets.run(spec, () => failure);
+  remember();
+  assert.equal(events.filter(e => e.type === 'target_failure').at(-1).recoveryPending, true);
+  assert.equal(targets.recovering(spec), true);
+  assert.equal(targets.avoid(spec), false);
+  assert.equal(targets.excluded(spec), null);
+  await targets.run(spec, () => assert.fail('the body must try an alternate approach'), () => failure);
+  assert.ok(targets.excluded(spec));
+  assert.equal(events.filter(e => e.type === 'target_recovery').length, 1);
+});
+
+test('route exhaustion transfers the concrete failed walk and never a different cell selected on its synthetic rungs', async () => {
+  const { restart, events } = fixture();
+  const adaptation = restart();
+  const ctx = { adapt: adaptation.scope(() => true) };
+  const bot = {
+    entity: { position: new Vec3(0.5, 72, 0.5) }, game: { dimension: 'overworld' },
+    blockAt: p => ({ name: p.y < 72 ? 'stone' : 'air', boundingBox: p.y < 72 ? 'block' : 'empty' }),
+    pathfinder: { movements: { companionWalkOnly: true }, async goto() { throw Object.assign(new Error(), { code: 'path_timeout' }); } },
+  };
+  const actual = new Vec3(12, 72, 2);
+  const untried = new Vec3(13, 72, 2);
+  for (let i = 0; i < 6; i += 1) await actions.goNear(bot, ctx, actual, 1);
+  assert.equal(adaptation.targets.snapshot().length, 0);
+  assert.equal((await actions.goNear(bot, ctx, untried, 1)).reason, 'choose_another_target');
+  const final = await actions.goNear(bot, ctx, untried, 1);
+  assert.equal(final.adaptationExhausted?.task, 'route');
+  const failures = events.filter(e => e.type === 'target_failure');
+  assert.deepEqual(failures.map(e => [e.ladder, e.target, e.failures]), [['route', posKey(actual), 1]]);
+});
+
+test('a long walk to a log preserves the wood observer without incurring an inner route ladder', async () => {
+  const { restart, events } = fixture();
+  const adaptation = restart();
+  const ctx = { adapt: adaptation.scope(() => true) };
+  const pos = new Vec3(35, 72, 0);
+  const bot = {
+    entity: { position: new Vec3(0.5, 72, 0.5) }, game: { dimension: 'overworld' },
+    blockAt: p => ({ name: p.y < 72 ? 'stone' : 'air', boundingBox: p.y < 72 ? 'block' : 'empty' }),
+    pathfinder: { movements: { companionWalkOnly: true }, async goto() { throw Object.assign(new Error(), { code: 'path_timeout' }); } },
+  };
+  const spec = blockTarget(bot, 'wood', 'gather_log', pos);
+  for (const _ of LADDERS.wood) {
+    await ctx.adapt.run('wood', location, (_method, _plan, observe) => actions.goNear(bot, ctx, pos.offset(0.5, 0, 0.5), 6,
+      { destination: { spec, observe, resolves: false } }), { threshold: 1 });
+  }
+  assert.deepEqual(events.filter(e => e.type === 'adaptation_attempt').map(e => e.task), ['wood', 'wood', 'wood']);
+  assert.deepEqual(events.filter(e => e.type === 'target_failure').map(e => [e.ladder, e.target]), [['wood', posKey(pos)]]);
 });
 
 for (const [task, rungs] of Object.entries(LADDERS)) {

@@ -13,6 +13,7 @@ const { ownedItems } = require('./perception');
 const { dropReturnPosition } = require('./pathReturn');
 const { posKey } = require('./blacklist');
 const { homeContains, safeStand, SIDES: CARDINAL } = require('./home-topology');
+const shore = require('./shore-route');
 const { meleeGeometry, meleeSight, MeleeFollowGoal, entitySizeEvidence } = require('./entityGeometry');
 const { surveyDigPermit, withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight } = require('./survey-plan-actions');
 
@@ -247,28 +248,34 @@ async function goNear(bot, ctx, position, range = 2, options = {}) {
   const before = tracker && bot.entity.position.clone();
   let result = await goNearAdapted(bot, before ? { ...ctx, nearDestination: true } : ctx, position, range, options);
   if (before) result = originFailure(bot, result, before, position);
-  if (!result.ok && !result.sourceHandled && tracker?.pathFailed(position, result, before)) {
+  if (!result.ok && !result.sourceHandled && !result.destinationObserved && !result.destinationUnconfirmed
+    && tracker?.pathFailed(position, result, before)) {
     return fail('self_stuck', { sourceHandled: true, sourceFailure: 'self_stuck' });
   }
   return result;
 }
 
 async function goNearAdapted(bot, ctx, position, range, options) {
+  const { blockTarget, watchDestination } = require('./target-recovery');
+  const destination = options.destination;
+  const walk = () => goNearOnce(bot, ctx, position, range, options);
+  // An exact work target already has a ladder (such as wood or diamond).
+  // Keep the native travel fallbacks, but give its failed approach one owner.
+  if (destination) return watchDestination(bot, ctx, destination.spec, destination.observe, walk, destination);
   if (!ctx.adapt || options.skipAdaptation || ctx.selfRescue || dimensionOf(bot) !== 'overworld'
     || bot.companionSelfStuck?.inTarget() || routeOrigin(bot)
-    || bot.entity.position.distanceTo(position) <= range + 1.5) return goNearOnce(bot, ctx, position, range, options);
+    || bot.entity.position.distanceTo(position) <= range + 1.5) return walk();
   const before = bot.entity.position.clone();
   const task = { position, origin: before, target: 'walk' };
   const plan = ctx.adapt.plan('route', task);
-  // An alternate-target response is a failed approach, not a successful walk:
-  // the caller can then blacklist this exact tree, mob, entrance or cell.
-  if (ctx.adapt.avoids('hard_route', position)) return fail('route_region_avoided');
-  return ctx.adapt.run('route', task, (method) => {
+  const cell = new Vec3(position.x, position.y, position.z).floored();
+  const spec = blockTarget(bot, 'route', 'walk', cell, { cells: [cell.offset(0, -1, 0), cell.offset(0, 1, 0)] });
+  if (ctx.adapt.targets.avoid(spec) || ctx.adapt.avoids('hard_route', position)) return fail('route_region_avoided');
+  return ctx.adapt.run('route', task, (method, _plan, observe) => {
     if (method === 'avoid_region') return fail('route_region_avoided');
     if (method === 'alternate_target') return fail('choose_another_target');
-    return goNearOnce(bot, ctx, position, range, { ...options,
-      lateral: method === 'waypoint' ? (plan.failures % 2 === 0 ? 1 : -1) : 0 })
-      .then(result => originFailure(bot, result, before, position));
+    return watchDestination(bot, ctx, spec, observe, () => goNearOnce(bot, ctx, position, range,
+      { ...options, lateral: method === 'waypoint' ? (plan.failures % 2 === 0 ? 1 : -1) : 0 }));
   }, plan.method === 'avoid_region' ? { threshold: 1, learn: { kind: 'hard_route', radius: 6 } } : undefined)
     .then(result => result.waited ? { ...result, ok: false, reason: 'route_region_avoided' } : result);
 }
@@ -306,17 +313,21 @@ async function recoverHomeOrigin(bot, ctx, destination) {
 async function goHome(bot, ctx, position, range, options) {
   const unblocked = await recoverHomeOrigin(bot, ctx, position);
   if (unblocked) return unblocked;
+  if (bot.companionTemporaryBlocks?.list().length) {
+    await shore.clearRouteBridge(bot, ctx, bridgeOperations(bot, ctx));
+  }
   const flat = Math.hypot(position.x - bot.entity.position.x, position.z - bot.entity.position.z);
   const timeoutMs = Math.max(options.timeoutMs ?? 30000, Math.min(120000, 15000 + flat * 800));
   const route = { ...ctx, nearDestination: true };
   const approach = { ...options, timeoutMs, segmentFirst: true };
   let result = await goNearOnce(bot, route, position, range, approach);
-  if (routeOrigin(bot)) {
+  if (routeOrigin(bot) && !result.shoreHandled) {
     const recovered = await recoverHomeOrigin(bot, ctx, position);
     if (recovered) return recovered;
     result = await goNearOnce(bot, route, position, range, approach);
   }
   const destination = new Vec3(position.x, position.y, position.z).floored();
+  if (result.shoreHandled && !result.ok && !isHomeTarget(bot, bot.entity.position.floored())) return result;
   const porch = houseOf(bot)?.entrance;
   if (!result.ok || (porch && destination.equals(porch) && !safeStand(p => bot.blockAt(p), destination))) {
     const repaired = await bot.companionHomestead?.()?.repairHomeAccess?.(ctx);
@@ -325,6 +336,128 @@ async function goHome(bot, ctx, position, range, options) {
   }
   if (result.ok) ctx.record?.('home_route_arrived', { destination: position, position: bot.entity.position.floored() });
   return result;
+}
+
+function bridgeOperations(bot, ctx) {
+  return {
+    materials: CLIMB_BLOCKS,
+    isProtected: p => Boolean(isHomeTarget(bot, p) || ctx.protectedCell?.(p)
+      || bot.companionPlayerBlock?.(p) || bot.companionProtectBlock?.(bot.blockAt(p))),
+    dig: (block, options) => digBlock(bot, ctx, block, options),
+  };
+}
+
+async function walkGroundLegs(bot, ctx, position, goal, route, prefix, initial = null) {
+  const { remaining, attempt, direct } = route;
+  let last = initial;
+  let bank = initial && shore.waterContact(bot, true);
+  let returns = bank ? 1 : 0;
+  let avoided = false;
+  const shoreFailure = result => ({ ...result, shoreHandled: true, destinationUnconfirmed: true });
+  const report = (from, waypoint, result, dry, cost, advanced) => ctx.record?.(`${prefix}_route_leg`, {
+    from, position: bot.entity.position.clone(), destination: position, waypoint: { x: waypoint.x, z: waypoint.z },
+    advanced, dry, arrived: result.ok, reason: result.reason, ...cost,
+  });
+  const take = async (waypoint, dryOnly) => {
+    const from = bot.entity.position.clone();
+    const before = shore.routeCost(bot, goal, from);
+    const result = await attempt(waypoint, { timeoutMs: Math.min(12000, remaining()), retryNoProgress: false }, dryOnly);
+    const dry = result.ok ? await shore.settleDry(bot, ctx.signal) : shore.steadyGround(bot);
+    const cost = result.ok && dry ? shore.progress(before, shore.routeCost(bot, goal, bot.entity.position)) : {};
+    const sameBank = bank && shore.shoreDistance(bot.entity.position, bank) < 7;
+    const advanced = Boolean(result.ok && dry && cost.closer && !(returns >= 2 && sameBank));
+    report(from, waypoint, result, dry, cost, advanced);
+    return { result, advanced };
+  };
+  const observeBank = async () => {
+    const edge = shore.waterContact(bot, true);
+    if (!edge) return null;
+    returns = bank && shore.shoreDistance(edge, bank) < 7 ? returns + 1 : 1;
+    bank = edge;
+    if (!shore.waterContact(bot)) return null;
+    return recoverHomeOrigin(bot, ctx, position);
+  };
+  const confirmedDirect = async (limit, dryOnly) => {
+    const result = await direct(limit, dryOnly);
+    return result.ok && !(await shore.settleDry(bot, ctx.signal)) ? fail('not_arrived') : result;
+  };
+  for (let leg = 0; leg < 12 && remaining() > 0; leg += 1) {
+    if (shore.waterContact(bot)) {
+      const recovery = await recoverHomeOrigin(bot, ctx, position);
+      if (recovery) return shoreFailure(recovery);
+    }
+    if (bank && returns >= 2) {
+      const oldBank = bank;
+      route.shoreHandled = true;
+      ctx.record?.(`${prefix}_route_shore`, { phase: 'alternate', bank, returns });
+      const detour = await confirmedDirect(Math.min(20000, remaining() / 2), true);
+      if (detour.ok) return detour;
+      if (shore.waterContact(bot)) {
+        const recovery = await recoverHomeOrigin(bot, ctx, position);
+        if (recovery) return shoreFailure(recovery);
+      }
+      let leftBank = false;
+      // A direction can first lead sideways. Log it as progress only if it
+      // meets the same dry and distance checks as every other route leg.
+      for (const p of shore.bankDetours(bot, bank, goal)) {
+        if (remaining() < 5000) break;
+        const moved = await take(new goals.GoalBlock(p.x, p.y, p.z), true);
+        if (moved.result.ok && shore.steadyGround(bot) && shore.shoreDistance(bot.entity.position, oldBank) >= 7) {
+          leftBank = true;
+          break;
+        }
+      }
+      if (!leftBank && remaining() > 5000) {
+        const move = async p => {
+          const moved = await attempt(new goals.GoalBlock(p.x, p.y, p.z),
+            { timeoutMs: Math.min(4000, remaining()), retryNoProgress: false }, true);
+          return moved.ok && await shore.settleDry(bot, ctx.signal) && bot.entity.position.floored().equals(p);
+        };
+        leftBank = await shore.crossRouteBridge(bot, ctx, goal, { ...bridgeOperations(bot, ctx), move });
+      }
+      if (!leftBank) {
+        ctx.record?.(`${prefix}_route_shore`, { phase: 'exhausted', bank, returns, position: bot.entity.position.clone() });
+        return shoreFailure(last?.ok === false ? last : detour);
+      }
+      avoided = true;
+      bank = null;
+      returns = 0;
+      continue;
+    }
+    const here = bot.entity.position.clone();
+    const dx = position.x - here.x, dz = position.z - here.z;
+    const flat = Math.hypot(dx, dz);
+    if (flat <= 20) {
+      const nearWater = shore.waterContact(bot, true);
+      last = await confirmedDirect(nearWater ? Math.min(10000, remaining()) : remaining(), avoided);
+      if (last.ok || !shore.waterContact(bot, true)) return last;
+      const recovery = await observeBank();
+      if (recovery) return shoreFailure(recovery);
+      continue;
+    }
+    let advanced = false;
+    for (const side of [0, -8, 8]) {
+      if (remaining() <= 0) break;
+      const waypoint = new goals.GoalNearXZ(here.x + (16 * dx - side * dz) / flat, here.z + (16 * dz + side * dx) / flat, 3);
+      const moved = await take(waypoint, avoided);
+      last = moved.result;
+      if (moved.advanced) {
+        advanced = true;
+        if (bank && shore.shoreDistance(bot.entity.position, bank) >= 7) { bank = null; returns = 0; }
+        break;
+      }
+      const recovery = await observeBank();
+      if (recovery) return shoreFailure(recovery);
+      if (returns >= 2) break;
+    }
+    if (advanced || returns >= 2) continue;
+    last = await confirmedDirect(remaining(), avoided);
+    if (last.ok || !shore.waterContact(bot, true)) return last;
+    const recovery = await observeBank();
+    if (recovery) return shoreFailure(recovery);
+  }
+  const result = last?.ok === false ? last : fail('path_timeout');
+  return route.shoreHandled ? shoreFailure(result) : result;
 }
 
 async function goNearOnce(bot, ctx, position, range, options) {
@@ -338,42 +471,23 @@ async function goNearOnce(bot, ctx, position, range, options) {
   const scoped = { ...ctx, signal };
   const timer = setTimeout(() => { expiry.abort('path_timeout'); haltBody(bot); }, timeoutMs);
   const remaining = () => Math.max(0, deadline - Date.now());
-  const attempt = async (goal, options) => {
+  const attempt = async (goal, options, dryOnly = false) => {
     if (ctx.signal?.aborted) throw abortError(ctx.signal);
-    const result = await goTo(bot, scoped, goal, options);
+    const result = await goTo(bot, dryOnly ? { ...scoped, dryRoute: true } : scoped, goal, options);
     // A native timeout can resolve as {ok:false} after cancellation as well
     // as reject. Respect the root owner in both completion paths.
     if (ctx.signal?.aborted) throw abortError(ctx.signal);
     return result;
   };
   const goal = new goals.GoalNear(position.x, position.y, position.z, range);
-  const direct = (limit = remaining()) => remaining() <= 0 ? Promise.resolve(fail('path_timeout'))
+  const direct = (limit = remaining(), dryOnly = false) => remaining() <= 0 ? Promise.resolve(fail('path_timeout'))
     : attempt(goal, {
       targetY: position.y, ...options, timeoutMs: Math.min(limit, remaining()),
       arrived: (at) => options.exact ? goal.isEnd(at.floored()) : at.distanceTo(position) <= range + 1.5,
-    });
+    }, dryOnly);
+  const route = { remaining, attempt, direct, shoreHandled: false };
   try {
-    if (options.segmentFirst) {
-      for (let leg = 0; leg < 12 && remaining() > 0; leg += 1) {
-        const here = bot.entity.position.clone();
-        const dx = position.x - here.x, dz = position.z - here.z;
-        const flat = Math.hypot(dx, dz);
-        if (flat <= 20) break;
-        let advanced = false;
-        for (const side of [0, -8, 8]) {
-          if (remaining() <= 0) break;
-          const waypoint = new goals.GoalNearXZ(here.x + (16 * dx - side * dz) / flat, here.z + (16 * dz + side * dx) / flat, 3);
-          const moved = await attempt(waypoint, { timeoutMs: Math.min(12000, remaining()), retryNoProgress: false });
-          const at = bot.entity.position;
-          advanced = flat - Math.hypot(position.x - at.x, position.z - at.z) >= 4;
-          ctx.record?.('home_route_leg', { from: here, position: at.clone(), destination: position,
-            waypoint: { x: waypoint.x, z: waypoint.z }, advanced, reason: moved.reason });
-          if (advanced) break;
-        }
-        if (!advanced) return await direct();
-      }
-      return await direct();
-    }
+    if (options.segmentFirst) return await walkGroundLegs(bot, scoped, position, goal, route, 'home');
     if (options.lateral) {
       const here = bot.entity.position;
       const dx = position.x - here.x, dz = position.z - here.z;
@@ -391,7 +505,11 @@ async function goNearOnce(bot, ctx, position, range, options) {
     // their full direct budget. 20s is the existing waypoint attempt cap.
     const far = Math.hypot(position.x - bot.entity.position.x, position.z - bot.entity.position.z) > 20;
     const result = await direct(far ? Math.min(20000, remaining()) : remaining());
-    if (result.ok || !['Timeout', 'path_timeout', 'no_progress', 'NoPath'].includes(result.reason)) return result;
+    if (result.ok || !/^(timeout|path_timeout|no_progress|not_arrived|nopath)$/i.test(result.reason)) return result;
+    if (dimensionOf(bot) === 'overworld' && !ctx.selfRescue && !bot.pathfinder?.movements?.companionWalkOnly
+      && shore.waterContact(bot, true)) {
+      return await walkGroundLegs(bot, scoped, position, goal, route, 'travel', result);
+    }
     for (let leg = 0; leg < 6 && remaining() > 0; leg += 1) {
       const here = bot.entity.position;
       const dx = position.x - here.x;
@@ -401,15 +519,25 @@ async function goNearOnce(bot, ctx, position, range, options) {
       const step = 16 / flat;
       const waypoint = new goals.GoalNearXZ(here.x + dx * step, here.z + dz * step, 3);
       const before = here.clone();
-      const moved = await attempt(waypoint, { timeoutMs: Math.min(20000, remaining()), arrived: () => true });
-      if (bot.entity.position.distanceTo(before) < 4) return moved.ok ? fail('leg_blocked') : moved;
+      const guarded = dimensionOf(bot) === 'overworld' && !ctx.selfRescue && !bot.pathfinder?.movements?.companionWalkOnly;
+      const cost = guarded && shore.routeCost(bot, goal, before);
+      const moved = await attempt(waypoint, { timeoutMs: Math.min(20000, remaining()), ...(guarded ? {} : { arrived: () => true }) });
+      if (guarded) {
+        if (shore.waterContact(bot, true) && (!moved.ok || !shore.steadyGround(bot))) {
+          return await walkGroundLegs(bot, scoped, position, goal, route, 'travel', moved);
+        }
+        const dry = moved.ok && await shore.settleDry(bot, scoped.signal);
+        if (!dry || !shore.progress(cost, shore.routeCost(bot, goal, bot.entity.position)).closer) {
+          return moved.ok ? fail('leg_blocked') : moved;
+        }
+      } else if (bot.entity.position.distanceTo(before) < 4) return moved.ok ? fail('leg_blocked') : moved;
     }
     return await direct();
   } catch (error) {
     // Native cancellation can acknowledge after our own deadline. The root
     // owner still decides cancellation; never relabel it as our timeout.
     if (ctx.signal?.aborted) throw abortError(ctx.signal);
-    if (expiry.signal.aborted) return fail('path_timeout');
+    if (expiry.signal.aborted) return fail('path_timeout', route.shoreHandled ? { shoreHandled: true, destinationUnconfirmed: true } : {});
     throw error;
   } finally {
     clearTimeout(timer);
@@ -1400,6 +1528,6 @@ async function surface(bot, ctx, { targetY } = {}) {
 module.exports = {
   withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight,
   drainPocket,
-  recentre, surface, underground, openSky, localSurfaceY, isHomeTarget, originFailure, unstick, nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, gatherClimbBlocks, digStairsUp, digStairsDown, goTo, goNear, goToDig, withinReach, digBlock, collectDrops, countItems, eat, pickFood, attack, directStep, fleeFrom,
+  recentre, surface, underground, openSky, localSurfaceY, isHomeTarget, routeOrigin, originFailure, unstick, nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, gatherClimbBlocks, digStairsUp, digStairsDown, goTo, goNear, goToDig, withinReach, digBlock, collectDrops, countItems, eat, pickFood, attack, directStep, fleeFrom,
   equipBestWeapon, haltBody, weaponScore, droppedItemName, RISKY_FOODS, consumeHeldUntil,
 };

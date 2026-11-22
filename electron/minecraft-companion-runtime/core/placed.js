@@ -15,7 +15,10 @@ function installPlacedMemory(bot, { keepMs = KEEP_MS, now = Date.now } = {}) {
   const original = bot.placeBlock;
   const wrapped = function placeBlock(reference, face, ...rest) {
     try {
-      if (reference?.position && face) placed.set(posKey(reference.position.plus(face)), now());
+      if (reference?.position && face) {
+        const key = posKey(reference.position.plus(face));
+        placed.set(key, { at: now() });
+      }
     } catch { /* never in the way of placing */ }
     return original.call(this, reference, face, ...rest);
   };
@@ -23,14 +26,27 @@ function installPlacedMemory(bot, { keepMs = KEEP_MS, now = Date.now } = {}) {
   bot.placeBlock = wrapped;
   bot.companionPlacedRecently = (position) => {
     const key = posKey(position);
-    const at = placed.get(key);
-    if (at === undefined) return false;
-    if (now() - at > keepMs) { placed.delete(key); return false; }
+    const entry = placed.get(key);
+    if (!entry) return false;
+    if (!entry.temporary && now() - entry.at > keepMs) { placed.delete(key); return false; }
     return true;
+  };
+  // An explicit temporary placement shares the ordinary placement ledger.
+  // Keep only the server-confirmed block state and forget it after removal or
+  // a change by someone else. An interrupted crossing may retry cleanup.
+  bot.companionTemporaryBlocks = {
+    remember(block) {
+      const key = posKey(block.position);
+      const entry = placed.get(key);
+      if (entry) entry.temporary = { position: block.position, name: block.name, stateId: block.stateId };
+    },
+    list: () => [...placed.values()].flatMap(entry => entry.temporary ? [entry.temporary] : []),
+    forget: (position) => placed.delete(posKey(position)),
   };
   return () => {
     if (bot.placeBlock === wrapped) bot.placeBlock = original;
     delete bot.companionPlacedRecently;
+    delete bot.companionTemporaryBlocks;
   };
 }
 

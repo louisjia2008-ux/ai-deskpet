@@ -31,6 +31,7 @@ const LEARN_TTL = { mine_danger: 24 * 60 * MINUTE, rejected_site: 6 * 60 * MINUT
   no_sheep: 45 * MINUTE, hard_route: 30 * MINUTE, lava_pool: 10 * MINUTE };
 const TTL = 90 * MINUTE;
 const MAX_ENTRIES = 128;
+const MAX_DESTINATIONS = 32;
 
 function position(p) {
   return p && ['x', 'y', 'z'].every((axis) => Number.isFinite(p[axis]) && Math.abs(p[axis]) <= 30_000_000)
@@ -41,7 +42,7 @@ const reasonCode = (value) => typeof value === 'string'
   ? (value.slice(0, 80).match(/^[a-z][a-z_0-9-]*/i)?.[0] || 'failed').toLowerCase() : 'failed';
 
 function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, stallMs = 45 * MINUTE,
-  helpIntervalMs = 60 * MINUTE, helpTimeoutMs = 20_000, atHome = () => false } = {}) {
+  helpIntervalMs = 60 * MINUTE, helpTimeoutMs = 20_000, atHome = () => false, playerProtected = () => false } = {}) {
   let saved = {};
   try { saved = store?.load() || {}; } catch { /* start with no lessons */ }
   const states = new Map();
@@ -51,14 +52,30 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
   const completed = new Map();
   let lastProof = now();
   let lastContext = null;
+  let transferring = false;
   const emit = (type, fields) => { try { onEvent({ type, at: now(), ...fields }); } catch { /* observers do not own the body */ } };
-  const targets = createTargetMemory({ now, load: saved.targets, onChange: persist, emit, protectedTarget: atHome });
+  const transfers = new WeakMap();
+  const targets = createTargetMemory({ now, load: saved.targets, onChange: () => { if (!transferring) persist(); }, emit,
+    protectedTarget: (p, dimension) => atHome(p, dimension) || playerProtected(p, dimension) });
+  const destinations = targets.scope();
+  function loadedDestinations(items) {
+    if (!Array.isArray(items)) return [];
+    return items.slice(-MAX_DESTINATIONS).flatMap((item) => {
+      const p = !item?.revoked && position(item?.position);
+      if (!p) return [];
+      try {
+        const restored = destinations.capture({ ...item, entity: item.target, position: p, witness: () => item.witness }, item.reason);
+        return restored?.key === item.key ? [restored] : [];
+      } catch { return []; }
+    });
+  }
   for (const e of Array.isArray(saved.states) ? saved.states.slice(-MAX_ENTRIES) : []) {
     if (typeof e?.key === 'string' && e.key.length <= 150 && Object.hasOwn(LADDERS, e.task) && e.until > now()
       && Number.isInteger(e.index) && e.index >= 0 && e.index <= LADDERS[e.task].length) {
       states.set(e.key, { key: e.key, task: e.task, index: e.index, count: Math.max(0, Math.min(LIMIT, e.count | 0)),
         until: Math.min(e.until, now() + TTL), failed: reasonCode(e.failed), retryAt: Math.min(e.retryAt || 0, now() + 10 * MINUTE),
-        fresh: e.fresh === true, revision: Number.isSafeInteger(e.revision) ? e.revision : 0 });
+        fresh: e.fresh === true, revision: Number.isSafeInteger(e.revision) ? e.revision : 0,
+        destinations: loadedDestinations(e.destinations) });
     }
   }
   for (const [key, at] of Object.entries(saved.asked || {})) {
@@ -98,10 +115,10 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
     states.delete(c.key);
     return { task: c.task, key: c.key, index: 0, count: 0, until: now() + TTL, revision: 0 };
   }
-  function put(e) {
+  function put(e, flush = true) {
     states.delete(e.key);
     states.set(e.key, e);
-    persist();
+    if (flush) persist();
   }
   function plan(task, input) {
     const c = context(task, input);
@@ -195,18 +212,45 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
     return result;
   }
 
-  function outcome(p, result, { threshold = LIMIT, valid = () => true, learn = null } = {}) {
+  function finishDestinations(e) {
+    const witnesses = new Map();
+    for (const item of e.destinations || []) if (!item.revoked) witnesses.set(item.key, item);
+    delete e.destinations;
+    transferring = true;
+    try {
+      for (const item of witnesses.values()) transfers.set(item, destinations.handoff(item, e.task));
+    } finally {
+      transferring = false;
+      persist();
+    }
+  }
+
+  function outcome(p, result, { threshold = LIMIT, valid = () => true, learn = null, observations = [] } = {}) {
     if (!valid() || !result || result.waited || ['aborted', 'self_stuck'].includes(result.reason)) return result;
-    if (result.sourceHandled && (!result.ok || result.adaptFailure || result.adaptationExhausted)) return result;
     const e = entry(p);
     // Do not let late/cancelled outcomes change a newer decision.
     if (e.index !== p.index || e.revision !== p.revision) return { ...result, sourceHandled: true };
+    if (observations.length) {
+      let pendingTargets = (e.destinations || []).filter(item => !item.revoked);
+      for (const item of observations) {
+        if (item.reached) pendingTargets = pendingTargets.filter(prior => prior.key !== item.key);
+        else if (!item.revoked) pendingTargets.push(item);
+      }
+      e.destinations = pendingTargets.slice(-MAX_DESTINATIONS);
+    }
+    if (result.sourceHandled && (!result.ok || result.adaptFailure || result.adaptationExhausted)) {
+      if (observations.length) put(e);
+      return result;
+    }
     lastContext = p;
     helpEffect(p, result);
     if (result.ok && !result.adaptFailure) {
       if (result.progress !== false) {
         lastProof = now();
         if (e.count) { e.count = 0; put(e); }
+        else if (observations.length) put(e);
+      } else if (observations.length) {
+        put(e);
       }
       return { ...result, sourceHandled: true };
     }
@@ -227,17 +271,19 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
       e.index = Math.min(LADDERS[p.task].length, e.index + 1);
       e.revision += 1;
       e.count = 0;
-      if (!LADDERS[p.task][e.index]) {
+      const finished = !LADDERS[p.task][e.index];
+      if (finished) {
         e.fresh = false;
         e.retryAt = now() + 5 * MINUTE;
         e.until = e.retryAt;
       }
-      put(e);
+      put(e, !finished);
       emit('adaptation_switch', { ...fields, from: p.method, to: LADDERS[p.task][e.index] || FALLBACK, reason, failures });
-      if (!LADDERS[p.task][e.index]) {
+      if (finished) {
         ask(p, e, 'ladder_exhausted');
         adaptationExhausted = exhaustion({ ...p, retryAt: e.retryAt }, p.method, reason);
         emit('adaptation_exhausted', { ...fields, ...adaptationExhausted });
+        finishDestinations(e);
       }
     } else {
       e.count = failures;
@@ -297,7 +343,21 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
         const p = plan(task, input);
         if (!valid()) return { ok: false, reason: 'aborted' };
         if (p.method === FALLBACK) return defer(p);
-        return outcome(p, await execute(p.method, p), { ...options, valid });
+        const observations = [];
+        const observeDestination = (spec, result) => {
+          if (!valid()) return null;
+          const item = destinations.capture(spec, result.reason);
+          if (!item) return null;
+          if (result.ok) item.reached = true;
+          observations.push(item);
+          return () => {
+            item.revoked = true;
+            const undo = transfers.get(item);
+            if (undo) return undo();
+            persist();
+          };
+        };
+        return outcome(p, await execute(p.method, p, observeDestination), { ...options, valid, observations });
       } };
   }
   return { plan, scope, promote, teach, avoids, reply, poll, defer, targets, pruneHome,
