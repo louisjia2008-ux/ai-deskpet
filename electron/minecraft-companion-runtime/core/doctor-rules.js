@@ -1,25 +1,27 @@
 // R1 detector thresholds live here. Time values are elapsed milliseconds.
-// Calibrated on the six development cases; each condition requires evidence of
-// the symptom itself (e.g. a failed approach is distinct from a failed chase).
+// Each condition requires evidence of the symptom itself. For example, a
+// failed approach is distinct from a failed chase.
 const DOCTOR_RULE_THRESHOLDS = Object.freeze({
-  // Three failures permit an ordinary attempt and retry. An eight-second
-  // minimum ignores the immediate fallbacks of a single search.
-  D2: Object.freeze({ count: 3, windowMs: 135_000, minimumMs: 8_000, radius: 8, maxGroups: 48, maxFailures: 12 }),
-  // A sequence of instantaneous planner calls alone is weak evidence.
-  D3: Object.freeze({ count: 4, minimumMs: 25_000, windowMs: 165_000, maxSteps: 32 }),
-  // Enough room for local reroutes, but require repeat visits after departure.
-  D4: Object.freeze({ windowMs: 300_000, minimumMs: 75_000, radius: 6, maxDiameter: 48,
-    repeats: 4, shoreRepeats: 3, maxVisits: 48 }),
-  // A half daylight cycle with work attempted and no completed work.
-  D5: Object.freeze({ daylightMs: 300_000, maxSampleGapMs: 45_000, maxBuilds: 242 }),
-  // The dusk radius is the existing 48-block return threshold. Darkness
-  // alone needs 1.5 times that distance because a normal return takes time.
+  // Separate route legs, construction shortages and recovery retries.
+  D2: Object.freeze({ count: 3, windowMs: 135_000, minimumMs: 8_000, recoveryMinimumMs: 60_000,
+    shortageWindowMs: 180_000, shortagePlanMs: 30_000, radius: 8, maxGroups: 48, maxFailures: 12 }),
+  // Repeated requests need correlated unsuccessful executions or an already
+  // witnessed shortage. A planner poll alone does not establish a stall.
+  D3: Object.freeze({ count: 4, failedAttempts: 3, minimumMs: 25_000, windowMs: 165_000, maxSteps: 32 }),
+  // Preserve ordinary reroutes and vertical progress; require multiple observed returns.
+  D4: Object.freeze({ windowMs: 300_000, minimumMs: 75_000, radius: 6, verticalRadius: 3, maxDiameter: 48,
+    repeats: 4, homeFailures: 2, shoreRepeats: 3, maxVisits: 48 }),
+  // A five-minute daylight work interval, interrupted by confirmed progress.
+  D5: Object.freeze({ daylightMs: 300_000, maxSampleGapMs: 45_000, newAreaBlocks: 8, maxWorkReceipts: 256, maxTargets: 32 }),
+  // Confirm a departure across consecutive samples, or give a distant bot a
+  // minute and a half to make progress on its return or shelter.
   D6: Object.freeze({ duskTick: 10_800, nightTick: 12_542, dawnTick: 23_460,
-    duskDistance: 48, nightDistance: 72, growth: 12, minimumMs: 50_000,
-    windowMs: 120_000, maxSamples: 16 }),
+    duskDistance: 48, nightDistance: 72, growth: 12, legGrowth: 4, minimumMs: 50_000,
+    nightMs: 90_000, maxSampleGapMs: 45_000, evidenceMs: 120_000, mineDepth: 12, interruptions: 2,
+    departureSamples: 3, homeRadiusSlack: 2 }),
   D7: Object.freeze({ waitMs: 120_000 }),
   // Several completed select/yield pairs, excluding the first few fair retries.
-  D8: Object.freeze({ count: 5, windowMs: 600_000, maxCards: 24 }),
+  D8: Object.freeze({ count: 5, windowMs: 600_000, minWaitAttempts: 2, maxCards: 24 }),
 });
 
 const EXPECTED_FAILURES = new Set(['aborted', 'self_stuck', 'reserve_work_ended', 'waiting',
@@ -71,37 +73,84 @@ function failureReason(event) {
   return reason && !EXPECTED_FAILURES.has(reason) && !explicitWait(reason) ? reason : null;
 }
 
+function adaptationIdentity(event) {
+  return shortText(event.key) ?? [event.dimension, event.region, event.target]
+    .map(shortText).join(':');
+}
+
 function failureLocation(event, frame, build) {
   const reason = failureReason(event);
   if (!reason) return null;
   if (event.type === 'home_route_leg' && event.advanced === false) {
     const location = point(event.from || event.position);
-    return location && { reason, location, scope: 'home route' };
+    const destination = point(event.destination);
+    return location && { reason, location, scope: 'home route', key: destination && pointText(destination),
+      origin: true, provesWork: true };
   }
   if (event.type === 'target_failure') {
     const location = point(event.position);
-    return location && { reason, location, scope: shortText(event.goal) || shortText(event.behavior) || 'target',
-      exact: typeof event.target === 'string' && Boolean(point(event.target)) };
+    const scope = shortText(event.goal) || shortText(event.behavior) || 'target';
+    return location && { reason, location, scope,
+      key: shortText(event.key) || shortText(event.target), attemptAt: event.failureAt };
   }
   if (event.type === 'adaptation_attempt' && event.outcome === 'failure' && event.task !== 'goal') {
     const location = point(event.position);
-    return location && { reason, location, scope: shortText(event.task) || 'adaptation' };
+    return location && { reason, location, scope: shortText(event.task) || 'adaptation',
+      key: adaptationIdentity(event), provesWork: true, recovery: event.task === 'mine_hazard' };
   }
   if (event.type === 'behavior_finished' && event.ok === false && build) {
-    return { reason, location: build.position, scope: event.behavior, exact: true };
+    const shortage = reason === 'no_material';
+    const scope = shortText(event.behavior);
+    return { reason, location: build.position, scope, shortage,
+      key: shortage ? [build.what, scope, event.generation].join(':') : build.id };
   }
-  // Some old recordings only have the recovery action outcome. Restrict this
-  // inference to actions whose failure describes their own current location.
+  // These results describe the body's current position, not an action target.
   if (event.type === 'behavior_finished' && event.ok === false && event.behavior === 'home_escape') {
     const location = point(frame.context.position);
-    return location && { reason, location, scope: event.behavior };
+    return location && { reason, location, scope: event.behavior, origin: true, recovery: true };
   }
   return null;
 }
 
-function sameLocation(group, location, exact, radius) {
-  if (exact) return group.location.x === location.x && group.location.y === location.y && group.location.z === location.z;
-  return distance(group.location, location) <= radius;
+function sameFailure(group, failure, radius) {
+  return group.reason === failure.reason && group.scope === failure.scope && group.key === failure.key
+    && (!group.dimension || !failure.dimension || group.dimension === failure.dimension)
+    && distance(group.location, failure.location) <= radius
+    && (!Number.isFinite(group.location.y) || !Number.isFinite(failure.location.y)
+      || Math.abs(group.location.y - failure.location.y) <= radius);
+}
+
+function resolvedGroup(group, event, build, at) {
+  if (event.type === 'home_route_arrived') return group.scope === 'home route' || group.recovery;
+  if (event.type === 'self_stuck_escaped') return group.origin;
+  if (event.type === 'site_abandoned') return group.shortage;
+  if (event.type === 'adaptation_attempt' && event.outcome === 'success') {
+    return group.scope === event.task && group.key === adaptationIdentity(event);
+  }
+  if (event.type === 'target_reached') {
+    return group.key != null && group.key === (shortText(event.key) || shortText(event.target));
+  }
+  if (group.shortage && event.type === 'goal_done') return group.scope === 'goal:' + event.goal;
+  if (build && event.ok === true && at > group.lastAt) {
+    // Count repeated stock-outs of the same local construction job, even if
+    // earlier stock-outs were temporarily relieved by successful placement.
+    const expected = group.shortage ? group.confirmed && group.lastPosition : group.location;
+    return expected && group.scope === event.behavior && pointText(expected) === pointText(build.position);
+  }
+  return false;
+}
+
+function recordShortagePlan(group, event, frame, settings) {
+  if (!group.confirmed || frame.at - group.lastAt > settings.shortageWindowMs || event.type !== 'plan_step'
+    || event.behavior !== group.scope || event.generation !== group.generation || event.kind !== 'gather'
+    || !Number.isFinite(event.count)) return false;
+
+  const signature = JSON.stringify([shortText(event.key), shortText(event.for), event.count]);
+  if (group.plan?.signature !== signature) {
+    group.plan = { signature, first: mark(frame) };
+    group.retry = null;
+  }
+  return frame.at - group.plan.first.at >= settings.shortagePlanMs;
 }
 
 function repeatFailures() {
@@ -111,51 +160,59 @@ function repeatFailures() {
   return {
     ingest(event, frame, build) {
       const { at, context } = frame;
-      const arriving = event.type === 'home_route_arrived';
-      const recoveredTarget = event.type === 'target_reached' && point(event.position);
-      if (arriving || recoveredTarget || (build && event.ok === true)) {
-        groups = groups.filter((group) => !(arriving ? group.scope === 'home route'
-          : sameLocation(group, recoveredTarget || build.position, group.exact, settings.radius)));
-      }
-      groups = groups.filter((group) => at - group.lastAt <= settings.windowMs);
-      if (active && !groups.includes(active)) active = null;
-      if (frame.waiting) {
+      if (frame.inactive || frame.sleepingAtHome) {
         groups.length = 0;
         active = null;
         return null;
       }
+      groups = groups.filter((group) => at - group.lastAt <= group.windowMs && !resolvedGroup(group, event, build, at));
+      if (active && !groups.includes(active)) active = null;
+
       const failure = failureLocation(event, frame, build);
-      if (failure) {
-        const { reason, location, scope, exact } = failure;
-        let group = groups.find((row) => row.reason === reason && row.scope === scope && row.exact === exact
-          && sameLocation(row, location, exact, settings.radius));
+      if (failure && (!frame.waiting || failure.provesWork)) {
+        failure.dimension = shortText(event.dimension) || frame.dimension;
+        let group = groups.find((row) => sameFailure(row, failure, settings.radius));
         if (!group) {
-          group = { reason, location, scope, exact, first: mark(frame), entries: [] };
+          group = { ...failure, generation: event.generation, entries: [],
+            windowMs: failure.shortage ? settings.shortageWindowMs : settings.windowMs };
           append(groups, group, settings.maxGroups);
         }
-        trim(group.entries, at, settings.windowMs);
-        if (!group.entries.length) group.first = mark(frame);
-        // A target-memory event can report an extension of the same failure.
-        // failureAt identifies the original attempt in that case.
-        const attemptAt = event.type === 'target_failure' && Number.isFinite(event.failureAt) ? event.failureAt : at;
-        if (attemptAt !== group.attemptAt) {
-          append(group.entries, mark(frame), settings.maxFailures);
-          group.attemptAt = attemptAt;
+        trim(group.entries, at, group.windowMs);
+        const attemptAt = Number.isFinite(failure.attemptAt) ? failure.attemptAt : at;
+        if (!group.entries.some((entry) => entry.attemptAt === attemptAt)) {
+          append(group.entries, { ...mark(frame), attemptAt }, settings.maxFailures);
+          group.lastAt = at;
+          group.lastPosition = failure.location;
+          group.plan = null;
+          group.retry = null;
+          const minimum = group.recovery ? settings.recoveryMinimumMs : settings.minimumMs;
+          group.confirmed = group.entries.length >= settings.count && at - group.entries[0].at >= minimum;
+          if (group.confirmed && !group.shortage) active = group;
+          else if (active === group) active = null;
         }
-        group.lastAt = at;
-        if (group.entries.length >= settings.count && at - group.first.at >= settings.minimumMs) active = group;
       }
-      if (!active) return null;
+      if (!frame.waiting && event.type === 'plan_step') {
+        for (const group of groups) {
+          if (group.shortage && recordShortagePlan(group, event, frame, settings)) {
+            group.retry = [group.plan.first, mark(frame)];
+            active = group;
+          }
+        }
+      }
+      if (!active || (active.shortage && !active.retry)) return null;
       const current = point(context.position);
-      if (event.type === 'doctor_observation' && current && !active.exact && distance(current, active.location) > 3 * settings.radius) {
+      if (event.type === 'doctor_observation' && active.origin && current && distance(current, active.location) > 3 * settings.radius) {
         groups = groups.filter((group) => group !== active);
         active = null;
         return null;
       }
-      const key = active.scope + ':' + active.reason + ':' + active.first.evidence;
-      return detect(key, active.first.at,
+      const first = active.entries[0];
+      const key = active.scope + ':' + active.reason + ':' + first.evidence;
+      const retries = active.retry || [];
+      const shortage = active.shortage ? ' and the same material request still remains unresolved' : '';
+      return detect(key, first.at,
         active.scope + ' has failed with ' + active.reason + ' at least ' + active.entries.length
-        + ' times near ' + pointText(active.location) + '.', [active.first, ...active.entries.slice(-settings.count)]);
+        + ' times near ' + pointText(active.lastPosition) + shortage + '.', [first, ...active.entries.slice(-settings.count), ...retries]);
     },
     reset() { groups = []; active = null; },
     size() { return groups.length + groups.reduce((count, group) => count + group.entries.length, 0); },
@@ -176,14 +233,16 @@ function planSignature(event, inventory) {
   if (!stepKey) return null;
   const output = shortText(event.for) || stepKey;
   const material = shortText(event.item) || stepKey;
-  const id = [shortText(event.behavior || event.goal) || '', shortText(event.kind) || 'step', stepKey, output].join(':');
+  const behavior = shortText(event.behavior || event.goal);
+  const generation = Number.isSafeInteger(event.generation) ? event.generation : null;
+  const id = JSON.stringify([behavior, generation, shortText(event.kind), stepKey, output]);
   const count = event.count;
   const stock = inventory ? observedItemCount(inventory, material) : null;
   const outputStock = inventory ? observedItemCount(inventory, output) : null;
   // Historic traces sometimes omit count. Inventory observations can also
   // supply concrete evidence that the needed material has not changed.
   if (!Number.isFinite(count) && !inventory) return null;
-  return { id, material, output, count, stock, outputStock };
+  return { id, behavior, generation, material, output, count, stock, outputStock };
 }
 
 function planProgress(previous, current) {
@@ -192,39 +251,89 @@ function planProgress(previous, current) {
     || (previous.outputStock !== null && current.outputStock !== null && previous.outputStock !== current.outputStock);
 }
 
+function samePlanOwner(signature, event) {
+  return signature.behavior === (event.behavior || event.goal)
+    && signature.generation === (event.generation ?? null);
+}
+
 function repeatedPlans() {
   const settings = DOCTOR_RULE_THRESHOLDS.D3;
   const steps = new Map();
   let inventory = null;
   let active = null;
+  let shortage = null;
+
+  function outcome(event, frame) {
+    const previous = [...steps.values()].find((step) => step.pending && samePlanOwner(step.signature, event));
+    if (!previous) return;
+    previous.pending = false;
+    if (event.ok === true) {
+      // The outcome alone is not a milestone, but it does break a streak of
+      // failures. Mining fronts and useful navigation often yield ok before
+      // the final count changes.
+      if (previous.failures || previous.interruptions) steps.delete(previous.signature.id);
+    } else if (event.ok === false && failureReason(event)) {
+      previous.failures++;
+      append(previous.outcomes, mark(frame), settings.failedAttempts);
+    } else if (event.ok === false && event.reason === 'aborted') {
+      previous.interruptions++;
+      append(previous.outcomes, mark(frame), settings.failedAttempts);
+    }
+  }
+
+  function observation(event) {
+    inventory = Object.fromEntries(Object.entries(event.inventory).slice(0, 256)
+      .filter(([, value]) => Number.isFinite(value)));
+    let completed = false;
+    for (const step of steps.values()) {
+      if (step.signature.position) continue;
+      const stock = observedItemCount(inventory, step.signature.material);
+      const outputStock = observedItemCount(inventory, step.signature.output);
+      if (planProgress(step.signature, { ...step.signature, stock, outputStock })) {
+        steps.delete(step.signature.id);
+        completed ||= outputStock > step.signature.outputStock || stock > step.signature.stock;
+      } else if (step.signature.stock === null) {
+        step.signature = { ...step.signature, stock, outputStock };
+      }
+    }
+    return completed;
+  }
+
   return {
     ingest(event, frame, build) {
       const { at } = frame;
       let completed = false;
       if (event.type === 'doctor_observation' && event.inventory && typeof event.inventory === 'object') {
-        // Retain only scalar counts and keep malformed inputs bounded too.
-        inventory = Object.fromEntries(Object.entries(event.inventory).slice(0, 256)
-          .filter(([, value]) => Number.isFinite(value)));
-        for (const step of steps.values()) {
-          if (step.signature.position) continue;
-          const stock = observedItemCount(inventory, step.signature.material);
-          const outputStock = observedItemCount(inventory, step.signature.output);
-          if (planProgress(step.signature, { ...step.signature, stock, outputStock })) {
-            steps.delete(step.signature.id);
-            completed ||= outputStock > step.signature.outputStock || stock > step.signature.stock;
-          } else if (step.signature.stock === null) {
-            step.signature = { ...step.signature, stock, outputStock };
-          }
+        completed = observation(event);
+      }
+      if (frame.inactive || frame.sleepingAtHome || GOAL_ENDED.has(event.type) || event.type === 'site_abandoned') {
+        steps.clear();
+        shortage = null;
+      }
+      if (event.type === 'behavior_finished') {
+        outcome(event, frame);
+        if (build && event.ok === true) {
+          steps.delete(build.id);
+          if (shortage && samePlanOwner(shortage, event)) shortage = null;
+        }
+        if (build && event.ok === false && failureReason(event) === 'no_material') {
+          shortage = { ...mark(frame), behavior: shortText(event.behavior), generation: event.generation ?? null };
         }
       }
-      if (event.type === 'goal_done' || event.type === 'site_abandoned') steps.clear();
-      if (build && event.ok === true) steps.delete(build.id);
-      for (const [id, step] of steps) {
-        if (at - step.lastAt > settings.windowMs) steps.delete(id);
+      if (event.type === 'home_route_arrived' || (event.type === 'home_route_leg' && event.advanced === true)) {
+        for (const [id, step] of steps) {
+          if (samePlanOwner(step.signature, event)) steps.delete(id);
+        }
       }
+      for (const [id, step] of steps) {
+        if (at - step.first.at > settings.windowMs) steps.delete(id);
+      }
+      if (shortage && at - shortage.at > settings.windowMs) shortage = null;
       if (active && steps.get(active.signature.id) !== active) active = null;
-      if (!frame.waiting && (event.type === 'plan_step' || (build && event.ok === false && failureReason(event)))) {
-        const signature = build ? { id: build.id, item: build.what, material: build.what, output: build.what,
+
+      const buildFailure = build && event.ok === false && failureReason(event);
+      if (!frame.waiting && (event.type === 'plan_step' || buildFailure)) {
+        const signature = buildFailure ? { id: build.id, material: build.what, output: build.what,
           stock: null, outputStock: null, position: build.position } : planSignature(event, inventory);
         if (signature) {
           let step = steps.get(signature.id);
@@ -233,18 +342,27 @@ function repeatedPlans() {
             if (active === step) active = null;
             step = null;
           }
-          if (!step) step = { first: mark(frame), attempts: 0, signature, marks: [] };
-          if (at - step.first.at > settings.windowMs && active !== step) {
-            step.first = mark(frame);
-            step.attempts = 0;
-            step.marks.length = 0;
+          if (!step) {
+            step = { first: mark(frame), attempts: 0, signature, marks: [], failures: 0, interruptions: 0, outcomes: [] };
           }
           step.signature = signature;
-          step.lastAt = at;
-          step.attempts += 1;
+          step.attempts++;
+          if (!buildFailure) {
+            for (const previous of steps.values()) {
+              if (samePlanOwner(previous.signature, event)) previous.pending = false;
+            }
+            step.pending = true;
+          }
+          if (buildFailure) step.failures++;
           append(step.marks, mark(frame), settings.count);
           boundedSet(steps, signature.id, step, settings.maxSteps);
-          if (step.attempts >= settings.count && at - step.first.at >= settings.minimumMs) active = step;
+          const buildingBlocked = !buildFailure && shortage && samePlanOwner(shortage, event)
+            && step.failures + step.interruptions >= settings.failedAttempts;
+          if (step.attempts >= settings.count && at - step.first.at >= settings.minimumMs
+            && (step.failures >= settings.failedAttempts || buildingBlocked)) {
+            step.shortage = buildingBlocked && shortage;
+            active = step;
+          }
         }
       }
       if (!active || frame.waiting) return { detection: null, completed };
@@ -252,183 +370,372 @@ function repeatedPlans() {
       const requested = Number.isFinite(signature.count) ? signature.count + ' ' : '';
       const plan = signature.position ? 'The same ' + signature.material + ' build at ' + pointText(signature.position)
         + ' has failed' : 'The plan has requested ' + requested + signature.material + ' for ' + signature.output;
+      const receipts = [active.first, ...active.marks, ...active.outcomes, ...(active.shortage ? [active.shortage] : [])]
+        .sort((a, b) => a.at - b.at || a.evidence - b.evidence);
       return { detection: detect(signature.id + ':' + active.first.evidence, active.first.at,
         plan + ' ' + active.attempts + ' times over ' + minutes(at - active.first.at)
-        + ' minutes without observable progress.', [active.first, ...active.marks]), completed };
+        + ' minutes with repeated unsuccessful attempts.', receipts), completed };
     },
-    reset() { steps.clear(); inventory = null; active = null; },
-    size() { return steps.size + Object.keys(inventory || {}).length
-      + [...steps.values()].reduce((count, step) => count + step.marks.length, 0); },
+    reset() { steps.clear(); inventory = null; active = null; shortage = null; },
+    size() { return steps.size + Object.keys(inventory || {}).length + Number(Boolean(shortage))
+      + [...steps.values()].reduce((count, step) => count + step.marks.length + step.outcomes.length, 0); },
   };
 }
 
 function routeLoop() {
   const settings = DOCTOR_RULE_THRESHOLDS.D4;
-  const shore = [];
-  const visits = [];
-  let lastRoutedAt = null;
+  const samples = [];
+  const homes = [];
+  const relocations = [];
+  const banks = [];
+  let homeDestination = null;
   let active = null;
-  function clear() { shore.length = 0; visits.length = 0; lastRoutedAt = null; active = null; }
 
-  function appendVisit(pos, frame, action) {
-    if (!pos) return;
-    const previous = visits.at(-1);
-    if (previous && distance(previous.pos, pos) <= settings.radius) return;
-    append(visits, { ...mark(frame), pos, action: shortText(action) }, settings.maxVisits);
-    // Keep visits from one local neighborhood. A long detour starts its own
-    // history even if the route eventually passes an old point again.
-    while (visits.some((visit) => distance(visit.pos, pos) > settings.maxDiameter)) visits.shift();
+  function near(a, b) {
+    return distance(a, b) <= settings.radius
+      && (!Number.isFinite(a.y) || !Number.isFinite(b.y) || Math.abs(a.y - b.y) <= settings.verticalRadius);
+  }
+
+  function clear(...tracks) {
+    for (const track of tracks) track.length = 0;
+    if (active && tracks.includes(active.track)) active = null;
+  }
+
+  function visit(track, position, frame, action, failed = false) {
+    if (!position) return;
+    if (active?.track === track && distance(active.first.position, position) > settings.maxDiameter) active = null;
+    const previous = track.at(-1);
+    if (previous && near(previous.position, position)) {
+      if (failed) previous.failure = mark(frame);
+      return;
+    }
+    append(track, { ...mark(frame), position, action, failure: failed ? mark(frame) : null }, settings.maxVisits);
+    // A move to a different neighborhood ends this local pattern.
+    while (track.some((row) => distance(row.position, position) > settings.maxDiameter)) track.shift();
+  }
+
+  function repeated(track) {
+    const first = track[0];
+    const last = track.at(-1);
+    if (track.length < settings.repeats + 2 || last.at - first.at < settings.minimumMs) return null;
+    let visits = 0;
+    const distinct = [];
+    for (let i = 2; i < track.length; i += 1) {
+      const row = track[i];
+      if (!track.slice(0, i - 1).some((earlier) => near(earlier.position, row.position))) continue;
+      visits += 1;
+      if (!distinct.some((earlier) => near(earlier.position, row.position))) distinct.push(row);
+    }
+    if (visits < settings.repeats || distinct.length < 2) return null;
+    return distinct;
+  }
+
+  function confirm(track, hits, summary, extra = []) {
+    if (!active || active.track !== track) active = { track, first: track[0] };
+    active.last = track.at(-1).at;
+    active.hits = [active.first, ...hits, ...extra, track.at(-1)];
+    active.summary = summary;
   }
 
   return {
     ingest(event, frame, progressed) {
-      if (frame.waiting || progressed || event.type === 'home_route_arrived') {
-        clear();
+      if (frame.inactive || frame.sleepingAtHome || frame.context.goal === 'survey_plan') {
+        clear(samples, homes, relocations, banks);
+        homeDestination = null;
         return null;
       }
-      trim(visits, frame.at, settings.windowMs);
-      trim(shore, frame.at, settings.windowMs);
+      for (const track of [samples, homes, relocations, banks]) trim(track, frame.at, settings.windowMs);
+      if (event.type === 'home_route_arrived') {
+        clear(samples, homes, banks);
+        homeDestination = null;
+      }
+      if (event.type === 'site_chosen') clear(relocations);
+      // Sampling alone cannot distinguish a small return into a mining shaft
+      // from a loop. Require 3D revisits and discard recent productive work.
+      if (frame.waiting || progressed || ['mine_loot', 'mine_frontier', 'mine_leave'].includes(event.type)) clear(samples);
+
       if (event.type === 'home_route_shore' && event.phase === 'alternate' && event.returns >= 2) {
         const bank = point(event.bank);
-        if (bank) append(shore, { ...mark(frame), bank }, settings.maxVisits);
-      }
-      if (event.type === 'home_route_leg' || event.type === 'adaptation_route') lastRoutedAt = frame.at;
-      if (event.type === 'home_route_leg') {
-        appendVisit(point(event.from), frame, event.behavior);
-        appendVisit(point(event.position), frame, event.behavior);
-      }
-      if (event.type === 'doctor_observation') {
-        appendVisit(point(event.position), frame, event.engine?.running || frame.context.goal);
-        if (active && visits.length === 1 && frame.at - active.seenAt > settings.minimumMs) active = null;
-      }
-      const shorelineLoop = shore.length >= settings.shoreRepeats
-        && shore.some((entry) => distance(shore[0].bank, entry.bank) > settings.radius)
-        && frame.at - shore[0].at >= settings.minimumMs;
-      let hits = 0;
-      const repeated = [];
-      const haveRoute = lastRoutedAt !== null && frame.at - lastRoutedAt <= settings.windowMs;
-      // Revisited cells must be separated by an out-and-back, not adjacent
-      // samples of jitter. For uninstrumented travel require action changes.
-      const haveDifferentActions = new Set(visits.map((visit) => visit.action).filter(Boolean)).size >= 2;
-      if ((haveRoute || haveDifferentActions) && visits.length >= settings.repeats + 2
-        && frame.at - visits[0].at >= settings.minimumMs) {
-        for (let i = 2; i < visits.length; i++) {
-          if (!visits.slice(0, i - 1).some(({ pos }) => distance(visits[i].pos, pos) <= settings.radius)) continue;
-          hits += 1;
-          if (!repeated.some(({ pos }) => distance(visits[i].pos, pos) <= settings.radius)) repeated.push(visits[i]);
+        if (bank) {
+          if (active?.track === banks && distance(active.first.position, bank) > settings.maxDiameter) active = null;
+          append(banks, { ...mark(frame), position: bank }, settings.maxVisits);
+          while (banks.some((row) => distance(row.position, bank) > settings.maxDiameter)) banks.shift();
+          if (banks.length >= settings.shoreRepeats && frame.at - banks[0].at >= settings.minimumMs
+            && banks.some((row) => !near(row.position, banks[0].position))) {
+            confirm(banks, banks.slice(-settings.shoreRepeats),
+              'The route has switched between nearby banks without breaking the repeated shore returns.');
+          }
+        }
+      } else if (event.type === 'home_route_leg' || event.type === 'home_relocation_leg') {
+        const isHomeRoute = event.type === 'home_route_leg';
+        const track = isHomeRoute ? homes : relocations;
+        const destination = point(event.destination);
+        if (isHomeRoute && destination) {
+          if (homeDestination && !near(homeDestination, destination)) clear(homes, banks);
+          homeDestination = destination;
+        }
+        visit(track, point(event.from), frame, null);
+        visit(track, point(event.position), frame, null, isHomeRoute && event.advanced === false);
+        const repeats = repeated(track);
+        if (repeats) {
+          const failures = track.map((row) => row.failure)
+            .filter((failure) => failure && frame.at - failure.at <= settings.windowMs);
+          if (!isHomeRoute || failures.length >= settings.homeFailures) {
+            confirm(track, repeats, 'Travel is repeatedly revisiting the same ' + repeats.length + ' local positions.', failures);
+          }
+        }
+      } else if (event.type === 'doctor_observation' && !frame.waiting) {
+        const action = shortText(event.engine?.running ?? frame.behavior ?? frame.context.goal);
+        visit(samples, point(event.position), frame, action);
+        const actions = new Set(samples.map((row) => row.action).filter(Boolean));
+        if (actions.size >= 2) {
+          const repeats = repeated(samples);
+          if (repeats) confirm(samples, repeats, 'Travel is repeatedly revisiting the same ' + repeats.length + ' local positions.');
         }
       }
-      if (shorelineLoop || (hits >= settings.repeats && repeated.length >= 2)) {
-        const samples = shorelineLoop ? shore : [visits[0], ...repeated];
-        if (!active) {
-          active = { first: samples[0], seenAt: frame.at, summary: shorelineLoop
-            ? 'The route has retried a small set of banks after repeatedly returning to them.'
-            : 'Travel is repeatedly revisiting the same ' + repeated.length + ' local positions.', samples };
-        }
-        active.seenAt = samples.at(-1).at;
-        active.samples = samples;
-      }
-      if (active && frame.at - active.seenAt > settings.windowMs) active = null;
-      return active && detect('loop:' + active.first.evidence, active.first.at, active.summary, active.samples);
+      if (active && (!active.track.length || frame.at - active.last > settings.windowMs)) active = null;
+      return active && detect('loop:' + active.first.evidence, active.first.at, active.summary, active.hits);
     },
-    reset: clear,
-    size() { return visits.length + shore.length; },
+    reset() { clear(samples, homes, relocations, banks); homeDestination = null; },
+    size() { return samples.length + homes.length + relocations.length + banks.length; },
   };
 }
 
 function daylightProgress() {
   const settings = DOCTOR_RULE_THRESHOLDS.D5;
-  let since = null, previous = null, elapsed = 0, homeMilestone = null;
+  const receipts = new Map();
+  const targets = new Map();
+  const pending = new Map();
+  let since = null;
+  let previous = null;
+  let homeMilestone = null;
   let working = false;
-  const built = new Map();
-  function clear() { since = null; previous = null; elapsed = 0; working = false; }
+  let waiting = false;
+  let search = null;
+
+  function clearClock() { since = previous = null; }
+  function clearGoal() {
+    clearClock();
+    working = waiting = false;
+    search = null;
+    pending.clear();
+    targets.clear();
+  }
+  function complete(id) {
+    if (receipts.has(id)) return false;
+    boundedSet(receipts, id, true, settings.maxWorkReceipts);
+    return true;
+  }
+  function observedProgress(event, frame) {
+    const inventory = event.inventory;
+    if (!inventory || typeof inventory !== 'object') return false;
+    const goal = frame.context.goal;
+    if (goal === 'stock_food' && !targets.has('doctor:food')) boundedSet(targets, 'doctor:food', null, settings.maxTargets);
+    if (goal === 'farm' || goal === 'harvest_wheat') {
+      for (const crop of ['wheat', 'wheat_seeds', 'bread']) {
+        if (!targets.has(crop)) boundedSet(targets, crop, null, settings.maxTargets);
+      }
+    }
+    let advanced = false;
+    for (const [item, previousCount] of targets) {
+      const count = item === 'doctor:food'
+        ? Object.entries(inventory).reduce((total, [name, quantity]) => total
+          + (/^(?:cooked_)?(?:beef|porkchop|chicken|mutton|rabbit|cod|salmon)$|^(?:bread|baked_potato|apple|carrot|mushroom_stew)$/.test(name)
+            && Number.isFinite(quantity) ? quantity : 0), 0)
+        : observedItemCount(inventory, item);
+      if (previousCount !== null && count > previousCount) advanced = true;
+      targets.set(item, count);
+    }
+    return advanced;
+  }
   return {
     progress(event, build, frame, planCompleted) {
       let advanced = MILESTONES.has(event.type) || planCompleted;
-      if (build && event.ok === true && build.what !== 'scaffold' && !built.has(build.id)) {
-        boundedSet(built, build.id, true, settings.maxBuilds);
-        advanced = true;
+      if (event.type === 'goal_set' || GOAL_ENDED.has(event.type) || event.type === 'stopped') clearGoal();
+      if (event.type === 'site_abandoned' || event.type === 'site_chosen') {
+        receipts.clear();
+        search = null;
+        advanced ||= event.type === 'site_chosen';
       }
-      if (event.type === 'site_abandoned') {
-        built.clear();
-        advanced = true;
+      if (event.type === 'plan_step') {
+        for (const value of [event.item || event.key, event.for]) {
+          const item = shortText(value);
+          if (item && !targets.has(item)) boundedSet(targets, item, null, settings.maxTargets);
+        }
       }
-      if (event.type === 'doctor_observation' && event.home?.anchor) {
-        const home = point(event.home.anchor);
+      const behavior = shortText(event.behavior);
+      if (behavior?.startsWith('goal:')) {
+        const positionKey = shortText(event.position) || shortText(event.plot);
+        const work = ['site_dig', 'site_fill', 'mine_loot', 'mine_ore'].includes(event.type)
+          || (event.type === 'farm' && ['plant', 'harvest', 'till'].includes(event.action));
+        if (work && positionKey) boundedSet(pending, behavior,
+          event.type + ':' + (event.action ?? '') + ':' + positionKey, settings.maxTargets);
+        if (event.type === 'behavior_finished') {
+          const receipt = pending.get(behavior);
+          pending.delete(behavior);
+          if (event.ok === true && receipt && complete(receipt)) advanced = true;
+          if (['crops_growing', 'no_available_plot', 'waiting_for_wheat', 'sheltering_until_daylight'].includes(event.reason)) {
+            waiting = true;
+          }
+        }
+        if (event.type === 'behavior_abandoned' || event.type === 'behavior_started') pending.delete(behavior);
+      }
+      if (build && event.ok === true && build.what !== 'scaffold' && complete(build.id)) advanced = true;
+      if (event.type === 'home_relocation_leg' && event.ok === true && !event.inWater) {
+        const from = point(event.from);
+        const to = point(event.position);
+        if (from && to) {
+          search ||= { origin: from, radius: 0 };
+          const radius = distance(search.origin, to);
+          if (radius > search.radius + settings.newAreaBlocks) {
+            search.radius = radius;
+            clearClock(); // New search area is progress for D5, and D4 still checks the path.
+          }
+        }
+      }
+      if (event.type === 'doctor_observation') {
+        const home = point(event.home?.anchor);
         const id = home && [pointText(home), event.home.usable === true, event.home.finished === true].join(':');
         if (id && id !== homeMilestone) advanced = true;
         homeMilestone = id;
+        if (observedProgress(event, frame)) advanced = true;
       }
-      if (advanced) clear();
+      if (advanced) clearClock();
+      if (['plan_step', 'build', 'farm', 'site_dig', 'site_fill', 'home_relocation_leg', 'explore_for'].includes(event.type)) waiting = false;
       working ||= event.type === 'plan_step' || event.type === 'build'
-        || (event.type === 'behavior_started' && event.behavior?.startsWith?.('goal:'));
+        || (event.type === 'behavior_started' && behavior?.startsWith('goal:'));
       return advanced;
     },
     ingest(event, frame, idle) {
       const { at, context } = frame;
       if (event.type !== 'doctor_observation') return undefined;
-      const eligible = working && !idle && event.isDay === true && !frame.waiting && (context.goal || context.card);
-      if (event.isDay !== true || frame.waiting || (previous && at - previous.at > settings.maxSampleGapMs)) {
-        since = null;
-        elapsed = 0;
-        previous = null;
-      }
-      if (!eligible) {
-        previous = null;
+      if (!working || idle || waiting || event.isDay !== true || frame.waiting || !context.goal) {
+        clearClock();
         return null;
       }
+      if (previous && at - previous.at > settings.maxSampleGapMs) clearClock();
       since ||= mark(frame);
-      if (previous) elapsed += at - previous.at;
       previous = mark(frame);
+      const elapsed = at - since.at;
       if (elapsed < settings.daylightMs) return null;
       return detect('daylight:' + since.evidence, since.at,
         (context.card || context.goal) + ' has spent ' + minutes(elapsed)
           + ' minutes working in daylight without completing a plan step or reaching a milestone.', [since, previous]);
     },
-    reset() { clear(); built.clear(); homeMilestone = null; },
-    size() { return built.size; },
+    reset() { clearGoal(); receipts.clear(); homeMilestone = null; },
+    size() { return receipts.size + targets.size + pending.size; },
   };
 }
 
 function distanceAtDusk() {
   const settings = DOCTOR_RULE_THRESHOLDS.D6;
-  const samples = [];
   let homeId = null;
-  function clear() { samples.length = 0; homeId = null; }
+  let prior = null;
+  let departure = [];
+  let late = null;
+  let shelterStarted = null;
+  let duskReturn = null;
+  let interrupted = [];
+  let lastLeg = null;
+  let lastMineAt = null;
+  function clearSamples() { prior = late = null; departure = []; }
+  function clear() {
+    clearSamples();
+    homeId = shelterStarted = duskReturn = lastLeg = lastMineAt = null;
+    interrupted = [];
+  }
+  function recent(witness, at, age = settings.evidenceMs) {
+    return witness !== null && at - witness.at <= age;
+  }
+  function isNightEvent(event) { return event.type === 'night' || event.type === 'night_rest'; }
   return {
     ingest(event, frame) {
-      if (frame.waiting) { clear(); return null; }
-      if (event.type !== 'doctor_observation') return undefined;
-      const pos = point(event.position);
-      const home = point(event.home?.anchor || frame.context.home?.anchor || frame.context.home);
+      const { at, context } = frame;
+      const home = point(event.home?.anchor || context.home?.anchor);
       const time = event.timeOfDay ?? frame.context.timeOfDay;
-      if (!home || !pos || !Number.isFinite(time) || time < settings.duskTick || time >= settings.dawnTick
-        || (event.dimension && !['overworld', 'minecraft:overworld'].includes(event.dimension))) {
+      const dimension = event.dimension ?? frame.dimension;
+      if (frame.inactive || !home || !Number.isFinite(time) || time < settings.duskTick || time >= settings.dawnTick
+        || (dimension && !['overworld', 'minecraft:overworld'].includes(dimension))) {
         clear();
         return null;
       }
       const id = pointText(home);
       if (homeId !== id) clear();
       homeId = id;
+      if (isNightEvent(event) && event.action === 'dusk_home') duskReturn = { ...mark(frame), behavior: event.behavior };
+      if (event.type === 'preempted' && recent(duskReturn, at) && duskReturn.behavior === event.behavior
+        && ['provision', 'hunt'].includes(event.by)) {
+        trim(interrupted, at, settings.evidenceMs);
+        append(interrupted, mark(frame), settings.interruptions);
+        duskReturn = null;
+      }
+      if (event.type === 'home_route_leg' || event.type === 'home_route_arrived') {
+        const destination = point(event.destination);
+        const pos = point(event.position);
+        const from = point(event.from);
+        if (destination && pos && distance(home, destination) <= (context.home?.size ?? 5) + settings.homeRadiusSlack) {
+          if (event.type === 'home_route_arrived') {
+            clear();
+            return null;
+          }
+          if (event.advanced === true && from && distance(home, pos) < distance(home, from)) {
+            lastLeg = { ...mark(frame), distance: distance(home, pos) };
+          }
+        }
+      }
+      if ((isNightEvent(event) && ['dig_in', 'dug_in', 'sleep'].includes(event.action))
+        || (event.type === 'behavior_started' && event.behavior === 'night_rest')) {
+        if (!recent(shelterStarted, at, settings.nightMs)) shelterStarted = mark(frame);
+      }
+      if (['mine_return', 'mine_progress', 'mine_ore', 'mine_loot'].includes(event.type)) lastMineAt = at;
+      if (event.type !== 'doctor_observation') return undefined;
+      const pos = point(event.position);
+      const mine = pos && pos.y <= home.y - settings.mineDepth
+        && (event.mining || (lastMineAt !== null && at - lastMineAt <= settings.evidenceMs));
+      const emergency = ['escape', 'breathe', 'recover_drops', 'defend', 'avoid'].includes(frame.behavior);
+      if (!pos || frame.waiting || mine || emergency || recent(shelterStarted, at, settings.maxSampleGapMs)) {
+        clearSamples();
+        return null;
+      }
       const current = { ...mark(frame), distance: distance(home, pos) };
-      trim(samples, frame.at, settings.windowMs);
-      append(samples, current, settings.maxSamples);
-      const earlier = samples.find((sample) => frame.at - sample.at >= settings.minimumMs
-        && current.distance - sample.distance >= settings.growth);
-      if (current.distance < settings.duskDistance) return null;
+      if (prior && at - prior.at > settings.maxSampleGapMs) clearSamples();
+      const growth = prior ? current.distance - prior.distance : 0;
+      if (growth < settings.legGrowth) departure = [current];
+      else append(departure, current, settings.departureSamples);
+      prior = current;
       const afterDark = event.isDay === false || (event.isDay !== true && time >= settings.nightTick);
-      if ((earlier && !afterDark) || (afterDark && current.distance >= settings.nightDistance)) {
-        const first = earlier || current;
+      const recentlyReturning = recent(lastLeg, at, settings.maxSampleGapMs);
+      trim(interrupted, at, settings.evidenceMs);
+      if (afterDark && current.distance >= settings.nightDistance && interrupted.length >= settings.interruptions
+        && recentlyReturning && current.distance - lastLeg.distance >= settings.growth) {
+        return detect('dusk:' + id, interrupted[0].at,
+          'The bot moved away from home after its dusk return was interrupted twice and is now '
+          + Math.round(current.distance) + ' blocks away after dark.', [...interrupted, lastLeg, current]);
+      }
+      if (current.distance >= settings.duskDistance && departure.length === settings.departureSamples && !recentlyReturning
+        && at - departure[0].at >= settings.minimumMs && current.distance - departure[0].distance >= settings.growth) {
+        const first = departure[0];
         return detect('dusk:' + id, first.at,
           'The bot is ' + Math.round(current.distance) + ' blocks from home '
           + (afterDark ? 'after dark' : 'at dusk')
-          + (earlier ? ' after moving ' + Math.round(current.distance - earlier.distance) + ' blocks farther away.' : '.'),
-        first === current ? [current] : [first, current]);
+          + ' after moving ' + Math.round(current.distance - first.distance) + ' blocks farther away.', departure);
+      }
+      if (afterDark && current.distance >= settings.nightDistance && !recentlyReturning && growth > -settings.legGrowth) {
+        late ||= current;
+        if (at - late.at >= settings.nightMs) {
+          return detect('dusk:' + id, late.at, 'The bot remains ' + Math.round(current.distance)
+            + ' blocks from home after dark without confirmed progress toward home or shelter.', [late, current]);
+        }
+      } else {
+        late = null;
       }
       return null;
     },
     reset: clear,
-    size() { return samples.length; },
+    size() {
+      return departure.length + interrupted.length
+        + [prior, late, shelterStarted, duskReturn, lastLeg, lastMineAt].filter(value => value !== null).length;
+    },
   };
 }
 
@@ -462,40 +769,60 @@ function cardSwitches() {
   const cycles = new Map();
   let selected = null;
   let active = null;
+
   function clear() { cycles.clear(); selected = null; active = null; }
+
   return {
     ingest(event, frame) {
       const { at } = frame;
-      if (event.type === 'autonomy_disabled') { clear(); return null; }
-      for (const [card, entries] of cycles) {
+      if (event.type === 'autonomy_disabled' || frame.inactive) { clear(); return null; }
+
+      const dawn = (event.type === 'doctor_observation' && event.isDay === true)
+        || (['night', 'night_rest'].includes(event.type) && event.action === 'dug_out');
+      for (const [key, entries] of cycles) {
         trim(entries, at, settings.windowMs);
-        if (!entries.length) cycles.delete(card);
+        if (!entries.length || (dawn && entries[0].night)) cycles.delete(key);
       }
-      if (active && (cycles.get(active.card)?.length ?? 0) < settings.count) active = null;
+      if (active && (cycles.get(active.key)?.length ?? 0) < settings.count) active = null;
+
       if (event.type === 'autonomy_choice' && typeof event.card === 'string') {
-        selected = { ...mark(frame), card: shortText(event.card), goal: shortText(event.goal) };
+        selected = { ...mark(frame), card: shortText(event.card), goal: shortText(event.goal), generation: null };
+      } else if (event.type === 'goal_set' && selected && event.goal === selected.goal) {
+        selected.generation = event.generation ?? null;
       } else if (GOAL_ENDED.has(event.type)) {
-        const matching = selected && (event.card ? event.card === selected.card : event.goal === selected.goal);
+        const matching = selected && (event.card ? event.card === selected.card : event.goal === selected.goal)
+          && (selected.generation === null || event.generation == null || event.generation === selected.generation);
         if (matching) {
-          if (event.type === 'goal_yielded' && !explicitWait(event.reason) && !frame.waiting) {
-            const entries = cycles.get(selected.card) || [];
-            append(entries, { ...mark(frame), selection: selected }, settings.count);
-            boundedSet(cycles, selected.card, entries, settings.maxCards);
-            if (entries.length >= settings.count && active?.card !== selected.card) {
-              active = { card: selected.card, first: entries[0].selection };
+          const waited = explicitWait(event.reason);
+          // A rest can be physically correct while its short retry budget causes
+          // the director to repeat an equivalent choice throughout one night.
+          const night = waited && frame.isDay === false && event.waits >= settings.minWaitAttempts
+            && event.waitMs > 0 && Number.isFinite(event.until) && event.until > at;
+          if (event.type === 'goal_yielded' && (night || (!waited && !frame.waiting
+            && event.reason !== 'waiting' && !Number.isFinite(event.waits)))) {
+            const key = selected.card + (night ? ':night' : ':blocked');
+            const entries = cycles.get(key) || [];
+            append(entries, { ...mark(frame), selection: selected, night }, settings.count);
+            boundedSet(cycles, key, entries, settings.maxCards);
+            if (entries.length >= settings.count && active?.key !== key) {
+              active = { key, first: entries[0].selection };
             }
           } else if (event.type === 'goal_done') {
-            cycles.delete(selected.card);
-            if (active?.card === selected.card) active = null;
+            for (const key of [selected.card + ':blocked', selected.card + ':night']) {
+              cycles.delete(key);
+              if (active?.key === key) active = null;
+            }
           }
           selected = null;
         }
       }
-      if (!active || frame.waiting) return null;
-      const entries = cycles.get(active.card);
-      return detect(active.card + ':' + active.first.evidence, active.first.at,
-        'The director has selected and yielded the ' + active.card + ' card at least ' + settings.count
-        + ' times in ' + minutes(settings.windowMs) + ' minutes.', [...entries.map((entry) => entry.selection), ...entries]);
+
+      if (!active) return null;
+      const entries = cycles.get(active.key);
+      const note = entries[0].night ? ' before the same night ended.' : ' in ' + minutes(settings.windowMs) + ' minutes.';
+      return detect(active.key + ':' + active.first.evidence, active.first.at,
+        'The director has selected and yielded the ' + active.first.card + ' card at least ' + settings.count
+        + ' times' + note, [...entries.map((entry) => entry.selection), ...entries]);
     },
     reset: clear,
     size() { return [...cycles.values()].reduce((count, entries) => count + entries.length, 0); },

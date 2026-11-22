@@ -46,6 +46,7 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
   let now = null;
   let context = emptyContext();
   let goalGeneration = null;
+  let behavior = null;
   let lastWaitAt = null;
   let nightSheltered = false;
   let observation = null;
@@ -61,6 +62,7 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
     recent.length = 0;
     context = emptyContext();
     goalGeneration = lastWaitAt = now = null;
+    behavior = null;
     nightSheltered = false;
     observation = null;
   }
@@ -84,6 +86,9 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
       context = { ...context, home: homeOf(event) || context.home };
     }
     if (event.type === 'behavior_finished' && WAIT_REASONS.has(event.reason)) lastWaitAt = now;
+    if (event.type === 'behavior_started') behavior = text(event.behavior);
+    if (['behavior_finished', 'behavior_abandoned'].includes(event.type) && event.behavior === behavior) behavior = null;
+    if (event.type === 'doctor_observation' && Object.hasOwn(event.engine || {}, 'running')) behavior = text(event.engine.running);
     if (['night', 'night_rest'].includes(event.type) && ['dug_in', 'dug_out'].includes(event.action)) {
       nightSheltered = event.action === 'dug_in';
     }
@@ -109,6 +114,7 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
       nightSheltered = false;
       observation = null;
       lastWaitAt = null;
+      behavior = null;
     }
     updateContext(event);
     if (observationEvent) {
@@ -126,12 +132,14 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
       };
     }
     const fresh = observation && now - observation.at <= D1.maxGapMs ? observation : null;
-    const waiting = context.goal === 'survey_plan' || Boolean(fresh && (!fresh.alive || fresh.paused || fresh.survey
-      || (context.goal === 'follow_owner' && fresh.following)
-      || (fresh.isDay === false && (fresh.rested || fresh.sleepingAtHome || nightSheltered
-        || (lastWaitAt !== null && now - lastWaitAt < D1.maxGapMs)))));
+    const inactive = context.goal === 'survey_plan' || Boolean(fresh && (!fresh.alive || fresh.paused || fresh.survey
+      || (context.goal === 'follow_owner' && fresh.following)));
+    const sleepingAtHome = fresh?.isDay === false && fresh.sleepingAtHome;
+    const waiting = inactive || Boolean(fresh?.isDay === false && (fresh.rested || sleepingAtHome || nightSheltered
+      || (lastWaitAt !== null && now - lastWaitAt < D1.maxGapMs)));
     const evidence = Number.isSafeInteger(event.doctorSequence) ? event.doctorSequence : (lineNumber ?? now);
-    const frame = { at: now, evidence, context, waiting, isDay: fresh?.isDay, dimension: fresh?.dimension };
+    const frame = { at: now, evidence, context, goalGeneration, behavior, inactive, sleepingAtHome,
+      waiting, isDay: fresh?.isDay, dimension: fresh?.dimension };
     const results = rules?.ingest(event, frame) || {};
     const stationaryResult = stationary.ingest(event, frame);
     const emitted = [];
