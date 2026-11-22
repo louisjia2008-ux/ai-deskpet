@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Vec3 } = require('vec3');
+const { goals } = require('mineflayer-pathfinder');
 const { createStarterHouse } = require('../core/blueprints/starterHouse');
 const { createHomesteadGoal } = require('../core/goals/homestead');
 const { createSelfStuck } = require('../core/self-stuck');
@@ -187,6 +188,53 @@ test('one animal with three blocked approaches sends the body out through the cl
   assert.equal((await escape.run(ctx)).ok, true);
   assert.equal(open, true);
   assert.ok(bot.entity.position.floored().equals(porch));
+});
+
+test('a native route arrival stays successful and home escape verifies the dry landing', async () => {
+  const start = new Vec3(0.5, 62, 0.5);
+  const end = new Vec3(30.5, 64, 0.5);
+  const bot = {
+    game: { dimension: 'overworld' },
+    entity: { position: start, isInWater: true, onGround: false },
+    blockAt(p) {
+      if (p.x < 10) return { name: 'water', boundingBox: 'empty' };
+      return p.y < 64 ? { name: 'sand', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' };
+    },
+    pathfinder: { async goto() { Object.assign(bot.entity, { position: end, isInWater: false, onGround: true }); } },
+  };
+  const tracker = bot.companionSelfStuck = createSelfStuck(bot);
+  const pathFailed = tracker.pathFailed;
+  let reviews = 0;
+  tracker.pathFailed = (...args) => { reviews += 1; return pathFailed(...args); };
+  tracker.force('route_origin_water');
+
+  const reached = await actions.goTo(bot, {}, new goals.GoalNearXZ(end.x, end.z, 2));
+  assert.equal(reached.ok, true);
+  assert.equal(reviews, 0);
+  tracker.moved();
+  assert.equal(tracker.state().reason, 'route_origin_water');
+
+  const records = [];
+  const escape = createHomeEscape({ bot, home: () => null, tracker,
+    actions: { unstick: () => assert.fail('an already verified dry landing needs no probe') } });
+  assert.equal((await escape.run({ record: (type, fields) => records.push({ type, ...fields }) })).ok, true);
+  assert.equal(tracker.state(), null);
+  assert.equal(records.at(-1).method, 'dry_ground');
+});
+
+test('a water rescue cannot release the tracker after swimming farther in water', async () => {
+  const bot = { entity: { position: new Vec3(0.5, 62, 0.5), isInWater: true, onGround: false },
+    blockAt: () => ({ name: 'water', boundingBox: 'empty' }) };
+  const tracker = createSelfStuck(bot);
+  tracker.force('route_origin_water');
+  const escape = createHomeEscape({ bot, home: () => null, tracker, actions: {
+    async unstick() {
+      bot.entity.position = new Vec3(17.5, 62, 0.5);
+      return { ok: true, moved: 'swam_ashore' };
+    },
+  } });
+  assert.equal((await escape.run({ record: () => assert.fail('there was no dry landing') })).reason, 'self_escape_unconfirmed');
+  assert.equal(tracker.state().reason, 'route_origin_water');
 });
 
 test('a waterfront sighting does not count as accessible wood across a river', () => {

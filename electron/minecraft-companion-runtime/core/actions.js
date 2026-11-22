@@ -192,6 +192,7 @@ async function goTo(bot, ctx, goal, options = {}) {
   }
   const before = !ctx.selfRescue && !ctx.nearDestination && bot.companionSelfStuck ? bot.entity.position.clone() : null;
   const done = (result) => {
+    if (result.ok) return result;
     const p = goal.pos || (Number.isFinite(goal.x) && Number.isFinite(goal.z)
       ? { x: goal.x, y: Number.isFinite(goal.y) ? goal.y : Math.floor(bot.entity.position.y), z: goal.z } : null);
     if (before) result = originFailure(bot, result, before, p);

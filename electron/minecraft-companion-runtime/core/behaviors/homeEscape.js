@@ -3,6 +3,7 @@
 const { BAND } = require('../brain');
 const defaultActions = require('../actions');
 const { safeStand, SIDES } = require('../home-topology');
+const { wet } = require('../dry-route');
 const { goals } = require('mineflayer-pathfinder');
 
 function createHomeEscape({ bot, home, tracker, actions = defaultActions }) {
@@ -44,13 +45,34 @@ function createHomeEscape({ bot, home, tracker, actions = defaultActions }) {
         }
         tracker.force('idle_exit_probe_failed');
       }
+      const stuck = tracker.state();
+      const waterOrigin = stuck?.reason === 'route_origin_water' ? stuck.position : null;
+      function outOfWater(walked) {
+        if (!waterOrigin || bot.entity.isInWater || bot.entity.onGround !== true) return false;
+        const position = bot.entity.position;
+        const feet = position.floored();
+        const confirmed = walked?.ok && ['swam_ashore', 'out_of_pool'].includes(walked.moved);
+        return (confirmed || position.distanceTo(waterOrigin) >= 2) && safeStand(p => bot.blockAt(p), feet)
+          && [-1, 0, 1].every(dy => !wet(bot.blockAt(feet.offset(0, dy, 0))));
+      }
+      function finish(method) {
+        tracker.release();
+        ctx.record('self_stuck_escaped', { method, position: bot.entity.position.floored() });
+        return { ok: true };
+      }
+      // Another survival action or an already-started route can put the body
+      // on the bank before this behavior is scheduled. Verify that landing.
+      if (outOfWater()) return finish('dry_ground');
       const before = bot.entity.position.clone();
       const walked = await actions.unstick(bot, rescue);
+      if (outOfWater(walked)) return finish('dry_ground');
       if (bot.entity.position.distanceTo(before) < 2) await actions.surface(bot, rescue);
+      if (waterOrigin) {
+        if (outOfWater(walked)) return finish('dry_ground');
+        return { ok: false, reason: walked.reason || 'self_escape_unconfirmed' };
+      }
       if (bot.entity.position.distanceTo(before) < 2) return { ok: false, reason: walked.reason || 'self_escape_unconfirmed' };
-      tracker.release();
-      ctx.record('self_stuck_escaped', { method: 'natural_route', position: bot.entity.position.floored() });
-      return { ok: true };
+      return finish('natural_route');
     },
   };
 }
