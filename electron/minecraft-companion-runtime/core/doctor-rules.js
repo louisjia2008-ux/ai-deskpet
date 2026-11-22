@@ -641,13 +641,15 @@ function distanceAtDusk() {
   let late = null;
   let shelterStarted = null;
   let protection = null;
+  let homeward = null;
+  let outboundTarget = null;
   let interrupted = [];
   let lastLeg = null;
   let lastMineAt = null;
   function clearSamples() { prior = late = null; departure = []; }
   function clear() {
     clearSamples();
-    homeId = shelterStarted = protection = lastLeg = lastMineAt = null;
+    homeId = shelterStarted = protection = homeward = outboundTarget = lastLeg = lastMineAt = null;
     interrupted = [];
   }
   function recent(witness, at, age = settings.evidenceMs) {
@@ -673,17 +675,31 @@ function distanceAtDusk() {
       if (homeId !== id) clear();
       homeId = id;
       const diggingShelter = isNightEvent(event) && event.action === 'dig_in';
-      if (duskHome || diggingShelter) protection = { ...mark(frame), behavior: event.behavior };
-      if (event.type === 'preempted' && recent(protection, at) && protection.behavior === event.behavior
-        && ['provision', 'hunt'].includes(event.by)) {
+      if (duskHome || diggingShelter) {
+        protection = { ...mark(frame), behavior: event.behavior, generation: event.generation, action: event.action };
+        homeward = outboundTarget = null;
+      }
+      const sameProtection = recent(protection, at) && protection.behavior === event.behavior
+        && protection.generation === event.generation;
+      if (event.type === 'preempted' && sameProtection && ['provision', 'hunt'].includes(event.by)) {
         trim(interrupted, at, settings.evidenceMs);
         append(interrupted, { ...mark(frame), intent: protection.evidence }, settings.interruptions);
         protection = shelterStarted = null;
       }
-      if ((event.type === 'behavior_finished' && protection?.behavior === event.behavior)
-        || (isNightEvent(event) && ['dug_in', 'sleep'].includes(event.action))) {
+      if (event.type === 'behavior_finished' && sameProtection) {
+        if (event.ok === true && protection.action === 'dusk_home') {
+          homeward = { ...mark(frame), behavior: protection.behavior, generation: protection.generation,
+            startedAt: protection.at, intent: protection.evidence };
+        }
         protection = null;
       }
+      if (event.type === 'target_selected' && recent(homeward, at) && homeward.behavior === event.behavior
+        && homeward.generation === event.generation) {
+        const position = point(event.position);
+        outboundTarget = position && distance(home, position) >= settings.nightDistance
+          ? { ...mark(frame), position } : null;
+      }
+      if (isNightEvent(event) && ['dug_in', 'sleep'].includes(event.action)) protection = homeward = outboundTarget = null;
       if (event.type === 'home_route_leg' || event.type === 'home_route_arrived') {
         const destination = point(event.destination);
         const pos = point(event.position);
@@ -729,6 +745,13 @@ function distanceAtDusk() {
           'The bot is ' + Math.round(current.distance) + ' blocks from home after dark after two return or shelter attempts were interrupted.',
           [...interrupted.flatMap(row => [{ evidence: row.intent }, row]), lastHomewardPoint, current]);
       }
+      if (afterDark && current.distance >= settings.nightDistance && growth >= settings.growth
+        && recent(homeward, at) && recent(outboundTarget, at)
+        && distance(pos, outboundTarget.position) <= (context.home?.size ?? 5) + settings.homeRadiusSlack) {
+        return detect('dusk:' + id, homeward.startedAt, 'The bot ended its dusk return to pursue a new target and is now '
+          + Math.round(current.distance) + ' blocks from home after dark.',
+        [{ evidence: homeward.intent }, homeward, outboundTarget, lastSample, current]);
+      }
       if (recent(shelterStarted, at, settings.maxSampleGapMs)) {
         late = null;
         departure = [current];
@@ -756,7 +779,8 @@ function distanceAtDusk() {
     reset: clear,
     size() {
       return departure.length + interrupted.length
-        + [prior, late, shelterStarted, protection, lastLeg, lastMineAt].filter(value => value !== null).length;
+        + [prior, late, shelterStarted, protection, homeward, outboundTarget, lastLeg, lastMineAt]
+          .filter(value => value !== null).length;
     },
   };
 }

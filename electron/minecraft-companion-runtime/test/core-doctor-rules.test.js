@@ -160,6 +160,19 @@ test('D6 gives a confirmed underground advance or local shelter time to succeed'
   assert.deepEqual(ofRule(rows, 'D6'), []);
 });
 
+test('D6 detects a new far target pursued after a successful dusk return', () => {
+  const home = { anchor: position(0), size: 5 };
+  const behavior = 'goal:homestead';
+  const rows = [[0, { ...observation, home, position: position(90), timeOfDay: 11_639 }],
+    [1, { type: 'night', action: 'dusk_home', behavior }],
+    [20, { type: 'behavior_finished', behavior, ok: true }],
+    [28, { type: 'target_selected', behavior, position: '135,64,0' }],
+    [30, { ...observation, home, position: position(52), timeOfDay: 12_239 }],
+    [60, { ...observation, home, position: position(133), timeOfDay: 12_839, isDay: false }]];
+  assert.deepEqual(ofRule(rows, 'D6')[0].evidence, [2, 3, 4, 5, 6]);
+  assert.deepEqual(ofRule(rows.slice(0, -1).concat([[60, { ...rows.at(-1)[1], position: position(28) }]]), 'D6'), []);
+});
+
 test('D5 treats farm edits, inventory gain and successful mining as steps and clears on task turnover', () => {
   const farm = { type: 'goal_set', goal: 'farm', generation: 1 };
   const start = { type: 'behavior_started', behavior: 'goal:farm', generation: 1 };
@@ -243,7 +256,7 @@ test('D2 through D8 bound their retained evidence under bursts of distinct tasks
     apply({ type: 'build', what: 'wall', behavior, position: '1,64,2' });
     apply({ type: 'goal_yielded', card, goal: card, reason: 'adaptation_exhausted' });
   }
-  assert.ok(doctor.size().rules <= 48 * 13 + 32 * 8 + 257 + 48 * 4 + 256 + 32 * 2 + 11 + 24 * 5 + 32);
+  assert.ok(doctor.size().rules <= 48 * 13 + 32 * 8 + 257 + 48 * 4 + 256 + 32 * 2 + 13 + 24 * 5 + 32);
   doctor.reset();
   assert.equal(doctor.size().rules, 0);
 });

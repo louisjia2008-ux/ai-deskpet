@@ -43,6 +43,8 @@ function createStationaryRule(onSegment) {
   let origin = null;
   let cards = new Set();
   let sheltered = false;
+  let diggingShelter = null;
+  let legacyShelter = null;
   let nightRest = null;
   let lastMining = null;
   let missing = 0;
@@ -59,11 +61,27 @@ function createStationaryRule(onSegment) {
     reset() {
       close();
       previous = nightRest = lastMining = null;
+      diggingShelter = legacyShelter = null;
       sheltered = false;
     },
     ingest(event, frame) {
-      if (['night', 'night_rest'].includes(event.type) && ['dug_in', 'dug_out'].includes(event.action)) {
-        sheltered = event.action === 'dug_in';
+      if (event.type === 'night' || event.type === 'night_rest') {
+        if (event.action === 'dig_in' && typeof event.behavior === 'string') {
+          diggingShelter = { at: frame.at, behavior: event.behavior.slice(0, 256), generation: event.generation };
+        }
+        if (event.action === 'dug_in') sheltered = true;
+        if (event.action === 'dug_out') {
+          sheltered = false;
+          diggingShelter = legacyShelter = null;
+        }
+      }
+      if (diggingShelter && event.behavior === diggingShelter.behavior && event.generation === diggingShelter.generation) {
+        if (event.type === 'behavior_finished' && event.ok === true && frame.at - diggingShelter.at <= D1.maxGapMs) {
+          // Early logs only had dig_in and the matching invocation's result.
+          // Hold the exemption to the confirmed burrow's observed position.
+          legacyShelter = { at: frame.at, position: null, dimension: null };
+        }
+        if (['behavior_finished', 'behavior_started', 'behavior_abandoned', 'preempted'].includes(event.type)) diggingShelter = null;
       }
       if (event.type === 'behavior_finished' && event.behavior === 'night_rest') {
         nightRest = event.reason === 'sheltering_until_daylight' ? frame.at : null;
@@ -76,17 +94,28 @@ function createStationaryRule(onSegment) {
       if (!position || !Number.isFinite(at)) {
         close();
         previous = null;
+        legacyShelter = null;
         missing += 1;
         return null;
       }
       const gap = previous && (at <= previous.at || at - previous.at > D1.maxGapMs);
       if (gap) missing += 1;
+      if (legacyShelter) {
+        const { position: shelterPosition, dimension, at: confirmed } = legacyShelter;
+        if (event.isDay !== false || event.sheltered != null || event.alive === false || gap
+          || (!shelterPosition && at - confirmed > D1.maxGapMs)
+          || (shelterPosition && (event.dimension !== dimension || distance(position, shelterPosition) >= D1.movementBlocks))) {
+          legacyShelter = null;
+        } else if (!shelterPosition) {
+          legacyShelter = { ...legacyShelter, position, dimension: event.dimension };
+        }
+      }
       const owner = point(event.ownerPosition);
       const following = frame.context.goal === 'follow_owner' && owner && previous?.owner
         && distance(owner, position) <= 3 && distance(owner, previous.owner) < 1;
       const homeRest = insideHome(frame.context.home, position) && (event.sleeping === true
         || (nightRest !== null && 0 <= at - nightRest && at - nightRest < D1.maxGapMs));
-      const nightShelter = event.isDay === false && ((event.sheltered ?? sheltered) || homeRest);
+      const nightShelter = event.isDay === false && ((event.sheltered ?? (sheltered || legacyShelter !== null)) || homeRest);
       const waiting = frame.context.goal === 'survey_plan' || event.survey === true || event.paused === true
         || following || nightShelter;
       const inventory = inventoryCounts(event.inventory);
@@ -110,7 +139,7 @@ function createStationaryRule(onSegment) {
     },
     finish: close,
     missing: () => missing,
-    size: () => Number(Boolean(origin)) + Number(Boolean(previous)),
+    size: () => [origin, previous, diggingShelter, legacyShelter].filter(value => value !== null).length,
   };
 }
 

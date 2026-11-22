@@ -71,6 +71,28 @@ test('D1 requires an inventory change for mining and treats outdoor sleeping as 
   assert.equal(d1(observe(doctor, 300_000, { isDay: false, sleeping: true, mining: 'stone' }))[0].severity, 'alert');
 });
 
+test('D1 recognizes a completed legacy burrow and resumes measuring after departure', () => {
+  const doctor = createDoctor();
+  const behavior = 'goal:homestead';
+  doctor.accept({ type: 'night', action: 'dig_in', behavior, generation: 1, at: 0 });
+  doctor.accept({ type: 'behavior_finished', behavior, generation: 1, at: 1000, ok: true });
+  for (let i = 1; i <= 12; i++) assert.deepEqual(d1(observe(doctor, i * 30_000, { isDay: false })), []);
+  for (let i = 13; i <= 18; i++) observe(doctor, i * 30_000, { isDay: false, position: { ...initial, x: 8 } });
+  assert.equal(d1(doctor.getStatus().active)[0].since, 390_000);
+});
+
+test('D1 does not infer a legacy shelter from an interrupted or mismatched invocation', () => {
+  for (const generation of [1, 2]) {
+    const doctor = createDoctor();
+    const behavior = 'goal:homestead';
+    doctor.accept({ type: 'night', action: 'dig_in', behavior, generation: 1, at: 0 });
+    if (generation === 1) doctor.accept({ type: 'preempted', behavior, generation: 1, at: 500, by: 'provision' });
+    doctor.accept({ type: 'behavior_finished', behavior, generation, at: 1000, ok: true });
+    for (let i = 1; i <= 11; i++) observe(doctor, i * 30_000, { isDay: false });
+    assert.equal(d1(doctor.getStatus().active)[0].severity, 'alert');
+  }
+});
+
 test('doctor retains bounded history and its public reports are detached from input and internal state', () => {
   const doctor = createDoctor();
   for (let n = 0; n < RECENT_LIMIT * 2; n += 1) {
