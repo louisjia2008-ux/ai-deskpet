@@ -67,6 +67,17 @@ test('survey placement uses a horizontal face for horizontal logs and rejects bo
   assert.ok(stationChoices(bot, step, new Set()).length > 0);
 });
 
+test('survey construction never chooses standing on tilled soil', () => {
+  const { bot, set } = scene();
+  const pos = new Vec3(0, 1, 0), soil = new Vec3(0, 0, 2), station = soil.offset(0, 1, 0);
+  const step = [{ pos, target: 'minecraft:oak_log[axis=y]' }];
+  const choices = () => stationChoices(bot, step, new Set());
+  assert.ok(choices().some(cell => cell.equals(station)));
+  set(soil, 'farmland');
+  assert.ok(!choices().some(cell => cell.equals(station)));
+  assert.equal(hitFor(bot, step, soil.offset(0.5, 0.9375, 0.5), new Set()), null);
+});
+
 test('survey irrigation refuses to place a source in an uncontained cell', () => {
   const { bot, set } = scene();
   const pos = new Vec3(0, 1, 0);

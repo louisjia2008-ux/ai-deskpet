@@ -15,7 +15,7 @@ const { isLog, isSurfaceLog } = require('./goals/gatherBlocks');
 const { isAir, naturalCover, plantPartner, isWaterlogged } = require('./natural-cover');
 const { blockTarget, watchDestination } = require('./target-recovery');
 const { accepts, pickItem, seal: sealMatch, isSealSoil, isSealRock, SANDSTONE } = require('./materials');
-const { complete, factsOf, failure, resultFrom, settleAction, waiting, waterRouteFailure, waterRouteTarget } = require('./action-result');
+const { complete, factsOf, failure, isComplete, resultFrom, settleAction, waiting, waterRouteFailure, waterRouteTarget } = require('./action-result');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
@@ -88,7 +88,7 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, purpose = 'gather', excl
   const approach = () => actions.goToDig(bot, ctx, block, { timeoutMs: 45000, ...(selectTarget ? { retryNoProgress: false } : {}) });
   const reach = spec ? await watchDestination(bot, ctx, spec, destination.observe, approach) : await approach();
   trace('mining_stance', reach, from);
-  if (!reach.ok || reach.wait) return remember(reach);
+  if (!isComplete(reach)) return remember(reach);
   const dig = await actions.digBlock(bot, ctx, bot.blockAt(block.position) || block);
   trace('dig', dig, { ...bot.entity.position });
   if (!dig.ok) return remember(dig);
@@ -682,7 +682,7 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, accept = () => 
     } finally {
       clearInterval(tracker);
     }
-    if (!result.ok || result.wait) return targets ? result : recordTarget(bot, ctx, result, nearby(target));
+    if (!isComplete(result)) return targets ? result : recordTarget(bot, ctx, result, nearby(target));
     ledger.clearOnSuccess(nearby(target));
     ledger.clearOnSuccess(nearby(target, 'hunt_far'));
     const before = actions.countItems(bot, dropMatch);
@@ -716,7 +716,7 @@ async function pickBerries(bot, ctx, { radius = 32, purpose = 'berry' } = {}) {
   const block = ripe[0];
   const before = actions.countItems(bot, (n) => n === 'sweet_berries');
   const moved = await actions.goToDig(bot, ctx, block, { timeoutMs: 30000 });
-  if (!moved.ok || moved.wait) return recordTarget(bot, ctx, moved, target(block.position));
+  if (!isComplete(moved)) return recordTarget(bot, ctx, moved, target(block.position));
   try {
     await bot.activateBlock(bot.blockAt(block.position));
   } catch (error) {

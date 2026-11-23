@@ -10,7 +10,8 @@ const { goals } = require('mineflayer-pathfinder');
 const actions = require('../core/actions');
 const { createAdaptation } = require('../core/adaptation');
 const { createBrain } = require('../core/brain');
-const { classifyReason, complete, createAttempt, failure, factsOf, resultFrom, waiting } = require('../core/action-result');
+const { createHomesteadGoal } = require('../core/goals/homestead');
+const { classifyReason, complete, createAttempt, failure, factsOf, isComplete, resultFrom, waiting } = require('../core/action-result');
 const { reasons } = require('../core/action-reasons');
 
 test('reason catalog covers literal failure producers with no duplicate codes or implicit classification', () => {
@@ -63,6 +64,35 @@ test('canonical completion and wait have only outcome fields', () => {
   assert.deepEqual(operation, { ok: true, progress: true });
   assert.deepEqual(factsOf(operation), { ate: 'bread' });
   assert.deepEqual(waiting('daylight'), { ok: true, wait: { reason: 'daylight', until: null } });
+  assert.equal(isComplete(complete(false)), true);
+  assert.equal(isComplete(waiting('daylight')), false);
+  assert.equal(isComplete(failure('still_below_surface')), false);
+});
+
+test('an exhausted dawn exit keeps the homestead bunker until the bot actually emerges', async () => {
+  // R3.2 seed 2: side_stairs fails, then digOut returns the do_other_work wait.
+  // The following log entry wrongly claimed dug_out while the body was at Y60.
+  const bunker = { top: { x: 0, y: 63, z: 0 } };
+  const bot = { entity: { position: new Vec3(0.5, 60, 0.5) }, companionSheltered: true };
+  const records = [];
+  const outcomes = [failure('still_below_surface'), waiting('adaptation_other_work', 20_000), complete()];
+  const goal = createHomesteadGoal({ bot, autonomous: true, skills: { digOut: async () => {
+    const outcome = outcomes.shift();
+    if (isComplete(outcome)) bot.entity.position.y = bunker.top.y;
+    return outcome;
+  } } });
+  goal.memory.bunker = bunker;
+  const ctx = { perceive: () => ({ isDay: true }), record: (type, data) => records.push({ type, ...data }) };
+  assert.equal((await goal.run(ctx)).reason, 'still_below_surface');
+  assert.deepEqual(await goal.run(ctx), waiting('adaptation_other_work', 20_000));
+  assert.equal(bot.entity.position.y, 60);
+  assert.equal(goal.memory.bunker, bunker);
+  assert.equal(bot.companionSheltered, true);
+  assert.deepEqual(records, []);
+  assert.equal(isComplete(await goal.run(ctx)), true);
+  assert.equal(goal.memory.bunker, null);
+  assert.equal(bot.companionSheltered, false);
+  assert.deepEqual(records, [{ type: 'night', action: 'dug_out' }]);
 });
 
 function pathBot({ wet = false } = {}) {

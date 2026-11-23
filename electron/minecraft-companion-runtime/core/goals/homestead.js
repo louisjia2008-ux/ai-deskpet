@@ -2,7 +2,7 @@
 // Choose a site, build a usable house through the material planner, and
 // confirm optional upgrades against the current world.
 
-const { complete: finished, createAttempt, factsOf, failure, resultFrom, waiting } = require('../action-result');
+const { complete: finished, createAttempt, factsOf, failure, isComplete, resultFrom, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
@@ -572,7 +572,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       case 'smelt': {
         const result = await skills.smelt(bot, ctx, { input: step.input, count: step.count,
           furnacePosition: house.furniture.furnace.position, memory: memory.furnace });
-        if (result.ok) memory.verified.furnace = true;
+        if (isComplete(result)) memory.verified.furnace = true;
         return result;
       }
       case 'hunt': {
@@ -1038,7 +1038,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       if (autonomous) {
         const result = await bedUpgrade(ctx, 'guestBed') || waiting('roof_not_ready_for_bed');
         if (result.facts?.target?.excluded) memory.guestBedRetryAt = Date.now() + 5 * 60_000;
-        return result.ok && !result.wait ? advance(result) : result;
+        return isComplete(result) ? advance(result) : result;
       }
       const state = ctx.perceive(), { inventory } = state;
       if (wantsGuestBed(state) && steps < 12) {
@@ -1054,7 +1054,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
             });
           } else if (step && step.kind !== 'gather') result = await runPlannerStep(ctx, step, null);
         }
-        if (result?.ok && !result.wait) return advance(result);
+        if (isComplete(result)) return advance(result);
         if (result?.wait || result?.kind === 'start' || result?.facts?.adaptation) return result;
       }
       memory.guestBedRetryAt = Date.now() + 5 * 60_000;
@@ -1106,7 +1106,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       }
       ctx.record('home_finish_step', { step: step.kind, material: step.key, for: 'torch', missing: hs.torches.length });
       const result = await runPlannerStep(ctx, step, null);
-      return result.ok && !result.wait ? advance(result) : result;
+      return isComplete(result) ? advance(result) : result;
     });
   }
 
@@ -1154,7 +1154,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (memory.house && feet.y === memory.house.anchor.y && insideRoom(feet) && supports(blockAt(below(feet)))) return null;
     const result = await actions.surface(bot, ctx);
     if (result?.progress === false) return null;
-    if (result) ctx.record('surface', { ok: result.ok });
+    if (result) ctx.record('surface', { ok: isComplete(result), reason: result.wait?.reason ?? result.reason });
     return result;
   }
 
@@ -1266,7 +1266,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const chosen = opts.selection ? n => n === opts.selection.item : match;
       const result = what === 'roof' && memory.house.variant === 'compact' && !memory.established
         ? resultFrom(await placeCompactRoof(ctx, p, chosen, placeTile), ctx, bot) : await placeTile();
-      if (result.ok && !result.wait && site.changed && posKey(p) === posKey(site.position)) {
+      if (isComplete(result) && site.changed && posKey(p) === posKey(site.position)) {
         memory.house.furniture[what] = site.changed;
         ctx.record('home_furniture_moved', { item: what, from: posKey(original), to: posKey(p) });
       }
@@ -1661,7 +1661,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     // Fall back to the usual exit route through natural terrain only. It
     // cannot break the home or someone else's blocks via pathfinding.
     const surfaced = await actions.surface?.(bot, rescue, { targetY: Math.max(memory.house.anchor.y, Math.floor(initial.y) + 3) });
-    if (surfaced?.ok && bot.entity.position.distanceTo(initial) >= 2) {
+    if (surfaced?.wait) return surfaced;
+    if (isComplete(surfaced) && bot.entity.position.distanceTo(initial) >= 2) {
       out = await walkOut(rescue);
       if (out.ok) return finish('surface');
       if (!insideRoom(bot.entity.position.floored()) && !memory.breach) return finish('surface');
@@ -1898,7 +1899,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       if (memory.recovery) {
         memory.recovery = false;
         ctx.record('recovery', { at: bot.entity.position.floored() });
-        await actions.unstick(bot, ctx);
+        const restored = await actions.unstick(bot, ctx);
+        if (restored?.wait) { memory.recovery = true; return restored; }
         const entrance = memory.house?.entrance;
         if (entrance && bot.entity.position.distanceTo(new Vec3(entrance.x, entrance.y, entrance.z)) > 16) {
           return actions.goNear(bot, ctx, new Vec3(entrance.x, entrance.y, entrance.z), 3, { timeoutMs: 120000 });
@@ -1908,7 +1910,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const result = await runOnce(ctx);
       // Waiting (for dusk, out the night) is not progress: counting it would
       // refill the stall budget of a step that keeps failing every morning.
-      if (result.ok && !result.wait) {
+      if (isComplete(result)) {
         memory.steps += 1;
         if (!factsOf(result).moved) memory.exploreStreak = 0;
       }
@@ -1927,7 +1929,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (!memory.house) {
       if (memory.bunker && state.isDay !== false) {
         const out = await skills.digOut(bot, ctx, memory.bunker);
-        if (out.ok) {
+        if (isComplete(out)) {
           ctx.record('night', { action: 'dug_out' });
           memory.bunker = null; bot.companionSheltered = false;
         }
@@ -2055,7 +2057,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     // Homeward travel may start before dark; shelter and the door use perception.
     const atNight = state.isDay === false;
     if (!atNight) { memory.bedRefusedAt = null; memory.doorPlug = false; }
-    bot.companionSheltered = false;
     // After a death the bot is no longer in its bunker: forget it.
     if (memory.bunker) {
       const top = memory.bunker.top;
@@ -2065,9 +2066,13 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (memory.bunker && !atNight) {
       ctx.record('night', { action: 'dig_out' });
       const out = await skills.digOut(bot, ctx, memory.bunker);
-      if (out.ok) { ctx.record('night', { action: 'dug_out' }); memory.bunker = null; }
+      if (isComplete(out)) {
+        ctx.record('night', { action: 'dug_out' });
+        memory.bunker = null; bot.companionSheltered = false;
+      }
       return out;
     }
+    bot.companionSheltered = false;
     // No shell to sleep in yet and out searching: back on the site's own
     // ground before dusk, rather than dig in on whatever rock the search
     // ended on (bare stone without a pickaxe gives no block to seal with).
@@ -2118,8 +2123,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         const cooked = await skills.smelt(bot, ctx, { input: raw[0], count: Math.min(raw[1], 8),
           furnacePosition: memory.house.furniture.furnace.position, memory: memory.furnace });
         memory.furnace.item = raw[0];
-        if (cooked.ok) memory.verified.furnace = true;
-        else retryAt.cook = Date.now() + 120000;
+        if (isComplete(cooked)) memory.verified.furnace = true;
+        else if (!cooked.wait) retryAt.cook = Date.now() + 120000;
         return cooked;
       }
     }

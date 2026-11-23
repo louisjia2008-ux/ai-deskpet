@@ -11,7 +11,8 @@ const supports = (b) => Boolean(b && b.boundingBox === 'block' && !isBed(b) && !
 
 function safeStand(read, p) {
   const v = new Vec3(p.x, p.y, p.z);
-  return supports(read(v.offset(0, -1, 0))) && clear(read(v)) && clear(read(v.offset(0, 1, 0)));
+  const floor = read(v.offset(0, -1, 0));
+  return supports(floor) && floor.name !== 'farmland' && clear(read(v)) && clear(read(v.offset(0, 1, 0)));
 }
 
 function homeContains(house, position) {

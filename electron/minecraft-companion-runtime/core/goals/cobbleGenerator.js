@@ -12,7 +12,7 @@
 // The only memory kept across runs is the site and the harvest count, which
 // counts only cobblestone seen regenerating in C and arriving in the inventory.
 
-const { factsOf } = require('../action-result');
+const { factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
@@ -185,8 +185,8 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
     await actions.goTo(bot, ctx, away, { timeoutMs: 10000, arrived: () => !trappedCell() });
     if (!trappedCell()) return { ok: true };
     const result = await actions.unstick(bot, ctx);
-    ctx.record('device_step_off', { from: key(cell), result: result.ok ? factsOf(result).moved : result.reason });
-    return trappedCell() ? { ok: false, reason: 'trapped_in_device' } : { ok: true };
+    ctx.record('device_step_off', { from: key(cell), result: isComplete(result) ? factsOf(result).moved : result.wait?.reason ?? result.reason });
+    return trappedCell() ? (result.wait ? result : { ok: false, reason: 'trapped_in_device' }) : { ok: true };
   }
 
   function inspect() {
@@ -359,7 +359,7 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
       }
       if (!s.lava) {
         const result = await targets.run(ctx, 'pour_lava', d.cells.lava, () => skills.pourLiquid(bot, ctx, d.cells.lava, 'lava'), { cells: d.seal });
-        if (result.ok) await sleep(500, ctx.signal);
+        if (isComplete(result)) await sleep(500, ctx.signal);
         return result;
       }
       return targets.run(ctx, 'stand_harvest', d.cells.stand, () => harvestOnce(ctx), { cells: [d.cells.cobble] });

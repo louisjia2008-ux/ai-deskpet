@@ -7,7 +7,7 @@
 // where the bot stands. Underground work (a branch mine) is left alone.
 // With no house and nothing to do (a task just ended), it digs in where it is.
 
-const { waiting, factsOf } = require('../action-result');
+const { waiting, factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
@@ -72,9 +72,11 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, p
         }
         ctx.record('night_rest', { action: 'dig_out' });
         const out = await skills.digOut(bot, ctx, bunker);
-        if (out.ok) ctx.record('night_rest', { action: 'dug_out' });
-        bunker = null;
-        bot.companionSheltered = false;
+        if (isComplete(out)) {
+          ctx.record('night_rest', { action: 'dug_out' });
+          bunker = null;
+          bot.companionSheltered = false;
+        }
         return out;
       }
       if (needsSeal(state)) {

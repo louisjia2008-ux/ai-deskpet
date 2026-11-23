@@ -139,6 +139,13 @@ function configureMovements(bot) {
     if (block.name?.endsWith('_bed') || below?.name.endsWith('_bed')) return 1000;
     return below && leaves.has(below.type) ? 25 : 0;
   });
+  const farmland = bot.registry.blocksByName.farmland;
+  if (farmland) movements.blocksCantBreak.add(farmland.id);
+  // Native drop moves check the takeoff level, so inspect every landing cell.
+  const neighbors = movements.getNeighbors;
+  movements.getNeighbors = function (node) {
+    return neighbors.call(this, node).filter(move => bot.blockAt(move.offset(0, -1, 0))?.name !== 'farmland');
+  };
   trackReturnPositions(bot, movements);
   installOpenDoorPassage(bot, movements);
   const protection = (block) => bot.companionPlayerBlock?.(block?.position) ? 100 : 0;

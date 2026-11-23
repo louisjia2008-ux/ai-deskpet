@@ -3,7 +3,7 @@
 const { BAND } = require('../brain');
 const mining = require('../mining');
 const actions = require('../actions');
-const { failure, resultFrom } = require('../action-result');
+const { failure, isComplete, resultFrom } = require('../action-result');
 
 function createMineRetreat({ bot, adaptation, enabled }) {
   function threat(state) {
@@ -45,8 +45,9 @@ function createMineRetreat({ bot, adaptation, enabled }) {
       const start = bot.entity.position.clone();
       return scope.run('mine_hazard', area, async (method) => {
         const exit = method === 'known_exit' ? await mining.leaveMine(bot, ctx, { mine }, actions) : null;
-        if (exit?.ok && bot.entity.position.distanceTo(start) >= 0.5) return { ...exit, progress: false };
-        if (method === 'known_exit' && exit) return exit.ok ? failure('mine_exit_not_arrived', {}, ctx, bot) : resultFrom(exit, ctx, bot);
+        if (exit?.wait) return exit;
+        if (isComplete(exit) && bot.entity.position.distanceTo(start) >= 0.5) return { ...exit, progress: false };
+        if (exit) return isComplete(exit) ? failure('mine_exit_not_arrived', {}, ctx, bot) : resultFrom(exit, ctx, bot);
         const surfaced = await actions.surface(bot, ctx, { targetY: mine.surfaceY });
         return surfaced && surfaced.progress !== false ? surfaced : failure('mine_exit_blocked', {}, ctx, bot);
       }, { learn: { kind: 'mine_danger', radius: 48 } });

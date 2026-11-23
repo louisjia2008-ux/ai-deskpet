@@ -4,7 +4,7 @@
 // does one thing: make or place fences, set the gate, lead an animal in, or
 // breed two adults.
 
-const { waiting } = require('../action-result');
+const { isComplete, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -149,7 +149,7 @@ function createRanchGoal({ bot, kind = 'cow', target = 3, size = 6, center = nul
     progress: () => memory.steps,
     async run(ctx) {
       const result = await runOnce(ctx);
-      if (result.ok && !result.wait) memory.steps += 1;
+      if (isComplete(result)) memory.steps += 1;
       return result;
     },
   };

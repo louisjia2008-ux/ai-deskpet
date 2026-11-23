@@ -1,7 +1,7 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
-const { failure, isRescueBehavior, resultFrom, waiting } = require('./action-result');
+const { failure, isComplete, isRescueBehavior, resultFrom, waiting } = require('./action-result');
 const { createFailureLedger } = require('./failure-ledger');
 
 const MINUTE = 60_000;
@@ -206,7 +206,7 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
     if (result.facts?.rescue && !isRescueBehavior(p.task)) return resultFrom(result, {});
     if (!valid() || result.wait || ['start', 'interrupted'].includes(result.kind)) return result;
     const e = entry(p);
-    const owned = fields => result.ok ? result : { ...result, facts: { ...result.facts, adaptation: { task: p.task, method: p.method, ...fields } } };
+    const owned = fields => isComplete(result) ? result : { ...result, facts: { ...result.facts, adaptation: { task: p.task, method: p.method, ...fields } } };
     // Do not let late/cancelled outcomes change a newer decision.
     if (e.index !== p.index || e.revision !== p.revision) return owned();
     failureLedger.stage(e.key, now() + TTL, observations);
@@ -216,7 +216,7 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
     }
     lastContext = p;
     helpEffect(p, result);
-    if (result.ok) {
+    if (isComplete(result)) {
       if (result.progress !== false) {
         lastProof = now();
         if (e.count) { e.count = 0; put(e); }

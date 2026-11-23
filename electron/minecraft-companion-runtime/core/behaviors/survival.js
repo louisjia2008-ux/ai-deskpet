@@ -3,7 +3,7 @@
 // goal while one of them wants the body and the goal re-plans afterwards.
 // Kept deliberately simple; hardening them is the next milestone.
 
-const { complete, waiting, factsOf } = require('../action-result');
+const { complete, waiting, factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
@@ -1130,7 +1130,8 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       if (typeof actions.underground === 'function' && typeof actions.surface === 'function' && actions.underground(bot)) {
         // A climb that fails still leaves whatever is in reach down here.
         ctx.record('provision', { action: 'surface' });
-        await actions.surface(bot, ctx);
+        const surfaced = await actions.surface(bot, ctx);
+        if (surfaced?.wait) return surfaced;
       }
       // Animals are visible out to about 100 blocks; go for the nearest one seen.
       const near = feeding();
@@ -1299,7 +1300,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
         return waiting('enderman_shelter');
       }
       const out = await skills.digOut(bot, ctx, hidden.bunker);
-      hidden = null;
+      if (isComplete(out)) hidden = null;
       return out;
     },
   };

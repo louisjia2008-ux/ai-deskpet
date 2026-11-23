@@ -6,7 +6,7 @@
 // bread, or fetch what one of those needs (a hoe, seeds). With nothing ready
 // it waits, which neither spends nor refills the goal's stall budget.
 
-const { waiting } = require('../action-result');
+const { isComplete, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -46,7 +46,11 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
   function plots(ctx, targets) {
     if (!memory.center) memory.center = bot.entity.position.floored();
     const prior = memory.plots || [];
-    const keep = prior.filter(p => !['lost', 'blocked'].includes(stateAt(p)) && !unavailable(p, targets, false));
+    const keep = prior.filter(p => {
+      const state = stateAt(p);
+      if (p.hydrated === false && ['empty', 'untilled'].includes(state)) return false;
+      return !['lost', 'blocked'].includes(state) && !unavailable(p, targets, false);
+    });
     if (keep.length < plotCount) {
       const picks = farming.choosePlots(blockAt, memory.center, {
         count: plotCount - keep.length,
@@ -124,7 +128,7 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
       ctx.record('farm', { action: 'harvest', plot: posKey(ripe) });
       if (mode === 'harvest') memory.harvestPending = true;
       const result = await work('harvest', ripe);
-      if (result.ok) memory.harvested += result.gained || 0;
+      if (isComplete(result)) memory.harvested += result.gained || 0;
       return result;
     }
     const empty = byState('empty')[0];
@@ -172,7 +176,7 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     progress: () => memory.steps,
     async run(ctx) {
       const result = await runOnce(ctx);
-      if (result.ok && !result.wait) memory.steps += 1;
+      if (isComplete(result)) memory.steps += 1;
       return result;
     },
   };

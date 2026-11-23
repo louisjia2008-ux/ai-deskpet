@@ -5,6 +5,7 @@
 // goal can search for new terrain first, using the same cancellable body.
 
 const defaultActions = require('../actions');
+const { isComplete } = require('../action-result');
 const { goals } = require('mineflayer-pathfinder');
 const { abortError } = require('../confirm');
 const { countMatching } = require('../perception');
@@ -203,6 +204,7 @@ function createGatherBlocksGoal({
       const availableTargets = () => locate().filter(block => !ledger.skip(spec(block.position)));
       let candidates = availableTargets();
       if (candidates.length === 0 && findBeyondRange) candidates = await findBeyondRange(ctx, availableTargets);
+      if (candidates.wait) return candidates;
       if (candidates.length === 0) {
         return { ok: false, reason: candidates.reason || (findBeyondRange ? 'log_search_exhausted' : 'no_target_in_range') };
       }
@@ -213,7 +215,7 @@ function createGatherBlocksGoal({
       ctx.record('target_selected', { block: block.name, position: key, options: candidates.length });
 
       const reach = await actions.goToDig(bot, ctx, block);
-      if (!reach.ok || reach.wait) return recordTarget(bot, ctx, reach, spec(block.position));
+      if (!isComplete(reach)) return recordTarget(bot, ctx, reach, spec(block.position));
       const dig = await actions.digBlock(bot, ctx, block);
       if (!dig.ok) return recordTarget(bot, ctx, dig, spec(block.position));
       ledger.clearOnSuccess(spec(block.position));
@@ -261,11 +263,13 @@ function createGatherLogsGoal({ bot, count, walk = walkToSurface, recover = reco
       return { ok: false };
     });
     if (deadline) deadline += Date.now() - started;
-    return result?.ok !== false;
+    if (result?.wait) { memory.climbs--; return result; }
+    return !result || isComplete(result);
   }
 
   async function findBeyondRange(ctx, availableTargets) {
-    if (!await leavePit(ctx)) return Object.assign([], { reason: 'log_scout_trapped' });
+    const departure = await leavePit(ctx);
+    if (departure !== true) return departure || Object.assign([], { reason: 'log_scout_trapped' });
     deadline ??= Date.now() + SEARCH_TIME_MS;
     while (legs < SEARCH_LEGS && Date.now() < deadline) {
       if (ctx.signal?.aborted) throw abortError(ctx.signal);
@@ -298,7 +302,10 @@ function createGatherLogsGoal({ bot, count, walk = walkToSurface, recover = reco
       if (!result?.ok) memory.blocked = true;
       if (ctx.signal?.aborted) throw abortError(ctx.signal);
       if (bodyInDeepWater(bot)) continue;
-      if (!result?.ok && !await leavePit(ctx)) return Object.assign([], { reason: 'log_scout_trapped' });
+      if (!result?.ok) {
+        const departure = await leavePit(ctx);
+        if (departure !== true) return departure || Object.assign([], { reason: 'log_scout_trapped' });
+      }
       const candidates = availableTargets();
       if (candidates.length > 0) return candidates;
     }

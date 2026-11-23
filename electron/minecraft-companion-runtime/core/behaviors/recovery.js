@@ -9,7 +9,7 @@
 // They watch the brain's events and the bot's deaths; the brain still decides
 // who owns the body, so survival reflexes keep outranking them.
 
-const { waiting, factsOf } = require('../action-result');
+const { waiting, factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
@@ -189,7 +189,7 @@ function createRecovery({
       ctx.record('unstick', { why: stuckReason(state), at: state.position?.floored?.() || state.position });
       try {
         const result = await actions.unstick(bot, ctx);
-        if (!result?.ok) ctx.record('unstick_failed', { reason: result?.reason, around: surroundings(bot) });
+        if (!isComplete(result) && !result?.wait) ctx.record('unstick_failed', { reason: result?.reason, around: surroundings(bot) });
         return result;
       } finally {
         // Whatever happened, the goal gets a fresh look before the next attempt.
@@ -374,8 +374,10 @@ function createRecovery({
       }
       ctx.record('danger_bunker', { action: 'dig_out' });
       const out = await skills.digOut(bot, ctx, bunker.bunker);
-      bunker = null;
-      bot.companionSheltered = false;
+      if (isComplete(out)) {
+        bunker = null;
+        bot.companionSheltered = false;
+      }
       return out;
     },
   };

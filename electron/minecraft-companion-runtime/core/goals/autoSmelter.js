@@ -12,7 +12,7 @@
 //   6. otherwise                -> wait for the furnace, take the output chest's contents
 // The only memory kept across runs is the site and what was taken out.
 
-const { factsOf } = require('../action-result');
+const { factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
@@ -119,8 +119,8 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
     await actions.goTo(bot, ctx, away, { timeoutMs: 15000, arrived: () => !overPit() });
     if (!overPit()) return { ok: true };
     const result = await actions.unstick(bot, ctx);
-    ctx.record('device_step_off', { result: result.ok ? factsOf(result).moved : result.reason });
-    return overPit() ? { ok: false, reason: 'trapped_in_device' } : { ok: true };
+    ctx.record('device_step_off', { result: isComplete(result) ? factsOf(result).moved : result.wait?.reason ?? result.reason });
+    return overPit() ? (result.wait ? result : { ok: false, reason: 'trapped_in_device' }) : { ok: true };
   }
 
   function inspect() {
@@ -197,7 +197,7 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
         if (have(name) === 0) continue;
         const stored = await targets.run(ctx, `load_${slot}`, chest,
           () => skills.storeItems(bot, ctx, { position: chest, items: [{ name }] }));
-        if (stored.ok) memory.loaded[slot] += factsOf(stored).stored?.[name] || 0;
+        if (isComplete(stored)) memory.loaded[slot] += factsOf(stored).stored?.[name] || 0;
         return stored;
       }
       const wait = memory.lastCheck + SMELT_WAIT_MS - Date.now();
@@ -205,7 +205,7 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
       memory.lastCheck = Date.now();
       const result = await targets.run(ctx, 'take_output', d.cells.outChest,
         () => skills.takeItems(bot, ctx, { position: d.cells.outChest, itemMatch: (n) => n === output }));
-      if (result.ok && !result.wait) memory.taken += factsOf(result).taken || 0;
+      if (isComplete(result)) memory.taken += factsOf(result).taken || 0;
       ctx.record('smelter_output', { ok: result.ok, reason: result.reason, taken: memory.taken });
       return result;
     },

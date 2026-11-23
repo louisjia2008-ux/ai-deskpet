@@ -4,7 +4,7 @@ const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const { isSoft, canClearTerrain } = require('./site');
 const { targetsFor } = require('./failure-ledger');
-const { complete, createAttempt, failure, factsOf, rescueOf, resultFrom, waiting } = require('./action-result');
+const { complete, createAttempt, failure, factsOf, isComplete, rescueOf, resultFrom, waiting } = require('./action-result');
 
 const v = (p) => new Vec3(p.x, p.y, p.z);
 const dimensionOf = (bot) => String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '');
@@ -45,7 +45,7 @@ async function watchDestination(bot, ctx, spec, observe, attempt, { resolves = t
   const attempted = await (tracker ? tracker.target(run) : run());
   const result = actions.originFailure(bot, attempted, before, spec.position, ctx);
   if (ctx.signal?.aborted || result.wait || factsOf(result).target || bot.companionPlayerBlock?.(spec.position) || blockedOrigin()) return result;
-  if (result.ok) {
+  if (isComplete(result)) {
     if (resolves) observe(spec, result);
     return result;
   }
@@ -64,9 +64,12 @@ async function alternateStand(bot, ctx, actions, position, { avoid = () => false
   const from = bot.entity.position.floored(), p = v(position);
   const movements = bot.pathfinder?.movements;
   const stand = SIDES.flatMap(([dx, dz]) => [0, 1, -1].map(dy => p.offset(dx * distance, dy, dz * distance)))
-    .filter((q) => !q.equals(from) && !avoid(q) && !bot.companionPlayerBlock?.(q)
-      && bot.blockAt(q.offset(0, -1, 0))?.boundingBox === 'block'
-      && [q, q.offset(0, 1, 0)].every(c => { const b = bot.blockAt(c); return b && isSoft(b); }))
+    .filter((q) => {
+      if (q.equals(from) || avoid(q) || bot.companionPlayerBlock?.(q)) return false;
+      const floor = bot.blockAt(q.offset(0, -1, 0));
+      return floor?.boundingBox === 'block' && floor.name !== 'farmland'
+        && [q, q.offset(0, 1, 0)].every(c => { const b = bot.blockAt(c); return b && isSoft(b); });
+    })
     .sort((a, b) => a.distanceTo(from) - b.distanceTo(from))[0];
   if (!stand || !actions.goTo) return failure('no_alternate_stand', {}, ctx, bot);
   const canDig = movements?.canDig;

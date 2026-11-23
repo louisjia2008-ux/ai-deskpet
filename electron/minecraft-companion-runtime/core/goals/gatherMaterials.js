@@ -18,7 +18,7 @@
 // The only memory kept across runs is the chest contents last seen there,
 // what was left in the furnace and where the mine's front is.
 
-const { waiting, factsOf, failure, resultFrom } = require('../action-result');
+const { waiting, factsOf, failure, isComplete, resultFrom } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -378,8 +378,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     if (typeof actions.surface !== 'function' || surfaceRetryAt > Date.now()) return null;
     const result = await actions.surface(bot, ctx);
     if (result?.progress === false) return null;
-    if (result) ctx.record('surface', { ok: result.ok });
-    if (result?.ok === false && !['start', 'interrupted'].includes(resultFrom(result, ctx, bot).kind)) surfaceRetryAt = Date.now() + 60000;
+    if (result) ctx.record('surface', { ok: isComplete(result), reason: result.wait?.reason ?? result.reason });
+    if (result?.kind && !['start', 'interrupted'].includes(result.kind)) surfaceRetryAt = Date.now() + 60000;
     return result;
   }
 
@@ -478,7 +478,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         const result = await findLiquid(p => isLava && ledger.regionHard(p, dimension, purpose));
         if (result.reason === 'no_target_in_range') return explore(ctx, step.key);
         if (!isLava) return result;
-        if (result.ok && !result.wait) ledger.clearWhere((e, limit) => e.purpose === purpose && e.dimension === dimension && e.failures < limit);
+        if (isComplete(result)) ledger.clearWhere((e, limit) => e.purpose === purpose && e.dimension === dimension && e.failures < limit);
         const p = factsOf(result).sourcePosition;
         if (p && !result.ok) {
           const recorded = recordTarget(bot, ctx, result, ledgerTarget(bot, purpose, p, { radius: 10 }));
@@ -706,7 +706,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       if (memory.recovery) {
         memory.recovery = false;
         ctx.record('recovery', { at: bot.entity.position.floored() });
-        await actions.unstick(bot, ctx);
+        const restored = await actions.unstick(bot, ctx);
+        if (restored?.wait) { memory.recovery = true; return restored; }
         // The chest is home: everything else is decided from there.
         if (bot.entity.position.distanceTo(new Vec3(chest.x, chest.y, chest.z)) > 16) {
           return actions.goNear(bot, ctx, new Vec3(chest.x, chest.y, chest.z), 3, { timeoutMs: 120000 });
@@ -715,7 +716,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       }
       const result = await runOnce(ctx);
       if (result.wait) return result;
-      if (result.ok) {
+      if (isComplete(result)) {
         if (result.progress !== false) memory.steps += 1;
         memory.pathFailures = 0;
         if (!factsOf(result).moved) memory.exploreStreak = 0;

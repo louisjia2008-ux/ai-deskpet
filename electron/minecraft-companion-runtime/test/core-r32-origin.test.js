@@ -119,6 +119,40 @@ test('provision L2224–L2225 captures the next native leg after an internal dry
   assert.equal(result.facts.enteredWater, true);
 });
 
+test('dry-clear audit preserves only continuous wet retries and new dry-to-wet legs', async () => {
+  for (const scenario of ['stayed_wet', 'landed_during_same_leg', 'landed_between_routes', 'new_wet_leg_after_landing']) {
+    const bot = routeBot(new Vec3(0.5, 64, 0.5)), goal = new goals.GoalBlock(12, 64, 0);
+    const dry = new Vec3(4.5, 64, 0.5), water = new Vec3(4.5, 63, 0.5);
+    const events = [], ctx = () => ({ behavior: 'goal:homestead', record: (type, data) => events.push({ type, ...data }) });
+    const run = () => actions.goTo(bot, ctx(), goal);
+    bot.pathfinder.goto = async () => { move(bot, new Vec3(3.5, 63, 0.5), true); timedOut(); };
+    assert.equal((await run()).facts.enteredWater, true, scenario);
+    if (scenario === 'landed_between_routes') {
+      move(bot, dry, false);
+      move(bot, water, true);
+    }
+    bot.pathfinder.goto = async () => {
+      if (scenario === 'landed_during_same_leg') move(bot, dry, false);
+      if (scenario === 'new_wet_leg_after_landing') move(bot, water, true);
+      timedOut();
+    };
+    const retry = scenario === 'new_wet_leg_after_landing'
+      ? await settleRoute(bot, ctx(), goal, route => {
+        move(bot, dry, false);
+        return actions.goTo(bot, route, goal);
+      })
+      : await run();
+    const stayedWet = scenario === 'stayed_wet', newWetLeg = scenario === 'new_wet_leg_after_landing';
+    assert.equal(retry.kind, stayedWet || newWetLeg ? 'target' : 'start', scenario);
+    assert.equal(Boolean(retry.facts.routeCaused), stayedWet, scenario);
+    assert.equal(Boolean(retry.facts.enteredWater), newWetLeg, scenario);
+    if (newWetLeg) assert.deepEqual(retry.facts.routeStart, dry);
+    assert.equal(events.filter(e => e.type === 'target_excluded').length, Number(stayedWet || newWetLeg), scenario);
+    move(bot, dry, false);
+    assert.equal(bot.listenerCount('physicsTick'), 0, scenario);
+  }
+});
+
 test('dry confirmation and a different destination clear attribution; pre-existing water and protected cells cannot exclude work', async () => {
   const dry = new Vec3(0.5, 64, 0.5), water = new Vec3(3.5, 63, 0.5);
   const bot = routeBot(dry), events = [];

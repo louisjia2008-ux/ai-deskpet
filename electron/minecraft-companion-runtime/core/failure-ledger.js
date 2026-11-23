@@ -1,7 +1,7 @@
 'use strict';
 
 const { Vec3 } = require('vec3');
-const { classifyReason, failure, rescueOf, resultFrom, waterRouteFailure } = require('./action-result');
+const { classifyReason, failure, isComplete, rescueOf, resultFrom, waterRouteFailure } = require('./action-result');
 const { homeContains } = require('./home-topology');
 
 const MINUTE = 60_000;
@@ -20,7 +20,7 @@ const policies = {
   hunt: [MINUTE, 1], hunt_far: [5 * MINUTE, 1], berry: [MINUTE, 1],
   guard_hunt: [30_000, 1],
   berry_materials: [2 * MINUTE, 1], ranch_fence: [15_000, 1], ranch_lure: [20_000, 1],
-  director_step: [10 * MINUTE, 3], mine_entrance: [10 * MINUTE, 1], route_water: [2 * MINUTE, 2],
+  target_hazard: [10 * MINUTE, 1], director_step: [10 * MINUTE, 3], mine_entrance: [10 * MINUTE, 1], route_water: [2 * MINUTE, 2],
   lava_pool_candidate: [10 * MINUTE, 3, false, 30 * MINUTE],
   // R6 callers retain their existing per-purpose duration while using the same ledger.
   legacy_30000: [30_000, 1], legacy_60000: [MINUTE, 1], legacy_120000: [2 * MINUTE, 1],
@@ -62,6 +62,7 @@ const covers = (entry, p, radius = entry.radius) => {
 function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyLessons = [], legacyStates = [], protectedTarget = () => false,
   onChange = () => {}, emit = () => {} } = {}) {
   const entries = new Map();
+  const interruptions = new Map();
   const staged = new Map(), transfers = new WeakMap();
   const protectedCell = fields => fields.position && protectedTarget(fields.position, fields.dimension);
   const policy = fields => policies[fields.purpose];
@@ -103,6 +104,23 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
     if (!regionPurposes.has(entry?.kind)) continue;
     const fields = context({ ...entry, purpose: entry.kind });
     restore(fields, { ...entry, failures: 1 });
+  }
+
+  function workInterrupted(spec, reason, ctx) {
+    const fields = context(spec);
+    if (!fields || protectedCell(fields)) return;
+    const at = now();
+    const recent = (interruptions.get(fields.key) || []).filter(e => e.at > at - 10 * MINUTE);
+    if (recent.some(e => e.attemptId === ctx.attemptId)) return;
+    recent.push({ at, attemptId: ctx.attemptId, reason });
+    interruptions.delete(fields.key);
+    if (recent.length >= 3) {
+      scope(() => true, ctx.record).record(failure(reason, { interruptions: recent.map(e => e.reason) },
+        { attemptId: ctx.attemptId }), spec);
+    } else {
+      interruptions.set(fields.key, recent);
+      if (interruptions.size > MAX) interruptions.delete(interruptions.keys().next().value);
+    }
   }
 
   function pruneProtected() {
@@ -262,12 +280,13 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
       const extending = found && found.failures === policy(fields)[1] - 1 && Boolean(recover);
       if (extending) recordEvent('target_recovery', { ...fields, reason: found.reason, failures: found.failures });
       let result = resultFrom(await (extending ? recover(found.reason) : attempt()), ctx, bot);
-      if (!valid() || result.wait) return result;
+      if (!valid()) return result;
       if (fields && protectedCell(fields) && result.kind === 'target' && recover) {
         result = resultFrom(await recover(result.reason), ctx, bot);
       }
-      if (result.ok) {
-        if (found && !result.wait) {
+      if (result.wait) return result;
+      if (isComplete(result)) {
+        if (found) {
           clearOnSuccess(spec);
           recordEvent('target_reached', { ...fields, afterRecovery: extending });
         }
@@ -284,7 +303,7 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
   const snapshot = persistent => [...entries.values()].filter(e => active(e) && (!persistent || (policy(e)[2] && !CELL_CONFIRMATIONS.has(e.reason))));
   const persisted = () => ({ entries: snapshot(true), staged: [...staged.values()].filter(e => e.until > now())
     .slice(-REGION_MAX).map(e => ({ ...e, items: e.items.filter(item => !item.revoked && !protectedCell(item)) })) });
-  return { ...scope(), scope, snapshot, persisted, pruneProtected, stage, finish, revoke };
+  return { ...scope(), scope, snapshot, persisted, pruneProtected, stage, finish, revoke, workInterrupted };
 }
 
 function migrationReason(raw, purpose) {
@@ -336,7 +355,7 @@ const ledgerTarget = (bot, purpose, position, extra) => ({ purpose, position, di
 function recordTarget(bot, ctx, result, target, { leaf = true } = {}) {
   const classified = resultFrom(result, ctx, bot);
   const ledger = ledgerFor(bot, ctx);
-  if (classified.ok && !classified.wait) ledger.clearOnSuccess(target);
+  if (isComplete(classified)) ledger.clearOnSuccess(target);
   const saved = ledger.record(classified, target);
   if (!saved) return resultFrom(classified, ctx, bot);
   if (!leaf) return classified;

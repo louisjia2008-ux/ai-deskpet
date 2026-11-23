@@ -12,7 +12,10 @@ const { pickItem, isSealSoil, isSealRock } = require('./materials');
 const shore = require('./shore-route');
 const { meleeGeometry, meleeSight, MeleeFollowGoal, entitySizeEvidence } = require('./entityGeometry');
 const { surveyDigPermit, withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight } = require('./survey-plan-actions');
-const { complete, createAttempt, departRoute, factsOf, failure, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waterRouteFailure } = require('./action-result');
+const { complete, createAttempt, departRoute, factsOf, failure, isComplete, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waterRouteFailure } = require('./action-result');
+
+const { withWorkTarget } = require('./work-target');
+const digTarget = run => (bot, ctx, block, options) => withWorkTarget(bot, ctx, block?.position, () => run(bot, ctx, block, options));
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
@@ -307,10 +310,10 @@ async function recoverHomeOrigin(bot, ctx, destination) {
     } else if (reason === 'self_stuck') {
       const home = bot.companionHomestead?.();
       result = home?.nearForSelfRecovery?.() ? await home.escapeHome(rescue) : await unstick(bot, rescue);
-      if (result.ok) bot.companionSelfStuck.release();
+      if (isComplete(result)) bot.companionSelfStuck.release();
     } else {
       const exit = mine && await require('./mining').leaveMine(bot, rescue, { mine });
-      result = exit?.ok ? exit : await surface(bot, rescue);
+      result = isComplete(exit) || exit?.wait ? exit : await surface(bot, rescue);
     }
     const position = bot.entity.position.clone();
     ctx.record?.('home_route_recovery', { phase: 'finish', reason, from, position, destination, ok: !routeOrigin(bot),
@@ -1467,11 +1470,11 @@ async function surface(bot, ctx, { targetY, bunker = false } = {}) {
         return reached() || bot.entity.position.y >= legTarget - 0.1
           ? { ok: true, surfaced: reached() } : failure('still_below_surface', {}, ctx, bot);
       }, { threshold: 1 });
-      if (reached() || result.wait || (!result.ok && !factsOf(result).adaptation?.switched)) return result;
+      if (reached() || result.wait || (!isComplete(result) && !factsOf(result).adaptation?.switched)) return result;
       if (factsOf(result).adaptation?.exhausted) return result;
       nextRim = shallowPitTarget(bot);
     }
-    if (result && (nextRim || !result.ok)) return result;
+    if (result && (nextRim || !isComplete(result))) return result;
   }
   await climb(target, { timeoutMs: 30000, arrived: () => true });
   if (reached()) return { ok: true, surfaced: true };
@@ -1493,8 +1496,11 @@ module.exports = {
   drainPocket,
   recentre, surface: settleAction(surface, 'surface'), underground, openSky, localSurfaceY, isHomeTarget, routeOrigin, originFailure,
   unstick: settleAction(unstick, 'unstick'), nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, gatherClimbBlocks,
-  digStairsUp, digStairsDown, goTo: settleAction(goTo), goNear: settleAction(goNear), goToDig: settleAction(goToDig), withinReach,
-  digBlock: settleAction(digBlock), collectDrops: settleAction(collectDrops), countItems, eat: settleAction(eat), pickFood,
-  attack: settleAction(attack), directStep, fleeFrom: settleAction(fleeFrom),
+  digStairsUp, digStairsDown, goTo: settleAction(goTo), goNear: settleAction(goNear), goToDig: settleAction(digTarget(goToDig)), withinReach,
+  digBlock: settleAction(digTarget(digBlock)), collectDrops: settleAction(collectDrops), countItems, eat: settleAction(eat), pickFood,
+  attack: settleAction((bot, ctx, id, options) => {
+    const entity = bot.entities?.[id];
+    return withWorkTarget(bot, ctx, entity?.position, () => attack(bot, ctx, id, options), entity?.uuid);
+  }), directStep, fleeFrom: settleAction(fleeFrom),
   equipBestWeapon, haltBody, weaponScore, droppedItemName, RISKY_FOODS, consumeHeldUntil,
 };

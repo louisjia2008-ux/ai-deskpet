@@ -144,7 +144,7 @@ function eyeAt(bot, feet) {
 
 function hitFor(bot, step, feet, used) {
   const pos = vec(step[0].pos);
-  if (feet.distanceTo(pos.offset(0.5, 0, 0.5)) > 6) return null;
+  if (feet.distanceTo(pos.offset(0.5, 0, 0.5)) > 6 || bot.blockAt(feet.offset(0, -0.01, 0).floored())?.name === 'farmland') return null;
   const eye = eyeAt(bot, feet);
   if (step[0].target === 'minecraft:air') return digHit(bot, feet, eye, pos);
   return buildHit(bot, feet, eye, step, placementSpec(step[0].target), used);
@@ -154,7 +154,7 @@ function standingPoint(bot, pos) {
   const ground = bot.blockAt(pos.offset(0, -1, 0));
   const feet = bot.blockAt(pos);
   const head = bot.blockAt(pos.offset(0, 1, 0));
-  if (!ground?.shapes.length || HAZARDOUS.test(ground.name) || !feet || !head ||
+  if (!ground?.shapes.length || ground.name === 'farmland' || HAZARDOUS.test(ground.name) || !feet || !head ||
       feet.shapes.length || head.shapes.length || HAZARDOUS.test(feet.name) || HAZARDOUS.test(head.name)) return null;
   const support = ground.shapes.filter((box) => box[0] <= 0.5 && box[3] >= 0.5 && box[2] <= 0.5 && box[5] >= 0.5);
   if (!support.length) return null;

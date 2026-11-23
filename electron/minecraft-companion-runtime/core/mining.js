@@ -1,4 +1,6 @@
 'use strict';
+
+const { withWorkTarget, hazardTarget } = require('./work-target');
 // Branch mining at a fixed height, one block of tunnel per call.
 //
 // The bot digs a walkable staircase down from the surface to the target
@@ -18,7 +20,7 @@ const defaultActions = require('./actions');
 const defaultSkills = require('./skills');
 const { posKey } = require('./blacklist');
 const { ledgerFor, ledgerTarget, recordTarget } = require('./failure-ledger');
-const { failure, resultFrom } = require('./action-result');
+const { failure, isComplete, resultFrom } = require('./action-result');
 const { abortError } = require('./confirm');
 const { blockTarget, watchDestination } = require('./target-recovery');
 const { pickItem, stableSolid } = require('./materials');
@@ -222,13 +224,13 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
     const underRoute = p => posKey(p.offset(0, 1, 0)) in memory.mine.cells;
     const hasFiller = pickItem('filler', bot.inventory.items());
     const ore = visibleOre(bot, wanted, bot.entity.position)
-      .filter((b) => !ledger.skip(spec(b.position)) && harvestable(bot, b) && (!underRoute(b.position) || hasFiller)
+      .filter((b) => !ledger.skip(spec(b.position)) && !ledger.skip(hazardTarget(bot, b.position)) && harvestable(bot, b) && (!underRoute(b.position) || hasFiller)
         && (!observeDestination || !ctx.adapt.targets.avoid(target(b.position)))
         && (!closed || (actions.withinReach(bot, b.position) && FACES.every(([dx, dy, dz]) => {
           const p = b.position.offset(dx, dy, dz), adjacent = bot.blockAt(p);
           return adjacent && !LIQUID.test(adjacent.name) && (!isPassable(adjacent) || knownOpen(memory.mine, p));
         }))))[0];
-    if (ore) {
+    if (ore) return withWorkTarget(bot, ctx, ore.position, async () => {
       // An ore under a recorded walking cell is part of the route home. Take
       // it only when the hole can be filled again, and confirm that repair
       // before allowing the tunnel to advance.
@@ -238,7 +240,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
       const reach = observeDestination ? await watchDestination(bot, ctx, target(ore.position), observeDestination, approach,
         { knownMine: memory.mine }) : await approach();
       const remember = result => recordTarget(bot, ctx, result, spec(ore.position), { leaf: !observeDestination });
-      if (!reach.ok || reach.wait) return remember(reach);
+      if (!isComplete(reach)) return remember(reach);
       const block = bot.blockAt(ore.position) || ore;
       const dug = await actions.digBlock(bot, ctx, block, { tool: pickFor(bot, block) });
       if (!dug.ok) return remember(dug);
@@ -253,7 +255,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
         if (!repaired.ok) return repaired;
       }
       return collected;
-    }
+    });
   }
   if (typeof bot.inventory.emptySlotCount === 'function' && bot.inventory.emptySlotCount() <= 3) {
     ctx.record('mine_toss_rubble', {});

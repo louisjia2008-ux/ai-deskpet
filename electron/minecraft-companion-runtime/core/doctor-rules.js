@@ -1,4 +1,4 @@
-const { FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior } = require('./action-reasons');
+const { FAILURE_LIMIT, FAILURE_WINDOW_MS, isComplete, isRescueBehavior } = require('./action-reasons');
 
 // Detector and incident thresholds. Time values are elapsed milliseconds.
 // Each condition requires evidence of the symptom itself. For example, a
@@ -136,14 +136,14 @@ function resolvedGroup(group, event, build, at) {
   if (event.type === 'self_stuck_escaped') return group.origin;
   if (group.rescue && event.type === 'behavior_finished' && event.behavior === group.behavior && event.result?.progress) return true;
   if (event.type === 'site_abandoned') return group.shortage;
-  if (event.type === 'adaptation_attempt' && event.result?.ok === true && !event.result.wait) {
+  if (event.type === 'adaptation_attempt' && isComplete(event.result)) {
     return group.scope === event.task && group.key === adaptationIdentity(event);
   }
   if (event.type === 'target_reached') {
     return group.key != null && group.key === (shortText(event.key) || shortText(event.target));
   }
   if (group.shortage && event.type === 'goal_done') return group.scope === 'goal:' + event.goal;
-  if (build && event.result?.ok === true && !event.result.wait && at > group.lastAt) {
+  if (build && isComplete(event.result) && at > group.lastAt) {
     // Count repeated stock-outs of the same local construction job, even if
     // earlier stock-outs were temporarily relieved by successful placement.
     const expected = group.shortage ? group.confirmed && group.lastPosition : group.location;
@@ -327,9 +327,10 @@ function repeatedPlans() {
     const previous = [...steps.values()].find((step) => step.pending && samePlanOwner(step.signature, event));
     if (!previous || !event.result || (previous.pending !== true && previous.pending !== event.attemptId)) return;
     previous.pending = false;
+    if (event.result.wait) return;
     const attempt = attemptOf(event.result);
     if (attempt && previous.outcomes.some((entry) => entry.attempt === attempt)) return;
-    if (event.result.ok) {
+    if (isComplete(event.result)) {
       if (previous.failures || previous.interruptions) steps.delete(previous.signature.id);
     } else if (event.result.kind === 'interrupted') {
       previous.interruptions++;
@@ -371,7 +372,7 @@ function repeatedPlans() {
       }
       if (event.type === 'behavior_finished') {
         outcome(event, frame);
-        if (build && event.result?.ok === true && !event.result.wait) {
+        if (build && isComplete(event.result)) {
           steps.delete(build.id);
           if (shortage && samePlanOwner(shortage, event)) shortage = null;
         }

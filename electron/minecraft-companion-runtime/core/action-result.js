@@ -2,7 +2,7 @@
 
 const { randomUUID } = require('node:crypto');
 const { Vec3 } = require('vec3');
-const { classifyReason, FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior } = require('./action-reasons');
+const { classifyReason, FAILURE_LIMIT, FAILURE_WINDOW_MS, isComplete, isRescueBehavior } = require('./action-reasons');
 const { countInventory, ownedItems } = require('./perception');
 
 const receipts = new WeakMap();
@@ -41,6 +41,24 @@ function startProblem(state) {
 function observeWater(route, state) {
   const position = (state?.bot ?? state)?.entity?.position ?? state?.position;
   if (position && inWater(state)) route.entered ??= { position: { ...position }, at: Date.now(), start: route.start };
+}
+
+function clearWaterRoutes(bot) {
+  const recent = waterRoutes.get(bot);
+  if (!recent) return;
+  waterRoutes.delete(bot);
+  bot.removeListener?.('physicsTick', recent.sample);
+}
+
+function rememberWaterRoute(bot, owner, evidence) {
+  let recent = waterRoutes.get(bot);
+  if (!recent) {
+    const sample = () => { if (bot.entity?.onGround && !inWater(bot)) clearWaterRoutes(bot); };
+    recent = { owners: new Map(), sample };
+    waterRoutes.set(bot, recent);
+    bot.on?.('physicsTick', sample);
+  }
+  recent.owners.set(owner, evidence);
 }
 
 function sameWater(bot, from, to) {
@@ -97,7 +115,11 @@ function waterRouteTarget(bot, ctx, position, entity) {
 function departRoute(ctx, bot) {
   const route = ctx.route, wet = inWater(bot), at = bot.entity.position;
   if (wet && route.entered && sameWater(bot, route.entered.position, at)) route.linked = route.entered;
-  if (!wet && bot.entity.onGround) { route.linked = route.entered = null; route.start = at.clone(); }
+  if (!wet && bot.entity.onGround) {
+    clearWaterRoutes(bot);
+    route.linked = route.entered = null;
+    route.start = at.clone();
+  }
   route.departure = wet && route.linked ? 'water' : startProblem(bot);
   return { ...ctx, departure: route.departure };
 }
@@ -108,20 +130,23 @@ async function settleRoute(bot, ctx, position, run, entity) {
   const spec = waterRouteTarget(bot, ctx, position, entity), ledger = ledgerFor(bot, ctx);
   if (ledger.skip(spec)) return failure('choose_another_target', {}, ctx);
   const owner = `${spec.dimension}:${ctx.behavior || 'travel'}`;
-  const recent = waterRoutes.get(bot) || new Map();
-  waterRoutes.set(bot, recent);
-  const previous = recent.get(owner), here = bot.entity.position.clone();
+  const recent = waterRoutes.get(bot)?.owners;
+  const previous = recent?.get(owner), here = bot.entity.position.clone();
   const wet = inWater(bot);
   const linked = wet && previous?.key === spec.entity && sameWater(bot, previous.position, here) ? previous : null;
-  if (!linked) recent.delete(owner);
+  if (!linked && recent?.delete(owner) && !recent.size) clearWaterRoutes(bot);
   const route = { destination: spec.entity, linked, start: here };
   const attempt = departRoute(createAttempt({ ...ctx, route }), bot);
-  const sample = () => inWater(bot) ? !route.departure && observeWater(route, bot) : bot.entity.onGround && recent.clear();
+  const sample = () => {
+    if (inWater(bot)) {
+      if (!route.departure) observeWater(route, bot);
+    } else if (bot.entity.onGround) route.linked = route.entered = null;
+  };
   bot.on?.('physicsTick', sample);
   try {
     const result = resultFrom(await run(attempt), attempt, bot);
     if (!waterRouteFailure(result)) return result;
-    if (inWater(bot) && route.entered) recent.set(owner, { key: spec.entity, ...route.entered });
+    if (inWater(bot) && route.entered) rememberWaterRoute(bot, owner, { key: spec.entity, ...route.entered });
     return recordTarget(bot, attempt, { ...result, facts: { ...result.facts, routeDestination: position } }, spec);
   } finally {
     bot.removeListener?.('physicsTick', sample);
@@ -154,7 +179,7 @@ function settleAction(run, rescue) {
     if (attempt.signal?.aborted) return interrupted();
     try {
       const result = resultFrom(await run(bot, attempt, ...args) ?? complete(false), attempt, bot);
-      if (rescueOf(attempt) && result.ok && bot.entity?.onGround && !inWater(bot)) waterRoutes.delete(bot);
+      if (rescueOf(attempt) && isComplete(result) && bot.entity?.onGround && !inWater(bot)) clearWaterRoutes(bot);
       return result;
     } catch (error) {
       if (error?.code !== 'aborted') throw error;
@@ -164,4 +189,4 @@ function settleAction(run, rescue) {
 }
 
 module.exports = { classifyReason, complete, createAttempt, departRoute, factsOf, failure, FAILURE_LIMIT, FAILURE_WINDOW_MS,
-  isRescueBehavior, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waiting, waterRouteFailure, waterRouteTarget };
+  isComplete, isRescueBehavior, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waiting, waterRouteFailure, waterRouteTarget };

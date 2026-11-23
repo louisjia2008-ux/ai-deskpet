@@ -12,7 +12,7 @@
 // A death that loses the materials just makes step 1 come back for what is
 // missing; whatever is already built stays built and is not asked for again.
 
-const { factsOf } = require('../action-result');
+const { factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -127,7 +127,7 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
         const before = gatherBefore ? gatherBefore.progress() : 0;
         const result = await bring(ctx, lack);
         // A finished gather is dropped: keep its steps.
-        if (gatherBefore && memory.gather !== gatherBefore) memory.steps += before + (result.ok ? 1 : 0);
+        if (gatherBefore && memory.gather !== gatherBefore) memory.steps += before + Number(isComplete(result));
         return result;
       }
       // The last crafting step can put every needed part straight in the

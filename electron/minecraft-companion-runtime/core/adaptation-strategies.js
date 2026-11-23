@@ -2,7 +2,7 @@
 
 const { goals } = require('mineflayer-pathfinder');
 const { blockTarget } = require('./target-recovery');
-const { complete, resultFrom, failure } = require('./action-result');
+const { complete, resultFrom, failure, isComplete } = require('./action-result');
 
 const OUTWARD_HEADINGS = Object.freeze([0, 1, -1, 2, -2, 3, -3, 4]);
 async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, timeoutMs = 15000, bearing } = {}) {
@@ -45,7 +45,7 @@ async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blocks, d
     if (far && (!route.departed || (method === 'different_biome' && biome(bot) !== null && route.biome === biome(bot)
       && route.from.distanceTo(bot.entity.position) < 128))) {
       const move = await outwardLeg(bot, ctx, actions, route, route.from, { distance: 28 });
-      route.departed ||= move.ok && !move.wait;
+      route.departed ||= isComplete(move);
       return move;
     }
     const found = resultFrom(await gather(near ? 48 : 128), ctx, bot);
@@ -53,7 +53,7 @@ async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blocks, d
     if (!['no_target_in_range', 'not_arrived', 'path_timeout', 'no_progress', 'NoPath', 'Timeout', 'choose_another_target',
       'route_region_avoided'].includes(found.reason)) return found;
     const moved = await outwardLeg(bot, ctx, actions, route, route.from, { distance: far ? 28 : 20 });
-    if (!moved.ok || moved.wait) return moved;
+    if (!isComplete(moved)) return moved;
     return gather(128);
   });
 }

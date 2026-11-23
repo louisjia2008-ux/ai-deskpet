@@ -3,6 +3,7 @@
 // Interrupted goals resume by reading the changed inventory and blocks.
 
 const { complete, failure, createAttempt, FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior, resultFrom } = require('./action-result');
+const { interruptedWork } = require('./work-target');
 const BAND = Object.freeze({ IDLE: 0, GOAL: 50, MAINTENANCE: 100, DEFENSE: 120, ESCAPE: 130 });
 const START_RETRY_DELAY_MS = 2_000; // Let the blocked body settle without increasing the backoff.
 
@@ -333,6 +334,7 @@ function createBrain({
           await preempt('goal_cleared');
         } else if (best && best.band > current.band) {
           emit('preempted', { behavior: current.name, by: best.name, attemptId: running.attemptId, ...correlation(current.goalEntry) });
+          interruptedWork(running.controller.signal, best.name);
           await preempt(`preempted_by:${best.name}`);
         } else {
           return;

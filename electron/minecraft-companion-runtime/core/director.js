@@ -3,7 +3,7 @@
 // yield after bounded waits or consecutive failures.
 
 const { createAdaptation } = require('./adaptation');
-const { complete, failure } = require('./action-result');
+const { complete, failure, isComplete } = require('./action-result');
 
 const RISKS = new Set(['low', 'medium', 'high']);
 const MINUTE = 60_000;
@@ -78,7 +78,7 @@ function createDirector({
   const adapt = adaptation?.scope(() => true);
   const generic = card => adapt?.plan('goal', { target: card });
   function clearFailures(card, result) {
-    const p = result?.ok && !result.wait && result.progress !== false && generic(card);
+    const p = isComplete(result) && result.progress !== false && generic(card);
     if (p?.failures) adapt.outcome(p, result);
   }
 
@@ -149,7 +149,7 @@ function createDirector({
           ledger.clearOnSuccess(streak);
         }
         streak = target;
-        if (result.ok) { ledger.clearOnSuccess(target); return result; }
+        if (isComplete(result)) { ledger.clearOnSuccess(target); return result; }
         const saved = ledger.record(result, target);
         if (!saved) return result;
         const { undo: _undo, ...evidence } = saved;

@@ -1,6 +1,7 @@
 'use strict';
 
 const { BAND } = require('../brain');
+const { isComplete } = require('../action-result');
 const defaultActions = require('../actions');
 const { safeStand, SIDES } = require('../home-topology');
 const { wet } = require('../dry-route');
@@ -34,7 +35,7 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
           tracker.force('door_probe_failed');
         }
         const moved = await goal.escapeHome(rescue);
-        if (moved.ok) tracker.release();
+        if (isComplete(moved)) tracker.release();
         return moved;
       }
       if (!tracker.state()) {

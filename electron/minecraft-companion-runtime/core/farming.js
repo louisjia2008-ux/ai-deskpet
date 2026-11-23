@@ -4,6 +4,7 @@
 // (the block that is there afterwards), like every other skill.
 
 const { Vec3 } = require('vec3');
+const { isComplete } = require('./action-result');
 const actions = require('./actions');
 const { clearCoverAt } = require('./skills');
 const { naturalCover } = require('./natural-cover');
@@ -17,13 +18,14 @@ const v = (p) => new Vec3(p.x, p.y, p.z);
 const TILLABLE = new Set(['grass_block', 'dirt', 'dirt_path', 'coarse_dirt', 'rooted_dirt']);
 const RIPE = 7;
 
-const isSourceWater = (b) => b?.name === 'water' && Number(b.getProperties?.().level ?? b.metadata ?? 0) === 0;
+const irrigates = (b) => b && (/^(water|bubble_column|kelp|kelp_plant|seagrass|tall_seagrass)$/.test(b.name)
+  || b.getProperties?.().waterlogged === true);
+const farmLevel = (waterY, centerY) => waterY >= centerY - 6 && waterY <= centerY + 2;
 
 /**
  * Up to `count` ground cells to farm near `center`. Vanilla keeps farmland
- * moist with water up to 4 blocks away horizontally, at its own level or one
- * above, so plots sit beside a water source at or one below its level.
- * Without water nearby, dry plots next to `center` still grow, more slowly.
+ * moist with water within 4 blocks on each horizontal axis, at its own level
+ * or one above.
  */
 function choosePlots(blockAt, center, { count = 16, radius = 24, exclude = () => false, findWater } = {}) {
   const c = { x: Math.floor(center.x), y: Math.floor(center.y), z: Math.floor(center.z) };
@@ -35,7 +37,7 @@ function choosePlots(blockAt, center, { count = 16, radius = 24, exclude = () =>
       && (naturalCover(above) || (ground.name === 'farmland' && above?.name === 'wheat'))
       && !exclude(p);
   };
-  const waters = (findWater ? findWater(c, radius) : []).filter((w) => w.y >= c.y - 6 && w.y <= c.y + 2);
+  const waters = (findWater?.(c, radius) ?? []).filter(w => farmLevel(w.y, c.y) && irrigates(blockAt(w)));
   const plots = new Map();
   const distance = (p) => Math.hypot(p.x - c.x, p.z - c.z);
   // Wheat already growing there (a farm left on an earlier task).
@@ -51,34 +53,16 @@ function choosePlots(blockAt, center, { count = 16, radius = 24, exclude = () =>
     }
     if (plots.size >= count) break;
   }
-  if (plots.size < count) {
-    // Dry fallback: the ground right around the centre.
-    for (let r = 2; r <= 8 && plots.size < count; r += 1) {
-      for (let dx = -r; dx <= r; dx += 1) {
-        for (let dz = -r; dz <= r; dz += 1) {
-          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-          for (const dy of [-1, -2, 0]) {
-            const p = { x: c.x + dx, y: c.y + dy, z: c.z + dz };
-            if (!plots.has(posKey(p)) && usable(p)) { plots.set(posKey(p), { ...p, hydrated: false }); break; }
-          }
-        }
-      }
-    }
-  }
   // Sown plots first: a new farm tilled four plots beside two ripe wheat and
   // waited by them for the new ones to grow.
   return [...plots.values()]
-    .sort((a, b) => (sown(b) - sown(a)) || (b.hydrated - a.hydrated) || distance(a) - distance(b))
+    .sort((a, b) => (sown(b) - sown(a)) || distance(a) - distance(b))
     .slice(0, count);
 }
 
 function findWater(bot, center, radius) {
-  const id = bot.registry.blocksByName.water?.id;
-  if (id === undefined) return [];
-  return bot.findBlocks({ matching: id, point: v(center), maxDistance: radius, count: 64 })
-    .map((p) => bot.blockAt(p))
-    .filter((b) => isSourceWater(b) && naturalCover(bot.blockAt(b.position.offset(0, 1, 0))))
-    .map((b) => ({ x: b.position.x, y: b.position.y, z: b.position.z }));
+  return bot.findBlocks({ matching: irrigates, point: v(center), maxDistance: radius, count: 64,
+    useExtraInfo: block => farmLevel(block.position.y, center.y) });
 }
 
 /**
@@ -204,7 +188,7 @@ async function gatherSeeds(bot, ctx, { radius = 32, exclude = () => false } = {}
     .map((p) => bot.blockAt(p)).filter(Boolean)[0];
   if (!grass) return fail('no_grass');
   const moved = await actions.goToDig(bot, ctx, grass, { timeoutMs: 30000 });
-  if (!moved.ok || moved.wait) return recordTarget(bot, ctx, moved, target(grass.position));
+  if (!isComplete(moved)) return recordTarget(bot, ctx, moved, target(grass.position));
   const before = actions.countItems(bot, (n) => n === 'wheat_seeds');
   const dug = await actions.digBlock(bot, ctx, grass);
   if (!dug.ok) return recordTarget(bot, ctx, dug, target(grass.position));

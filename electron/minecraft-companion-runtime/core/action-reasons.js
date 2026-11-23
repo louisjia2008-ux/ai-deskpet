@@ -50,6 +50,7 @@ const reasons = Object.freeze({
     shore_route_unsafe shulker_survived site_changed site_rejected spawner_unreachable spiral_place_failed spiral_step_failed
     station_out_of_reach survey_adjacent_fluid survey_cross_boundary_tree survey_falling_column
     survey_outside_attachment survey_site_changed table_missing target_excluded target_lost target_unreachable timeout
+    target_needs_breath target_near_lava target_near_fire target_causes_suffocation
     tower_not_reached tower_short unconfirmed_cave_at_ore undiggable unknown_block unsafe_excavation unsafe_full_floor
     unreachable unsafe_stance unsafe_support_dig villager_in_entrance villager_moved villager_not_aboard walk_blocked
     worksite_unreachable
@@ -140,4 +141,6 @@ function classifyReason(reason) {
   });
 }
 
-module.exports = { classifyReason, FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior, reasons, templates };
+const isComplete = result => result?.ok === true && !result.wait;
+
+module.exports = { classifyReason, FAILURE_LIMIT, FAILURE_WINDOW_MS, isComplete, isRescueBehavior, reasons, templates };
