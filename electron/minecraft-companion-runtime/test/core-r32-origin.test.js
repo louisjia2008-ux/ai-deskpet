@@ -7,7 +7,7 @@ const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('../core/actions');
 const skills = require('../core/skills');
-const { createAttempt, failure } = require('../core/action-result');
+const { createAttempt, failure, settleRoute } = require('../core/action-result');
 
 function routeBot(position) {
   const bot = new EventEmitter();
@@ -101,6 +101,22 @@ test('a wet retry beyond eight blocks needs known contiguous water to inherit th
     assert.equal(result.kind, gap ? 'start' : 'target');
     assert.equal(Boolean(result.facts.routeCaused), !gap);
   }
+});
+
+test('provision L2224–L2225 captures the next native leg after an internal dry landing', async () => {
+  const from = new Vec3(600.5, 62, -33.5), shore = new Vec3(600.5, 63, -32.5);
+  const bot = routeBot(from), goal = new goals.GoalBlock(579, 63, -94);
+  move(bot, from, true);
+  bot.pathfinder.goto = async () => { move(bot, new Vec3(596.5, 62, -43.5), true); timedOut(); };
+  const ctx = createAttempt({ behavior: 'provision' });
+  const result = await settleRoute(bot, ctx, new Vec3(goal.x, goal.y, goal.z), async route => {
+    move(bot, shore, false);
+    return actions.goTo(bot, route, goal);
+  });
+  assert.equal(result.kind, 'target');
+  assert.equal(result.attemptId, ctx.attemptId);
+  assert.deepEqual(result.facts.routeStart, shore);
+  assert.equal(result.facts.enteredWater, true);
 });
 
 test('dry confirmation and a different destination clear attribution; pre-existing water and protected cells cannot exclude work', async () => {

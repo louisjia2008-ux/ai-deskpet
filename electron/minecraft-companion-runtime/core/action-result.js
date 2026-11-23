@@ -40,7 +40,7 @@ function startProblem(state) {
 
 function observeWater(route, state) {
   const position = (state?.bot ?? state)?.entity?.position ?? state?.position;
-  if (position && inWater(state)) route.entered ??= { position: { ...position }, at: Date.now() };
+  if (position && inWater(state)) route.entered ??= { position: { ...position }, at: Date.now(), start: route.start };
 }
 
 function sameWater(bot, from, to) {
@@ -71,9 +71,9 @@ function failure(reason, facts = {}, ctx, state) {
       if (kind === 'start') kind = 'environment';
       facts = { ...facts, rescue: facts.rescue || rescue };
     } else if (!facts.rescue && kind === 'target' && route?.linked && source === 'water') {
-      facts = { ...facts, routeCaused: route.destination, waterPosition: route.linked.position, waterAt: route.linked.at };
+      facts = { ...facts, routeCaused: route.destination, waterPosition: route.linked.position, waterAt: route.linked.at, routeStart: route.linked.start };
     } else if (!facts.rescue && kind === 'target' && !source && route?.entered) {
-      facts = { ...facts, enteredWater: true, waterPosition: route.entered.position, waterAt: route.entered.at };
+      facts = { ...facts, enteredWater: true, waterPosition: route.entered.position, waterAt: route.entered.at, routeStart: route.entered.start };
     } else if (source || facts.rescue) kind = 'start';
     if (source) facts = { ...facts, source };
   }
@@ -94,6 +94,14 @@ function waterRouteTarget(bot, ctx, position, entity) {
   return { purpose: 'route_water', dimension, position, entity: `${ctx.behavior || 'travel'}:${destination}` };
 }
 
+function departRoute(ctx, bot) {
+  const route = ctx.route, wet = inWater(bot), at = bot.entity.position;
+  if (wet && route.entered && sameWater(bot, route.entered.position, at)) route.linked = route.entered;
+  if (!wet && bot.entity.onGround) { route.linked = route.entered = null; route.start = at.clone(); }
+  route.departure = wet && route.linked ? 'water' : startProblem(bot);
+  return { ...ctx, departure: route.departure };
+}
+
 async function settleRoute(bot, ctx, position, run, entity) {
   if (ctx.route || rescueOf(ctx) || !position) return run(ctx);
   const { ledgerFor, recordTarget } = require('./failure-ledger');
@@ -106,15 +114,15 @@ async function settleRoute(bot, ctx, position, run, entity) {
   const wet = inWater(bot);
   const linked = wet && previous?.key === spec.entity && sameWater(bot, previous.position, here) ? previous : null;
   if (!linked) recent.delete(owner);
-  const route = { destination: spec.entity, linked };
-  const attempt = createAttempt({ ...ctx, departure: linked ? 'water' : startProblem(bot), route });
-  const sample = () => inWater(bot) ? !attempt.departure && observeWater(route, bot) : bot.entity.onGround && recent.clear();
+  const route = { destination: spec.entity, linked, start: here };
+  const attempt = departRoute(createAttempt({ ...ctx, route }), bot);
+  const sample = () => inWater(bot) ? !route.departure && observeWater(route, bot) : bot.entity.onGround && recent.clear();
   bot.on?.('physicsTick', sample);
   try {
     const result = resultFrom(await run(attempt), attempt, bot);
     if (!waterRouteFailure(result)) return result;
     if (inWater(bot) && route.entered) recent.set(owner, { key: spec.entity, ...route.entered });
-    return recordTarget(bot, attempt, { ...result, facts: { ...result.facts, routeStart: here, routeDestination: position } }, spec);
+    return recordTarget(bot, attempt, { ...result, facts: { ...result.facts, routeDestination: position } }, spec);
   } finally {
     bot.removeListener?.('physicsTick', sample);
   }
@@ -155,5 +163,5 @@ function settleAction(run, rescue) {
   };
 }
 
-module.exports = { classifyReason, complete, createAttempt, factsOf, failure, FAILURE_LIMIT, FAILURE_WINDOW_MS,
+module.exports = { classifyReason, complete, createAttempt, departRoute, factsOf, failure, FAILURE_LIMIT, FAILURE_WINDOW_MS,
   isRescueBehavior, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waiting, waterRouteFailure, waterRouteTarget };

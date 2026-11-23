@@ -12,7 +12,7 @@ const { pickItem, isSealSoil, isSealRock } = require('./materials');
 const shore = require('./shore-route');
 const { meleeGeometry, meleeSight, MeleeFollowGoal, entitySizeEvidence } = require('./entityGeometry');
 const { surveyDigPermit, withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight } = require('./survey-plan-actions');
-const { complete, createAttempt, factsOf, failure, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waterRouteFailure } = require('./action-result');
+const { complete, createAttempt, departRoute, factsOf, failure, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waterRouteFailure } = require('./action-result');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
@@ -167,6 +167,7 @@ function originFailure(bot, raw, before, destination, ctx) {
 }
 
 async function goTo(bot, ctx, goal, options = {}) {
+  if (ctx?.route && !rescueOf(ctx)) return goToRoute(bot, departRoute(ctx, bot), goal, options);
   const position = goalPosition(bot, goal), xz = position && !goal.pos && !Number.isFinite(goal.y);
   return settleRoute(bot, createAttempt(ctx, bot), position, run => goToRoute(bot, run, goal, options),
     options.routeEntity ?? (xz ? `xz:${position.x},${position.z}` : null));
@@ -200,9 +201,8 @@ async function goToRoute(bot, ctx, goal, options) {
   };
   if (offCentre(bot) && !goal.isEnd(bot.entity.position.floored())) await recentre(bot, ctx);
   const first = await goToOnce(bot, ctx, goal, options);
-  // A caller with its own shared recovery deadline can own the next attempt.
+  // A scoped deadline can leave retries to the caller.
   if (first.kind === 'start' || first.reason !== 'no_progress' || options.retryNoProgress === false) return done(first);
-  // Stuck at the start: step into an open neighbouring cell and try once more.
   await nudge(bot, ctx);
   return done(await goToOnce(bot, ctx, goal, options));
 }
@@ -604,8 +604,7 @@ async function digBlock(bot, ctx, block, { timeoutMs = 12000, tool: chosen = nul
   if (ownedHomeRemoval && !ownedHomeRemoval(current)) return fail('not_owned_home_block');
   if (bot.companionProtectBlock?.(current) && !ownedHomeRemoval?.(current)) return fail('protected_home');
   if (initialPermit ? !current.diggable : !bot.canDigBlock(current)) return fail('cannot_dig');
-  // Mid-air digging is five times slower on the server than the client's
-  // timing assumes, and the break is rejected. Wait to land (not in water).
+  // The server digs five times slower in mid-air, so wait for footing.
   if (!bot.entity.onGround && !bot.entity.isInWater) {
     await waitUntil(() => bot.entity.onGround, { timeoutMs: 1500, signal: ctx.signal });
   }
@@ -734,7 +733,6 @@ async function eat(bot, ctx, { timeoutMs = 5000, accepts, survey = false } = {})
     if (isAbort(error)) throw error;
     // consume() can reject although the server applied the meal; check below.
   }
-  // Both facts must hold together: the item left the inventory AND hunger went up.
   const confirmed = await waitUntil(eaten, { timeoutMs: 2000, signal: ctx.signal });
   return confirmed ? { ok: true, ate: name } : fail('eat_unconfirmed', { ate: name });
 }
@@ -1027,7 +1025,6 @@ async function blockInflow(bot, ctx, feet) {
   }
   if (!walled) return false;
   ctx.record?.('block_inflow', { walled, at: `${feet.x},${feet.y},${feet.z}` });
-  // Running water left behind drains in a few ticks.
   return waitUntil(() => bot.blockAt(feet.offset(0, 1, 0))?.name !== 'water', { timeoutMs: 4000, signal: ctx.signal });
 }
 

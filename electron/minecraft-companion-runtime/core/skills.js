@@ -37,19 +37,16 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, purpose = 'gather', excl
   const target = p => ledgerTarget(bot, purpose, p);
   const eligible = p => !ledger.skip(target(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p);
   const unprotected = b => !bot.companionProtectBlock?.(b) && !bot.companionPlacedRecently?.(b.position);
-  // A house and its foundation can fill the native limit with the same
-  // material we need for the roof. Apply protection before that limit there.
+  // Apply home protection before the search limit.
   const candidates = bot.findBlocks({ matching: ids, maxDistance: radius, count: radius > 48 && ctx.adapt ? 160 : 64,
     ...(eligibleFirst ? { useExtraInfo: b => eligible(b.position) && unprotected(b) } : {}) })
     .filter(eligible)
     .map((p) => bot.blockAt(p))
     // Digging next to water or lava floods the pit the bot is standing in.
     .filter((b) => b && unprotected(b) && !touchesLiquid(bot, b.position))
-    // Logs down in a dark cave cost an unarmoured bot its life and its bag:
-    // like gatherLogs, take only trees under the sky and explore for more.
+    // Gather logs under open sky.
     .filter((b) => !isLog(b.name) || isSurfaceLog(bot, b))
-    // Exposed blocks first: keeps mining inside one open pit instead of
-    // digging a fresh hole through the soil for every single stone.
+    // Prefer exposed blocks to opening a new pit.
     // Logs left hanging in a tall canopy need climbing: try anything else first.
     .map((b) => ({ b, score: cost(here, b.position) + buried(bot, b.position) + (aboveGround(bot, b.position) > 4 ? 40 : 0) }))
     .sort((a, b) => a.score - b.score)
@@ -738,10 +735,7 @@ async function explore(bot, ctx, memory, { distance = 32, timeoutMs = 40000, ret
   memory.tried = memory.tried || [];
   const here = bot.entity.position;
   const directions = Array.from({ length: 8 }, (_, i) => (i * Math.PI) / 4);
-  // Keep one heading while it works: random legs wander in circles around the
-  // same treeless hilltop. Turn only after a blocked leg.
-  // `memory.around` ({ x, z, radius }): past the radius, head back towards
-  // the centre (the house) instead of on outwards.
+  // Keep successful headings, and head back toward the centre past the roaming radius.
   const around = memory.around;
   const off = around ? Math.hypot(here.x - around.x, here.z - around.z) : 0;
   if (around && off > around.radius) {
