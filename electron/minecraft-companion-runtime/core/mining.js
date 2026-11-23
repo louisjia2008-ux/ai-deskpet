@@ -19,6 +19,7 @@ const defaultSkills = require('./skills');
 const { posKey } = require('./blacklist');
 const { abortError } = require('./confirm');
 const { blockTarget, watchDestination } = require('./target-recovery');
+const { pickItem, stableSolid } = require('./materials');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
@@ -232,8 +233,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
       // it only when the hole can be filled again, and confirm that repair
       // before allowing the tunnel to advance.
       const routeFloor = posKey(ore.position.offset(0, 1, 0)) in memory.mine.cells;
-      const filler = routeFloor && bot.inventory.items().find((i) => ['cobblestone', 'cobbled_deepslate', 'dirt'].includes(i.name));
-      if (routeFloor && !filler) { blacklist.add(posKey(ore.position), 'route_floor'); return { ok: true, progress: false }; }
+      if (routeFloor && !pickItem('filler', bot.inventory.items())) { blacklist.add(posKey(ore.position), 'route_floor'); return { ok: true, progress: false }; }
       ctx.record(blocks(ore.name) ? 'mine_ore' : 'mine_loot', { block: ore.name, position: posKey(ore.position) });
       const approach = () => actions.goToDig(bot, ctx, ore, { timeoutMs: 15000 });
       const reach = observeDestination ? await watchDestination(bot, ctx, target(ore.position), observeDestination, approach,
@@ -353,14 +353,13 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
     if (closed && step.opening) {
       const p = new Vec3(step.opening.x, step.opening.y, step.opening.z);
       const air = bot.blockAt(p);
-      const fill = (n) => ['cobblestone', 'cobbled_deepslate', 'dirt'].includes(n);
       if (/^(air|cave_air)$/.test(air?.name || '') && actions.withinReach(bot, p) && !bot.companionNearPlayerBuild?.(p)
-        && bot.inventory.items().some((item) => fill(item.name))
+        && pickItem('filler', bot.inventory.items())
         && FACES.every(([dx, dy, dz]) => {
           const b = bot.blockAt(p.offset(dx, dy, dz));
           return b && !LIQUID.test(b.name) && !GRAVITY.has(b.name);
         })) {
-        const placed = await skills.placeAt(bot, ctx, p, fill, { requireAir: true });
+        const placed = await skills.placeAt(bot, ctx, p, 'filler', { requireAir: true });
         if (placed.ok) {
           ctx.record('mine_cave_sealed', { at: posKey(p) });
           return { ok: true, progress: false, sealed: true };
@@ -408,15 +407,11 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
 async function repairFloor(bot, ctx, mine, skills) {
   const p = mine.floorRepair;
   const position = new Vec3(p.x, p.y, p.z);
-  const sealed = () => {
-    const block = bot.blockAt(position);
-    return block?.boundingBox === 'block' && !LIQUID.test(block.name) && !GRAVITY.has(block.name);
-  };
+  const sealed = () => stableSolid(bot.blockAt(position));
   let result = { ok: true };
   if (!sealed()) {
-    const filler = bot.inventory.items().find((i) => ['cobblestone', 'cobbled_deepslate', 'dirt'].includes(i.name));
-    if (!filler) return fail('route_floor_missing_material');
-    result = await skills.placeAt(bot, ctx, position, (name) => name === filler.name, { verify: sealed });
+    result = await skills.placeAt(bot, ctx, position, 'filler', { verify: sealed });
+    if (result.reason === 'no_material') return fail('route_floor_missing_material');
   }
   if (result.ok && !sealed()) result = fail('route_floor_unconfirmed');
   ctx.record('mine_floor_repair', { position: posKey(position), ok: result.ok, reason: result.reason });

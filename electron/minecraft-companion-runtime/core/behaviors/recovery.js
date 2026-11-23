@@ -40,7 +40,6 @@ const WOOL_KEPT = 3;
 // (a part stack frees no slot). A full bag fails every craft.
 const CHEAP = new Set(['dirt', 'sand', 'cobbled_deepslate', 'netherrack', 'coarse_dirt']);
 const SAPLINGS_KEPT = 8;
-const SEALS = new Set(['dirt', 'cobblestone', 'cobbled_deepslate', 'coarse_dirt']);
 const dimensionOf = (bot) => String(bot?.game?.dimension || 'overworld').replace(/^minecraft:/, '');
 
 /** What a full bag can lose, junk first: [{ name, count }]. `keep` exempts items a goal still needs. */
@@ -361,7 +360,7 @@ function createRecovery({
     async run(ctx) {
       if (!bunker) {
         ctx.record('danger_bunker', { action: 'dig_in' });
-        const dug = await skills.digIn(bot, ctx, { sealMatch: (n) => SEALS.has(n) });
+        const dug = await skills.digIn(bot, ctx);
         if (!dug.ok) return dug;
         bunker = { bunker: dug.bunker, since: now() };
         bot.companionSheltered = true;

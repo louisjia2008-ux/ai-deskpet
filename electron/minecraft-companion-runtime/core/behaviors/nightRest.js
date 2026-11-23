@@ -13,7 +13,6 @@ const defaultSkills = require('../skills');
 const { BAND } = require('../brain');
 const { sleep } = require('../confirm');
 
-const SEALS = new Set(['dirt', 'cobblestone', 'cobbled_deepslate', 'coarse_dirt']);
 const dimensionOf = (bot) => String(bot?.game?.dimension || 'overworld').replace(/^minecraft:/, '');
 
 // Within this the bed is used straight away (useBed walks to it).
@@ -90,7 +89,7 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, p
       const distance = bed ? bot.entity.position.distanceTo(bed) : Infinity;
       if (distance > farDistance) {
         ctx.record('night_rest', { action: 'dig_in', distance: Math.round(distance) });
-        const dug = await skills.digIn(bot, ctx, { sealMatch: (n) => SEALS.has(n), prepareSeal: prepareSeals() });
+        const dug = await skills.digIn(bot, ctx, { prepareSeal: prepareSeals() });
         if (!dug.ok) return dug;
         ctx.record('night_rest', { action: 'dug_in' });
         bunker = dug.bunker;

@@ -29,7 +29,7 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
   const size = variant === 'starter' ? SIZE : 5;
   const mid = Math.floor(size / 2);
   const blocks = [];
-  const add = (dx, dy, dz, family, phase, extra = {}) => blocks.push({ position: at(dx, dy, dz), family, phase, ...extra });
+  const add = (dx, dy, dz, purpose, phase) => blocks.push({ position: at(dx, dy, dz), purpose, phase });
 
   const door = { dx: mid, dz: 0 };
   for (let dy = 0; dy < WALL_HEIGHT; dy += 1) {
@@ -38,7 +38,7 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
         const edge = dx === 0 || dz === 0 || dx === size - 1 || dz === size - 1;
         if (!edge) continue;
         if (dx === door.dx && dz === door.dz && dy < 2) continue;
-        add(dx, dy, dz, variant === 'hillside' && dz > 0 ? 'cave_wall' : variant === 'starter' ? 'cobblestone' : 'shelter_wall', 'walls');
+        add(dx, dy, dz, variant === 'hillside' && dz > 0 ? 'cave_wall' : 'wall', 'walls');
       }
     }
   }
@@ -48,28 +48,22 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
   for (let dx = 0; dx < size; dx += 1) for (let dz = 0; dz < size; dz += 1) roof.push({ dx, dz, ring: ring(dx, dz) });
   roof.sort((a, b) => variant === 'compact' && (a.ring === mid || b.ring === mid)
     ? b.ring - a.ring : a.ring - b.ring);
-  for (const cell of roof) add(cell.dx, WALL_HEIGHT, cell.dz, variant === 'hillside' ? 'cave_wall' : 'planks', 'roof');
+  for (const cell of roof) add(cell.dx, WALL_HEIGHT, cell.dz, variant === 'hillside' ? 'cave_wall' : 'roof', 'roof');
 
+  const compact = size < SIZE;
+  const cell = (family, dx, dz) => ({ family, position: at(dx, 0, dz) });
+  // Stand south of the beds in the starter house, north of them in a compact house.
+  const bed = (x) => ({ ...cell('bed', x, 2), head: at(x, 0, compact ? 3 : 1),
+    stand: at(compact ? mid : x, 0, compact ? -1 : 4) });
   const furniture = {
-    crafting_table: { position: at(1, 0, 5), family: 'crafting_table' },
-    furnace: { position: at(2, 0, 5), family: 'furnace' },
-    chest: { position: at(4, 0, 5), family: 'chest' },
-    // The bed is placed by standing south of the foot and facing north.
-    bed: { position: at(5, 0, 2), head: at(5, 0, 1), stand: at(5, 0, 4), family: 'bed' },
-    guestBed: { position: at(4, 0, 2), head: at(4, 0, 1), stand: at(4, 0, 4), family: 'bed' },
-    torches: [at(1, 0, 1), at(5, 0, 5), at(2, 0, -1), at(4, 0, -1)],
-    door: { position: at(door.dx, 0, door.dz), upper: at(door.dx, 1, door.dz), family: 'door' },
+    crafting_table: cell('crafting_table', 1, compact ? 1 : 5),
+    furnace: cell('furnace', compact ? 3 : 2, compact ? 1 : 5),
+    chest: cell('chest', compact ? 2 : 4, compact ? 3 : 5),
+    bed: bed(compact ? 3 : 5), guestBed: bed(compact ? 1 : 4),
+    torches: (compact ? [[2, 1], [2, 2], [1, -1], [3, -1]]
+      : [[1, 1], [5, 5], [2, -1], [4, -1]]).map(([x, z]) => at(x, 0, z)),
+    door: { ...cell('door', door.dx, door.dz), upper: at(door.dx, 1, door.dz) },
   };
-  if (size < SIZE) Object.assign(furniture, {
-    crafting_table: { position: at(1, 0, 1), family: 'crafting_table' },
-    furnace: { position: at(3, 0, 1), family: 'furnace' },
-    chest: { position: at(2, 0, 3), family: 'chest' },
-    // From the doorstep the southward component of the placement aim is
-    // dominant for either bed. Both are accessible from the central aisle.
-    bed: { position: at(3, 0, 2), head: at(3, 0, 3), stand: at(2, 0, -1), family: 'bed' },
-    guestBed: { position: at(1, 0, 2), head: at(1, 0, 3), stand: at(2, 0, -1), family: 'bed' },
-    torches: [at(2, 0, 1), at(2, 0, 2), at(1, 0, -1), at(3, 0, -1)],
-  });
 
   // The first roof ring sits on the wall tops, whose upper faces are above eye
   // level from the floor. One step in the middle of the room lets the bot see
@@ -78,20 +72,17 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
   const scaffold = variant === 'hillside' ? [] : [at(mid, 0, mid), ...(variant === 'compact' ? [at(mid, 1, mid)] : [])];
 
   // Everything inside the shell and one block of headroom above the roof must be clear.
-  const clearance = [];
+  const clearance = [], foundation = [];
   for (let dx = 0; dx < size; dx += 1) {
     for (let dz = 0; dz < size; dz += 1) {
+      foundation.push(at(dx, -1, dz));
       for (let dy = 0; dy <= WALL_HEIGHT + (variant === 'hillside' ? 0 : 1); dy += 1) clearance.push(at(dx, dy, dz));
     }
   }
   const entrance = at(door.dx, 0, -1);
   const exteriorTorches = furniture.torches.filter((p) => p.z < anchor.z);
   clearance.push(entrance, at(door.dx, 1, -1), ...exteriorTorches);
-  const foundation = [];
-  for (let dx = 0; dx < size; dx += 1) for (let dz = 0; dz < size; dz += 1) foundation.push(at(dx, -1, dz));
-  // And under the doorstep: a pit there (a creeper crater, a cave) leaves the
-  // bot shut in the house with no path out.
-  foundation.push(at(door.dx, -1, -1));
+  foundation.push(at(door.dx, -1, -1)); // A doorstep pit blocks the only exit.
   const torchSupports = exteriorTorches.map((p) => ({ ...p, y: p.y - 1 }));
 
   return {
@@ -107,12 +98,6 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
     // Doorstep outside the door; the bot must be able to reach it.
     entrance,
     interiorCenter: at(mid, 0, mid),
-    materials() {
-      const totals = {};
-      for (const block of blocks) totals[block.family] = (totals[block.family] || 0) + 1;
-      totals.torch = furniture.torches.length;
-      return totals;
-    },
   };
 }
 

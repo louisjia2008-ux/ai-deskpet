@@ -109,10 +109,10 @@ test('the carried sand can become a stable lid before the bunker site is selecte
   assert.deepEqual(result, { ok: true, gained: 1, method: 'craft_sandstone' });
   assert.equal(first.items[0].count, 3);
   const automatic = sandyBot();
-  assert.equal((await digIn(automatic.bot, {}, { sealMatch: () => false, prepareSeal: true })).reason, 'no_bunker_spot');
+  assert.equal((await digIn(automatic.bot, {}, { prepareSeal: true })).reason, 'no_bunker_spot');
   assert.equal(automatic.items[1].name, 'sandstone');
   const manual = sandyBot();
-  assert.equal((await digIn(manual.bot, {}, { sealMatch: () => false })).reason, 'no_seal_block');
+  assert.equal((await digIn(manual.bot, {})).reason, 'no_seal_block');
   assert.equal(manual.items[0].count, 7);
 });
 

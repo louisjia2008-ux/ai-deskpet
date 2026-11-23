@@ -13,6 +13,7 @@ const { withCursorConfirmation } = require('./inventory');
 const { isLog, isSurfaceLog } = require('./goals/gatherBlocks');
 const { isAir, naturalCover, plantPartner, isWaterlogged } = require('./natural-cover');
 const { blockTarget, watchDestination } = require('./target-recovery');
+const { accepts, pickItem, seal: sealMatch, isSealSoil, isSealRock, SANDSTONE } = require('./materials');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
@@ -295,8 +296,9 @@ async function clearCoverAt(bot, ctx, cell, options) {
   return cleared ? { ok: true } : fail('cover_not_cleared');
 }
 
-async function placeAt(bot, ctx, position, itemMatch, { faces, stand, verify, sneak = false, alsoClear = [], passable = false,
+async function placeAt(bot, ctx, position, material, { faces, stand, verify, sneak = false, alsoClear = [], passable = false,
   requireAir = false, protectedCell } = {}) {
+  const itemMatch = typeof material === 'function' ? material : (name) => accepts(material, name);
   const target = v(position);
   const current = bot.blockAt(target);
   if (current && itemMatch(current.name)) return { ok: true, already: true };
@@ -306,7 +308,8 @@ async function placeAt(bot, ctx, position, itemMatch, { faces, stand, verify, sn
   // Check the whole footprint before changing either half of a bed or door.
   const blocked = inspect().find(result => !result.ok);
   if (blocked) return blocked;
-  const item = bot.inventory.items().find((i) => itemMatch(i.name));
+  const items = bot.inventory.items();
+  const item = typeof material === 'function' ? items.find((i) => itemMatch(i.name)) : pickItem(material, items);
   if (!item) return fail('no_material');
   for (const { cell, options } of cells) {
     const cleared = await clearCoverAt(bot, ctx, cell, options);
@@ -982,13 +985,7 @@ const SOLID = (b) => b && b.boundingBox === 'block' && !/water|lava|gravel|sand/
 const SHAFT_SOLID = (b) => b && b.boundingBox === 'block' && !/water|lava|soul_sand/.test(b.name);
 const SIDES4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const RING2 = [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 1], [-2, -1], [1, -2], [-1, 2]];
-// A lid that stays up: four sand make one in the inventory grid.
-const SANDSTONE = { sand: 'sandstone', red_sand: 'red_sandstone' };
-const SHELTER_SEALS = new Set(['dirt', 'cobblestone', 'cobbled_deepslate', 'coarse_dirt', ...Object.values(SANDSTONE)]);
-const SEAL_SOIL = /^(dirt|grass_block|coarse_dirt|podzol|rooted_dirt|mycelium)$/;
-const SEAL_ROCK = /^(stone|cobblestone|deepslate|cobbled_deepslate|sandstone|red_sandstone)$/;
-
-const shelterSealCount = (inventory = {}) => [...SHELTER_SEALS].reduce((n, name) => n + (inventory[name] || 0), 0);
+const shelterSealCount = (inventory = {}) => Object.entries(inventory).reduce((n, [name, count]) => sealMatch(name) ? n + count : n, 0);
 
 async function craftShelterSeal(bot, ctx, times) {
   const sand = Object.keys(SANDSTONE).find(name => actions.countItems(bot, n => n === name) >= 4);
@@ -998,14 +995,14 @@ async function craftShelterSeal(bot, ctx, times) {
 
 /** Top up the night shelter with one short local gathering action. */
 async function prepareShelterSeal(bot, ctx, { want = 2 } = {}) {
-  const countSeals = () => actions.countItems(bot, n => SHELTER_SEALS.has(n));
+  const countSeals = () => actions.countItems(bot, sealMatch);
   const before = countSeals();
   if (before >= want) return { ok: true, already: true };
   const crafted = await craftShelterSeal(bot, ctx, want - before);
   if (crafted?.ok) return { ok: true, gained: countSeals() - before, method: 'craft_sandstone' };
   const feet = bot.entity.position.floored();
   const pickaxe = bot.inventory.items().some(item => item.name.endsWith('_pickaxe'));
-  const stable = b => b && (SEAL_SOIL.test(b.name) || (pickaxe && SEAL_ROCK.test(b.name)));
+  const stable = b => b && (isSealSoil(b.name) || (pickaxe && isSealRock(b.name)));
   const sand = b => b && Object.hasOwn(SANDSTONE, b.name);
   const nearby = (matching) => (bot.findBlocks?.({ matching, maxDistance: 8, count: 32 }) || [])
     .filter(p => Math.abs(p.y - feet.y) <= 2 && !p.equals(feet.offset(0, -1, 0))
@@ -1015,12 +1012,12 @@ async function prepareShelterSeal(bot, ctx, { want = 2 } = {}) {
   if (!target) return fail('no_local_seal_material');
   const reach = await actions.goToDig(bot, { ...ctx, dryRoute: true }, target, { timeoutMs: 4000, retryNoProgress: false });
   if (!reach.ok) return reach;
-  const tool = SEAL_ROCK.test(target.name) && bot.inventory.items().find(item => item.name.endsWith('_pickaxe'));
+  const tool = isSealRock(target.name) && bot.inventory.items().find(item => item.name.endsWith('_pickaxe'));
   const dug = await actions.digBlock(bot, ctx, target, { timeoutMs: 3500, tool });
   if (!dug.ok) return dug;
   const takesSand = sand(target);
   const gained = await actions.collectDrops(bot, { ...ctx, dryRoute: true }, target.position.offset(0.5, 0.5, 0.5),
-    n => takesSand ? n === target.name : SHELTER_SEALS.has(n), { timeoutMs: 2500, radius: 3 });
+    n => takesSand ? n === target.name : sealMatch(n), { timeoutMs: 2500, radius: 3 });
   if (takesSand) return gained.ok ? { ...gained, method: 'gather_sand' } : gained;
   const count = countSeals() - before;
   return count > 0 ? { ok: true, gained: count, method: 'gather' } : gained;
@@ -1037,14 +1034,13 @@ function bunkerSpot(bot, top) {
   return SHAFT_SOLID(bot.blockAt(top.offset(0, -4, 0)));
 }
 
-async function digIn(bot, ctx, { sealMatch: baseSeal, avoid = () => false, prepareSeal = false }) {
-  const sealMatch = (n) => baseSeal(n) || Object.values(SANDSTONE).includes(n);
+async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}) {
   const hasSeal = () => bot.inventory.items().some((i) => sealMatch(i.name));
   const count = (name) => actions.countItems(bot, (n) => n === name);
   // With nothing to seal with (just respawned), the shaft itself supplies it:
   // its dirt drops by hand, its stone with a pickaxe.
-  const yieldsSeal = (b) => b && (SEAL_SOIL.test(b.name)
-    || (SEAL_ROCK.test(b.name) && bot.inventory.items().some((i) => i.name.endsWith('_pickaxe'))));
+  const yieldsSeal = (b) => b && (isSealSoil(b.name)
+    || (isSealRock(b.name) && bot.inventory.items().some((i) => i.name.endsWith('_pickaxe'))));
   // The carrying reserve counts as a usable lid, even if the shoreline
   // supplies no more sand and the shaft is still only being considered.
   if (prepareSeal && !hasSeal()) await craftShelterSeal(bot, ctx, 1);
@@ -1098,7 +1094,7 @@ async function digIn(bot, ctx, { sealMatch: baseSeal, avoid = () => false, prepa
   if (!hasSeal()) return fail('no_seal_block');
   // Seal the old ground block above the head, resting on the shaft wall beside it.
   const seal = top.offset(0, -1, 0);
-  const sealed = await placeAt(bot, ctx, seal, sealMatch,
+  const sealed = await placeAt(bot, ctx, seal, 'seal',
     { faces: [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)] });
   if (!sealed.ok) return sealed;
   return { ok: true, bunker: { top: { x: top.x, y: top.y, z: top.z } } };

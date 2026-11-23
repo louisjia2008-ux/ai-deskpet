@@ -13,6 +13,7 @@ const { ownedItems } = require('./perception');
 const { dropReturnPosition } = require('./pathReturn');
 const { posKey } = require('./blacklist');
 const { homeContains, safeStand, SIDES: CARDINAL } = require('./home-topology');
+const { pickItem, isSealSoil, isSealRock } = require('./materials');
 const shore = require('./shore-route');
 const { meleeGeometry, meleeSight, MeleeFollowGoal, entitySizeEvidence } = require('./entityGeometry');
 const { surveyDigPermit, withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight } = require('./survey-plan-actions');
@@ -1003,7 +1004,6 @@ async function drainPocket(bot, ctx) {
   return blockInflow(bot, ctx, feet);
 }
 
-const FILLERS = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack', 'stone'];
 /**
  * No source to scoop (the hole is fed by water running in from aside): wall
  * the inflow off with blocks, so the water drains away and the bot stands
@@ -1019,7 +1019,7 @@ async function blockInflow(bot, ctx, feet) {
     }
   }
   if (!inflow.length || typeof bot.placeBlock !== 'function') return false;
-  const filler = bot.inventory.items().find((i) => FILLERS.includes(i.name));
+  const filler = pickItem('filler', bot.inventory.items());
   if (!filler) return false;
   try { await bot.equip(filler, 'hand'); } catch (error) { if (error?.code === 'aborted') throw error; return false; }
   let walled = 0;
@@ -1268,9 +1268,6 @@ const FLUID = /water|lava/;
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const fluidNext = (bot, p) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
   .some(([dx, dy, dz]) => FLUID.test(bot.blockAt(p.offset(dx, dy, dz))?.name || ''));
-// Blocks whose drop can be pillared with: soil by hand, rock with a pickaxe.
-const SOIL = /^(dirt|grass_block|coarse_dirt|podzol|rooted_dirt|mycelium)$/;
-const ROCK = /^(stone|cobblestone|deepslate|cobbled_deepslate|sandstone|red_sandstone)$/;
 
 /** Digs a few pit-wall blocks at or above foot level for their dirt or cobblestone. */
 async function gatherClimbBlocks(bot, ctx, { want = 6 } = {}) {
@@ -1282,13 +1279,13 @@ async function gatherClimbBlocks(bot, ctx, { want = 6 } = {}) {
       for (let dy = 0; dy <= 2; dy += 1) {
         if (dx === 0 && dz === 0) continue;
         const block = bot.blockAt(feet.offset(dx, dy, dz));
-        if (!block || !(SOIL.test(block.name) || (pickaxe && ROCK.test(block.name)))) continue;
+        if (!block || !(isSealSoil(block.name) || (pickaxe && isSealRock(block.name)))) continue;
         if (fluidNext(bot, block.position) || !withinReach(bot, block.position)) continue;
         walls.push(block);
       }
     }
   }
-  walls.sort((a, b) => Number(ROCK.test(a.name)) - Number(ROCK.test(b.name)));
+  walls.sort((a, b) => Number(isSealRock(a.name)) - Number(isSealRock(b.name)));
   let gained = 0;
   for (const block of walls) {
     if (gained >= want) break;

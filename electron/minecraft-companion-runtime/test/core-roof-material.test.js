@@ -9,6 +9,7 @@ const { createStarterHouse } = require('../core/blueprints/starterHouse');
 const { chooseNext } = require('../core/director');
 const { createHomesteadGoal } = require('../core/goals/homestead');
 const { createProgression } = require('../core/goals/progression');
+const { accepts, budget, supply } = require('../core/materials');
 const { KNOWLEDGE } = require('../core/knowledge');
 const { gatherOne } = require('../core/skills');
 
@@ -18,12 +19,13 @@ const above = (p) => new Vec3(p.x, p.y + 1, p.z);
 function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false, widerStone = false } = {}) {
   const blueprint = createStarterHouse(anchor, { variant });
   const roof = blueprint.blocks.filter(b => b.phase === 'roof').map(b => b.position);
+  const walls = blueprint.blocks.filter(b => b.phase === 'walls').map(b => b.position);
   const blocks = new Map();
   const events = [], worked = [];
   const inventory = { crafting_table: 1, stone_pickaxe: 1, dirt: 2, ...materials };
   let afterChange = () => {};
   const setBlock = (p, n) => { blocks.set(posKey(p), n); afterChange(p, n); };
-  for (const b of blueprint.blocks.filter(b => b.phase === 'walls')) setBlock(b.position, 'cobblestone');
+  for (const p of walls) setBlock(p, 'cobblestone');
   for (const [key, n] of Object.entries(panels)) blocks.set(key, n);
   const f = blueprint.furniture;
   for (const key of ['crafting_table', 'furnace', 'chest']) setBlock(f[key].position, key);
@@ -95,7 +97,7 @@ function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false
   const adapt = createAdaptation({ onEvent: e => events.push(e) }).scope(() => true);
   const ctx = { perceive: () => state, record: (type, data) => events.push({ type, ...data }), adapt };
   const newHome = () => createHomesteadGoal({ bot, anchor, variant, autonomous: true, gear: [], actions, skills });
-  return { roof, setBlock, setWatcher: fn => { afterChange = fn; }, bot, state, ctx, newHome, events, worked };
+  return { roof, walls, setBlock, setWatcher: fn => { afterChange = fn; }, bot, state, ctx, newHome, events, worked };
 }
 
 test('roof stone gathers apply protection before the native candidate cap', async () => {
@@ -134,7 +136,7 @@ async function finish(home, fixture) {
   assert.equal(home.status(fixture.state).usable, true);
 }
 
-for (const [material, stock] of [['cobblestone', { cobblestone: 44 }], ['sandstone', { sand: 192 }]]) {
+for (const [material, stock] of [['cobblestone', { cobblestone: 45, dirt: 0 }], ['sandstone', { sand: 196, dirt: 0 }]]) {
   test(`wood-ladder exhaustion builds a complete 49-cell ${material} roof through the native planner`, async () => {
     const fixture = site({ materials: stock, widerStone: material === 'cobblestone' });
     const home = fixture.newHome();
@@ -151,7 +153,7 @@ for (const [material, stock] of [['cobblestone', { cobblestone: 44 }], ['sandsto
       assert.equal(fixture.worked.filter(e => e.kind === 'gather' && e.block === 'stone').length, 5);
       assert.ok(!fixture.events.some(e => e.type === 'home_roof_material_changed'));
     } else {
-      assert.equal(fixture.worked.filter(e => e.kind === 'gather' && e.block === 'sand').length, 4);
+      assert.ok(!fixture.worked.some(e => e.kind === 'gather'));
       assert.equal(fixture.worked.reduce((n, e) => n + (e.kind === 'craft' ? e.times : 0), 0), 49);
       assert.equal(fixture.state.inventory.sand, 0);
     }
@@ -193,7 +195,8 @@ test('a restored mixed roof is usable only with allowed full blocks in every pan
   const cave = hillside.newHome();
   cave.restoreConstruction({ roofMaterial: 'dirt' });
   assert.equal(cave.status(hillside.state).usable, true);
-  assert.equal(cave.memory.roofMaterial, undefined);
+  assert.deepEqual(cave.memory.materialFallbacks, {});
+  assert.deepEqual(home.memory.materialFallbacks, { roof: { reason: 'legacy_roof_material' } });
 });
 
 test('wood maintenance closes one panel at a time and keeps a persisted cap on interruption', async () => {
@@ -225,7 +228,7 @@ test('wood maintenance closes one panel at a time and keeps a persisted cap on i
   assert.equal(fixture.bot.blockAt(above(touched)).name, 'oak_planks');
   assert.equal(home.protects(above(touched)), true);
   assert.equal(home.status(fixture.state).finished, true);
-  const saved = JSON.parse(JSON.stringify({ roofMaterial: home.memory.roofMaterial,
+  const saved = JSON.parse(JSON.stringify({ materialFallbacks: home.memory.materialFallbacks,
     owned: home.memory.owned, temporary: home.memory.temporary }));
   home = fixture.newHome();
   home.memory.established = true;
@@ -238,7 +241,7 @@ test('wood maintenance closes one panel at a time and keeps a persisted cap on i
   assert.equal(fixture.bot.blockAt(touched).name, 'oak_planks');
   assert.equal(stone.filter(p => fixture.bot.blockAt(p).name === 'cobblestone').length, 1);
   assert.equal((await home.roofWoodGoal().run(fixture.ctx)).ok, true);
-  assert.equal(home.memory.roofMaterial, null);
+  assert.deepEqual(home.memory.materialFallbacks, {});
   assert.equal(Object.keys(home.memory.temporary).length, 0);
   assert.equal(fixture.events.filter(e => e.type === 'home_roof_wood_replaced').length, 2);
 });
@@ -270,4 +273,76 @@ test('roof wood is ineligible until both iron and diamond cards can finish', () 
   inventory.iron_boots = 1;
   assert.equal(roof.need(state, memory), 5);
   assert.equal(roof.need(state, { ...memory, homePending: true }), 0);
+});
+
+test('seed 2 places a sandstone wall corner from the 56 blocks already carried', async () => {
+  const fixture = site({ materials: { cobblestone: 0, sandstone: 56, oak_planks: 49 } });
+  const corner = fixture.walls[0];
+  fixture.setBlock(corner, 'air');
+  const home = fixture.newHome();
+  await home.run(fixture.ctx);
+  assert.equal(fixture.bot.blockAt(corner).name, 'sandstone');
+  assert.deepEqual(fixture.worked, [{ kind: 'place', position: posKey(corner), item: 'sandstone' }]);
+  assert.equal(fixture.events.some(e => e.type === 'home_material_acquisition'), false);
+});
+
+test('wall mixes carried preferred materials with on-site sandstone conversion and protects finished panels', async () => {
+  const fixture = site({ materials: { cobblestone: 1, sand: 4, sandstone: 1, dirt: 64, oak_planks: 49 } });
+  const [first, second, third, oldDirt, oldSandstone] = fixture.walls;
+  for (const cell of [first, second, third]) fixture.setBlock(cell, 'air');
+  fixture.setBlock(oldDirt, 'dirt');
+  fixture.setBlock(oldSandstone, 'sandstone');
+  const home = fixture.newHome();
+  for (let n = 0; n < 4; n++) await home.run(fixture.ctx);
+  assert.deepEqual([first, second, third, oldDirt, oldSandstone].map(p => fixture.bot.blockAt(p).name),
+    ['cobblestone', 'sandstone', 'sandstone', 'dirt', 'sandstone']);
+  assert.equal(fixture.worked.filter(e => e.kind === 'craft').length, 1);
+  assert.ok(!fixture.worked.some(e => e.kind === 'gather' || e.kind === 'dig'));
+});
+
+test('wall tries preferred acquisition before entering the dirt fallback if it has no pickaxe', async () => {
+  const fixture = site({ materials: { stone_pickaxe: 0, oak_planks: 49 } });
+  const corner = fixture.walls[0];
+  fixture.setBlock(corner, 'air');
+  const home = fixture.newHome();
+  await home.run(fixture.ctx);
+  assert.equal(fixture.bot.blockAt(corner).name, 'air');
+  assert.equal(fixture.events.find(e => e.type === 'home_material_acquisition').reason, 'no_tool');
+  await home.run(fixture.ctx);
+  assert.equal(fixture.bot.blockAt(corner).name, 'dirt');
+  assert.deepEqual(home.memory.materialFallbacks, { wall: { reason: 'no_tool' } });
+});
+
+test('every placement purpose excludes gravity blocks, ores, logs and workstations', () => {
+  for (const purpose of ['wall', 'roof', 'cave_wall', 'filler', 'seal']) {
+    for (const name of ['sand', 'red_sand', 'gravel', 'white_concrete_powder', 'iron_ore', 'deepslate_coal_ore',
+      'oak_log', 'stripped_spruce_log', 'crafting_table', 'furnace']) {
+      assert.equal(accepts(purpose, name), false, purpose + ' ' + name);
+    }
+  }
+});
+
+test('local material promises subtract stone tool, furnace and furniture costs', () => {
+  const stock = budget({ cobblestone: 8, cobbled_deepslate: 2, sandstone: 5, birch_planks: 4, oak_log: 2 }, { stone: 10, wood: 9 });
+  assert.equal(supply('wall', stock, {}).primary, 5);
+  assert.equal(supply('roof', stock, {}).primary, 3);
+});
+
+test('inventory-grid supply combines stripped and regular wood without counting loose bamboo', () => {
+  const stock = budget({ oak_log: 1, stripped_oak_wood: 2, crimson_stem: 1, bamboo_block: 1, bamboo: 8 });
+  assert.deepEqual(stock.craftable, {
+    oak_planks: { count: 12, yields: 4 }, crimson_planks: { count: 4, yields: 4 }, bamboo_planks: { count: 2, yields: 2 },
+  });
+  assert.equal(supply('roof', stock, {}).primary, 18);
+});
+
+test('ample cobblestone and planks preserve the north-facing 7×7 shell materials', async () => {
+  const fixture = site({ materials: { cobblestone: 64, sandstone: 56, oak_planks: 64 } });
+  for (const p of fixture.walls) fixture.setBlock(p, 'air');
+  const home = fixture.newHome();
+  for (let n = 0; n < 110 && !home.isDone(fixture.state); n++) await home.run(fixture.ctx);
+  assert.equal(home.status(fixture.state).usable, true);
+  assert.ok(fixture.walls.every(p => fixture.bot.blockAt(p).name === 'cobblestone'));
+  assert.ok(fixture.roof.every(p => fixture.bot.blockAt(p).name === 'oak_planks'));
+  assert.equal(fixture.events.some(e => e.type === 'home_material_acquisition'), false);
 });

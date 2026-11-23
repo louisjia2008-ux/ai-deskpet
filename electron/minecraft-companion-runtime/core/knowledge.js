@@ -13,7 +13,7 @@
 //   gather ... rare?: the drop only comes some of the time (flint from gravel)
 //   station                                           a placed crafting table / furnace
 
-const WOODS = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'pale_oak'];
+const { WOODS, filler } = require('./materials');
 const COLORS = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray',
   'cyan', 'purple', 'blue', 'brown', 'green', 'red', 'black'];
 
@@ -281,13 +281,7 @@ const KNOWLEDGE = {
   wheat: { match: exact('wheat'), sources: [{ kind: 'farm', crop: 'wheat' }] },
   bread: { match: exact('bread'), sources: [{ kind: 'craft', yields: 1, needs: { wheat: 3 }, table: true, pick: () => 'bread' }] },
   dirt: { match: exact('dirt'), sources: [{ kind: 'gather', blocks: exact('dirt', 'grass_block', 'coarse_dirt') }] },
-  shelter_wall: { match: exact('dirt', 'cobblestone', 'cobbled_deepslate', 'sandstone'), sources: [{ kind: 'alias', key: 'dirt' }] },
-  cave_wall: { match: exact('stone', 'andesite', 'diorite', 'granite', 'deepslate', 'dirt', 'cobblestone', 'cobbled_deepslate', 'sandstone'),
-    sources: [{ kind: 'alias', key: 'shelter_wall' }] },
-  roof_cobblestone: { match: exact('cobblestone'),
-    sources: [{ kind: 'gather', blocks: exact('stone', 'cobblestone'), tool: 'pickaxe' }] },
-  roof_cobbled_deepslate: { match: exact('cobbled_deepslate'),
-    sources: [{ kind: 'gather', blocks: exact('deepslate', 'cobbled_deepslate'), tool: 'pickaxe' }] },
+  filler: { match: filler, sources: [{ kind: 'alias', key: 'cobblestone' }] },
   sandstone: { match: exact('sandstone'),
     sources: [{ kind: 'craft', yields: 1, maxBatch: 16, needs: { sand: 4 }, table: false, pick: () => 'sandstone' }] },
   red_sand: { match: exact('red_sand'), sources: [{ kind: 'gather', blocks: exact('red_sand') }] },

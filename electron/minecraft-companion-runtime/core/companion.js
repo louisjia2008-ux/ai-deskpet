@@ -309,7 +309,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
     if (!home || (!memory?.house && !memory?.relocation?.anchor)) return;
     const structure = memory.house ? { anchor: memory.house.anchor, variant: memory.house.variant, established: memory.established === true,
       pinned: memory.pinned === true, verified: { ...memory.verified },
-      construction: { owned: memory.owned, temporary: memory.temporary, breach: memory.breach, roofMaterial: memory.roofMaterial,
+      construction: { owned: memory.owned, temporary: memory.temporary, breach: memory.breach, materialFallbacks: memory.materialFallbacks,
         furniture: Object.fromEntries(['crafting_table', 'furnace', 'chest', 'bed', 'guestBed']
           .map(id => [id, memory.house.furniture[id]])) } } : { anchor: null };
     const value = { ...structure,

@@ -300,7 +300,6 @@ const GUARD_REACH = 16;
 const GUARD_SWITCH_HEALTH = 10;
 // Neutral mobs are left alone unless they are right next to us.
 const NEUTRAL = new Set(['enderman', 'zombified_piglin', 'piglin', 'spider', 'cave_spider']);
-const SEALS = new Set(['dirt', 'cobblestone', 'cobbled_deepslate', 'coarse_dirt']);
 const CALM_UNLESS_PROVOKED = new Set(['zombified_piglin', 'piglin']);
 const OTHER_ATTACKERS = new Set(['wither_skeleton', 'skeleton', 'blaze', 'ghast', 'magma_cube', 'hoglin', 'piglin_brute', 'zombie', 'husk', 'spider', 'cave_spider', 'creeper', 'stray', 'bogged']);
 const PROJECTILES = new Set(['arrow', 'small_fireball', 'fireball', 'spectral_arrow']);
@@ -1286,7 +1285,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     async run(ctx) {
       if (!hidden) {
         ctx.record('hide', { from: 'enderman' });
-        const dug = await skills.digIn(bot, ctx, { sealMatch: (n) => SEALS.has(n) });
+        const dug = await skills.digIn(bot, ctx);
         if (!dug.ok) return dug;
         hidden = { bunker: dug.bunker, since: Date.now() };
         return { ok: true };
@@ -1432,7 +1431,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
         if (spot) {
           await actions.goTo(bot, ctx, new goals.GoalBlock(spot.x, spot.y, spot.z), { timeoutMs: 8000 });
         } else {
-          const dug = await skills.digIn(bot, ctx, { sealMatch: (n) => SEALS.has(n) || n === 'netherrack' });
+          const dug = await skills.digIn(bot, ctx);
           if (dug.ok) {
             await sleep(8000, ctx.signal);
             await skills.digOut(bot, ctx, dug.bunker);

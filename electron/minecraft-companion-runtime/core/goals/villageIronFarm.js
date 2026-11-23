@@ -262,7 +262,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
       await sleep(300, ctx.signal);
     }
     if (need.path || need.fill) {
-      const filled = await skills.placeAt(bot, ctx, { ...cell, y: cell.y - 1 }, (n) => n === 'dirt' || n === 'cobblestone',
+      const filled = await skills.placeAt(bot, ctx, { ...cell, y: cell.y - 1 }, 'filler',
         { faces: [new Vec3(0, -1, 0)] });
       ctx.record('village_rail_ground', { at: cell, ok: filled.ok, reason: filled.reason });
       if (!filled.ok && filled.reason === 'cell_occupied_by_entity') {

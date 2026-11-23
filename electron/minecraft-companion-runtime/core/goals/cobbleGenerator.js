@@ -4,7 +4,7 @@
 //
 // Every run() looks at the world and does exactly one thing:
 //   1. no site yet           -> choose flat, solid ground near the bot
-//   2. a seal cell is open   -> fill it with cobblestone or dirt
+//   2. a seal cell is open   -> fill it with a stable, non-flammable block
 //   3. an open cell is solid -> dig it out
 //   4. no water source       -> pour the water bucket
 //   5. no lava source        -> pour the lava bucket (only once the pit holds water)
@@ -19,10 +19,9 @@ const defaultActions = require('../actions');
 const { createCobbleGenerator, FACINGS } = require('../blueprints/cobbleGenerator');
 const { sleep, waitUntil } = require('../confirm');
 const { deviceTargets, clearTerrain } = require('../target-recovery');
+const { stableSolid } = require('../materials');
 
-const FILLERS = ['cobblestone', 'dirt', 'cobbled_deepslate', 'stone', 'coarse_dirt'];
 const LIQUID = new Set(['water', 'lava', 'bubble_column']);
-const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
 const DIGGABLE = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'stone',
   'andesite', 'diorite', 'granite', 'cobblestone', 'cobbled_deepslate', 'deepslate', 'tuff', 'clay', 'mud',
   'terracotta', 'moss_block', 'netherrack']);
@@ -32,8 +31,7 @@ const isAir = (block) => !block || block.name === 'air' || block.name === 'cave_
 const isSoft = (block) => isAir(block) || (block.boundingBox === 'empty' && !LIQUID.has(block.name));
 // Lava burns flammable neighbours away (with fire ticks on), opening the seal.
 const FLAMMABLE = /(_log|_wood|_stem|_hyphae|_leaves|_planks|_wool|_carpet|_slab|_stairs|_fence|bookshelf|hay_block|scaffolding|tnt|bamboo|dried_kelp_block|target|beehive|bee_nest|moss_block|coal_block)$/;
-const isSeal = (block) => Boolean(block) && block.boundingBox === 'block' && !LIQUID.has(block.name)
-  && !GRAVITY.test(block.name) && !FLAMMABLE.test(block.name);
+const isSeal = (block) => stableSolid(block) && !FLAMMABLE.test(block.name);
 const key = (p) => `${p.x},${p.y},${p.z}`;
 
 /**
@@ -276,7 +274,7 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
     const s = inspect();
     if (!s) {
       const probe = createCobbleGenerator({ x: 0, y: 0, z: 0 }, 'east', { collector });
-      return [{ key: 'water_bucket', count: 1 }, { key: 'lava_bucket', count: 1 }, { key: 'cobblestone', count: Math.min(probe.seal.length, 12) },
+      return [{ key: 'water_bucket', count: 1 }, { key: 'lava_bucket', count: 1 }, { key: 'filler', count: Math.min(probe.seal.length, 12) },
         ...probe.parts.map((part) => ({ key: part.block, count: 1 })), { key: 'pickaxe', count: 1 }];
     }
     // Mined by hand, cobblestone drops nothing: after a death the harvest
@@ -284,7 +282,7 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
     const list = memory.harvested < harvest ? [{ key: 'pickaxe', count: 1 }] : [];
     if (!s.water) list.push({ key: 'water_bucket', count: 1 });
     if (!s.lava) list.push({ key: 'lava_bucket', count: 1 });
-    if (s.openSeal.length) list.push({ key: 'cobblestone', count: s.openSeal.length });
+    if (s.openSeal.length) list.push({ key: 'filler', count: s.openSeal.length });
     for (const part of memory.device.parts) if (!partOk(part)) list.push({ key: part.block, count: 1 });
     return list;
   }
@@ -318,7 +316,7 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
 
       if (s.openSeal.length) {
         const p = s.openSeal[0];
-        const place = () => skills.placeAt(bot, ctx, p, (n) => FILLERS.includes(n));
+        const place = () => skills.placeAt(bot, ctx, p, 'filler');
         return targets.run(ctx, 'seal', p, place, { relocate: relocation });
       }
       if (s.toDig.length || s.headBlocked) {

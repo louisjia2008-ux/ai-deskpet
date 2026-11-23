@@ -5,6 +5,7 @@
 
 const { createStarterHouse, SIZE, WALL_HEIGHT } = require('./blueprints/starterHouse');
 const { isAir: airName } = require('./natural-cover');
+const { naturalWall } = require('./materials');
 
 const GROUND = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'stone',
   'andesite', 'diorite', 'granite', 'sand', 'red_sand', 'terracotta', 'snow_block', 'moss_block', 'mud', 'clay']);
@@ -144,7 +145,7 @@ function chooseHillside(blockAt, around, { avoid = () => false, protectedCell = 
         if (avoid(anchor)) continue;
         const house = createStarterHouse(anchor, { variant: 'hillside' });
         if (!house.foundation.every((p) => isSolid(read(p))) || !house.torchSupports.every((p) => isSolid(read(p)))) continue;
-        if (house.blocks.filter((b) => b.family === 'cave_wall').some((b) => !caveRock(read(b.position)))) continue;
+        if (house.blocks.filter((b) => b.purpose === 'cave_wall').some((b) => !naturalWall(read(b.position)))) continue;
         if ([...house.clearance, ...house.foundation, ...house.torchSupports].some(protectedCell)) continue;
         if (!house.clearance.every((p) => {
           const b = read(p);

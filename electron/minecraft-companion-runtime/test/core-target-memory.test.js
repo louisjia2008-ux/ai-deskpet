@@ -61,7 +61,7 @@ for (const variant of ['starter', 'compact', 'hillside']) {
     const raised = [...exterior, house.entrance, above(house.entrance)];
     const world = new Map(raised.map(p => [posKey(p), 'podzol']));
     if (variant === 'hillside') {
-      for (const b of house.blocks.filter(b => b.family === 'cave_wall')) world.set(posKey(b.position), 'stone');
+      for (const b of house.blocks.filter(b => b.purpose === 'cave_wall')) world.set(posKey(b.position), 'stone');
     }
     const read = (x, y, z) => makeBlock(world.get(posKey({ x, y, z })) || (y < 64 ? 'dirt' : 'air'), { x, y, z });
     const center = { x: Math.floor(house.size / 2), y: 64, z: variant === 'hillside' ? -1 : Math.floor(house.size / 2) };
@@ -70,7 +70,7 @@ for (const variant of ['starter', 'compact', 'hillside']) {
       : chooseSite(read, center, { radius: 0, variant, maxWork: raised.length, protectedCell });
     const result = select();
     assert.deepEqual(result.anchor, anchor);
-    assert.equal(result.digs, raised.length + (variant === 'hillside' ? house.blocks.filter(b => b.family === 'cave_wall').length : 0));
+    assert.equal(result.digs, raised.length + (variant === 'hillside' ? house.blocks.filter(b => b.purpose === 'cave_wall').length : 0));
     if (variant !== 'hillside') assert.equal(evaluateSite(read, anchor, center, { variant }).fills, 0);
     assert.equal(select(p => posKey(p) === posKey(exterior[0])), null);
     const work = siteWork(read, house, (p, b) => b.name === 'stone');
