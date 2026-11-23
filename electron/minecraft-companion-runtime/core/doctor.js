@@ -82,7 +82,7 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
   }
 
   function updateContext(event) {
-    if (event.type === 'autonomy_choice') {
+    if (event.type === 'autonomy_choice' && !event.reassessment) {
       context = { ...context, card: text(event.card), goal: text(event.goal), step: null };
     } else if (event.type === 'goal_set') {
       goalGeneration = event.generation ?? null;

@@ -29,6 +29,18 @@ function materialsFor(blocks, nameAt, kb = require('./knowledge').KNOWLEDGE) {
   return [...totals].map(([key, count]) => ({ key, count }));
 }
 
+function materialWork(requirements, inventory, kb) {
+  const { countKey } = require('./knowledge');
+  const totals = new Map();
+  for (const { key, count } of requirements) totals.set(key, (totals.get(key) || 0) + count);
+  let needed = 0, available = 0;
+  for (const [key, count] of totals) {
+    needed += count;
+    available += Math.min(count, countKey(key, inventory, kb));
+  }
+  return { ready: available === needed, readiness: needed ? available / needed : 1, remaining: needed };
+}
+
 const SANDSTONE = Object.freeze({ sand: 'sandstone', red_sand: 'red_sandstone' });
 const STONE = ['stone', 'andesite', 'diorite', 'granite', 'deepslate', 'tuff', 'calcite'];
 const PLANKS = [...WOODS, 'crimson', 'warped', 'bamboo'].map(wood => wood + '_planks');
@@ -138,5 +150,5 @@ function restoreFallbacks(saved, variant) {
   return fallbacks;
 }
 
-module.exports = { WOODS, materialsFor, accepts, filler, seal, pickItem, stableSolid, naturalWall, placedFor, matchesRoofWood,
+module.exports = { WOODS, materialsFor, materialWork, accepts, filler, seal, pickItem, stableSolid, naturalWall, placedFor, matchesRoofWood,
   matchesRoofFallback, isSealSoil, isSealRock, SANDSTONE, budget, supply, acquisition, setFallback, restoreFallbacks };

@@ -1790,14 +1790,22 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     memory,
     restoreConstruction,
     status,
-    work(state) {
+    work(state, inventory) {
       if (!memory.house || memory.established) return null;
       const hs = houseState(), tasks = buildTasks(hs);
       const remaining = Math.max(tasks.length, hs.missing.length);
-      if (remaining > 2) return { remaining, ready: false };
-      const stock = materialStock(hs, state.inventory);
-      return { remaining, ready: tasks.every(task => (task.purpose
-        ? supply(task.purpose, stock, memory.materialFallbacks).carried : countKey(task.material, state.inventory, kb)) > 0) };
+      if (!inventory && remaining > 2) return { remaining, ready: false };
+      inventory ??= state.inventory;
+      const stock = materialStock(hs, inventory);
+      const usable = new Map();
+      let available = 0;
+      for (const task of tasks) {
+        const have = usable.get(task.material) ?? (task.purpose
+          ? supply(task.purpose, stock, memory.materialFallbacks).available : countKey(task.material, inventory, kb));
+        if (have > 0) { available++; usable.set(task.material, have - 1); }
+      }
+      return { remaining, ready: available >= remaining, readiness: remaining ? available / remaining : 1,
+        progress: Math.max(0, 8 - Math.ceil(hs.missing.length / 12)), position: memory.house.anchor };
     },
     maintenance,
     observeParts,

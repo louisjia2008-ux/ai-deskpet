@@ -3,6 +3,7 @@
 const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { countKey } = require('../knowledge');
+const { materialWork } = require('../materials');
 const { createOutfitGoal } = require('./outfit');
 const { createFarmGoal } = require('./farm');
 const { createNetherExpeditionGoal } = require('./netherExpedition');
@@ -30,7 +31,7 @@ const VALUABLES = ['diamond', 'blaze_rod', 'blaze_powder', 'ender_pearl', 'gold_
 const SUPPLIES = new Set(['dirt', 'gravel', 'cobbled_deepslate', 'rotten_flesh', 'netherrack']);
 const HOME = 'return_and_store';
 
-function createProgression({ bot, kb, homeOf, avoidFor, built }) {
+function createProgression({ bot, kb, homeOf, avoidFor }) {
   const here = () => dimension(bot);
   const milestones = (m) => (m.milestones ||= {});
   const chestCounts = (m) => Object.values(m.autonomyStock || {}).reduce((sum, counts) => {
@@ -168,49 +169,48 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
     };
   }
 
-  const card = (id, stage, need, create, { score = 80, expedition = false, safeReturn = false, maintenance = false, budgetStage } = {}) => ({
-    id, stage, risk: 'low', expedition, safeReturn, maintenance, budgetStage,
-    need: (s, m) => need(s, m) ? score : 0, create,
-  });
+  const card = (id, stage, requires, create, options) => ({ id, stage, risk: 'low', local: true, requires, create, ...options });
+  const materials = (...requirements) => ({ work: (_s, _m, stock) => materialWork(requirements, stock, kb) });
   const finished = (s, m) => m.homestead?.status(s)?.finished === true;
   const readyToFinish = (s, m) => inOverworld() && holds(s, IRON_TOOLS) && m.wheatFarmDone;
   const cards = [
     card('wheat_farm', 1, (s, m) => inOverworld() && holds(s, IRON_TOOLS) && !m.wheatFarmDone,
-      (m) => farm(m), { score: 72, maintenance: true }),
+      (m) => farm(m), materials(key('wheat_seeds', 9), key('hoe'))),
     card('harvest_wheat', 1, (s, m) => inOverworld() && m.wheatFarmDone && homeOf(m) && farm(m).harvestNeeded(),
-      (m) => harvest(m), { score: 30, maintenance: true }),
-    card('guest_bed', 1, (s, m) => readyToFinish(s, m) && m.homestead?.wantsGuestBed?.(s),
-      (m) => m.homestead.guestBedGoal(), { score: 81, maintenance: true }),
+      (m) => harvest(m)),
     card('home_lighting', 1, (s, m) => readyToFinish(s, m) && m.homestead?.wantsLighting?.(s),
-      (m) => m.homestead.lightingGoal(), { score: 85, maintenance: true }),
+      (m) => m.homestead.lightingGoal(), materials(key('torch', 4))),
+    card('guest_bed', 1, (s, m) => readyToFinish(s, m) && m.homestead?.wantsGuestBed?.(s),
+      (m) => m.homestead.guestBedGoal(), materials(key('wool', 3), key('planks', 3))),
     card('return_home', 0, (s, m) => inOverworld() && Boolean(m.homestead?.memory.established)
       && (m.homePending || VALUABLES.some((item) => (s.inventory[item] || 0) > 0 && (item !== 'diamond' || holds(s, DIAMOND)))),
-      (m) => { m.homePending = true; return homeStep(m); }, { score: 100, safeReturn: true }),
+      (m) => { m.homePending = true; return homeStep(m); }, { safeReturn: true }),
     // A machine is useful, but its construction must not block making iron tools.
     card('iron_tools', 1, (s) => inOverworld() && !holds(s, IRON_TOOLS),
-      (m) => outfit(m, IRON_TOOLS), { score: 90, maintenance: true }),
+      (m) => outfit(m, IRON_TOOLS), materials(key('iron_ingot', 6), key('stick', 3), key('planks', 6))),
     card('iron_armor', 1, (s, m) => readyToFinish(s, m) && finished(s, m)
       && (!holds(s, IRON_ARMOR) || upgrades(bot).some(([item]) => item.name.startsWith('iron_'))),
-      (m) => outfit(m, IRON_ARMOR), { maintenance: true }),
-    card('diamond_tools', 3, (s) => inOverworld() && !holds(s, DIAMOND), (m) => outfit(m, DIAMOND)),
+      (m) => outfit(m, IRON_ARMOR), materials(key('iron_ingot', 24))),
+    card('diamond_tools', 3, (s) => inOverworld() && !holds(s, DIAMOND), (m) => outfit(m, DIAMOND),
+      materials(key('diamond', 5), key('stick', 3))),
     card('home_roof_wood', 3, (s, m) => inOverworld() && !m.homePending && m.wheatFarmDone
       && holds(s, OVERWORLD_IRON) && holds(s, DIAMOND) && m.homestead?.wantsRoofWood?.(s),
-      (m) => m.homestead.roofWoodGoal(), { score: 5, maintenance: true }),
+      (m) => m.homestead.roofWoodGoal()),
     card('nether_supplies', 4, (s, m) => inOverworld() && !m.homePending && blaze(s, m) < 14 && !holds(s, [...IRON, ...netherKit()]),
-      (m) => outfit(m, [...IRON.filter((r) => r.key !== 'arrow'), ...netherKit()]), { maintenance: true }),
+      (m) => outfit(m, [...IRON.filter((r) => r.key !== 'arrow'), ...netherKit()])),
     card('nether_fortress', 4, (s, m) => inOverworld() && range(m) >= 4 && blaze(s, m) < 14 && ready(s, m, netherKit()),
       (m) => createNetherExpeditionGoal({ bot, blazeRods: Math.max(1, Math.ceil((14 - (chestCounts(m).blaze_powder || 0)) / 2) - (chestCounts(m).blaze_rod || 0)), witherSkulls: 0, trades: 0,
         returnOnRespawn: true,
         canEnter: (s) => fit(s) && holds(s, [...IRON, ...DIAMOND, key('food', 12), key('cobblestone', 48)]) }),
       { expedition: true, budgetStage: 4 }),
     card('nether_return', 0, () => here() === 'the_nether', () => createNetherExpeditionGoal({ bot, blazeRods: 0, witherSkulls: 0, trades: 0 }),
-      { score: 100, expedition: true, safeReturn: true }),
+      { expedition: true, safeReturn: true }),
     card('ender_pearls', 4, (s, m) => inOverworld() && range(m) >= 5 && !m.homePending && s.isDay === false
       && s.health >= 18 && s.food >= 16 && holds(s, IRON) && blaze(s, m) >= 14 && pearls(s, m) < 14,
       (m) => createHuntPearlsGoal({ bot, count: Math.max(1, 14 - (chestCounts(m).ender_pearl || 0)) }),
-      { score: 88, expedition: true, budgetStage: 4 }),
+      { expedition: true, budgetStage: 4 }),
     card('end_supplies', 5, (s, m) => inOverworld() && range(m) >= 5 && !milestones(m).dragon
-      && !m.homePending && endSuppliesReady(s, m) && !holds(s, endKitItems(m)), endKit, { maintenance: true }),
+      && !m.homePending && endSuppliesReady(s, m) && !holds(s, endKitItems(m)), endKit),
     card('stronghold', 5, (s, m) => range(m) >= 5 && !milestones(m).dragon && ready(s, m, endKitItems(m))
       && !(m.stagePauses?.[6] > Date.now()),
       (m) => {
@@ -221,9 +221,9 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
         return createEnterEndGoal({ bot, canEnter: canEnterEnd });
       }, { expedition: true, budgetStage: 5 }),
     card('dragon_return', 6, () => here() === 'the_end',
-      () => createEndJourneyGoal({ bot, withCity: false, home: true, alreadyInside: true }), { score: 100, expedition: true, safeReturn: true, budgetStage: 6 }),
+      () => createEndJourneyGoal({ bot, withCity: false, home: true, alreadyInside: true }), { expedition: true, safeReturn: true, budgetStage: 6 }),
     card('diamond_armor', 6, (s, m) => inOverworld() && milestones(m).dragon && !holds(s, ARMOR.map((piece) => key(`diamond_${piece}`))),
-       (m) => outfit(m, ARMOR.map((piece) => key(`diamond_${piece}`))), { score: 45 }),
+       (m) => outfit(m, ARMOR.map((piece) => key(`diamond_${piece}`)))),
   ];
   return { cards, stageOf, range, litEnd };
 }

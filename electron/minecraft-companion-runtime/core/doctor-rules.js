@@ -928,7 +928,7 @@ function cardSwitches() {
       }
       if (active && (cycles.get(active.key)?.length ?? 0) < settings.count) active = null;
 
-      if (event.type === 'autonomy_choice' && typeof event.card === 'string') {
+      if (event.type === 'autonomy_choice' && !event.reassessment && typeof event.card === 'string') {
         selected = { ...mark(frame), card: shortText(event.card), goal: shortText(event.goal), generation: null };
       } else if (event.type === 'goal_set' && selected && event.goal === selected.goal) {
         selected.generation = event.generation ?? null;

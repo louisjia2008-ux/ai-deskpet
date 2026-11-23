@@ -178,10 +178,13 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
         && (!(state.inventory.wheat_seeds > 0) || !count(['empty']));
     },
     progress: () => memory.steps,
-    work(state) {
+    work(state, inventory = state.inventory) {
       if (mode !== 'sow') return null;
       const remaining = plotCount - count(['growing', 'ripe']);
-      return { remaining, ready: (state.inventory.wheat_seeds || 0) >= remaining && countKey('hoe', state.inventory, kb) > 0 };
+      const seeds = Math.min(remaining, inventory.wheat_seeds || 0);
+      const hoe = Number(countKey('hoe', inventory, kb) > 0);
+      return { remaining, ready: seeds === remaining && Boolean(hoe), readiness: (seeds + hoe) / (remaining + 1),
+        progress: plotCount - remaining, position: memory.plots?.[0] ?? center };
     },
     async run(ctx) {
       const result = await runOnce(ctx);

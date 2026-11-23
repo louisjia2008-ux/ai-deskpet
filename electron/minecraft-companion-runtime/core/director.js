@@ -1,28 +1,80 @@
 'use strict';
-// Score autonomous cards when the body is available. A running goal can
-// yield after bounded waits or consecutive failures.
+// Reassess autonomous cards between steps while the selected card owns the goal.
 
 const { stepTarget } = require('./planner');
 const { createAdaptation } = require('./adaptation');
 const { complete, failure, isComplete } = require('./action-result');
-const { nightBudget } = require('./behaviors/nightRest');
+const { schedulingInputs, travelTicks, nightBudget } = require('./scheduling');
 
 const RISKS = new Set(['low', 'medium', 'high']);
 const MINUTE = 60_000;
 const RESERVE_WORK_MS = 45_000;
 
-/** How far a card's need counts right now; risky work waits for daylight and a healthy body. */
-function riskFactor(risk, state) {
-  if (risk === 'low') return 1;
-  const night = nightBudget(state).dark;
-  const weak = state.health < 12 || state.food < 8;
-  if (risk === 'high') return night || weak ? 0 : 0.8;
-  return night ? 0.4 : weak ? 0.6 : 1;
+const RESCORE_MS = MINUTE;
+const STALE_MS = 10 * MINUTE;
+const STOP_MS = 14 * MINUTE;
+// Small fluctuations in readiness or movement should not cancel a step sequence.
+const SWITCH_RATIO = 1.18;
+const UNLOCKS = {
+  homestead: ['iron_tools', 'return_home', 'cobble_generator'],
+  iron_tools: ['wheat_farm'],
+  wheat_farm: ['home_lighting', 'guest_bed', 'harvest_wheat'],
+  guest_bed: ['iron_armor'],
+  home_lighting: ['iron_armor'],
+  iron_armor: ['diamond_tools'],
+  diamond_tools: ['home_roof_wood', 'nether_supplies', 'nether_fortress'],
+  cobble_generator: ['auto_smelter'],
+  nether_supplies: ['nether_fortress'],
+  nether_fortress: ['ender_pearls'],
+  ender_pearls: ['end_supplies'],
+  end_supplies: ['stronghold'],
+  stronghold: ['dragon_return'],
+  dragon_return: ['diamond_armor'],
+};
+
+function downstream(id) {
+  const cards = new Set(UNLOCKS[id] || []);
+  for (const card of cards) for (const next of UNLOCKS[card] || []) cards.add(next);
+  return cards.size;
 }
 
-/** Choose the highest-scoring eligible card and record why others were left out. */
-function chooseNext(state, memory, cards, { stage = 0, cooldowns = new Map(), now = Date.now() } = {}) {
+function cardValue(card, memory, { state, home, returnTicks, ticksToDark, dark }, at, work, ledger, hazards, target, staleMs) {
+  const position = work?.position ?? (card.local ? home : state.position);
+  const travel = point => point && position ? travelTicks(point, position) : 0;
+  const route = position === home && Number.isFinite(returnTicks) ? returnTicks : travel(state.position);
+  const fromHome = travel(home);
+  const remaining = work?.remaining ?? 4;
+  const readiness = work?.readiness ?? Number(work?.ready ?? 0.5);
+  const blocked = (target && ledger?.skip(target)) || (position && ledger?.regionHard(position, state.dimension));
+  const nearby = p => p && position && travelTicks(p, position) <= 160;
+  const hazard = position && (ledger?.regionHard(position, state.dimension, 'mine_danger') || hazards.some(nearby));
+  const death = memory.routeDeaths?.some(entry => entry.at > at - STALE_MS && entry.dimension === state.dimension && nearby(entry.position));
+  const weak = state.health < 12 || state.food < 8;
+  const base = card.safeReturn ? 84 : Math.round(28 + 10 * Math.log2(1 + downstream(card.id)));
+  const parts = {
+    base, readiness: Math.round(10 * readiness), blocked: blocked ? -24 : 0,
+    travel: -Math.min(26, Math.floor((route + fromHome) / 140)),
+    daylight: card.safeReturn || !Number.isFinite(ticksToDark) ? 0
+      : -Math.min(16, Math.ceil(Math.max(0, route + 120 * remaining - ticksToDark) / 100)),
+    risk: -(Number(hazard || death || state.inWater || Boolean(home && position && position.y < home.y - 8)) * 14
+      + Number(card.risk !== 'low' && (weak || dark)) * 14),
+    progress: Math.min(8, Math.max(0, work?.progress ?? 0)),
+    stale: staleMs >= STALE_MS ? -Math.min(80, 16 + Math.floor((staleMs - STALE_MS) / 3_000)) : 0,
+  };
+  const demand = card.demand?.(state, memory) ?? (card.need ? card.need(state, memory) / 100 : 1);
+  return { ...parts, demand, remaining, score: Math.max(0, Math.round(demand * Object.values(parts).reduce((a, b) => a + b, 0))) };
+}
+
+function chooseNext(state, memory, cards, { stage = 0, cooldowns = new Map(), now = Date.now(),
+  inputs = schedulingInputs(state, { home: memory.homestead?.memory?.house?.interiorCenter }), ledger,
+  targets = new Map(), definitions = new Map(), current = null } = {}) {
   const scores = [];
+  const hazards = ledger?.snapshot().filter(entry => entry.purpose === 'target_hazard' && entry.dimension === state.dimension)
+    .map(entry => entry.position) ?? [];
+  const stock = { ...state.inventory };
+  for (const contents of Object.values(memory.autonomyStock || {})) {
+    for (const [item, count] of Object.entries(contents)) stock[item] = (stock[item] || 0) + count;
+  }
   let best = null;
   for (const card of cards) {
     const entry = { id: card.id, score: 0 };
@@ -32,8 +84,14 @@ function chooseNext(state, memory, cards, { stage = 0, cooldowns = new Map(), no
     if (cooldown && cooldown.until > now) { entry.skipped = 'cooldown'; entry.until = cooldown.until; continue; }
     try {
       if (card.requires && !card.requires(state, memory)) { entry.skipped = 'requires'; continue; }
-      const need = Math.max(0, Math.min(100, Number(card.need(state, memory)) || 0));
-      entry.score = Math.round(need * riskFactor(card.risk, state));
+      const goal = definitions.get(card.id);
+      const estimated = card.work?.(state, memory, stock);
+      const reported = goal?.work?.(state, stock);
+      const active = current?.id === card.id ? current : null;
+      const work = { ...estimated, ...reported, position: active?.position ?? reported?.position ?? estimated?.position,
+        readiness: Math.max(estimated?.readiness ?? 0, reported?.readiness ?? 0), progress: reported?.progress ?? active?.progress };
+      Object.assign(entry, cardValue(card, memory, inputs, now, work, ledger, hazards, targets.get(card.id), active ? now - active.progressAt : 0));
+      if (entry.score === 0) entry.skipped = 'no_value';
     } catch (error) {
       entry.skipped = `error:${error?.message || error}`;
       continue;
@@ -49,6 +107,7 @@ function createDirector({
   cards = [],
   reserveCards = [],
   stageOf = () => 0,
+  schedule = (state) => schedulingInputs(state, { home: memory.homestead?.memory?.house?.interiorCenter }),
   scope = () => Infinity,
   memory = {},
   now = Date.now,
@@ -67,6 +126,7 @@ function createDirector({
   if (!brain || typeof perceive !== 'function') throw new TypeError('brain and perceive are required');
   for (const card of [...cards, ...reserveCards]) validateCard(card);
   const cooldowns = new Map(); // card id -> { count, until }
+  const definitions = new Map(), targets = new Map();
   let enabled = false;
   let own = null; // { id, goal }: the goal the director handed the brain
   let playerActive = false;
@@ -99,6 +159,7 @@ function createDirector({
       return;
     }
     if (type === 'goal_yielded') {
+      if (event.reason === 'card_value_changed') return;
       cooldowns.set(id, { count: event.reason === 'adaptation_exhausted' ? 1 : 0, until: event.until });
       return;
     }
@@ -111,12 +172,49 @@ function createDirector({
     emit('autonomy_cooldown', { card: id, count, until: now() + delay, reasons: event.reasons });
   }
 
-  function governor(card, definition) {
+  function evaluate(state, at, pool = cards) {
+    const stage = stageOf(state, memory), maxStage = scope(memory), excluded = [];
+    const available = pool.filter(card => {
+      const until = memory.stagePauses?.[card.budgetStage ?? card.stage];
+      if (card.stage > maxStage && !card.safeReturn) excluded.push({ id: card.id, skipped: 'range' });
+      else if (card.expedition && !card.safeReturn && until > at) excluded.push({ id: card.id, skipped: 'stage_paused', until });
+      else return true;
+      return false;
+    });
+    const inputs = schedule(state);
+    const { card, scores } = chooseNext(state, memory, available, { stage, cooldowns, now: at, inputs,
+      ledger: adaptation?.failureLedger, targets, definitions, current: own });
+    return { card, scores: [...scores, ...excluded], stage, inputs };
+  }
+
+  function reconsider(current, state, at, boundary) {
+    if (own !== current || !state || state.alive === false) return null;
+    const { card, scores, stage, inputs } = evaluate(state, at);
+    const value = current.value = scores.find(score => score.id === current.id)?.score || 0;
+    const challenger = card?.id !== current.id && card && scores.find(score => score.id === card.id);
+    const stalled = at - current.progressAt >= STOP_MS;
+    const sheltered = inputs.dark && state.sheltered;
+    const change = !sheltered && boundary && challenger && challenger.score > value * SWITCH_RATIO;
+    const reason = stalled ? 'card_stalled' : change ? 'card_value_changed' : sheltered ? 'sheltered'
+      : !boundary && challenger && challenger.score > value * SWITCH_RATIO ? 'awaiting_step_boundary'
+      : challenger ? 'switch_margin' : 'highest_value';
+    if (stalled || change || at >= current.nextScoreAt) {
+      current.nextScoreAt = at + RESCORE_MS;
+      emit('autonomy_choice', { card: current.id, goal: current.goal, stage, scores,
+        reason, reassessment: true, retained: !stalled && !change, challenger: challenger?.id });
+    }
+    return stalled ? { card: current.id, reason, until: at + MINUTE }
+      : change ? { card: current.id, reason, until: at } : null;
+  }
+
+  function governor(current, definition) {
+    const card = current.id;
     let waits = 0, waitMs = 0, streak = null;
     const ledger = adaptation?.failureLedger;
     let recoveredRevision = null;
     return {
       adapt: adaptation && ((valid) => adaptation.scope(valid)),
+      value: () => Math.max(1, current.value),
       managesFailures: Boolean(adaptation),
       async before(ctx) {
         const p = generic(card);
@@ -143,6 +241,7 @@ function createDirector({
         if (!ledger || !result || result.wait || ['start', 'interrupted'].includes(result.kind)
           || result.facts?.target || result.facts?.adaptation || result.facts?.terminal) return result;
         const target = stepTarget(step, perceive()?.dimension);
+        targets.set(card, target);
         if (streak && (streak.entity !== target.entity || streak.dimension !== target.dimension) && !ledger.skip(streak)) {
           ledger.clearOnSuccess(streak);
         }
@@ -158,6 +257,10 @@ function createDirector({
       outcome(result, elapsedMs) {
         clearFailures(card, result); // Direct steps such as tilling bypass the planner.
         const at = now();
+        if (isComplete(result) && result.progress !== false && !result.facts?.transit) {
+          current.progressAt = at;
+          current.progress += 1;
+        }
         const p = result?.ok === false && !result.facts?.target && !result.facts?.adaptation && !result.facts?.terminal
           && !['start', 'interrupted', 'material'].includes(result.kind) ? generic(card) : null;
         const handled = p ? adapt.outcome(p, result) : result;
@@ -176,10 +279,10 @@ function createDirector({
           if (result.wait.until > at || waits >= waitLimit || waitMs >= waitBudgetMs) {
             return { card, reason: result.wait.reason, waits, waitMs, until: Math.max(at + yieldCooldownMs, result.wait.until || 0) };
           }
-          return null;
+          return reconsider(current, perceive(), at, true);
         }
         waits = 0;
-        return null;
+        return reconsider(current, perceive(), at, true);
       },
     };
   }
@@ -187,6 +290,16 @@ function createDirector({
   return {
     /** Feed every brain event here. */
     handleEvent(event) {
+      if (own && ['autonomy_milestone', 'site_chosen', 'home_part_restored', 'depot_built'].includes(event?.type)) {
+        own.progressAt = now();
+      }
+      if (own && event?.generation === own.generation) {
+        if (event.type === 'plan_step') own.position = null;
+        if (['target_selected', 'mine_ore', 'mine_loot'].includes(event.type) && /^-?\d+,-?\d+,-?\d+$/.test(event.position)) {
+          const [x, y, z] = event.position.split(',').map(Number);
+          own.position = { x, y, z };
+        }
+      }
       if (!event || !['goal_done', 'goal_failed', 'goal_cleared', 'goal_yielded'].includes(event.type)) return;
       if (own && event.goal === own.goal && (own.generation === undefined || event.generation === own.generation)) {
         settle(event.type, event);
@@ -205,11 +318,19 @@ function createDirector({
     tick() {
       if (!enabled) return null;
       if (!playerActive) adaptation?.poll();
-      if (brain.status().goal) {
+      const status = brain.status(), active = status.goal;
+      if (active) {
         idleSince = null;
         if (own?.reserveUntil != null && now() >= own.reserveUntil) {
           void brain.clearGoal('reserve_work_ended').catch((error) =>
             emit('autonomy_error', { reason: String(error?.message || error) }));
+        } else if (own && own.generation === active.generation && now() >= own.nextScoreAt) {
+          const current = own;
+          const result = reconsider(current, perceive(), now(), status.running !== `goal:${current.goal}`);
+          if (result && own === current) {
+            cooldowns.set(current.id, { count: 0, until: result.until });
+            void brain.clearGoal(result.reason).catch(error => emit('autonomy_error', { reason: String(error) }));
+          }
         }
         return null;
       }
@@ -221,29 +342,17 @@ function createDirector({
       if (now() - idleSince < idleMs) return null;
       const state = perceive();
       if (!state || state.alive === false) return null;
-      const stage = stageOf(state, memory);
-      const maxStage = scope(memory);
-      const paused = memory.stagePauses || {};
-      const excluded = [];
-      const available = cards.filter((card) => {
-        const budgetStage = card.budgetStage ?? card.stage;
-        if (card.stage > maxStage && !card.safeReturn) {
-          excluded.push({ id: card.id, skipped: 'range' });
-        } else if (card.expedition && !card.safeReturn && paused[budgetStage] > now()) {
-          excluded.push({ id: card.id, skipped: 'stage_paused', until: paused[budgetStage] });
-        } else return true;
-        return false;
-      });
-      const choice = chooseNext(state, memory, available, { stage, cooldowns, now: now() });
-      const scores = [...choice.scores, ...excluded];
       const at = now();
+      const { stage, scores, card: initial, inputs } = evaluate(state, at);
       const retryAt = Math.min(...scores.filter((score) => score.until > at).map((score) => score.until));
-      let card = choice.card;
+      let card = initial;
       let reserveUntil = null;
       if (Number.isFinite(retryAt) && (!card || reserveCards.includes(card))) {
-        card = state.isDay === true && !nightBudget(state).dusk
-          ? chooseNext(state, memory, reserveCards, { stage, cooldowns, now: at }).card || card
-          : null;
+        if (state.isDay === true && !inputs.dusk) {
+          const reserve = evaluate(state, at, reserveCards);
+          card = reserve.card || card;
+          scores.push(...reserve.scores.filter(score => !scores.some(other => other.id === score.id)));
+        } else card = null;
         if (card) reserveUntil = Math.min(retryAt, at + RESERVE_WORK_MS);
       }
       if (!card) {
@@ -258,11 +367,14 @@ function createDirector({
       }
       lastIdle = null;
       const goal = card.create(memory);
-      emit('autonomy_choice', { card: card.id, goal: goal.name, stage, scores,
+      definitions.set(card.id, goal);
+      emit('autonomy_choice', { card: card.id, goal: goal.name, stage, scores, reason: 'highest_value', retained: false,
         ...(reserveUntil === null ? {} : { reserveUntil, retryAt }) });
-      const generation = brain.setGoal(goal, { autonomy: governor(card.id, goal) });
-      own = { id: card.id, goal: goal.name, generation, expedition: card.expedition, stage: card.budgetStage ?? card.stage,
-        cardStage: card.stage, safeReturn: card.safeReturn, reserveUntil };
+      const current = { id: card.id, goal: goal.name, expedition: card.expedition, stage: card.budgetStage ?? card.stage,
+        cardStage: card.stage, safeReturn: card.safeReturn, reserveUntil, progressAt: at, nextScoreAt: at + RESCORE_MS,
+        progress: 0, value: scores.find(score => score.id === card.id)?.score || 0 };
+      current.generation = brain.setGoal(goal, { autonomy: governor(current, goal) });
+      own = current;
       idleSince = null;
       return card.id;
     },
@@ -335,11 +447,11 @@ function createDirector({
 
 function validateCard(card) {
   if (!card || typeof card.id !== 'string' || !Number.isFinite(card.stage) || !RISKS.has(card.risk)
-      || typeof card.need !== 'function' || typeof card.create !== 'function'
+      || typeof card.create !== 'function'
       || (card.requires !== undefined && typeof card.requires !== 'function')) {
-    throw new TypeError('Card needs id, stage, risk, need(state, memory) and create(memory)');
+    throw new TypeError('Card needs id, stage, risk and create(memory)');
   }
   return card;
 }
 
-module.exports = { createDirector, chooseNext, riskFactor };
+module.exports = { createDirector, chooseNext };

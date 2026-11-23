@@ -275,10 +275,10 @@ test('roof wood is ineligible until both iron and diamond cards can finish', () 
   const state = { inventory, health: 20, food: 20, isDay: true };
   assert.equal(chooseNext(state, memory, [roof, diamond], { stage: 3 }).card, diamond);
   Object.assign(inventory, { diamond_pickaxe: 1, diamond_sword: 1 });
-  assert.equal(roof.need(state, memory), 0, 'iron boots are still missing');
+  assert.equal(roof.requires(state, memory), false, 'iron boots are still missing');
   inventory.iron_boots = 1;
-  assert.equal(roof.need(state, memory), 5);
-  assert.equal(roof.need(state, { ...memory, homePending: true }), 0);
+  assert.equal(roof.requires(state, memory), true);
+  assert.equal(roof.requires(state, { ...memory, homePending: true }), false);
 });
 
 test('seed 2 places a sandstone wall corner from the 56 blocks already carried', async () => {

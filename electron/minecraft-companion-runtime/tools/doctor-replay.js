@@ -30,6 +30,7 @@ async function replay(input, { stationaryOnly = false, measureRequiredMaterials 
   const alerts = [];
   const recordedAlerts = [];
   const alertEvidenceLines = [];
+  const autonomyChoices = [];
   const stationarySegments = [];
   let longestStationarySegment = null;
   let missingSamples = 0;
@@ -88,6 +89,10 @@ async function replay(input, { stationaryOnly = false, measureRequiredMaterials 
       recordedAlerts.push(payload);
       continue;
     }
+    if (!stationaryOnly && payload?.type === 'autonomy_choice') {
+      const { at, card, goal, reason, reassessment, challenger, scores } = payload;
+      autonomyChoices.push({ line: lines, at, card, goal, reason, reassessment, challenger, scores });
+    }
     const sequenced = Number.isSafeInteger(payload?.doctorSequence);
     if (sequenced) recordedInput = true;
     // The driver also records status snapshots. Live Core logs its own doctor
@@ -110,7 +115,7 @@ async function replay(input, { stationaryOnly = false, measureRequiredMaterials 
   finish();
   const incidents = groupIncidents(alerts);
   return {
-    alerts, recordedAlerts, alertEvidenceLines, incidents,
+    alerts, recordedAlerts, alertEvidenceLines, incidents, autonomyChoices,
     alertCount: alerts.length, incidentCount: incidents.length,
     stationarySegments, longestStationarySegment, missingSamples,
     stats: { lines, accepted, acceptMs, acceptMaxMs, elapsedMs: performance.now() - started },

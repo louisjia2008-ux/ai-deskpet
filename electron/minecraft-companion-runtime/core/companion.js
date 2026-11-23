@@ -371,7 +371,9 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
     for (const [id, reached] of Object.entries(facts)) {
       if (reached && !memory.milestones[id]) {
         memory.milestones[id] = at;
-        onEvent({ type: 'autonomy_milestone', milestone: id, at });
+        const event = { type: 'autonomy_milestone', milestone: id, at };
+        director.handleEvent(event);
+        onEvent(event);
       }
     }
     if (!ownerName || !bot.players?.[ownerName]) return;
@@ -387,7 +389,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   }
   // Its goals go through useGoal too, so an autonomous ranch also spares its herd.
   const directorBrain = { status: () => brain.status(), setGoal: useGoal, clearGoal: (reason) => brain.clearGoal(reason) };
-  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, reserveCards, stageOf, scope: range, onEvent, adaptation,
+  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, reserveCards, stageOf, schedule, scope: range, onEvent, adaptation,
     onIdle(state, reason) {
       if (reason === 'no_eligible_card_until_retry' && state.isDay !== false && !state.sheltered) selfStuck.requestProbe();
     },

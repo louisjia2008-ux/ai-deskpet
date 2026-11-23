@@ -71,6 +71,6 @@ test('food, logs and cobblestone are all available to the reserve scheduler befo
   for (const card of reserveCards) {
     assert.equal(card.stage, 0);
     assert.equal(card.requires(state, {}), true);
-    assert.ok(card.need(state, {}) > 0);
+    assert.ok(card.demand(state, {}) > 0);
   }
 });

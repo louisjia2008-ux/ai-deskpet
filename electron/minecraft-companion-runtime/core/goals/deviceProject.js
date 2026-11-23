@@ -19,6 +19,7 @@ const defaultActions = require('../actions');
 const { createGatherMaterialsGoal } = require('./gatherMaterials');
 const mining = require('../mining');
 const { KNOWLEDGE, countKey } = require('../knowledge');
+const { materialWork } = require('../materials');
 
 // Spots tried for a site, around the house centre: 8 headings, 14 blocks out.
 const SITE_DISTANCE = 14;
@@ -43,6 +44,7 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
     if (memory.gather?.memory) Object.assign(memory.gather.memory, { mine: null, mineDir: memory.mineDir });
   };
   bot.on?.('death', onDeath);
+  let observing = true;
 
   const lacking = (state) => device.needs()
     .map((r) => ({ key: r.key, count: r.count - countKey(r.key, state.inventory, kb) }))
@@ -95,8 +97,17 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
   return {
     name,
     memory,
+    work(state, inventory = state.inventory) {
+      const observed = { ...inventory };
+      for (const [item, count] of Object.entries(memory.gather?.memory?.chest || {})) {
+        observed[item] = (state.inventory[item] || 0) + Math.max(count, (inventory[item] || 0) - (state.inventory[item] || 0));
+      }
+      return { ...materialWork(device.needs(), observed, kb), progress: device.progress(state),
+        position: memory.device?.device?.anchor ?? (device.name === 'kit' ? home.centre : siteSpot()) };
+    },
     async dispose() {
       bot.removeListener?.('death', onDeath);
+      observing = false;
       try { await memory.gather?.dispose?.(); } finally { await device.dispose?.(); }
     },
     noProgressLimit: 40,
@@ -115,6 +126,10 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
     // gathering phase does not run out of budget while nothing is built yet.
     progress: (state) => memory.steps + (memory.gather ? memory.gather.progress(state) : 0) + device.progress(state),
     async run(ctx) {
+      if (!observing) {
+        bot.on?.('death', onDeath);
+        observing = true;
+      }
       if (memory.recovery) {
         memory.recovery = false;
         ctx.record('device_recovery', { device: device.name });

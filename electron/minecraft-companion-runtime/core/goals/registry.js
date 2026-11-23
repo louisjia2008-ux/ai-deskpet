@@ -16,6 +16,7 @@ const { createAutoSmelterGoal } = require('./autoSmelter');
 const { createDeviceProjectGoal } = require('./deviceProject');
 const { createProgression } = require('./progression');
 const { KNOWLEDGE, countKey } = require('../knowledge');
+const { materialWork } = require('../materials');
 
 const FOOD_TARGET = 16;
 const GENERATOR_HARVEST = 8;
@@ -53,15 +54,12 @@ function createReserveCards(bot, kb, food, inOverworld) {
   const faces = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
   return [food, {
     id: 'stock_wood', stage: 0, risk: 'medium', requires: hasRoom,
-    need: (state) => {
-      const logs = countKey('log', state.inventory, kb);
-      return logs < 8 ? 65 : logs < 64 ? 10 : 0;
-    },
+    demand: (state) => Math.max(0, 1 - countKey('log', state.inventory, kb) / 64),
     create: () => createGatherLogsGoal({ bot, count: 1 }),
   }, {
     id: 'stock_cobblestone', stage: 0, risk: 'medium',
     requires: (state) => hasRoom(state) && countKey('pickaxe', state.inventory, kb) > 0,
-    need: (state) => cobble(state) < 16 ? 55 : cobble(state) < 64 ? 12 : 0,
+    demand: (state) => Math.max(0, 1 - cobble(state) / 64),
     create: (memory) => {
       const home = homeOf(memory);
       const protect = home && avoidFor(memory, home);
@@ -88,17 +86,18 @@ function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = 
     {
       id: 'homestead',
       stage: 0,
-      risk: 'low', // handles nights itself (bunker, then the house)
-      need: (state, memory) => (memory.homestead?.isDone(state) ? 0 : 100),
+      risk: 'low', local: true,
+      requires: (state, memory) => !memory.homestead?.isDone(state),
+      work: (state, memory, stock) => memory.homestead?.work?.(state, stock),
       create: home,
     },
     {
       id: 'stock_food',
       stage: progression ? 0 : 1,
-      risk: 'medium', // walks far after animals
-      need: (state) => {
+      risk: 'medium',
+      demand: (state) => {
         const food = countKey('food', state.inventory, kb);
-        return food >= foodTarget ? 0 : 40 + Math.round(50 * (1 - food / foodTarget));
+        return food < 4 ? 1 + (4 - food) / 16 : Math.max(0, (1 - food / foodTarget) * 0.75);
       },
       create: () => createStockFoodGoal({ bot, target: foodTarget, kb }),
     },
@@ -115,38 +114,33 @@ function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = 
     return memory[id];
   };
   const built = (memory, id, state) => Boolean(memory[id]?.isDone(state));
+  const deviceWork = create => (_state, _memory, inventory) => materialWork(create().needs(), inventory, kb);
   cards.push(
     {
       id: 'cobble_generator',
       stage: 1,
-      risk: 'medium', // pours lava
-      requires: (state, memory) => Boolean(homeOf(memory)),
-      need: (state, memory) => (built(memory, 'cobbleGenerator', state) ? 0 : 60),
+      risk: 'medium', local: true,
+      requires: (state, memory) => Boolean(homeOf(memory)) && !built(memory, 'cobbleGenerator', state),
+      work: deviceWork(() => createCobbleGeneratorGoal({ bot, collector: true })),
       create: machine('cobbleGenerator', (avoid) => createCobbleGeneratorGoal({ bot, harvest: GENERATOR_HARVEST, collector: true, avoid }), 0),
     },
     {
       id: 'auto_smelter',
       stage: 1,
-      risk: 'low',
-      requires: (state, memory) => Boolean(homeOf(memory)) && built(memory, 'cobbleGenerator', state),
-      need: (state, memory) => (built(memory, 'autoSmelter', state) ? 0 : 55),
+      risk: 'low', local: true,
+      requires: (state, memory) => Boolean(homeOf(memory)) && built(memory, 'cobbleGenerator', state) && !built(memory, 'autoSmelter', state),
+      work: deviceWork(() => createAutoSmelterGoal({ bot, count: SMELT_COUNT, fuel: progression ? 'charcoal' : 'coal' })),
       create: machine('autoSmelter', (avoid) => createAutoSmelterGoal({ bot, count: SMELT_COUNT, ...(progression ? { fuel: 'charcoal' } : {}), avoid }), Math.PI),
     },
   );
 
   if (progression) {
-    const route = createProgression({ bot, kb, homeOf, avoidFor, built });
+    const route = createProgression({ bot, kb, homeOf, avoidFor });
     const overworld = () => !['the_nether', 'the_end'].includes(String(bot.game?.dimension).replace('minecraft:', ''));
-    cards[0].requires = overworld;
     cards[1].requires = overworld;
-    cards[1].maintenance = true;
-    cards[1].need = (state) => {
-      const food = countKey('food', state.inventory, kb);
-      return food < 4 ? 95 : food < FOOD_TARGET ? 35 : 0;
-    };
-    for (const device of cards.slice(2)) {
-      const requires = device.requires;
-      device.requires = (state, memory) => overworld() && requires(state, memory);
+    for (const card of cards.filter(card => card.local)) {
+      const requires = card.requires;
+      card.requires = (state, memory) => overworld() && requires(state, memory);
     }
     return { ...route, cards: [...route.cards, ...cards], reserveCards: createReserveCards(bot, kb, cards[1], overworld) };
   }
