@@ -1,7 +1,8 @@
-// R1 detector thresholds live here. Time values are elapsed milliseconds.
+// Detector and incident thresholds. Time values are elapsed milliseconds.
 // Each condition requires evidence of the symptom itself. For example, a
 // failed approach is distinct from a failed chase.
 const DOCTOR_RULE_THRESHOLDS = Object.freeze({
+  incident: Object.freeze({ gapMs: 180_000 }),
   // Separate route legs, construction shortages and recovery retries.
   D2: Object.freeze({ count: 3, windowMs: 135_000, minimumMs: 8_000, recoveryMinimumMs: 60_000,
     shortageWindowMs: 180_000, shortagePlanMs: 30_000, radius: 8, maxGroups: 48, maxFailures: 12 }),
@@ -96,7 +97,7 @@ function failureLocation(event, frame, build) {
   if (event.type === 'adaptation_attempt' && event.outcome === 'failure' && event.task !== 'goal') {
     const location = point(event.position);
     return location && { reason, location, scope: shortText(event.task) || 'adaptation',
-      key: adaptationIdentity(event), provesWork: true, recovery: event.task === 'mine_hazard' };
+      key: adaptationIdentity(event), provesWork: true, recovery: event.task === 'mine_hazard', regionAnchor: location };
   }
   if (event.type === 'behavior_finished' && event.ok === false && build) {
     const shortage = reason === 'no_material';
@@ -110,6 +111,14 @@ function failureLocation(event, frame, build) {
     return location && { reason, location, scope: event.behavior, origin: true, recovery: true };
   }
   return null;
+}
+
+function isDoctorFailureEvent(event) {
+  const candidate = event.type === 'target_failure'
+    || (event.type === 'adaptation_attempt' && event.outcome === 'failure' && event.task !== 'goal')
+    || (event.type === 'home_route_leg' && event.advanced === false)
+    || (event.type === 'behavior_finished' && event.ok === false);
+  return candidate && failureReason(event) !== null;
 }
 
 function sameFailure(group, failure, radius) {
@@ -183,6 +192,10 @@ function repeatFailures() {
           append(group.entries, { ...mark(frame), attemptAt }, settings.maxFailures);
           group.lastAt = at;
           group.lastPosition = failure.location;
+          const failurePosition = point(event.doctorPosition)
+            || (event.type === 'home_route_leg' ? point(event.position || event.from) : null);
+          group.botPosition = failurePosition || point(context.position);
+          group.positionFromFailure = Boolean(failurePosition);
           group.plan = null;
           group.retry = null;
           const minimum = group.recovery ? settings.recoveryMinimumMs : settings.minimumMs;
@@ -210,9 +223,16 @@ function repeatFailures() {
       const key = active.scope + ':' + active.reason + ':' + first.evidence;
       const retries = active.retry || [];
       const shortage = active.shortage ? ' and the same material request still remains unresolved' : '';
-      return detect(key, first.at,
+      const near = !active.botPosition ? '' : (active.positionFromFailure ? ' near ' : '; last observed near ')
+        + pointText(active.botPosition);
+      const alert = detect(key, first.at,
         active.scope + ' has failed with ' + active.reason + ' at least ' + active.entries.length
-        + ' times near ' + pointText(active.lastPosition) + shortage + '.', [first, ...active.entries.slice(-settings.count), ...retries]);
+        + ' times' + near + shortage + '.', [first, ...active.entries.slice(-settings.count), ...retries]);
+      return { ...alert, context: {
+        position: active.botPosition,
+        regionAnchor: point(active.regionAnchor),
+        positionSource: active.positionFromFailure ? 'failure' : active.botPosition ? 'observation' : null,
+      } };
     },
     reset() { groups = []; active = null; },
     size() { return groups.length + groups.reduce((count, group) => count + group.entries.length, 0); },
@@ -952,4 +972,4 @@ function createDoctorRules() {
   };
 }
 
-module.exports = { createDoctorRules, DOCTOR_RULE_THRESHOLDS };
+module.exports = { createDoctorRules, DOCTOR_RULE_THRESHOLDS, isDoctorFailureEvent };

@@ -11,7 +11,7 @@ const home = { anchor: { x: 3, y: 60, z: 6 }, size: 5 };
 
 function observe(doctor, at, extras = {}) {
   return doctor.accept({ type: 'doctor_observation', at, dimension: 'overworld', position: initial,
-    alive: true, isDay: true, inventory: {}, ...extras }, at / D1.sampleIntervalMs + 1);
+    alive: true, isDay: true, inventory: {}, ...extras });
 }
 
 function d1(alerts) {
@@ -27,15 +27,19 @@ test('D1 warns after 150 s, escalates after 300 s, and closes when the bot moves
   for (let i = 0; i <= 10; i += 1) alerts.push(...observe(doctor, i * 30_000, { home, timeOfDay: 8000 }));
   const stationary = d1(alerts);
   assert.deepEqual(stationary.map(a => [a.severity, a.since, a.at]), [['warn', 0, 150_000], ['alert', 0, 300_000]]);
-  assert.deepEqual(stationary[1].evidence, [1, 11]);
+  assert.deepEqual(stationary[1].evidence, [3, 13]);
+  assert.equal(stationary[0].incidentId, stationary[1].incidentId);
   assert.equal(stationary[1].context.goal, 'homestead');
   assert.equal(stationary[1].context.step.key, 'cobblestone');
   assert.deepEqual(stationary[1].context.home, home);
   assert.equal(stationary[1].context.timeOfDay, 8000);
   assert.equal(d1(doctor.getStatus().active)[0].severity, 'alert');
+  assert.equal(doctor.getStatus().incidentCount, 1);
+  assert.deepEqual(doctor.getStatus().recentIncidents[0].alerts, stationary);
 
   observe(doctor, 330_000, { position: { ...initial, y: 62 } });
   assert.deepEqual(d1(doctor.getStatus().active), []);
+  assert.deepEqual(doctor.getStatus().activeIncidents.flatMap(({ alerts }) => d1(alerts)), []);
   assert.equal(d1(doctor.getStatus().recent).length, 2);
   assert.deepEqual(spans, [{ at: 0, finish: 300_000, position: initial, cards: ['无卡片'] }]);
   doctor.finish();

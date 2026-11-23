@@ -4,7 +4,7 @@
 const { createReadStream } = require('node:fs');
 const { createInterface } = require('node:readline');
 const { parseArgs } = require('node:util');
-const { createDoctor } = require('../core/doctor');
+const { createDoctor, groupIncidents, D1 } = require('../core/doctor');
 
 function corePayload(row) {
   const envelope = row.event || row;
@@ -19,11 +19,19 @@ async function replay(input, { stationaryOnly = false } = {}) {
   const recordedAlerts = [];
   const alertEvidenceLines = [];
   const stationarySegments = [];
+  let longestStationarySegment = null;
   let missingSamples = 0;
-  const onStationarySegment = (segment) => stationarySegments.push(segment);
+  const onStationarySegment = (segment) => {
+    const durationMs = segment.finish - segment.at;
+    if (durationMs >= D1.alertMs) stationarySegments.push(segment);
+    if (durationMs > (longestStationarySegment?.durationMs ?? 0)) {
+      longestStationarySegment = { ...segment, durationMs };
+    }
+  };
   let doctor = createDoctor({ onStationarySegment, stationaryOnly });
   let generation;
   let recordedInput = false;
+  let legacySequence = 0;
   const sequenceLines = new Map();
   let lines = 0;
   let accepted = 0;
@@ -57,6 +65,7 @@ async function replay(input, { stationaryOnly = false } = {}) {
       finish();
       doctor = createDoctor({ onStationarySegment, stationaryOnly });
       recordedInput = false;
+      legacySequence = 0;
       sequenceLines.clear();
     }
     generation = rowGeneration ?? generation;
@@ -65,29 +74,32 @@ async function replay(input, { stationaryOnly = false } = {}) {
       recordedAlerts.push(payload);
       continue;
     }
-    if (Number.isSafeInteger(payload?.doctorSequence)) {
-      recordedInput = true;
-      sequenceLines.set(payload.doctorSequence, lines);
-    }
+    const sequenced = Number.isSafeInteger(payload?.doctorSequence);
+    if (sequenced) recordedInput = true;
     // The driver also records status snapshots. Live Core logs its own doctor
     // inputs, so prefer those whenever this connection supplies them.
-    if (recordedInput && !Number.isSafeInteger(payload?.doctorSequence)) continue;
+    if (recordedInput && !sequenced) continue;
+    const sequence = sequenced ? payload.doctorSequence : ++legacySequence;
+    sequenceLines.set(sequence, lines);
 
     const before = performance.now();
     const inputRow = row.type === 'core' ? { type: 'event', event: row } : row;
-    const emissions = doctor.accept(inputRow, lines);
+    const emissions = doctor.accept(inputRow, sequence);
     const durationMs = performance.now() - before;
     acceptMs += durationMs;
     acceptMaxMs = Math.max(acceptMaxMs, durationMs);
     accepted += 1;
     for (const alert of emissions) {
       alerts.push(alert);
-      alertEvidenceLines.push(alert.evidence.map((ref) => recordedInput ? sequenceLines.get(ref) ?? null : ref));
+      alertEvidenceLines.push(alert.evidence.map((ref) => sequenceLines.get(ref) ?? null));
     }
   }
   finish();
+  const incidents = groupIncidents(alerts);
   return {
-    alerts, recordedAlerts, alertEvidenceLines, stationarySegments, missingSamples,
+    alerts, recordedAlerts, alertEvidenceLines, incidents,
+    alertCount: alerts.length, incidentCount: incidents.length,
+    stationarySegments, longestStationarySegment, missingSamples,
     stats: { lines, accepted, acceptMs, acceptMaxMs, elapsedMs: performance.now() - started },
   };
 }
@@ -107,8 +119,8 @@ async function main(args) {
   });
   if (values['stationary-stdin']) {
     if (positionals.length) throw new Error('--stationary-stdin takes JSONL on standard input');
-    const { stationarySegments, missingSamples } = await replay(process.stdin, { stationaryOnly: true });
-    console.log(JSON.stringify({ stationarySegments, missingSamples }));
+    const { stationarySegments, longestStationarySegment, missingSamples } = await replay(process.stdin, { stationaryOnly: true });
+    console.log(JSON.stringify({ stationarySegments, longestStationarySegment, missingSamples }));
     return;
   }
   if (positionals.length !== 1) throw new Error('Usage: node tools/doctor-replay.js [--json] <core.jsonl | ->');
@@ -117,9 +129,15 @@ async function main(args) {
     console.log(JSON.stringify(result));
     return;
   }
-  for (const [index, alert] of result.alerts.entries()) {
-    const evidence = result.alertEvidenceLines[index].map((line) => line == null ? '?' : `L${line}`).join(', ');
-    console.log(`${new Date(alert.at).toISOString()} ${alert.rule} ${alert.severity} ${alert.summary} [${evidence}]`);
+  console.log(`${result.incidentCount} incidents, ${result.alertCount} alerts`);
+  const evidenceLines = new Map(result.alerts.map((alert, index) => [alert, result.alertEvidenceLines[index]]));
+  for (const incident of result.incidents) {
+    console.log(`${incident.incidentId} ${incident.severity}`);
+    for (const alert of incident.alerts) {
+      const lines = evidenceLines.get(alert);
+      const evidence = alert.evidence.map((seq, index) => `#${seq}/${lines[index] == null ? '?' : 'L' + lines[index]}`).join(', ');
+      console.log(`  ${new Date(alert.at).toISOString()} ${alert.rule} ${alert.severity} ${alert.summary} [${evidence}]`);
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { createDoctor } = require('../core/doctor');
+const { createDoctor, recordDoctorInput } = require('../core/doctor');
 
 const home = 'goal:homestead';
 const point = (x, z = 0) => ({ x, y: 64, z });
@@ -12,7 +12,8 @@ function exercise(rule) {
   let line = 0;
   return {
     ingest(seconds, row) {
-      events.push(...doctor.accept({ ...row, at: seconds * 1000 }, ++line).filter((alert) => alert.rule === rule));
+      events.push(...doctor.accept({ ...row, at: seconds * 1000, doctorSequence: ++line })
+        .filter((alert) => alert.rule === rule));
     },
     active() { return doctor.getStatus().active.some((event) => event.rule === rule); },
     events,
@@ -74,6 +75,55 @@ test('D2 counts distinct attempts even when a target-failure duplicate arrives o
   assert.equal(study.events.length, 0);
   study.ingest(40, { ...failure, failureAt: 40_000 });
   assert.deepEqual(study.events[0].evidence, [1, 2, 4]);
+});
+
+test('D2 reports the body position recorded at the failure and retains the region anchor separately', () => {
+  const doctor = createDoctor();
+  const anchor = { x: 100, y: 65, z: -100 };
+  const body = { x: 32.5, y: 71, z: 8.5 };
+  doctor.accept({ ...observed, at: 0, doctorSequence: 1, home: { anchor, size: 7 } });
+  const failure = { type: 'adaptation_attempt', task: 'wood', outcome: 'failure', reason: 'no_target_in_range',
+    position: anchor, region: '1,0,-2', target: 'log' };
+  const alerts = [10_000, 20_000, 30_000].flatMap((at, index) => (
+    doctor.accept(recordDoctorInput({ ...failure, at }, index + 2, body))));
+  const alert = alerts.find(({ rule }) => rule === 'D2');
+  assert.deepEqual(alert.context.position, body);
+  assert.deepEqual(alert.context.regionAnchor, anchor);
+  assert.equal(alert.context.positionSource, 'failure');
+  assert.match(alert.summary, /near \(32, 71, 8\)/);
+  assert.doesNotMatch(alert.summary, /100/);
+  assert.deepEqual(alert.evidence, [2, 3, 4]);
+});
+
+test('doctor groups separate symptoms only while the card and generation match and the gap is under three minutes', () => {
+  const doctor = createDoctor();
+  const choice = { type: 'autonomy_choice', card: 'homestead', goal: 'homestead' };
+  const goal = { type: 'goal_set', goal: 'homestead', generation: 1 };
+  const failure = { type: 'adaptation_attempt', task: 'wood', outcome: 'failure',
+    reason: 'no_target_in_range', position: point(2), target: 'log' };
+  const send = (type, at) => doctor.accept({ ...type, at });
+  const repeatedFailure = (key, start) => [start, start + 4_000, start + 8_000]
+    .flatMap((at) => send({ ...failure, key }, at)).find(({ rule }) => rule === 'D2');
+  send(choice, 0);
+  send(goal, 0);
+  for (let at = 0; at <= 120_000; at += 30_000) send(observed, at);
+  send({ ...failure, key: 'overlap' }, 145_000);
+  send({ ...failure, key: 'overlap' }, 149_000);
+  send(observed, 150_000);
+  const warning = doctor.getStatus().recent.find(({ rule }) => rule === 'D1');
+  const first = send({ ...failure, key: 'overlap' }, 159_000).find(({ rule }) => rule === 'D2');
+  assert.equal(first.incidentId, warning.incidentId);
+  const second = repeatedFailure('short-gap', 338_999);
+  assert.equal(second.incidentId, first.incidentId);
+  const third = repeatedFailure('exactly-three-minutes', 526_999);
+  assert.notEqual(third.incidentId, second.incidentId);
+  send({ ...choice, card: 'other' }, 536_000);
+  const anotherCard = repeatedFailure('other-card', 537_000);
+  assert.notEqual(anotherCard.incidentId, third.incidentId);
+  send({ ...goal, generation: 2 }, 546_000);
+  const anotherGeneration = repeatedFailure('other-generation', 547_000);
+  assert.notEqual(anotherGeneration.incidentId, anotherCard.incidentId);
+  assert.equal(doctor.getStatus().incidentCount, 4);
 });
 
 test('D3 needs correlated failures and pauses for real route progress', () => {

@@ -2,6 +2,7 @@
 // Diagnostic state only. Inputs and outputs are plain records from the Core log.
 
 const { createStationaryRule, D1, point, insideHome } = require('./doctor-stationary');
+const { createDoctorRules, DOCTOR_RULE_THRESHOLDS, isDoctorFailureEvent } = require('./doctor-rules');
 
 const RECENT_LIMIT = 24;
 const MAX_TEXT = 300;
@@ -22,6 +23,28 @@ function homeOf(home) {
   return anchor ? { anchor, size: Number.isFinite(home.size) ? home.size : 5 } : null;
 }
 
+function recordDoctorInput(event, doctorSequence, botPosition) {
+  const input = { ...event, doctorSequence };
+  if (isDoctorFailureEvent(event)) input.doctorPosition = point(botPosition);
+  return input;
+}
+
+function groupIncidents(alerts) {
+  const groups = new Map();
+  for (const alert of alerts) {
+    const { incidentId, since, at, severity, goalGeneration } = alert;
+    const incident = groups.get(incidentId) || {
+      incidentId, since, at, severity, goalGeneration, alerts: [],
+    };
+    incident.since = Math.min(incident.since, since);
+    incident.at = Math.max(incident.at, at);
+    if (severity === 'alert') incident.severity = severity;
+    incident.alerts.push(alert);
+    groups.set(incidentId, incident);
+  }
+  return [...groups.values()];
+}
+
 function unwrap(entry) {
   if (entry.experiment === 'sample') {
     const observation = entry.observation || {};
@@ -40,9 +63,12 @@ function unwrap(entry) {
 
 function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
   const stationary = createStationaryRule(onStationarySegment);
-  const rules = stationaryOnly ? null : require('./doctor-rules').createDoctorRules();
+  const rules = stationaryOnly ? null : createDoctorRules();
   const active = new Map();
   const recent = [];
+  const latestIncident = new Map();
+  let incidentCount = 0;
+  let sequence = 0;
   let now = null;
   let context = emptyContext();
   let goalGeneration = null;
@@ -60,6 +86,8 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
     rules?.reset();
     active.clear();
     recent.length = 0;
+    latestIncident.clear();
+    incidentCount = sequence = 0;
     context = emptyContext();
     goalGeneration = lastWaitAt = now = null;
     behavior = null;
@@ -94,7 +122,23 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
     }
   }
 
-  function accept(entry, lineNumber) {
+  function incidentFor(card, goal, generation, since, evidence) {
+    // A manually assigned goal also has a generation, but can have no card.
+    const owner = JSON.stringify([card, goal, generation]);
+    const prior = latestIncident.get(owner);
+    if (prior && since - prior.at < DOCTOR_RULE_THRESHOLDS.incident.gapMs) {
+      prior.at = now;
+      return prior.id;
+    }
+    incidentCount += 1;
+    const id = `incident-${now}-${evidence}-${incidentCount}`;
+    latestIncident.delete(owner);
+    latestIncident.set(owner, { id, at: now });
+    if (latestIncident.size > RECENT_LIMIT) latestIncident.delete(latestIncident.keys().next().value);
+    return id;
+  }
+
+  function accept(entry, legacySequence) {
     if (!entry || typeof entry !== 'object') return [];
     let event = unwrap(entry);
     if (!event || typeof event.type !== 'string' || event.type === 'doctor_alert') return [];
@@ -111,11 +155,16 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
       stationary.reset();
       rules?.reset();
       active.clear();
+      latestIncident.clear();
       nightSheltered = false;
       observation = null;
       lastWaitAt = null;
       behavior = null;
     }
+    const ending = TERMINAL.has(event.type) && (goalGeneration === null || event.generation == null
+      || event.generation === goalGeneration);
+    const previous = context;
+    const previousGeneration = goalGeneration;
     updateContext(event);
     if (observationEvent) {
       const owner = point(event.ownerPosition);
@@ -137,7 +186,9 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
     const sleepingAtHome = fresh?.isDay === false && fresh.sleepingAtHome;
     const waiting = inactive || Boolean(fresh?.isDay === false && (fresh.rested || sleepingAtHome || nightSheltered
       || (lastWaitAt !== null && now - lastWaitAt < D1.maxGapMs)));
-    const evidence = Number.isSafeInteger(event.doctorSequence) ? event.doctorSequence : (lineNumber ?? now);
+    const recordedSequence = event.doctorSequence ?? legacySequence;
+    const evidence = Number.isSafeInteger(recordedSequence) ? recordedSequence : sequence + 1;
+    sequence = Math.max(sequence, evidence);
     const frame = { at: now, evidence, context, goalGeneration, behavior, inactive, sleepingAtHome,
       waiting, isDay: fresh?.isDay, dimension: fresh?.dimension };
     const results = rules?.ingest(event, frame) || {};
@@ -152,8 +203,13 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
       const prior = active.get(rule);
       const key = result.key ?? result.since;
       if (prior?.key === key && prior.alert.severity === result.severity) continue;
+      const reportContext = { ...context, ...result.context };
+      const owner = ending ? previous : reportContext;
+      const generation = ending ? previousGeneration : goalGeneration;
+      const incidentId = incidentFor(owner.card, owner.goal, generation, result.since, evidence);
       const alert = { type: 'doctor_alert', rule, severity: result.severity, since: result.since, at: now,
-        summary: result.summary, evidence: [...new Set(result.evidence)], context: structuredClone(context) };
+        summary: result.summary, evidence: [...new Set(result.evidence)], context: structuredClone(reportContext),
+        incidentId, goalGeneration: generation };
       active.set(rule, { key, alert });
       recent.push(alert);
       if (recent.length > RECENT_LIMIT) recent.shift();
@@ -167,9 +223,15 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
     reset,
     finish: stationary.finish,
     missingStationarySamples: stationary.missing,
-    getStatus: () => structuredClone({ recent, active: [...active.values()].map(({ alert }) => alert) }),
+    getStatus() {
+      const activeAlerts = [...active.values()].map(({ alert }) => alert);
+      return structuredClone({
+        recent, active: activeAlerts, incidentCount,
+        recentIncidents: groupIncidents(recent), activeIncidents: groupIncidents(activeAlerts),
+      });
+    },
     size: () => ({ recent: recent.length, active: active.size, stationary: stationary.size(), rules: rules?.size() }),
   };
 }
 
-module.exports = { createDoctor, D1, RECENT_LIMIT };
+module.exports = { createDoctor, recordDoctorInput, groupIncidents, D1, RECENT_LIMIT };

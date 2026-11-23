@@ -7,7 +7,7 @@ const { Vec3 } = require('vec3');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { createBrain } = require('./brain');
 const { perceive, isDaylight, ownedItems, countInventory } = require('./perception');
-const { createDoctor, D1 } = require('./doctor');
+const { createDoctor, recordDoctorInput, D1 } = require('./doctor');
 const { createSurvivalBehaviors, enabledDuringSurvey } = require('./behaviors/survival');
 const { createRecovery } = require('./behaviors/recovery');
 const { createNightRest } = require('./behaviors/nightRest');
@@ -163,7 +163,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   const doctor = createDoctor();
   let doctorSequence = 0;
   function onEvent(event) {
-    const input = { ...event, doctorSequence: ++doctorSequence };
+    const input = recordDoctorInput(event, ++doctorSequence, bot.entity?.position);
     if (!Number.isFinite(input.at)) input.doctorAt = Date.now();
     publish(input);
     // Diagnostics never feed back into the brain or director, even if an

@@ -50,7 +50,7 @@ function createStationaryRule(onSegment) {
   let missing = 0;
 
   function close() {
-    if (onSegment && origin && previous.at - origin.at >= D1.alertMs) {
+    if (onSegment && origin && previous.at > origin.at) {
       onSegment({ at: origin.at, finish: previous.at, position: origin.position, cards: [...cards].sort() });
     }
     origin = null;
