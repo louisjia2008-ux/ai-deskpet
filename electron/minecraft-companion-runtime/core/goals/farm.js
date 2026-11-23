@@ -6,16 +6,17 @@
 // bread, or fetch what one of those needs (a hoe, seeds). With nothing ready
 // it waits, which neither spends nor refills the goal's stall budget.
 
+const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const defaultFarming = require('../farming');
 const { planNext } = require('../planner');
 const { KNOWLEDGE, countKey } = require('../knowledge');
-const { createBlacklist, posKey } = require('../blacklist');
+const { posKey } = require('../blacklist');
 const { sleep } = require('../confirm');
 const { createPlannerRunner } = require('./common');
-const { targetsFor } = require('../target-memory');
+const { targetsFor } = require('../failure-ledger');
 const { blockTarget, alternateStand } = require('../target-recovery');
 
 // Farther than this from the centre, the farm's ground may be out of view.
@@ -24,14 +25,13 @@ const FAR_FROM_FARM = 48;
 function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = null,
   skills = defaultSkills, farming = defaultFarming, actions = defaultActions, kb = KNOWLEDGE, exclude = () => false, waitMs = 3000,
   mode = 'bread', sharedMemory = null, minRipe = 3 } = {}) {
-  const blacklist = createBlacklist({ ttlMs: 60000 });
   const memory = sharedMemory || { center: center || null, barren: false, plots: null, table: home?.table || null, steps: 0, harvested: 0, shortfall: {} };
   const stateAt = (p) => farming.plotState(bot, p);
   const count = (states) => (memory.plots || []).filter((p) => states.includes(stateAt(p))).length;
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   // Never put the crafting table on a plot.
   const onPlot = (p) => (memory.plots || []).some((q) => q.x === p.x && q.z === p.z);
-  const { step, inventoryFor, tableHere } = createPlannerRunner({ bot, skills, kb, memory, blacklist,
+  const { step, inventoryFor, tableHere } = createPlannerRunner({ bot, skills, kb, memory, purpose: 'farm_gather',
     avoid: (p) => onPlot(p) || exclude(p) });
 
   const operation = { ripe: 'harvest', empty: 'plant', untilled: 'till' };
@@ -144,13 +144,13 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     // Empty farmland and no seeds: break grass until some drop.
     if ((byState('empty').length || untilled) && !(inventory.wheat_seeds > 0)) {
       ctx.record('farm', { action: 'seeds' });
-      const result = await farming.gatherSeeds(bot, ctx, { blacklist, exclude: (p) => list.some((q) => q.x === p.x && q.z === p.z) });
+      const result = await farming.gatherSeeds(bot, ctx, { exclude: (p) => list.some((q) => q.x === p.x && q.z === p.z) });
       if (result.reason === 'no_grass') return skills.explore(bot, ctx, memory);
       return result;
     }
     // Everything sown: the crops grow on their own.
     await sleep(waitMs, ctx.signal);
-    return { ok: true, waited: true, reason: mode === 'bread' ? 'crops_growing' : 'no_available_plot' };
+    return waiting(mode === 'bread' ? 'crops_growing' : 'no_available_plot');
   }
 
   return {
@@ -172,7 +172,7 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     progress: () => memory.steps,
     async run(ctx) {
       const result = await runOnce(ctx);
-      if (result.ok && !result.waited) memory.steps += 1;
+      if (result.ok && !result.wait) memory.steps += 1;
       return result;
     },
   };

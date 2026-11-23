@@ -9,6 +9,7 @@
 // They watch the brain's events and the bot's deaths; the brain still decides
 // who owns the body, so survival reflexes keep outranking them.
 
+const { waiting, factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
@@ -136,7 +137,8 @@ function createRecovery({
         break;
       case 'behavior_finished':
         if (!String(event.behavior || '').startsWith('goal:')) break;
-        if (event.ok) {
+        if (event.result?.wait || ['start', 'interrupted'].includes(event.result?.kind)) break;
+        if (event.result?.ok ?? event.ok) {
           goalTrack.pathStreak = 0;
           goalTrack.lastOkAt = now();
         } else if (event.reason !== 'aborted') {
@@ -362,13 +364,13 @@ function createRecovery({
         ctx.record('danger_bunker', { action: 'dig_in' });
         const dug = await skills.digIn(bot, ctx);
         if (!dug.ok) return dug;
-        bunker = { bunker: dug.bunker, since: now() };
+        bunker = { bunker: factsOf(dug).bunker, since: now() };
         bot.companionSheltered = true;
         return { ok: true };
       }
       if (ctx.perceive().isDay === false) {
         await sleep(t.bunkerPollMs, ctx.signal);
-        return { ok: true, waited: true };
+        return waiting('sheltering_until_daylight');
       }
       ctx.record('danger_bunker', { action: 'dig_out' });
       const out = await skills.digOut(bot, ctx, bunker.bunker);

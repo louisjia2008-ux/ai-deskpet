@@ -10,7 +10,7 @@ const { planNext } = require('../core/planner');
 const { createFarmGoal } = require('../core/goals/farm');
 const { runPlanned } = require('../core/goals/common');
 const { mineStep, entranceCooling } = require('../core/mining');
-const { createBlacklist } = require('../core/blacklist');
+const { waiting } = require('../core/action-result');
 const { smelt } = require('../core/skills');
 const { createEndJourneyGoal } = require('../core/goals/endJourney');
 const { createHomesteadGoal } = require('../core/goals/homestead');
@@ -18,6 +18,7 @@ const { createNetherExpeditionGoal } = require('../core/goals/netherExpedition')
 const { createStarterHouse } = require('../core/blueprints/starterHouse');
 const { nightShelter } = require('../core/companion');
 const actions = require('../core/actions');
+const { factsOf } = require('../core/action-result');
 
 function fixture(options = {}) {
   let now = 1000;
@@ -111,7 +112,7 @@ test('autonomous waits yield via the brain and select another card', async () =>
   const card = (id, score) => ({
     id, stage: 0, risk: 'low', need: () => score,
     create: () => ({ name: id, isDone: () => false, progress: () => 0,
-      run: async () => ({ ok: true, waited: true, reason: 'cooling' }) }),
+      run: async () => waiting('cooling') }),
   });
   director = createDirector({ brain, perceive: () => ({ alive: true }), idleMs: 0, waitLimit: 2,
     cards: [card('waiting', 100), card('other_work', 80)] });
@@ -133,13 +134,13 @@ test('confirmed night shelter keeps the same homestead card until daylight', () 
   assert.equal(director.tick(), 'homestead');
   for (let run = 0; run < 10; run++) {
     advance(60_000);
-    assert.equal(governor().outcome({ ok: true, waited: true, reason: 'sheltering_until_daylight', retryAt: 1 }, 3_000), null);
+    assert.equal(governor().outcome(waiting('sheltering_until_daylight', 1), 3_000), null);
     assert.equal(director.tick(), null);
     assert.equal(director.status().current, 'homestead');
   }
   state = { ...state, isDay: true };
   assert.equal(governor().outcome({ ok: true, surfaced: true }, 500), null);
-  assert.equal(governor().outcome({ ok: true, waited: true, reason: 'sheltering_until_daylight' }, 3_000)?.reason,
+  assert.equal(governor().outcome(waiting('sheltering_until_daylight'), 3_000)?.reason,
     'sheltering_until_daylight');
 });
 
@@ -149,13 +150,13 @@ test('three failed planning attempts block the source and the planner moves on',
   const hooks = governor();
   const ctx = { stepBlocked: hooks.stepBlocked, stepOutcome: (s, r) => hooks.stepOutcome(s, r, (type, data) => events.push({ type, ...data })) };
   const step = { kind: 'smelt', key: 'charcoal' };
-  for (let i = 0; i < 3; i++) await runPlanned(ctx, step, async () => ({ ok: false, reason: 'no_fuel' }));
+  for (let i = 0; i < 3; i++) await runPlanned(ctx, step, async () => ({ ok: false, reason: 'block_changed' }));
   assert.equal(events.at(-1).step, 'smelt/charcoal');
   assert.equal(events.at(-1).until, 601_000);
   const args = { inventory: { oak_log: 2, stick: 1 }, stations: { furnace: true }, stepBlocked: hooks.stepBlocked };
   assert.equal(planNext({ ...args, requirements: [{ key: 'charcoal', count: 1 }] }).kind, 'blocked');
   assert.equal(planNext({ ...args, requirements: [{ key: 'charcoal', count: 1 }, { key: 'dirt', count: 1 }] }).key, 'dirt');
-  assert.equal((await runPlanned(ctx, step, () => assert.fail('blocked action ran'))).waited, true);
+  assert.equal((await runPlanned(ctx, step, () => assert.fail('blocked action ran'))).wait?.reason, 'planning_source_blocked');
   advance(600_000);
   assert.equal(ctx.stepBlocked('smelt', 'charcoal'), 0);
 });
@@ -208,7 +209,7 @@ test('an exhausted entrance is cooled across different mine memory objects', asy
   const position = new Vec3(8, 64, 0);
   const bot = { entity: { position }, inventory: { items: () => [] }, registry: { blocksByName: {} } };
   const memory = { mine: { entrance: position, dir: 0, surfaceY: 64, exhausted: true } };
-  const options = { blocks: () => false, dropMatch: () => false, y: -58, blacklist: createBlacklist() };
+  const options = { blocks: () => false, dropMatch: () => false, y: -58 };
   assert.equal((await mineStep(bot, { record() {} }, memory, options)).reason, 'mine_exhausted');
   assert.equal(entranceCooling(bot, position.offset(2, 0, 0)), true);
   assert.equal((await mineStep(bot, { record() {} }, {}, options)).reason, 'mine_entrance_cooling');
@@ -264,7 +265,7 @@ test('a shallow sandstone pit uses a direct pillar when the walking plan does no
   };
   const records = [];
   const result = await actions.surface(bot, { record: (type, data) => records.push({ type, ...data }) });
-  assert.equal(result.surfaced, true);
+  assert.equal(factsOf(result).surfaced, true);
   assert.equal(placed, 3);
   assert.equal(bot.entity.position.y, 64);
   assert.equal(records.find((entry) => entry.type === 'recovery_switch').to, 'direct_pillar');
@@ -311,7 +312,7 @@ test('three failures to regain a mining face retain the old route until the bot 
   let walks = 0;
   const events = [];
   const ctx = { record: (type, data) => events.push({ type, ...data }) };
-  const options = { blocks: () => false, dropMatch: () => false, y: 60, blacklist: createBlacklist(), actions: {
+  const options = { blocks: () => false, dropMatch: () => false, y: 60, actions: {
     async goTo(_bot, _ctx, goal) {
       if (++walks <= 3) return { ok: false, reason: 'not_arrived' };
       bot.entity.position = new Vec3(goal.x, goal.y, goal.z);

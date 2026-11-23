@@ -12,10 +12,10 @@
 //           need(state, memory) -> 0..100, create(memory) -> goal }
 
 const { createAdaptation } = require('./adaptation');
+const { failure } = require('./action-result');
 
 const RISKS = new Set(['low', 'medium', 'high']);
 const MINUTE = 60_000;
-const STEP_COOLDOWN = 10 * MINUTE;
 const RESERVE_WORK_MS = 45_000;
 const stepKey = (kind, item) => `${kind}/${item}`;
 
@@ -78,7 +78,6 @@ function createDirector({
   if (!brain || typeof perceive !== 'function') throw new TypeError('brain and perceive are required');
   for (const card of [...cards, ...reserveCards]) validateCard(card);
   const cooldowns = new Map(); // card id -> { count, until }
-  const blockedSteps = new Map();
   let enabled = false;
   let own = null; // { id, goal }: the goal the director handed the brain
   let playerActive = false;
@@ -108,7 +107,8 @@ function createDirector({
       return;
     }
     if (type !== 'goal_failed') return;
-    if (event.reasons?.includes('home_site_relocated')) return;
+    if (event.result?.wait || ['start', 'interrupted'].includes(event.result?.kind)
+      || event.result?.reason === 'home_site_relocated' || event.reasons?.includes('home_site_relocated')) return;
     const count = (cooldowns.get(id)?.count || 0) + 1;
     const delay = Math.min(maxCooldownMs, failureCooldownMs * 2 ** (count - 1));
     cooldowns.set(id, { count, until: now() + delay });
@@ -116,8 +116,11 @@ function createDirector({
   }
 
   function governor(card, definition) {
-    let waits = 0, waitMs = 0, streak = null, failures = 0;
+    let waits = 0, waitMs = 0, streak = null;
     const generic = () => adaptation?.plan('goal', { target: card });
+    const ledger = adaptation?.failureLedger;
+    const destination = (kind, item) => ({ purpose: 'director_step', entity: stepKey(kind, item),
+      dimension: perceive()?.dimension });
     let recoveredRevision = null;
     return {
       adapt: adaptation && ((valid) => adaptation.scope(valid)),
@@ -132,55 +135,53 @@ function createDirector({
             await definition.recover();
             return null;
           }
-          return ctx.adapt.outcome(p, { ok: false, reason: 'no_recovery_available' });
+          return ctx.adapt.outcome(p, failure('no_recovery_available', {}, ctx));
         }
         if (p.method === 'other_work') {
           ctx.record('adaptation_use', { task: 'goal', method: p.method, card });
-          return ctx.adapt.outcome(p, { ok: false, reason: 'goal_methods_exhausted' });
+          return ctx.adapt.outcome(p, failure('goal_methods_exhausted', {}, ctx));
         }
         if (p.method === 'do_other_work') return adaptation.defer(p);
         return null;
       },
       stepBlocked(kind, item) {
-        const key = stepKey(kind, item);
-        const until = blockedSteps.get(key);
-        if (until > now()) return until;
-        if (until) blockedSteps.delete(key);
-        return 0;
+        return ledger?.skip(destination(kind, item))?.until || 0;
       },
       stepOutcome(step, result, record) {
-        if (!result || result.waited || result.sourceHandled || ['aborted', 'self_stuck'].includes(result.reason)) return result;
-        const key = stepKey(step.kind, step.key || step.station);
-        if (key !== streak || result?.ok) { streak = key; failures = 0; }
-        if (result.ok !== false || result.giveUp) return result;
-        failures += 1;
-        if (failures === 3) {
-          const until = now() + STEP_COOLDOWN;
-          blockedSteps.set(key, until);
-          record('step_blocked', { card, step: key, count: failures, reason: result.reason, until });
-          failures = 0;
+        if (!ledger || !result || result.wait || ['start', 'interrupted'].includes(result.kind)
+          || result.facts?.target || result.facts?.adaptation || result.facts?.terminal) return result;
+        const target = destination(step.kind, step.key || step.station);
+        if (streak && (streak.entity !== target.entity || streak.dimension !== target.dimension) && !ledger.skip(streak)) {
+          ledger.clearOnSuccess(streak);
         }
-        return { ...result, sourceHandled: true };
+        streak = target;
+        if (result.ok) { ledger.clearOnSuccess(target); return result; }
+        const saved = ledger.record(result, target);
+        if (!saved) return result;
+        const { undo: _undo, ...evidence } = saved;
+        if (evidence.excluded) record('step_blocked', { card, step: target.entity, count: evidence.failures,
+          reason: result.reason, until: evidence.retryAt, result });
+        return { ...result, facts: { ...result.facts, target: evidence } };
       },
       outcome(result, elapsedMs) {
         const at = now();
-        const p = !result?.sourceHandled && result?.ok === false && !result.waited && !result.giveUp
-          && !['aborted', 'self_stuck'].includes(result.reason) ? generic() : null;
+        const p = result?.ok === false && !result.facts?.target && !result.facts?.adaptation && !result.facts?.terminal
+          && !['start', 'interrupted', 'material'].includes(result.kind) ? generic() : null;
         const handled = p ? adaptation.scope(() => true).outcome(p, result) : result;
-        const exhausted = handled?.adaptationExhausted;
+        const exhausted = handled?.facts?.adaptation?.exhausted;
         if (exhausted) {
           return { card, reason: 'adaptation_exhausted', task: exhausted.task, method: exhausted.method, key: exhausted.key,
             failure: exhausted.reason, until: Math.max(at + yieldCooldownMs, exhausted.retryAt) };
         }
-        if (result?.waited) {
-          if (card === 'homestead' && result.reason === 'sheltering_until_daylight') {
+        if (result?.wait) {
+          if (card === 'homestead' && result.wait.reason === 'sheltering_until_daylight') {
             const state = perceive();
             if (state?.isDay === false && state.sheltered) return null;
           }
           waits += 1;
           waitMs += Math.max(0, elapsedMs);
-          if (result.retryAt > at || waits >= waitLimit || waitMs >= waitBudgetMs) {
-            return { card, reason: result.reason || 'waiting', waits, waitMs, until: Math.max(at + yieldCooldownMs, result.retryAt || 0) };
+          if (result.wait.until > at || waits >= waitLimit || waitMs >= waitBudgetMs) {
+            return { card, reason: result.wait.reason, waits, waitMs, until: Math.max(at + yieldCooldownMs, result.wait.until || 0) };
           }
           return null;
         }

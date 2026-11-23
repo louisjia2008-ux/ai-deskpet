@@ -16,7 +16,8 @@ const { gatherOne } = require('../core/skills');
 const anchor = { x: 0, y: 64, z: 0 };
 const above = (p) => new Vec3(p.x, p.y + 1, p.z);
 
-function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false, widerStone = false } = {}) {
+function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false, widerStone = false,
+  unconfirmed = () => false, afterWalk = () => {} } = {}) {
   const blueprint = createStarterHouse(anchor, { variant });
   const roof = blueprint.blocks.filter(b => b.phase === 'roof').map(b => b.position);
   const walls = blueprint.blocks.filter(b => b.phase === 'walls').map(b => b.position);
@@ -47,6 +48,7 @@ function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false
     goTo: async (_bot, _ctx, goal) => {
       if (goal.y === undefined) return { ok: false, reason: 'path_timeout' }; // Attempts to look beyond the local wood supply.
       position.set(goal.x + 0.5, goal.y, goal.z + 0.5);
+      afterWalk(setBlock);
       return { ok: true };
     },
     async digBlock(_bot, _ctx, block, { ownedHomeRemoval } = {}) {
@@ -83,11 +85,15 @@ function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false
       worked.push({ kind: 'craft', item, times });
       return { ok: true };
     },
-    async placeAt(_bot, _ctx, p, match) {
+    async placeAt(_bot, ctx, p, match) {
       assert.equal(bot.blockAt(p).name, 'air');
       const item = Object.keys(inventory).find(n => inventory[n] > 0 && match(n));
       assert.ok(item, `uses carried material at ${posKey(p)}`);
       inventory[item] -= 1;
+      if (unconfirmed(p, item)) {
+        ctx.record('place_failed', { attemptId: ctx.attemptId, target: posKey(p), item });
+        return { ok: false, reason: 'place_unconfirmed' };
+      }
       worked.push({ kind: 'place', position: posKey(p), item });
       setBlock(p, item);
       return { ok: true };
@@ -125,10 +131,10 @@ test('roof stone gathers apply protection before the native candidate cap', asyn
   const options = { blocks: n => n === 'stone', blacklist: new Map(), exclude: p => p.x < 14, radius: 128,
     selectTarget: candidates => {
       assert.deepEqual(candidates.map(b => b.position), [stock]);
-      return { ok: false, reason: 'observed_candidate' };
+      return { ok: false, reason: 'no_target_selected' };
     } };
   assert.equal((await gatherOne(bot, ctx, options)).reason, 'no_target_in_range');
-  assert.equal((await gatherOne(bot, ctx, { ...options, eligibleFirst: true })).reason, 'observed_candidate');
+  assert.equal((await gatherOne(bot, ctx, { ...options, eligibleFirst: true })).reason, 'no_target_selected');
 });
 
 async function finish(home, fixture) {
@@ -284,6 +290,41 @@ test('seed 2 places a sandstone wall corner from the 56 blocks already carried',
   assert.equal(fixture.bot.blockAt(corner).name, 'sandstone');
   assert.deepEqual(fixture.worked, [{ kind: 'place', position: posKey(corner), item: 'sandstone' }]);
   assert.equal(fixture.events.some(e => e.type === 'home_material_acquisition'), false);
+});
+
+test('a wall retry reads the cell and inventory after the last sandstone is consumed', async () => {
+  const fixture = site({ materials: { sandstone: 1, oak_planks: 49 }, unconfirmed: () => true });
+  const corner = fixture.walls[0];
+  fixture.setBlock(corner, 'air');
+  const result = await fixture.newHome().run(fixture.ctx);
+  const [planned, unconfirmed, retry] = fixture.events.filter(e => ['build', 'place_failed'].includes(e.type));
+  assert.equal(planned.material, 'sandstone');
+  assert.equal(retry.retry, true);
+  assert.equal(retry.material, undefined);
+  assert.equal(fixture.bot.blockAt(corner).name, 'air');
+  assert.equal(fixture.state.inventory.sandstone, 0);
+  assert.equal(result.kind, 'material');
+  assert.deepEqual(result.facts.need, { wall: 1 });
+  assert.equal(result.facts.carried.sandstone, 0);
+  assert.deepEqual([planned.attemptId, unconfirmed.attemptId, retry.attemptId], Array(3).fill(result.attemptId));
+  assert.equal(fixture.worked.length, 0);
+});
+
+test('the same wall retry recognizes a late server confirmation with an empty stack', async () => {
+  let placement;
+  const fixture = site({ materials: { sandstone: 1, oak_planks: 49 },
+    unconfirmed(position, item) { placement = [position, item]; return true; },
+    afterWalk(setBlock) { if (placement) setBlock(...placement); } });
+  const corner = fixture.walls[0];
+  fixture.setBlock(corner, 'air');
+  const result = await fixture.newHome().run(fixture.ctx);
+  assert.deepEqual(result, { ok: true, progress: false });
+  assert.equal(fixture.bot.blockAt(corner).name, 'sandstone');
+  assert.equal(fixture.state.inventory.sandstone, 0);
+  const attempts = fixture.events.filter(e => e.type === 'build');
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].attemptId, attempts[1].attemptId);
+  assert.equal(fixture.worked.length, 0);
 });
 
 test('wall mixes carried preferred materials with on-site sandstone conversion and protects finished panels', async () => {

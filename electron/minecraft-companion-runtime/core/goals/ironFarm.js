@@ -20,6 +20,7 @@
 // The villagers still have to sleep in their beds once before they call golems:
 // the farm starts working after its first night.
 
+const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
@@ -327,7 +328,7 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
           && Math.floor(e.position.x) === c.entrance.x && Math.floor(e.position.z) === c.entrance.z);
         if (there) {
           await sleep(1000, ctx.signal);
-          return { ok: false, reason: 'villager_in_entrance', waited: true };
+          return waiting('villager_in_entrance');
         }
         // An empty cart stopped there (the corridor full of the others): break it from the tunnel.
         const cart = Object.values(bot.entities).find((e) => e.name === 'minecart' && e.position && !e.passengers?.length
@@ -341,7 +342,7 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
           ctx.record('iron_farm_entrance_cart', { broken: !bot.entities[cart.id] });
           // A hit that doesn't break it knocks it on into the corridor, which frees the entrance too.
           memory.entranceHits = (memory.entranceHits || 0) + 1;
-          return bot.entities[cart.id] ? { ok: false, reason: 'cart_in_entrance', waited: memory.entranceHits < 30 } : { ok: true };
+          return bot.entities[cart.id] ? (memory.entranceHits < 30 ? waiting('cart_in_entrance') : { ok: false, reason: 'cart_in_entrance' }) : { ok: true };
         }
         if (!isAir(blockAt(c.entrance))) return dig(ctx, c.entrance);
         const result = await skills.placeAt(bot, ctx, c.entrance, (n) => n === 'cobblestone', {

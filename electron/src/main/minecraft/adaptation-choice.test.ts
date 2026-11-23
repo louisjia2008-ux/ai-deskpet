@@ -52,7 +52,7 @@ it.each([1, 2])('executes a fixed model choice from a loopback provider, then ta
       const effect = await run('wood', location, (method: string) => { methods.push(method); return { ok: true, gained: 1 }; });
       if (failed) {
         expect(choice).toBeNull();
-        expect(effect).toMatchObject({ waited: true, reason: 'adaptation_other_work' });
+        expect(effect).toMatchObject({ ok: true, wait: { reason: 'adaptation_other_work' } });
         expect(methods).toEqual([]);
         expect(events).toContainEqual(expect.objectContaining({ type: 'adaptation_help_result', fallback: 'do_other_work' }));
         timeOffset += 300_001;

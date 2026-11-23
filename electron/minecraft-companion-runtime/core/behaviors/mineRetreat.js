@@ -47,7 +47,7 @@ function createMineRetreat({ bot, adaptation, enabled }) {
         if (exit?.ok && bot.entity.position.distanceTo(start) >= 0.5) return { ...exit, progress: false };
         if (method === 'known_exit' && exit) return exit.ok ? { ok: false, reason: 'mine_exit_not_arrived' } : exit;
         const surfaced = await actions.surface(bot, ctx, { targetY: mine.surfaceY });
-        return surfaced || { ok: false, reason: 'mine_exit_blocked' };
+        return surfaced && surfaced.progress !== false ? surfaced : { ok: false, reason: 'mine_exit_blocked' };
       }, { learn: { kind: 'mine_danger', radius: 48 } });
     },
   };

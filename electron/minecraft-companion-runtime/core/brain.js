@@ -6,6 +6,7 @@
 // current state again and decides what is still missing. Progress lives in the
 // world (inventory, placed blocks), not in a step pointer.
 
+const { complete, failure, createAttempt, legacyDimensionResult } = require('./action-result');
 const BAND = Object.freeze({ IDLE: 0, GOAL: 50, MAINTENANCE: 100, DEFENSE: 120, ESCAPE: 130 });
 
 function createBrain({
@@ -138,20 +139,20 @@ function createBrain({
     }
     // Being interrupted by survival is not a lack of progress, and neither is
     // waiting out the night: a wait neither spends nor refills the budget.
-    if (preempted || result?.reason === 'self_stuck') return;
+    if (preempted || result.kind === 'start' || result.kind === 'interrupted') return;
     const yielded = entry.autonomy?.outcome(result, now() - entry.startedAt);
     if (yielded) {
       goal = null;
-      emit('goal_yielded', { goal: entry.def.name, ...yielded, ...correlation(entry) });
+      emit('goal_yielded', { goal: entry.def.name, ...yielded, result, ...correlation(entry) });
       return;
     }
-    if (result?.waited) return;
+    if (result.wait) return;
     const progress = safeProgress(entry.def, state);
     // The goal knows it cannot go on here (nothing to build with in reach of
     // the site): end it now and say why, rather than burn the stall budget.
-    if (result?.giveUp && (!result.sourceHandled || result.reason === 'home_site_relocated')) {
+    if (result.facts?.terminal) {
       goal = null;
-      emit('goal_failed', { goal: entry.def.name, progress, reasons: [result.reason], ...correlation(entry) });
+      emit('goal_failed', { goal: entry.def.name, progress, reasons: [result.reason], result, ...correlation(entry) });
       return;
     }
     if (progress > entry.best) {
@@ -162,8 +163,7 @@ function createBrain({
     // A concrete action, planning source, or the goal's adaptation ladder
     // already owns this failed attempt. Use the stall budget for runs that
     // reported success without advancing, and for ordinary non-autonomous goals.
-    if (entry.autonomy && ((!result.ok && (result.sourceHandled || entry.autonomy.managesFailures))
-      || (result.sourceHandled && result.adaptFailure))) return;
+    if (entry.autonomy && !result.ok && (result.facts.target || result.facts.adaptation || entry.autonomy.managesFailures)) return;
     entry.stalls += 1;
     if (!result.ok) entry.reasons.push(result.reason);
     if (entry.stalls >= (entry.def.noProgressLimit ?? noProgressLimit)) {
@@ -181,12 +181,13 @@ function createBrain({
         return;
       }
       goal = null;
-      emit('goal_failed', { goal: entry.def.name, progress, reasons, ...correlation(entry) });
+      emit('goal_failed', { goal: entry.def.name, progress, reasons, result, ...correlation(entry) });
     }
   }
 
   function recordOutcome(behavior, result) {
     if (disposed || (behavior.isGoal && behavior.goalEntry !== goal)) return;
+    if (result.wait || result.kind === 'start' || result.kind === 'interrupted') return;
     if (result.ok) {
       failures.delete(behavior.name);
       return;
@@ -211,17 +212,18 @@ function createBrain({
     const controller = new AbortController();
     const entry = { behavior, controller, preempted: false };
     const isCurrent = () => !disposed && (!behavior.isGoal || behavior.goalEntry === goal);
-    const ctx = {
+    const ctx = createAttempt({
       signal: controller.signal,
       perceive,
       record: (type, data) => {
         if (running === entry && !controller.signal.aborted && isCurrent()) {
-          emit(type, { ...data, behavior: behavior.name, ...correlation(behavior.goalEntry) });
+          emit(type, { attemptId: ctx.attemptId, ...data, behavior: behavior.name, ...correlation(behavior.goalEntry) });
         }
       },
       ...correlation(behavior.goalEntry),
       behavior: behavior.name,
-    };
+    });
+    entry.attemptId = ctx.attemptId;
     const autonomous = behavior.goalEntry?.autonomy;
     if (autonomous) {
       behavior.goalEntry.startedAt = now();
@@ -231,24 +233,30 @@ function createBrain({
         if (isCurrent() && !controller.signal.aborted) return autonomous.stepOutcome(step, result, ctx.record);
       };
     }
+    const failed = error => {
+      if (error?.code === 'result_reason_unmapped') ctx.record('result_reason_unmapped', { reason: error.reason });
+      return failure(controller.signal.aborted || error?.code === 'aborted' ? 'aborted' : 'behavior_error',
+        { error: error?.message || describe(error) }, ctx, safePerceive());
+    };
     entry.promise = Promise.resolve()
       .then(async () => {
-        if (controller.signal.aborted || !isCurrent()) return { ok: false, reason: 'aborted' };
+        if (controller.signal.aborted || !isCurrent()) return failure('aborted', {}, ctx);
         const early = autonomous?.before && await autonomous.before(ctx);
-        if (controller.signal.aborted || !isCurrent()) return { ok: false, reason: 'aborted' };
-        return early || behavior.run(ctx);
+        if (controller.signal.aborted || !isCurrent()) return failure('aborted', {}, ctx);
+        const raw = early || await behavior.run(ctx);
+        return legacyDimensionResult(raw, ctx, safePerceive());
       })
-      .then(normalizeResult, (error) => ({ ok: false, reason: describe(error) }))
+      .catch(failed)
       .then(async (result) => {
         try {
-          if (controller.signal.aborted && result.ok !== true) result = { ok: false, reason: 'aborted' };
+          if (controller.signal.aborted) result = failure('aborted', {}, ctx);
           if (isCurrent()) {
             if (!entry.preempted) recordOutcome(behavior, result);
             if (behavior.isGoal) await settleGoal(behavior.goalEntry, safePerceive(), result, entry.preempted);
             // A terminal observer may synchronously submit another goal. Do not
             // let this finished callback perturb that goal's recovery tracking.
             if (!disposed && (!behavior.isGoal || !goal || goal === behavior.goalEntry)) {
-              emit('behavior_finished', { behavior: behavior.name, ok: result.ok, reason: result.reason,
+              emit('behavior_finished', { behavior: behavior.name, ok: result.ok, reason: result.reason, result, attemptId: ctx.attemptId,
                 ...correlation(behavior.goalEntry) });
             }
           }
@@ -256,7 +264,7 @@ function createBrain({
         } catch (error) {
           if (behavior.isGoal) failGoalEvaluation(behavior.goalEntry, safePerceive(), error, 'settle');
           else emit('behavior_error', { behavior: behavior.name, reason: describe(error) });
-          return { ok: false, reason: describe(error) };
+          return failed(error);
         } finally {
           // Even an evaluator/recovery failure must release the body. Otherwise
           // a rejected settlement leaves running pinned forever.
@@ -278,7 +286,7 @@ function createBrain({
       });
     inFlight.add(entry);
     running = entry;
-    emit('behavior_started', { behavior: behavior.name, band: behavior.band, ...correlation(behavior.goalEntry) });
+    emit('behavior_started', { behavior: behavior.name, band: behavior.band, attemptId: ctx.attemptId, ...correlation(behavior.goalEntry) });
   }
 
   async function preempt(reason, entry = running, required = false) {
@@ -322,7 +330,7 @@ function createBrain({
       }
       const idleGoal = goal;
       if (idleGoal && !paused && !running && isGoalDone(idleGoal, state)) {
-        await settleGoal(idleGoal, state, { ok: true }, false);
+        await settleGoal(idleGoal, state, complete(false), false);
       }
       const best = choose(state);
       if (running) {
@@ -332,7 +340,7 @@ function createBrain({
         if (!stillWanted) {
           await preempt('goal_cleared');
         } else if (best && best.band > current.band) {
-          emit('preempted', { behavior: current.name, by: best.name, ...correlation(current.goalEntry) });
+          emit('preempted', { behavior: current.name, by: best.name, attemptId: running.attemptId, ...correlation(current.goalEntry) });
           await preempt(`preempted_by:${best.name}`);
         } else {
           return;
@@ -460,11 +468,6 @@ function createBrain({
     /** Resolves once the currently running behavior (if any) has settled. */
     idle: () => inFlight.size ? Promise.all([...inFlight].map((entry) => entry.promise)) : deferredTick ?? Promise.resolve(),
   };
-}
-
-function normalizeResult(value) {
-  if (value && typeof value === 'object' && typeof value.ok === 'boolean') return value;
-  return { ok: true };
 }
 
 function describe(error) {

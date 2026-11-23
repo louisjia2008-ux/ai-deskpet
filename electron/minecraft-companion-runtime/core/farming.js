@@ -9,6 +9,7 @@ const { clearCoverAt } = require('./skills');
 const { naturalCover } = require('./natural-cover');
 const { waitUntil } = require('./confirm');
 const { posKey } = require('./blacklist');
+const { ledgerFor, ledgerTarget, recordTarget } = require('./failure-ledger');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
@@ -193,20 +194,21 @@ async function harvest(bot, ctx, plot) {
 }
 
 /** Breaks the nearest grass for a chance (1 in 8) at seeds. */
-async function gatherSeeds(bot, ctx, { radius = 32, blacklist, exclude = () => false } = {}) {
+async function gatherSeeds(bot, ctx, { radius = 32, exclude = () => false } = {}) {
   const ids = ['short_grass', 'tall_grass'].map((n) => bot.registry.blocksByName[n]?.id).filter(Number.isInteger);
   const here = bot.entity.position;
+  const ledger = ledgerFor(bot, ctx), target = p => ledgerTarget(bot, 'grass', p);
   const grass = bot.findBlocks({ matching: ids, maxDistance: radius, count: 32 })
-    .filter((p) => !blacklist?.has(`grass:${posKey(p)}`) && !exclude(p))
+    .filter(p => !ledger.skip(target(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p))
     .sort((a, b) => a.distanceTo(here) - b.distanceTo(here))
     .map((p) => bot.blockAt(p)).filter(Boolean)[0];
   if (!grass) return fail('no_grass');
-  blacklist?.add(`grass:${posKey(grass.position)}`, 'tried');
   const moved = await actions.goToDig(bot, ctx, grass, { timeoutMs: 30000 });
-  if (!moved.ok) return moved;
+  if (!moved.ok || moved.wait) return recordTarget(bot, ctx, moved, target(grass.position));
   const before = actions.countItems(bot, (n) => n === 'wheat_seeds');
   const dug = await actions.digBlock(bot, ctx, grass);
-  if (!dug.ok) return dug;
+  if (!dug.ok) return recordTarget(bot, ctx, dug, target(grass.position));
+  ledger.clearOnSuccess(target(grass.position));
   await actions.collectDrops(bot, ctx, grass.position.offset(0.5, 0.5, 0.5), (n) => n === 'wheat_seeds', { radius: 3, timeoutMs: 1500 });
   // No seed this time is still a block of work done, not a failure.
   return { ok: true, seeds: actions.countItems(bot, (n) => n === 'wheat_seeds') - before };

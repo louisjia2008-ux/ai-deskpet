@@ -14,6 +14,7 @@
 //   5. otherwise                      -> wait in the alcove, empty the chest
 // Only mob drops gained after the goal started count.
 
+const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
@@ -213,7 +214,7 @@ function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
     }
     memory.lastCheck = Date.now();
     const result = await skills.takeItems(bot, ctx, { position: f.cells.chest, itemMatch: (n) => MOB_DROPS.has(n) });
-    if (result.ok) memory.taken += result.taken;
+    if (result.ok) memory.taken += factsOf(result).taken;
     // Hostile mobs in the bot's view, to tell a farm that spawns nothing from one that drops nothing.
     const mobs = Object.values(bot.entities).filter((e) => e.type === 'hostile').length;
     ctx.record('mob_drops', { gained: gained(), taken: memory.taken, reason: result.reason, mobs });

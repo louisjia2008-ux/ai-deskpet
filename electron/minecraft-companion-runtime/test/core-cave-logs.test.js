@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Vec3 } = require('vec3');
 const skills = require('../core/skills');
-const { createBlacklist } = require('../core/blacklist');
 
 const solid = (name, position) => ({ name, boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]], position });
 const air = (position) => ({ name: 'air', boundingBox: 'empty', shapes: [], position });
@@ -21,9 +20,9 @@ test('planner wood gathering leaves logs in a cave and takes the tree under the 
   };
   let offered;
   const result = await skills.gatherOne(bot, { signal: new AbortController().signal, record: () => {} }, {
-    blocks: (name) => name === 'oak_log', dropMatch: (name) => name === 'oak_log', blacklist: createBlacklist({ ttlMs: 1000 }),
-    selectTarget: (candidates) => { offered = candidates.map((b) => b.position.toString()); return { ok: false, reason: 'inspected' }; },
+    blocks: (name) => name === 'oak_log', dropMatch: (name) => name === 'oak_log',
+    selectTarget: (candidates) => { offered = candidates.map((b) => b.position.toString()); return { ok: false, reason: 'no_target_selected' }; },
   });
-  assert.equal(result.reason, 'inspected');
+  assert.equal(result.reason, 'no_target_selected');
   assert.deepEqual(offered, [tree.toString()]);
 });

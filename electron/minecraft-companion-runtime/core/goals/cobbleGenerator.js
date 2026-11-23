@@ -12,6 +12,7 @@
 // The only memory kept across runs is the site and the harvest count, which
 // counts only cobblestone seen regenerating in C and arriving in the inventory.
 
+const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
@@ -184,7 +185,7 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
     await actions.goTo(bot, ctx, away, { timeoutMs: 10000, arrived: () => !trappedCell() });
     if (!trappedCell()) return { ok: true };
     const result = await actions.unstick(bot, ctx);
-    ctx.record('device_step_off', { from: key(cell), result: result.ok ? result.moved : result.reason });
+    ctx.record('device_step_off', { from: key(cell), result: result.ok ? factsOf(result).moved : result.reason });
     return trappedCell() ? { ok: false, reason: 'trapped_in_device' } : { ok: true };
   }
 
@@ -245,7 +246,7 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
     if (memory.device.collector && (memory.regenerated >= memory.harvested + 4 || memory.regenerated >= harvest)) {
       // Empty the collector chest under S now and then; the hopper fills it.
       const taken = await skills.takeItems(bot, ctx, { position: c.collectorChest, itemMatch: (n) => n === 'cobblestone' });
-      if (taken.ok) memory.harvested += taken.taken;
+      if (taken.ok) memory.harvested += factsOf(taken).taken;
       ctx.record('generator_collect', { ok: taken.ok, reason: taken.reason, harvested: memory.harvested });
       if (taken.ok || memory.harvested >= harvest) return taken;
     }

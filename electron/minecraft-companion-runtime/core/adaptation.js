@@ -1,7 +1,8 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
-const { createTargetMemory } = require('./target-memory');
+const { failure, resultFrom, waiting } = require('./action-result');
+const { createFailureLedger } = require('./failure-ledger');
 
 const MINUTE = 60_000;
 const LIMIT = 3;
@@ -27,11 +28,8 @@ const IMMEDIATE_FAILURES = {
   route: new Set(['choose_another_target', 'route_region_avoided']),
   goal: new Set(['no_recovery_available', 'goal_methods_exhausted']),
 };
-const LEARN_TTL = { mine_danger: 24 * 60 * MINUTE, rejected_site: 6 * 60 * MINUTE,
-  no_sheep: 45 * MINUTE, hard_route: 30 * MINUTE, lava_pool: 10 * MINUTE };
 const TTL = 90 * MINUTE;
 const MAX_ENTRIES = 128;
-const MAX_DESTINATIONS = 32;
 
 function position(p) {
   return p && ['x', 'y', 'z'].every((axis) => Number.isFinite(p[axis]) && Math.abs(p[axis]) <= 30_000_000)
@@ -47,52 +45,32 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
   try { saved = store?.load() || {}; } catch { /* start with no lessons */ }
   const states = new Map();
   const asked = new Map();
-  let lessons = [];
   const pending = new Map();
   const completed = new Map();
   let lastProof = now();
   let lastContext = null;
   let transferring = false;
   const emit = (type, fields) => { try { onEvent({ type, at: now(), ...fields }); } catch { /* observers do not own the body */ } };
-  const transfers = new WeakMap();
-  const targets = createTargetMemory({ now, load: saved.targets, onChange: () => { if (!transferring) persist(); }, emit,
+  const failureLedger = createFailureLedger({ now, load: saved.failureLedger, legacyTargets: saved.targets, legacyLessons: saved.lessons,
+    legacyStates: saved.states,
+    onChange: () => { if (!transferring) persist(); }, emit,
     protectedTarget: (p, dimension) => atHome(p, dimension) || playerProtected(p, dimension) });
-  const destinations = targets.scope();
-  function loadedDestinations(items) {
-    if (!Array.isArray(items)) return [];
-    return items.slice(-MAX_DESTINATIONS).flatMap((item) => {
-      const p = !item?.revoked && position(item?.position);
-      if (!p) return [];
-      try {
-        const restored = destinations.capture({ ...item, entity: item.target, position: p, witness: () => item.witness }, item.reason);
-        return restored?.key === item.key ? [restored] : [];
-      } catch { return []; }
-    });
-  }
+  const destinations = failureLedger.scope();
   for (const e of Array.isArray(saved.states) ? saved.states.slice(-MAX_ENTRIES) : []) {
     if (typeof e?.key === 'string' && e.key.length <= 150 && Object.hasOwn(LADDERS, e.task) && e.until > now()
       && Number.isInteger(e.index) && e.index >= 0 && e.index <= LADDERS[e.task].length) {
       states.set(e.key, { key: e.key, task: e.task, index: e.index, count: Math.max(0, Math.min(LIMIT, e.count | 0)),
         until: Math.min(e.until, now() + TTL), failed: reasonCode(e.failed), retryAt: Math.min(e.retryAt || 0, now() + 10 * MINUTE),
-        fresh: e.fresh === true, revision: Number.isSafeInteger(e.revision) ? e.revision : 0,
-        destinations: loadedDestinations(e.destinations) });
+        fresh: e.fresh === true, revision: Number.isSafeInteger(e.revision) ? e.revision : 0 });
     }
   }
   for (const [key, at] of Object.entries(saved.asked || {})) {
     if (Object.hasOwn(LADDERS, key) && Number.isFinite(at) && at <= now() && at > now() - helpIntervalMs) asked.set(key, at);
   }
-  for (const e of Array.isArray(saved.lessons) ? saved.lessons.slice(-MAX_ENTRIES) : []) {
-    if (Object.hasOwn(LEARN_TTL, e?.kind) && position(e.position) && e.until > now()) {
-      lessons.push({ kind: e.kind, dimension: token(e.dimension), position: position(e.position), reason: reasonCode(e.reason),
-        radius: Math.min(500, Math.max(1, Number(e.radius) || 1)), until: Math.min(e.until, now() + LEARN_TTL[e.kind]) });
-    }
-  }
-
   function persist() {
     for (const [key, entry] of states) if (entry.until <= now()) states.delete(key);
     while (states.size > MAX_ENTRIES) states.delete(states.keys().next().value);
-    lessons = lessons.filter((e) => e.until > now()).slice(-MAX_ENTRIES);
-    try { store?.save({ states: [...states.values()], lessons, asked: Object.fromEntries(asked), targets: targets.snapshot() }); }
+    try { store?.save({ states: [...states.values()], asked: Object.fromEntries(asked), failureLedger: failureLedger.persisted() }); }
     catch { /* this connection can still use the retained lessons */ }
   }
 
@@ -207,18 +185,15 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
   }
 
   function defer(p) {
-    const result = { ok: true, waited: true, reason: 'adaptation_other_work', retryAt: retryAt(p) };
+    const result = waiting('adaptation_other_work', retryAt(p));
     helpEffect(p, result);
     return result;
   }
 
   function finishDestinations(e) {
-    const witnesses = new Map();
-    for (const item of e.destinations || []) if (!item.revoked) witnesses.set(item.key, item);
-    delete e.destinations;
     transferring = true;
     try {
-      for (const item of witnesses.values()) transfers.set(item, destinations.handoff(item, e.task));
+      failureLedger.finish(e.key, e.task);
     } finally {
       transferring = false;
       persist();
@@ -226,25 +201,21 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
   }
 
   function outcome(p, result, { threshold = LIMIT, valid = () => true, learn = null, observations = [] } = {}) {
-    if (!valid() || !result || result.waited || ['aborted', 'self_stuck'].includes(result.reason)) return result;
+    if (!result) return result;
+    result = resultFrom(result);
+    if (!valid() || result.wait || ['start', 'interrupted'].includes(result.kind)) return result;
     const e = entry(p);
+    const owned = fields => result.ok ? result : { ...result, facts: { ...result.facts, adaptation: { task: p.task, method: p.method, ...fields } } };
     // Do not let late/cancelled outcomes change a newer decision.
-    if (e.index !== p.index || e.revision !== p.revision) return { ...result, sourceHandled: true };
-    if (observations.length) {
-      let pendingTargets = (e.destinations || []).filter(item => !item.revoked);
-      for (const item of observations) {
-        if (item.reached) pendingTargets = pendingTargets.filter(prior => prior.key !== item.key);
-        else if (!item.revoked) pendingTargets.push(item);
-      }
-      e.destinations = pendingTargets.slice(-MAX_DESTINATIONS);
-    }
-    if (result.sourceHandled && (!result.ok || result.adaptFailure || result.adaptationExhausted)) {
+    if (e.index !== p.index || e.revision !== p.revision) return owned();
+    failureLedger.stage(e.key, now() + TTL, observations);
+    if (result.facts?.adaptation || result.facts?.target) {
       if (observations.length) put(e);
       return result;
     }
     lastContext = p;
     helpEffect(p, result);
-    if (result.ok && !result.adaptFailure) {
+    if (result.ok) {
       if (result.progress !== false) {
         lastProof = now();
         if (e.count) { e.count = 0; put(e); }
@@ -252,22 +223,23 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
       } else if (observations.length) {
         put(e);
       }
-      return { ...result, sourceHandled: true };
+      return result;
     }
-    const reason = reasonCode(result.adaptFailure || result.reason);
+    if (result.kind === 'material') return result;
+    const reason = reasonCode(result.reason);
     if (p.method === FALLBACK) return defer(p);
     const cap = IMMEDIATE_FAILURES[p.task]?.has(reason) ? 1 : Math.max(1, Math.min(LIMIT, threshold));
     const failures = e.count + 1;
     const fields = { task: p.task, method: p.method, key: p.key, region: p.region, dimension: p.dimension,
       target: p.target, position: p.position };
-    emit('adaptation_attempt', { ...fields, outcome: 'failure', failures, reason });
+    emit('adaptation_attempt', { ...fields, outcome: 'failure', failures, reason, result });
     if (failures > LIMIT) emit('adaptation_invariant', { ...fields, failures, reason });
     e.failed = reason;
     e.until = now() + TTL;
     let adaptationExhausted;
     if (failures >= cap) {
       const lesson = typeof learn === 'function' ? learn(result, p) : learn;
-      if (lesson) teach(lesson.kind, lesson.position || p.position, p.dimension, reason, lesson.radius);
+      if (lesson) teach(lesson.kind, lesson.position || p.position, p.dimension, result, lesson.radius);
       e.index = Math.min(LADDERS[p.task].length, e.index + 1);
       e.revision += 1;
       e.count = 0;
@@ -290,35 +262,18 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
       put(e);
     }
     poll();
-    return { ...result, sourceHandled: true, ...(failures >= cap ? { adaptationSwitched: true } : {}),
-      ...(adaptationExhausted ? { adaptationExhausted } : {}) };
+    return owned({ switched: failures >= cap, exhausted: adaptationExhausted });
   }
 
-  function teach(kind, p, dimension, reason, radius = 32) {
+  function teach(kind, p, dimension, raw, radius = 32) {
     const where = position(p);
-    if (!where || !Object.hasOwn(LEARN_TTL, kind)) return;
-    if (kind === 'hard_route' && atHome(where, dimension)) return;
-    const lesson = { kind, dimension: token(dimension, 'overworld'), position: where,
-      reason: reasonCode(reason), radius: Math.min(500, Math.max(1, radius)), until: now() + LEARN_TTL[kind] };
-    lessons = lessons.filter((e) => e.kind !== kind || e.dimension !== lesson.dimension
-      || Math.hypot(e.position.x - where.x, e.position.z - where.z) > Math.min(e.radius, lesson.radius) / 2
-      || (kind === 'lava_pool' && Math.abs(e.position.y - where.y) > 4));
-    lessons.push(lesson);
-    persist();
-    emit('adaptation_lesson', lesson);
+    if (!where) return;
+    const result = typeof raw !== 'string' ? raw : failure(kind === 'mine_danger'
+      ? 'mine_route_hazard' : raw, kind === 'mine_danger' ? { originalReason: raw } : {});
+    failureLedger.record(result, { purpose: kind, dimension, position: where, radius });
   }
-  function avoids(kind, p, dimension = 'overworld') {
-    if (!position(p)) return false;
-    if (kind === 'hard_route' && atHome(p, dimension)) return false;
-    return lessons.some((e) => e.kind === kind && e.dimension === dimension && e.until > now()
-      && Math.hypot(e.position.x - p.x, e.position.z - p.z) <= e.radius
-      && (kind !== 'lava_pool' || Math.abs(e.position.y - p.y) <= 4));
-  }
-  function pruneHome() {
-    const previous = lessons.length;
-    lessons = lessons.filter(e => e.kind !== 'hard_route' || !atHome(e.position, e.dimension));
-    if (!targets.pruneProtected() && lessons.length !== previous) persist();
-  }
+  const avoids = (kind, p, dimension) => failureLedger.regionHard(p, dimension, kind);
+  const pruneHome = () => failureLedger.pruneProtected();
   function promote(task, input, method, reason) {
     const p = plan(task, input);
     const e = entry(p);
@@ -335,32 +290,27 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
     return true;
   }
   function scope(valid) {
-    return { plan, avoids, targets: targets.scope(valid), pruneHome: () => { if (valid()) pruneHome(); },
+    const ledger = failureLedger.scope(valid);
+    return { plan, avoids, ledger, targets: ledger, failureLedger, pruneHome: () => { if (valid()) pruneHome(); },
       progress: () => { if (valid()) lastProof = now(); },
       teach: (...args) => valid() && teach(...args), promote: (...args) => valid() && promote(...args),
       outcome: (p, result, options) => outcome(p, result, { ...options, valid }),
       async run(task, input, execute, options) {
         const p = plan(task, input);
-        if (!valid()) return { ok: false, reason: 'aborted' };
+        if (!valid()) return failure('aborted');
         if (p.method === FALLBACK) return defer(p);
         const observations = [];
         const observeDestination = (spec, result) => {
           if (!valid()) return null;
-          const item = destinations.capture(spec, result.reason);
+          const item = destinations.capture(spec, resultFrom(result));
           if (!item) return null;
-          if (result.ok) item.reached = true;
           observations.push(item);
-          return () => {
-            item.revoked = true;
-            const undo = transfers.get(item);
-            if (undo) return undo();
-            persist();
-          };
+          return () => failureLedger.revoke(item);
         };
         return outcome(p, await execute(p.method, p, observeDestination), { ...options, valid, observations });
       } };
   }
-  return { plan, scope, promote, teach, avoids, reply, poll, defer, targets, pruneHome,
+  return { plan, scope, promote, teach, avoids, reply, poll, defer, failureLedger, pruneHome,
     progress: () => { lastProof = now(); }, pending: () => pending.size };
 }
 

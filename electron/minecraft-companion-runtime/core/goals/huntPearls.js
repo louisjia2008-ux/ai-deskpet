@@ -8,6 +8,7 @@
 // when the bag holds `count` pearls, or at dawn after hunting through a night:
 // the caller sets it again the next evening.
 
+const { waiting } = require('../action-result');
 const defaultSkills = require('../skills');
 const { createBlacklist } = require('../blacklist');
 const { Vec3 } = require('vec3');
@@ -27,7 +28,7 @@ const isPearl = (n) => n === 'ender_pearl';
 
 function createHuntPearlsGoal({ bot, count = 12, radius = 64, skills = defaultSkills, actions = defaultActions } = {}) {
   if (!Number.isSafeInteger(count) || count < 1) throw new TypeError('count must be a positive integer');
-  const blacklist = createBlacklist({ ttlMs: 60000 });
+  const blacklist = createBlacklist({ bot, namespace: 'pearls', ttlMs: 60000 });
   const memory = { explore: {}, nights: 0, hunted: 0, sawNight: false };
   const pearls = (state) => state.inventory.ender_pearl || 0;
 
@@ -88,7 +89,7 @@ function createHuntPearlsGoal({ bot, count = 12, radius = 64, skills = defaultSk
           return back;
         }
         await sleep(5000, ctx.signal);
-        return { ok: true, waited: true };
+        return waiting('dimension_action_pending');
       }
       if (!memory.sawNight) { memory.sawNight = true; memory.nights += 1; }
       // One in sight but far: stare at its head and let it come. Chased,

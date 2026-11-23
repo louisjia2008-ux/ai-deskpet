@@ -58,8 +58,8 @@ test('with a search radius, no tree near the chest ends the task with what is mi
     requirements: [{ key: 'log', count: 4 }] });
   const ctx = { signal: new AbortController().signal, record: () => {}, perceive: () => ({ inventory: {} }) };
   let result;
-  for (let i = 0; i < 30 && !result?.giveUp; i += 1) result = await goal.run(ctx);
-  assert.equal(result.giveUp, true);
+  for (let i = 0; i < 30 && !result?.facts?.terminal; i += 1) result = await goal.run(ctx);
+  assert.equal(result.facts?.terminal, true);
   assert.match(result.reason, /^none_near_site:log within 128 of the chest at 0,64,0/);
   assert.equal(legs, 8);
 });
@@ -97,7 +97,7 @@ test(`three bad approaches switch lava pools (${autonomous ? 'autonomous' : 'man
     requirements: [{ key: 'lava_bucket', count: 1 }], carry: () => true });
   const outcomes = [];
   const ctx = { perceive: () => ({ inventory }), record: (type, data) => records.push({ type, ...data }),
-    stepOutcome: (step, result) => outcomes.push({ step, result }) };
+    stepOutcome: (step, result) => { outcomes.push({ step, result }); } };
   if (autonomous) ctx.adapt = createAdaptation({ onEvent: e => records.push(e) }).scope(() => true);
   for (let i = 0; i < 10 && !goal.isDone(ctx.perceive()); i += 1) await goal.run(ctx);
   assert.equal(goal.isDone(ctx.perceive()), true);

@@ -12,6 +12,7 @@
 // A death that loses the materials just makes step 1 come back for what is
 // missing; whatever is already built stays built and is not asked for again.
 
+const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -86,7 +87,7 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
     // All of it is in the chest now: take it out to build with.
     const result = await skills.takeItems(bot, ctx, { position: home.chest,
       itemMatch: (n) => lack.some((r) => kb[r.key].match(n)) });
-    ctx.record('device_take', { device: device.name, ok: result.ok, reason: result.reason, taken: result.taken });
+    ctx.record('device_take', { device: device.name, ok: result.ok, reason: result.reason, taken: factsOf(result).taken });
     await releaseGather();
     return result;
   }

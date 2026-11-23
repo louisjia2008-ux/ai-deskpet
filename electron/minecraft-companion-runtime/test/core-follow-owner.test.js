@@ -6,6 +6,7 @@ const { EventEmitter } = require('node:events');
 const { Vec3 } = require('vec3');
 const { createFollowOwnerGoal } = require('../core/goals/followOwner');
 const { validateTool } = require('../core-tools');
+const { createAttempt, failure, waiting } = require('../core/action-result');
 
 function fixture() {
   const owner = { type: 'player', position: new Vec3(20, 64, 0) };
@@ -40,7 +41,7 @@ test('follow never finishes, counts catch-ups and waits beside a still owner', a
   const goal = createFollowOwnerGoal({ bot, owner: 'Owner', stay: true, actions });
   assert.deepEqual(await goal.run(ctx), { ok: true });
   assert.equal(goal.progress(), 1);
-  assert.deepEqual(await goal.run(ctx), { ok: true, waited: true });
+  assert.deepEqual(await goal.run(ctx), waiting('owner_within_range'));
   owner.position = new Vec3(60, 64, 10);
   assert.deepEqual(await goal.run(ctx), { ok: true });
   assert.equal(goal.progress(), 2);
@@ -66,22 +67,22 @@ test('a following bot guards the owner: hostiles nearby, and whatever hurt them'
   mob(13, 'cow', 21, 'animal');
   const goal = createFollowOwnerGoal({ bot, owner: 'Owner', stay: true, actions });
   // Nothing worth a fight: a creeper, a calm enderman, a far zombie and a cow.
-  assert.deepEqual(await goal.run(ctx), { ok: true, waited: true });
+  assert.deepEqual(await goal.run(ctx), waiting('owner_within_range'));
   assert.deepEqual(fights, []);
   mob(16, 'phantom', 24);
-  assert.deepEqual(await goal.run(ctx), { ok: true, waited: true });
+  assert.deepEqual(await goal.run(ctx), waiting('owner_within_range'));
   assert.deepEqual(fights, []);
   delete bot.entities[16];
   mob(14, 'skeleton', 26);
-  assert.deepEqual(await goal.run(ctx), { ok: true, waited: true });
+  assert.deepEqual(await goal.run(ctx), waiting('guarding_owner'));
   assert.deepEqual(fights, ['skeleton']);
   bot.emit('entityHurt', owner);
-  assert.deepEqual(await goal.run(ctx), { ok: true, waited: true });
+  assert.deepEqual(await goal.run(ctx), waiting('guarding_owner'));
   assert.deepEqual(fights, ['skeleton', 'enderman']);
   // Hurt and low on health itself, the bot leaves fights to its survival behaviors.
   mob(15, 'zombie', 23);
   bot.health = 6;
-  assert.deepEqual(await goal.run(ctx), { ok: true, waited: true });
+  assert.deepEqual(await goal.run(ctx), waiting('recovering_near_owner'));
   assert.deepEqual(fights, ['skeleton', 'enderman']);
   goal.dispose();
   assert.equal(bot.listenerCount('entityHurt'), 0);
@@ -152,7 +153,7 @@ test('hurt, with the zombies it fled still about, the bot keeps its distance ins
   bot.entities[30] = { id: 30, name: 'zombie', type: 'hostile', position: new Vec3(9, 64, 0) };
   bot.health = 6;
   const goal = createFollowOwnerGoal({ bot, owner: 'Owner', stay: true, actions });
-  assert.deepEqual(await goal.run(ctx), { ok: true, waited: true });
+  assert.deepEqual(await goal.run(ctx), waiting('recovering_near_owner'));
   assert.deepEqual(walks, []);
   assert.deepEqual(fights, []);
   // Healed, it goes back to the owner (and the zombie near them is the guard's).
@@ -247,7 +248,7 @@ test('an attack yields at once when told something else needs the bot', async ()
     inventory: { items: () => [], slots: [] }, heldItem: null,
     pathfinder: { goal: null, setGoal() {} }, clearControlStates() {}, setControlState() {},
   });
-  const ctx = { signal: new AbortController().signal, record: () => {} };
+  const ctx = createAttempt({ signal: new AbortController().signal, record: () => {} });
   const result = await actions.attack(bot, ctx, 5, { yieldTo: () => true });
-  assert.deepEqual(result, { ok: true, died: false, hits: 0, yielded: true });
+  assert.deepEqual(result, failure('combat_yielded', { died: false, hits: 0, yielded: true }, ctx));
 });

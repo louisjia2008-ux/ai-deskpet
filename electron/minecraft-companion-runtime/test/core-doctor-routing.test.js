@@ -3,13 +3,18 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createDoctor } = require('../core/doctor');
+const { createArchiveAdapter } = require('../tools/doctor-replay-legacy');
 
 const location = (x, z, y = 64) => ({ x, y, z });
 
-function observe() {
+function observe({ archive = false } = {}) {
   const doctor = createDoctor();
+  const convert = archive ? createArchiveAdapter() : (event) => event;
   let line = 0;
-  function send(at, event) { return doctor.accept({ ...event, at: at * 1000 }, ++line); }
+  function send(at, event) {
+    const input = convert({ ...event, at: at * 1000 }, ++line);
+    return doctor.accept(input, line);
+  }
   return { send, status: doctor.getStatus };
 }
 
@@ -20,7 +25,7 @@ test('D4 detects a loop from actual relocation endpoints despite successful indi
   for (let leg = 0; leg < 12; leg += 1) {
     const from = corners[leg % corners.length];
     const position = corners[(leg + 1) % corners.length];
-    alerts.push(...send(leg * 10, { type: 'home_relocation_leg', from, position, ok: true }));
+    alerts.push(...send(leg * 10, { type: 'home_relocation_leg', from, position, result: { ok: true, progress: true } }));
   }
   const loops = alerts.filter(({ rule }) => rule === 'D4');
   assert.equal(loops.length, 1);
@@ -45,7 +50,7 @@ test('D4 treats vertical excavation and successful directed returns as progress'
   assert.deepEqual(status().recent.filter(({ rule }) => rule === 'D4'), []);
 });
 
-function nightCycle(send, begin, number, waits = 8) {
+function archiveNightCycle(send, begin, number, waits = 8) {
   const card = 'homestead';
   for (let cycle = 0; cycle < number; cycle += 1) {
     const at = begin + cycle * 55;
@@ -59,8 +64,8 @@ function nightCycle(send, begin, number, waits = 8) {
 }
 
 test('D8 records exhausted night wait budgets despite physically reasonable shelter and clears after dawn', () => {
-  const { send, status } = observe();
-  nightCycle(send, 0, 6);
+  const { send, status } = observe({ archive: true });
+  archiveNightCycle(send, 0, 6);
   const cycles = status().recent.filter(({ rule }) => rule === 'D8');
   assert.equal(cycles.length, 1);
   assert.equal(cycles[0].at, 245_000);
@@ -70,10 +75,10 @@ test('D8 records exhausted night wait budgets despite physically reasonable shel
 });
 
 test('D8 keeps dawn boundaries and scheduled one-wait yields out of the repeated budget tally', () => {
-  const { send, status } = observe();
-  nightCycle(send, 0, 3);
+  const { send, status } = observe({ archive: true });
+  archiveNightCycle(send, 0, 3);
   send(165, { type: 'doctor_observation', isDay: true, position: location(0, 0) });
-  nightCycle(send, 200, 3);
-  nightCycle(send, 400, 6, 1);
+  archiveNightCycle(send, 200, 3);
+  archiveNightCycle(send, 400, 6, 1);
   assert.deepEqual(status().recent.filter(({ rule }) => rule === 'D8'), []);
 });

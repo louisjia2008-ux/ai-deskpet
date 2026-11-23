@@ -1,12 +1,13 @@
 'use strict';
 // Executors for planner steps. Same contract as actions.js: short, cancellable,
-// confirmed by observed state, and returning { ok, reason } without retrying.
+// confirmed by observed state, and returning a shared outcome.
 
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('./actions');
 const { waitUntil, runCancellable, sleep, abortError } = require('./confirm');
 const { posKey } = require('./blacklist');
+const { ledgerFor, ledgerTarget, recordTarget, targetsFor } = require('./failure-ledger');
 const { FUELS, COLORS } = require('./knowledge');
 const { ownedItems } = require('./perception');
 const { withCursorConfirmation } = require('./inventory');
@@ -14,6 +15,7 @@ const { isLog, isSurfaceLog } = require('./goals/gatherBlocks');
 const { isAir, naturalCover, plantPartner, isWaterlogged } = require('./natural-cover');
 const { blockTarget, watchDestination } = require('./target-recovery');
 const { accepts, pickItem, seal: sealMatch, isSealSoil, isSealRock, SANDSTONE } = require('./materials');
+const { complete, factsOf, failure, resultFrom, settleAction, waiting } = require('./action-result');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
@@ -26,12 +28,14 @@ function inventoryCounts(bot) {
 }
 
 /** Breaks one matching block (nearest, cheapest first) and collects its drop. */
-async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () => false, radius = 48,
+async function gatherOne(bot, ctx, { blocks, dropMatch, purpose = 'gather', exclude = () => false, radius = 48,
   selectTarget, navigationTrace = false, destination = null, eligibleFirst = false }) {
   const ids = Object.values(bot.registry.blocksByName).filter((b) => blocks(b.name)).map((b) => b.id);
   if (ids.length === 0) return fail('unknown_block');
   const here = bot.entity.position;
-  const eligible = p => !blacklist.has(posKey(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p);
+  const ledger = ledgerFor(bot, ctx);
+  const target = p => ledgerTarget(bot, purpose, p);
+  const eligible = p => !ledger.skip(target(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p);
   const unprotected = b => !bot.companionProtectBlock?.(b) && !bot.companionPlacedRecently?.(b.position);
   // A house and its foundation can fill the native limit with the same
   // material we need for the roof. Apply protection before that limit there.
@@ -59,6 +63,7 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () 
   if (!candidates.includes(block)) return fail('invalid_target_selection');
   const key = posKey(block.position);
   const spec = destination?.spec(block.position);
+  const remember = result => recordTarget(bot, ctx, result, target(block.position), { leaf: !destination });
   ctx.record('target_selected', { block: block.name, position: key, options: candidates.length });
   const trace = (stage, result, from, phase = 'result') => {
     const far = stage === 'far_approach';
@@ -70,43 +75,27 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude = () 
         : bot.entity.position.offset(0, 1.62, 0).distanceTo(block.position.offset(.5, .5, .5)),
       walkOnly: Boolean(bot.pathfinder?.movements?.companionWalkOnly) });
   };
-  if (block.harvestTools && !bot.inventory.items().some((item) => block.harvestTools[item.type])) {
-    if (!actions.isHomeTarget(bot, block.position)) blacklist.add(key, 'no_tool', 30000);
-    return fail('no_tool');
-  }
+  if (block.harvestTools && !bot.inventory.items().some(item => block.harvestTools[item.type])) return fail('no_tool', { need: { harvest_tool: 1 } });
   // Far targets: walk most of the way in legs first, then the precise approach.
   if (block.position.distanceTo(here) > 32) {
     const from = { ...bot.entity.position };
     trace('far_approach', null, from, 'start');
-    const near = await actions.goNear(bot, ctx, block.position.offset(0.5, 0, 0.5), 6, { timeoutMs: 90000,
-      ...(spec ? { destination: { spec, observe: destination.observe, resolves: false } } : {}) });
+    const near = resultFrom(await actions.goNear(bot, ctx, block.position.offset(0.5, 0, 0.5), 6, { timeoutMs: 90000,
+      ...(spec ? { destination: { spec, observe: destination.observe, resolves: false } } : {}) }), ctx, bot);
     trace('far_approach', near, from);
-    if (!near.ok && (near.sourceHandled || near.waited || block.position.distanceTo(bot.entity.position) > 24)) {
-      if (!near.sourceHandled && !near.waited && !actions.isHomeTarget(bot, block.position)) blacklist.add(key, near.reason);
-      return near;
-    }
+    if (near.wait || near.kind === 'start' || near.kind === 'interrupted') return near;
+    if (!near.ok && (near.facts?.target || near.facts?.adaptation || block.position.distanceTo(bot.entity.position) > 24)) return remember(near);
   }
   const from = { ...bot.entity.position };
   trace('mining_stance', null, from, 'start');
   const approach = () => actions.goToDig(bot, ctx, block, { timeoutMs: 45000, ...(selectTarget ? { retryNoProgress: false } : {}) });
   const reach = spec ? await watchDestination(bot, ctx, spec, destination.observe, approach) : await approach();
   trace('mining_stance', reach, from);
-  if (!reach.ok) {
-    // The rest of the same tree or vein is almost always just as unreachable.
-    if (reach.sourceHandled || reach.waited) return reach;
-    for (const other of candidates) {
-      if (other.name === block.name && other.position.distanceTo(block.position) <= 4 && !actions.isHomeTarget(bot, other.position)) {
-        blacklist.add(posKey(other.position), reach.reason);
-      }
-    }
-    return reach;
-  }
+  if (!reach.ok || reach.wait) return remember(reach);
   const dig = await actions.digBlock(bot, ctx, bot.blockAt(block.position) || block);
   trace('dig', dig, { ...bot.entity.position });
-  if (!dig.ok) {
-    if (!actions.isHomeTarget(bot, block.position)) blacklist.add(key, dig.reason);
-    return dig;
-  }
+  if (!dig.ok) return remember(dig);
+  ledger.clearOnSuccess(target(block.position));
   return actions.collectDrops(bot, ctx, block.position.offset(0.5, 0.5, 0.5), dropMatch);
 }
 
@@ -243,7 +232,7 @@ async function craft(bot, ctx, { item, times = 1, tablePosition = null }) {
     const missing = recipe.filter((d) => (have[d.name] || 0) < d.need)
       .map((d) => ({ name: d.name, short: d.need - (have[d.name] || 0) }));
     ctx.record?.('craft_missing', { item, missing, inventory: have });
-    return fail('missing_ingredients', { missing });
+    return fail('missing_ingredients', { missing, need: Object.fromEntries(recipe.map(d => [d.name, d.need])), carried: have });
   }
   return { ok: true, crafted, gained: actions.countItems(bot, (n) => n === item) - before, usedTable: Boolean(table) };
 }
@@ -297,20 +286,24 @@ async function clearCoverAt(bot, ctx, cell, options) {
 }
 
 async function placeAt(bot, ctx, position, material, { faces, stand, verify, sneak = false, alsoClear = [], passable = false,
-  requireAir = false, protectedCell } = {}) {
+  requireAir = false, protectedCell, materialNeed } = {}) {
   const itemMatch = typeof material === 'function' ? material : (name) => accepts(material, name);
   const target = v(position);
   const current = bot.blockAt(target);
-  if (current && itemMatch(current.name)) return { ok: true, already: true };
+  if (current && itemMatch(current.name) && (!verify || verify())) return complete(false);
   const cells = [target, ...alsoClear.map(v)].map(cell => ({ cell,
     options: { protectedCell, legacy: !requireAir, ...(cell !== target && !requireAir ? { existing: itemMatch } : {}) } }));
   const inspect = () => cells.map(({ cell, options }) => inspectCover(bot, cell, options));
   // Check the whole footprint before changing either half of a bed or door.
   const blocked = inspect().find(result => !result.ok);
   if (blocked) return blocked;
-  const items = bot.inventory.items();
-  const item = typeof material === 'function' ? items.find((i) => itemMatch(i.name)) : pickItem(material, items);
-  if (!item) return fail('no_material');
+  const select = () => {
+    const items = bot.inventory.items();
+    return typeof material === 'function' ? items.find(i => i.count !== 0 && itemMatch(i.name)) : pickItem(material, items);
+  };
+  const need = { [materialNeed || (typeof material === 'string' ? material : 'placement_block')]: 1 };
+  const unavailable = () => failure('no_material', { need, carried: inventoryCounts(bot), position: posKey(target) }, ctx, bot);
+  if (!select()) return unavailable();
   for (const { cell, options } of cells) {
     const cleared = await clearCoverAt(bot, ctx, cell, options);
     if (!cleared.ok) return cleared;
@@ -354,6 +347,8 @@ async function placeAt(bot, ctx, position, material, { faces, stand, verify, sne
   if (!ref || ref.boundingBox !== 'block') return fail('no_support');
   // Multi-block items (a bed's head) need their other cells free of creatures too.
   if ((!passable && entityInside(bot, target)) || alsoClear.some((p) => entityInside(bot, v(p)))) return fail('cell_occupied_by_entity');
+  const item = select();
+  if (!item) return unavailable();
   try {
     await bot.equip(item, 'hand');
     if (sneak) {
@@ -373,11 +368,15 @@ async function placeAt(bot, ctx, position, material, { faces, stand, verify, sne
     const block = bot.blockAt(target);
     return block && itemMatch(block.name) && (!verify || verify());
   }, { timeoutMs: 1500, signal: ctx.signal });
-  if (placed) return { ok: true };
-  ctx.record('place_failed', { target: posKey(target), ref: posKey(ref.position), refBlock: ref.name,
+  if (placed) {
+    ctx.record?.('place_confirmed', { attemptId: ctx.attemptId, target: posKey(target), item: item.name });
+    return complete();
+  }
+  const result = failure('place_unconfirmed', { position: posKey(target), item: item.name, carried: inventoryCounts(bot) }, ctx, bot);
+  ctx.record('place_failed', { attemptId: ctx.attemptId, result, target: posKey(target), ref: posKey(ref.position), refBlock: ref.name,
     face: `${face.x},${face.y},${face.z}`, at: posKey(bot.entity.position), now: bot.blockAt(target)?.name || null,
     holding: bot.heldItem?.name || null });
-  return fail('place_unconfirmed');
+  return result;
 }
 
 function fluidLevel(block) {
@@ -572,6 +571,7 @@ async function smelt(bot, ctx, { input, count, furnacePosition, memory }) {
     return fail('furnace_open_failed');
   }
   let taken = 0;
+  let burning = false;
   try {
     const takeAll = async () => {
       const out = furnace.outputItem();
@@ -603,7 +603,7 @@ async function smelt(bot, ctx, { input, count, furnacePosition, memory }) {
       await furnace.putFuel(bot.registry.itemsByName[fuel.name].id, null, fuel.count);
       return true;
     };
-    if (needsFuel && !await refuel() && !taken) return fail('no_fuel');
+    if (needsFuel && !await refuel() && !taken) return fail('no_fuel', { need: { fuel: 1 } });
     // About 10 s per item; wait for the batch, collecting as it completes.
     const deadline = Date.now() + queued * 10500 + 4000;
     while (Date.now() < deadline && (furnace.inputItem() || furnace.outputItem())) {
@@ -622,9 +622,12 @@ async function smelt(bot, ctx, { input, count, furnacePosition, memory }) {
     memory.item = furnace.inputItem()?.name || input;
     memory.input = furnace.inputItem()?.count || 0;
     memory.output = furnace.outputItem()?.count || 0;
+    burning = furnace.fuel > 0 || Boolean(furnace.fuelItem());
     try { furnace.close(); } catch { /* ignore */ }
   }
-  return taken > 0 ? { ok: true, taken } : fail('smelt_no_output');
+  if (taken > 0) return { ok: true, taken };
+  if (memory.input > 0 && burning) return waiting('smelting', Date.now() + 1000);
+  return fail('smelt_no_output');
 }
 
 /** Kills the nearest matching animal and collects its drops. */
@@ -641,13 +644,11 @@ function sheepWool(bot, entity) {
 // if at all, by a long dig: hungry, the bot chased pigs 80 blocks off from 40
 // blocks down for ten minutes and mined 180 cobblestone on the way.
 const HUNT_HEIGHT = 10;
-// Could not be reached once: not worth another try for a while.
-const HUNT_UNREACHABLE_MS = 300000;
-
-async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, blacklist, accept = () => true, penalty = () => 0, targetGoal = null }) {
-  const { targetsFor } = require('./target-memory');
+async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, accept = () => true, penalty = () => 0, targetGoal = null }) {
   const { alternateStand, dimensionOf } = require('./target-recovery');
   const targets = targetGoal && targetsFor(bot, ctx);
+  const ledger = ledgerFor(bot, ctx);
+  const nearby = (e, purpose = 'hunt') => ledgerTarget(bot, purpose, e.position, { entity: e.id });
   const area = (p) => `${Math.floor(p.x / 12)}:${Math.floor(p.y / 8)}:${Math.floor(p.z / 12)}`;
   const spec = (e) => ({ goal: targetGoal, step: 'chase', entity: e.uuid || `region:${e.name}:${area(e.position)}`,
     dimension: dimensionOf(bot), position: e.position,
@@ -662,20 +663,19 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, blacklist, acce
   const score = (e) => e.position.distanceTo(here) + penalty(e);
   const target = Object.values(bot.entities)
     .filter((e) => mobs.includes(e.name) && e.position && e.position.distanceTo(here) <= radius
-       && Math.abs(e.position.y - here.y) <= HUNT_HEIGHT && !blacklist?.has(`mob:${e.id}`) && accept(e)
-       && !targets?.excluded(spec(e)) && !ctx.adapt?.avoids?.('hard_route', e.position))
+       && Math.abs(e.position.y - here.y) <= HUNT_HEIGHT && !ledger.skip(nearby(e)) && !ledger.skip(nearby(e, 'hunt_far')) && accept(e)
+       && !targets?.excluded(spec(e)) && !ledger.regionHard(e.position, dimensionOf(bot)))
     .sort((a, b) => score(a) - score(b))[0];
   if (!target) return fail('no_mob_in_range');
   const chase = async () => {
     ctx.record('hunt_target', { mob: target.name, distance: Math.round(target.position.distanceTo(bot.entity.position)) });
     // Far animals: walk over first; the fight itself has a short timeout.
     if (target.position.distanceTo(bot.entity.position) > 12) {
-      const near = await actions.goNear(bot, ctx, target.position.clone(), 4, { timeoutMs: 60000 });
-      if (!near.ok && (near.sourceHandled || near.waited)) return near;
+      const near = resultFrom(await actions.goNear(bot, ctx, target.position.clone(), 4, { timeoutMs: 60000 }), ctx, bot);
+      if (near.wait || near.kind === 'start' || near.kind === 'interrupted' || near.facts?.target || near.facts?.adaptation) return near;
       if (!bot.entities[target.id]) return near.ok ? fail('mob_gone') : near;
       if (!near.ok && bot.entities[target.id].position.distanceTo(bot.entity.position) > 8) {
-        if (!targets && !actions.isHomeTarget(bot, target.position)) blacklist?.add(`mob:${target.id}`, near.reason, HUNT_UNREACHABLE_MS);
-        return near;
+        return targets ? near : recordTarget(bot, ctx, near, nearby(target, 'hunt_far'));
       }
     }
     let last = target.position.clone();
@@ -686,10 +686,9 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, blacklist, acce
     } finally {
       clearInterval(tracker);
     }
-    if (!result.ok) {
-      if (!targets && !result.sourceHandled && !actions.isHomeTarget(bot, target.position)) blacklist?.add(`mob:${target.id}`, result.reason, 60000);
-      return result;
-    }
+    if (!result.ok || result.wait) return targets ? result : recordTarget(bot, ctx, result, nearby(target));
+    ledger.clearOnSuccess(nearby(target));
+    ledger.clearOnSuccess(nearby(target, 'hunt_far'));
     // Pick up everything it dropped: a sheep killed for mutton also gives the wool a bed needs.
     const before = actions.countItems(bot, dropMatch);
     const picked = await actions.collectDrops(bot, ctx, last, () => true, { radius: 8 });
@@ -705,18 +704,24 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, blacklist, acce
 }
 
 /** Picks a ripe sweet berry bush (taiga food when no animals are around). */
-async function pickBerries(bot, ctx, { radius = 32, blacklist } = {}) {
+const pickedBerries = new WeakMap();
+async function pickBerries(bot, ctx, { radius = 32, purpose = 'berry' } = {}) {
   const bush = bot.registry.blocksByName.sweet_berry_bush;
   if (!bush) return fail('no_berries');
+  const ledger = ledgerFor(bot, ctx);
+  const target = p => ledgerTarget(bot, purpose, p);
+  const picked = pickedBerries.get(bot) || new Map();
+  pickedBerries.set(bot, picked);
+  for (const [key, until] of picked) if (until <= Date.now()) picked.delete(key);
   const ripe = bot.findBlocks({ matching: bush.id, maxDistance: radius, count: 16,
     useExtraInfo: (b) => Number(b.getProperties?.().age) >= 2 })
-    .filter((p) => !blacklist?.has(`berry:${posKey(p)}`))
+    .filter(p => !ledger.skip(target(p)) && !picked.has(posKey(p)))
     .map((p) => bot.blockAt(p)).filter(Boolean);
   if (!ripe.length) return fail('no_berries');
   const block = ripe[0];
   const before = actions.countItems(bot, (n) => n === 'sweet_berries');
   const moved = await actions.goToDig(bot, ctx, block, { timeoutMs: 30000 });
-  if (!moved.ok) { blacklist?.add(`berry:${posKey(block.position)}`, moved.reason); return moved; }
+  if (!moved.ok || moved.wait) return recordTarget(bot, ctx, moved, target(block.position));
   try {
     await bot.activateBlock(bot.blockAt(block.position));
   } catch (error) {
@@ -724,8 +729,10 @@ async function pickBerries(bot, ctx, { radius = 32, blacklist } = {}) {
   }
   await actions.collectDrops(bot, ctx, block.position.offset(0.5, 0.5, 0.5), (n) => n === 'sweet_berries', { radius: 4, timeoutMs: 4000 });
   const gained = actions.countItems(bot, (n) => n === 'sweet_berries') - before;
-  blacklist?.add(`berry:${posKey(block.position)}`, 'picked', 120000);
-  return gained > 0 ? { ok: true, gained } : fail('berries_unconfirmed');
+  if (gained <= 0) return recordTarget(bot, ctx, fail('berries_unconfirmed'), target(block.position));
+  picked.set(posKey(block.position), Date.now() + 120000);
+  ledger.clearOnSuccess(target(block.position));
+  return { ok: true, gained };
 }
 
 /** Walks in a direction not tried recently, about 32 blocks by default. */
@@ -756,7 +763,7 @@ async function explore(bot, ctx, memory, { distance = 32, timeoutMs = 40000, ret
   const result = await actions.goTo(bot, ctx, goal, { timeoutMs, retryNoProgress, arrived: () => true });
   const moved = bot.entity.position.distanceTo(here);
   if (moved < 10) memory.blocked = true;
-  if (!result.ok && result.sourceHandled) return result;
+  if (result.wait || result.kind === 'start' || result.kind === 'interrupted' || factsOf(result).adaptation) return result;
   return moved >= 10 ? { ok: true, moved: Math.round(moved) } : fail(result.ok ? 'explore_blocked' : result.reason);
 }
 
@@ -915,7 +922,7 @@ const sourceLevel = (block) => Number(block?.getProperties?.().level);
  * Fills one empty bucket from a still source of water or lava, seen from dry
  * ground. Confirmed only by the full bucket appearing in the inventory.
  */
-async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48, exclude = () => false, observeDestination }) {
+async function fillBucket(bot, ctx, { liquid, radius = 48, exclude = () => false, observeDestination }) {
   const full = `${liquid}_bucket`;
   if (!bot.inventory.items().some((i) => i.name === 'bucket')) return fail('no_bucket');
   // Lava is only approached in good health: a slip costs a lot more than water.
@@ -923,8 +930,10 @@ async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48, exclude = 
   const id = bot.registry.blocksByName[liquid]?.id;
   if (id === undefined) return fail('unknown_block');
   const here = bot.entity.position;
+  const ledger = ledgerFor(bot, ctx);
+  const spec = p => ledgerTarget(bot, 'liquid', p);
   const sources = bot.findBlocks({ matching: id, maxDistance: radius, count: 128 })
-    .filter((p) => !blacklist.has(posKey(p)) && !exclude(p))
+    .filter(p => !ledger.skip(spec(p)) && !exclude(p))
     .map((p) => bot.blockAt(p))
     // A still source with open air above it, so the bucket can be aimed from the side or above.
     .filter((b) => b && sourceLevel(b) === 0 && isAir(bot.blockAt(b.position.offset(0, 1, 0))?.name || ''))
@@ -933,21 +942,21 @@ async function fillBucket(bot, ctx, { liquid, blacklist, radius = 48, exclude = 
   const target = sources[0];
   const key = posKey(target.position);
   ctx.record('target_selected', { block: liquid, position: key, options: sources.length });
-  const fill = () => fillBucketAt(bot, ctx, target, full, liquid, blacklist);
-  return observeDestination
+  const fill = () => fillBucketAt(bot, ctx, target, full, liquid);
+  const result = resultFrom(await (observeDestination
     ? watchDestination(bot, ctx, blockTarget(bot, 'lava_pool', 'fill_bucket', target.position), observeDestination, fill,
       { useFailure: 'bucket_unfilled' })
-    : fill();
+    : fill()), ctx, bot);
+  return recordTarget(bot, ctx, result, spec(target.position), { leaf: !observeDestination });
 }
 
-async function fillBucketAt(bot, ctx, target, full, liquid, blacklist) {
-  const key = posKey(target.position);
+async function fillBucketAt(bot, ctx, target, full, liquid) {
   const centre = target.position.offset(0.5, 0.5, 0.5);
   if (!actions.withinReach(bot, target.position, 4)) {
     const moved = await actions.goNear(bot, ctx, target.position.offset(0.5, 1, 0.5), 2, { timeoutMs: 45000, skipAdaptation: liquid === 'lava' });
+    if (moved.wait) return moved;
     if (!moved.ok && !actions.withinReach(bot, target.position, 4.5)) {
-      if (!moved.sourceHandled && !moved.waited && !actions.isHomeTarget(bot, target.position)) blacklist.add(key, moved.reason);
-      return { ...moved, sourcePosition: target.position };
+      return failure(moved.reason, { ...moved.facts, sourcePosition: target.position }, ctx, bot);
     }
   }
   if (liquid === 'lava' && bot.entity.isInLava) return fail('in_lava');
@@ -969,7 +978,6 @@ async function fillBucketAt(bot, ctx, target, full, liquid, blacklist) {
     const filled = await waitUntil(() => actions.countItems(bot, (n) => n === full) > before, { timeoutMs: 1500, signal: ctx.signal });
     if (filled) return { ok: true, filled: full };
   }
-  if (!actions.isHomeTarget(bot, target.position)) blacklist.add(key, 'bucket_unfilled');
   return fail('bucket_unfilled', { sourcePosition: target.position });
 }
 
@@ -1182,6 +1190,7 @@ async function useBed(bot, ctx, { position }) {
   }
 }
 
-module.exports = { gatherOne, craft, placeAt, clearCoverAt, pourLiquid, scoopLiquid, isFluidSource, smelt, huntOne, sheepWool, pickBerries, explore, useChest,
-  storeItems, storeInChest, takeItems, fillBucket, useBed, digIn, digOut, prepareShelterSeal, shelterSealCount,
-  tossStacks, inventoryCounts, entityInside, aimAtFace };
+const skills = { gatherOne, craft, placeAt, clearCoverAt, pourLiquid, scoopLiquid, smelt, huntOne, pickBerries, explore, useChest,
+  storeItems, storeInChest, takeItems, fillBucket, useBed, digIn, digOut, prepareShelterSeal, tossStacks };
+module.exports = { isFluidSource, sheepWool, shelterSealCount, inventoryCounts, entityInside, aimAtFace };
+for (const [name, execute] of Object.entries(skills)) module.exports[name] = settleAction(execute);

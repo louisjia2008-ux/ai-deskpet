@@ -117,8 +117,9 @@ test('a protected shore cell gets no temporary bridge and the repeated approach 
   t.after(dispose);
   const result = await actions.goNear(bot, context, home, 0, { exact: true });
   assert.equal(result.ok, false);
-  assert.equal(result.shoreHandled, true);
-  assert.equal(result.destinationUnconfirmed, true);
+  assert.equal(result.kind, 'environment');
+  assert.equal(result.reason, 'shore_route_unconfirmed');
+  assert.equal(result.facts.shore, true);
   assert.deepEqual(context.events.filter(e => e.type === 'home_route_shore').map(e => e.phase), ['alternate', 'exhausted']);
   assert.equal(changes.size, 0);
 });

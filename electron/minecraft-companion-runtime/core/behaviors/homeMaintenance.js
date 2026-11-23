@@ -1,6 +1,7 @@
 'use strict';
 // Reuse the established home's planner without replacing the current player
 // or device goal. Survival and night rest stay above this maintenance work.
+const { waiting } = require('../action-result');
 const { BAND } = require('../brain');
 
 // Goals that bring their own tools and gear.
@@ -40,7 +41,7 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.
 
   function accountAttempt(ctx, goal, before, result) {
     // Waiting and survival preemption neither spend nor refill this budget.
-    if (ctx.signal?.aborted || result?.waited || result?.reason === 'aborted') return;
+    if (ctx.signal?.aborted || result?.wait || ['start', 'interrupted'].includes(result?.kind)) return;
     // A failed path can monopolize maintenance just as a no-op success can.
     // Only observed inventory/world/body progress resets the streak. A failed
     // walk always moves the body, so after a failure only the house and the
@@ -129,7 +130,7 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.
           if (!upgrade || upgrade.isDone(start)) {
             upgrade = goal.wantsLighting(start) ? goal.lightingGoal() : goal.wantsGuestBed(start) ? goal.guestBedGoal() : null;
           }
-          result = upgrade ? await watched(ctx, (inner) => upgrade.run(inner)) : { ok: true, waited: true };
+          result = upgrade ? await watched(ctx, (inner) => upgrade.run(inner)) : waiting('home_upgrade_unavailable');
         } else {
           result = await watched(ctx, (inner) => goal.run(inner));
         }

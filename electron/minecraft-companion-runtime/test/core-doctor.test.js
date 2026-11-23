@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createDoctor, D1, RECENT_LIMIT } = require('../core/doctor');
+const { createArchiveAdapter } = require('../tools/doctor-replay-legacy');
 
 const initial = { x: 4, y: 60, z: 7 };
 const home = { anchor: { x: 3, y: 60, z: 6 }, size: 5 };
@@ -77,22 +78,26 @@ test('D1 requires an inventory change for mining and treats outdoor sleeping as 
 
 test('D1 recognizes a completed legacy burrow and resumes measuring after departure', () => {
   const doctor = createDoctor();
+  const convert = createArchiveAdapter();
+  const historicalDoctor = { accept: (event) => doctor.accept(convert(event)) };
   const behavior = 'goal:homestead';
-  doctor.accept({ type: 'night', action: 'dig_in', behavior, generation: 1, at: 0 });
-  doctor.accept({ type: 'behavior_finished', behavior, generation: 1, at: 1000, ok: true });
-  for (let i = 1; i <= 12; i++) assert.deepEqual(d1(observe(doctor, i * 30_000, { isDay: false })), []);
-  for (let i = 13; i <= 18; i++) observe(doctor, i * 30_000, { isDay: false, position: { ...initial, x: 8 } });
+  historicalDoctor.accept({ type: 'night', action: 'dig_in', behavior, generation: 1, at: 0 });
+  historicalDoctor.accept({ type: 'behavior_finished', behavior, generation: 1, at: 1000, ok: true });
+  for (let i = 1; i <= 12; i++) assert.deepEqual(d1(observe(historicalDoctor, i * 30_000, { isDay: false })), []);
+  for (let i = 13; i <= 18; i++) observe(historicalDoctor, i * 30_000, { isDay: false, position: { ...initial, x: 8 } });
   assert.equal(d1(doctor.getStatus().active)[0].since, 390_000);
 });
 
 test('D1 does not infer a legacy shelter from an interrupted or mismatched invocation', () => {
   for (const generation of [1, 2]) {
     const doctor = createDoctor();
+    const convert = createArchiveAdapter();
+    const historicalDoctor = { accept: (event) => doctor.accept(convert(event)) };
     const behavior = 'goal:homestead';
-    doctor.accept({ type: 'night', action: 'dig_in', behavior, generation: 1, at: 0 });
-    if (generation === 1) doctor.accept({ type: 'preempted', behavior, generation: 1, at: 500, by: 'provision' });
-    doctor.accept({ type: 'behavior_finished', behavior, generation, at: 1000, ok: true });
-    for (let i = 1; i <= 11; i++) observe(doctor, i * 30_000, { isDay: false });
+    historicalDoctor.accept({ type: 'night', action: 'dig_in', behavior, generation: 1, at: 0 });
+    if (generation === 1) historicalDoctor.accept({ type: 'preempted', behavior, generation: 1, at: 500, by: 'provision' });
+    historicalDoctor.accept({ type: 'behavior_finished', behavior, generation, at: 1000, ok: true });
+    for (let i = 1; i <= 11; i++) observe(historicalDoctor, i * 30_000, { isDay: false });
     assert.equal(d1(doctor.getStatus().active)[0].severity, 'alert');
   }
 });

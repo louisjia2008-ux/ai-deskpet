@@ -5,6 +5,7 @@ const defaultActions = require('../actions');
 const { safeStand, SIDES } = require('../home-topology');
 const { wet } = require('../dry-route');
 const { goals } = require('mineflayer-pathfinder');
+const { factsOf } = require('../action-result');
 
 function createHomeEscape({ bot, home, tracker, actions = defaultActions }) {
   return {
@@ -51,7 +52,7 @@ function createHomeEscape({ bot, home, tracker, actions = defaultActions }) {
         if (!waterOrigin || bot.entity.isInWater || bot.entity.onGround !== true) return false;
         const position = bot.entity.position;
         const feet = position.floored();
-        const confirmed = walked?.ok && ['swam_ashore', 'out_of_pool'].includes(walked.moved);
+        const confirmed = walked?.ok && ['swam_ashore', 'out_of_pool'].includes(factsOf(walked).moved);
         return (confirmed || position.distanceTo(waterOrigin) >= 2) && safeStand(p => bot.blockAt(p), feet)
           && [-1, 0, 1].every(dy => !wet(bot.blockAt(feet.offset(0, dy, 0))));
       }

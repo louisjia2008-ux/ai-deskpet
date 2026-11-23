@@ -12,6 +12,8 @@
 // The bot's own survival behaviors still outrank this: low health, fire or a
 // creeper next to the bot preempt the goal.
 
+const { failure, factsOf, resultFrom, waiting } = require('../action-result');
+const { ledgerFor, ledgerTarget, recordTarget } = require('../failure-ledger');
 const defaultActions = require('../actions');
 const { sleep } = require('../confirm');
 const { isHostile } = require('../perception');
@@ -26,7 +28,6 @@ const GUARD_HEALTH = 8;
 const OWNER_FIRST_HEALTH = 3;
 const AGGRESSOR_MS = 15000;
 const FIGHT_MS = 10000;
-const GIVE_UP_MS = 30000;
 // A creeper hit in melee explodes beside the owner; the rest outclass a bot.
 const NEVER_ENGAGE = new Set(['creeper', 'warden', 'ravager', 'piglin_brute', 'hoglin', 'ghast', 'elder_guardian']);
 // Left alone unless they hurt the owner: hitting them first starts the fight.
@@ -56,7 +57,7 @@ function createFollowOwnerGoal({ bot, owner, stay = false, actions = defaultActi
   // is not failed by path stalls accumulated over many separate walks.
   let arrivals = 0;
   const aggressors = new Map(); // entity id -> until
-  const unreachable = new Map(); // entity id -> until
+  const guardSpec = entity => ledgerTarget(bot, 'guard_hunt', entity.position, { entity: entity.id });
 
   // entityHurt names no attacker: blame the closest mob within melee reach of
   // the owner, or an archer that can see them.
@@ -86,9 +87,10 @@ function createFollowOwnerGoal({ bot, owner, stay = false, actions = defaultActi
     const floor = bot.companionGuardOwnerFirst ? OWNER_FIRST_HEALTH : GUARD_HEALTH;
     if (!me || !(bot.health > floor) || bot.entity.position.distanceTo(me.position) > LEASH) return null;
     const time = now();
+    const ledger = ledgerFor(bot);
     const candidates = [];
     for (const e of Object.values(bot.entities || {})) {
-      if (e === bot.entity || e.type === 'player' || !e.position || (unreachable.get(e.id) || 0) > time) continue;
+      if (e === bot.entity || e.type === 'player' || !e.position || ledger.skip(guardSpec(e))) continue;
       const fromOwner = e.position.distanceTo(me.position);
       const provoked = (aggressors.get(e.id) || 0) > time;
       if (provoked ? fromOwner > LEASH : (fromOwner > GUARD_RANGE || !isHostile(e) || NEUTRAL.has(e.name) || NEVER_ENGAGE.has(e.name))) continue;
@@ -115,15 +117,16 @@ function createFollowOwnerGoal({ bot, owner, stay = false, actions = defaultActi
       result = await actions.attack(bot, { ...ctx, signal: AbortSignal.any([ctx.signal, leash.signal]) }, mob.id, { timeoutMs: FIGHT_MS });
     } catch (error) {
       if (ctx.signal?.aborted || !leash.signal.aborted) throw error;
-      result = { ok: false, reason: 'guard_leash' };
+      result = failure('guard_leash', {}, ctx);
     } finally {
       clearInterval(check);
     }
+    if (leash.signal.aborted && !ctx.signal?.aborted) result = failure('guard_leash', {}, ctx);
+    result = recordTarget(bot, ctx, resultFrom(result, ctx, bot), guardSpec(mob));
     if (result.ok) aggressors.delete(mob.id);
-    else unreachable.set(mob.id, now() + GIVE_UP_MS);
-    ctx.record('guard_result', { mob: mob.name, ok: result.ok, died: result.died === true, reason: result.reason });
+    ctx.record('guard_result', { mob: mob.name, ok: result.ok, died: factsOf(result).died === true, reason: result.reason });
     // Guarding is part of following, not a stalled walk.
-    return { ok: true, waited: true };
+    return waiting('guarding_owner');
   }
 
   return {
@@ -141,12 +144,12 @@ function createFollowOwnerGoal({ bot, owner, stay = false, actions = defaultActi
       if (held) {
         ctx.record('following_owner', { owner, distance: Math.round(distance()), held: 'hurt' });
         await sleep(IDLE_MS, ctx.signal);
-        return { ok: true, waited: true };
+        return waiting('recovering_near_owner');
       }
       if (near()) {
         if (!stay) return { ok: true };
         await sleep(IDLE_MS, ctx.signal);
-        return { ok: true, waited: true };
+        return waiting('owner_within_range');
       }
       ctx.record('following_owner', { owner, distance: Math.round(distance()) });
       // A guarding bot turns from the walk as soon as something goes for the owner.
@@ -157,11 +160,11 @@ function createFollowOwnerGoal({ bot, owner, stay = false, actions = defaultActi
         result = await actions.goNear(bot, { ...ctx, signal: AbortSignal.any([ctx.signal, alarm.signal]) }, entity.position.floored(), RANGE, { timeoutMs: LEG_MS });
       } catch (error) {
         if (ctx.signal?.aborted || !alarm.signal.aborted) throw error;
-        return { ok: true, waited: true };
+        return waiting('guard_alarm');
       } finally {
         clearInterval(watch);
       }
-      if (alarm.signal.aborted) return { ok: true, waited: true };
+      if (alarm.signal.aborted) return waiting('guard_alarm');
       if (!near()) return result.ok ? { ok: false, reason: 'owner_moved' } : result;
       arrivals++;
       return { ok: true };

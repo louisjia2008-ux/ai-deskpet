@@ -16,15 +16,17 @@
 // planner only ever sees the inventory, asked for what the chest still lacks.
 //
 // The only memory kept across runs is the chest contents last seen there,
-// what was left in the furnace, where the mine's front is, and short-lived blacklists.
+// what was left in the furnace and where the mine's front is.
 
+const { waiting, factsOf, failure, resultFrom } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const { planNext } = require('../planner');
 const { KNOWLEDGE, countKey, familyOf } = require('../knowledge');
 const { materialsFor } = require('../materials');
-const { createBlacklist, posKey } = require('../blacklist');
+const { posKey } = require('../blacklist');
+const { ledgerFor, ledgerTarget, recordTarget } = require('../failure-ledger');
 const mining = require('../mining');
 const obsidian = require('../obsidian');
 const nether = require('../nether');
@@ -66,9 +68,6 @@ const FRAME_CORNERS = 4;
 // A station farther off than this is behind the bot: another goes down beside it.
 const STATION_REACH = 32;
 const { gatherWood } = require('../adaptation-strategies');
-const POOL_COOLDOWN_MS = 10 * 60_000;
-const POOL_FAILURE_WINDOW_MS = 30 * 60_000;
-const samePool = (a, b) => Math.abs(a.y - b.y) <= 4 && Math.hypot(a.x - b.x, a.z - b.z) <= 10;
 
 function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint = null, stations = {},
   skills = defaultSkills, actions = defaultActions, kb = KNOWLEDGE, maxExploreStreak = 20, carry = () => false, reserved = {}, countWorn = false,
@@ -90,15 +89,14 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     trip: null,
     steps: 0,
   };
-  const blacklist = createBlacklist({ ttlMs: 120000 });
-  let lavaPools = [];
+  let torchRetryAt = 0, surfaceRetryAt = 0;
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   const nameAt = (p) => blockAt(p)?.name || null;
   const plan = (ctx, args) => planNext({ ...args, kb, stepBlocked: ctx.stepBlocked });
   // Stations put down along the way join the caller's (a copy: never theirs to keep).
   stations = { ...stations };
   const portableMemory = {};
-  const portable = createPlannerRunner({ bot, skills, kb, memory: portableMemory, blacklist,
+  const portable = createPlannerRunner({ bot, skills, kb, memory: portableMemory,
     avoid: (p) => p.x === chest.x && p.z === chest.z && Math.abs(p.y - chest.y) <= 1 });
 
   const wanted = () => requirements || materialsFor(blueprint.blocks, nameAt, kb);
@@ -174,7 +172,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       // Legs on the way back from beyond the radius search nothing near the chest.
       if (Math.hypot(bot.entity.position.x - chest.x, bot.entity.position.z - chest.z) > searchRadius) memory.exploreStreak -= 1;
       if (memory.exploreStreak > maxSearchStreak) {
-        return { ok: false, reason: `none_near_site:${why} within ${searchRadius} of the chest at ${chest.x},${chest.y},${chest.z}`, giveUp: true };
+        return failure(`none_near_site:${why} within ${searchRadius} of the chest at ${chest.x},${chest.y},${chest.z}`, { terminal: true }, ctx);
       }
     }
     if (memory.exploreStreak > maxExploreStreak) return { ok: false, reason: `exhausted:${why}` };
@@ -189,7 +187,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     const result = await skills.storeInChest(bot, ctx, { position: chest,
       wants: [...wants.map((w) => ({ match: kb[w.key].match, count: w.count })),
         ...extra.map((name) => ({ match: (n) => n === name, count: Infinity }))] });
-    if (result.contents) memory.chest = result.contents;
+    if (factsOf(result).contents) memory.chest = factsOf(result).contents;
     return result;
   }
 
@@ -227,8 +225,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
           return { ok: true, progress: false };
         }
         const state = ctx.perceive();
-        if (state.health < (closed ? 17 : 13) || state.food < 8) return { ok: true, waited: true, reason: 'recover_before_mining',
-          retryAt: Date.now() + 30_000 };
+        if (state.health < (closed ? 17 : 13) || state.food < 8) return waiting('recover_before_mining', Date.now() + 30_000);
         memory.mine.safetyRetreat = null;
       }
     }
@@ -252,7 +249,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         const moved = await actions.goNear(bot, ctx, away, 1, { timeoutMs: 30000,
           ...(observeDestination ? { destination: { spec: entranceTarget(away), observe: observeDestination } } : {}) });
         if (!moved.ok) {
-          if (!moved.sourceHandled && !moved.waited) mining.coolEntrance(bot, ctx, away, moved.reason);
+          if (moved.kind === 'target' && !moved.facts?.target && !moved.facts?.adaptation) mining.coolEntrance(bot, ctx, away, moved.reason);
           return moved;
         }
         if (!allowed(bot.entity.position.floored())) {
@@ -265,14 +262,14 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     }
     // An unlit tunnel fills with monsters: carry torches while there is coal for them.
     const have = (n) => countKey(n, ctx.perceive().inventory, kb);
-    if (have('torch') === 0 && have('coal') > 0 && have('stick') > 0 && !blacklist.has('torch')) {
+    if (have('torch') === 0 && have('coal') > 0 && have('stick') > 0 && torchRetryAt <= Date.now()) {
       const made = await skills.craft(bot, ctx, { item: 'torch', times: Math.min(2, have('coal'), have('stick')) });
-      if (!made.ok) blacklist.add('torch', made.reason, 60000);
+      if (!made.ok) torchRetryAt = Date.now() + 60000;
     }
     const m = memory.mine;
     if (m && ctx.adapt) bot.companionMineRoute = m;
     if (m?.junction && !m.depot && m.y === step.mineY && step.mineY <= DEPOT_BELOW) return buildDepot(ctx);
-    const result = await mining.mineStep(bot, ctx, memory, { blocks: step.blocks, dropMatch, y: step.mineY, blacklist, start, actions, skills, closed,
+    const result = await mining.mineStep(bot, ctx, memory, { blocks: step.blocks, dropMatch, y: step.mineY, start, actions, skills, closed,
       observeDestination });
     if (memory.mine && !memory.mine.adaptMethod && method !== 'current_mine') ctx.record('adaptation_use', {
       task: 'diamond', method, position: memory.mine.entrance,
@@ -328,7 +325,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       wants: spare > 0 ? [{ match: (n) => n === 'stone_pickaxe', count: spare }] : [] });
     if (!stocked.ok) return stocked;
     m.depot = { chest: spots.chest, table: spots.crafting_table };
-    ctx.record('depot_built', { chest: posKey(spots.chest), picks: stocked.stored?.stone_pickaxe || 0 });
+    ctx.record('depot_built', { chest: posKey(spots.chest), picks: factsOf(stocked).stored?.stone_pickaxe || 0 });
     return { ok: true, depot: 'built' };
   }
 
@@ -343,7 +340,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     // Take what the chest holds, and make more on the spot: every walk back
     // here from a far front should last a good while.
     const taken = await skills.takeItems(bot, ctx, { position: depot.chest, itemMatch: (n) => n === 'stone_pickaxe' });
-    ctx.record('depot_take', { ok: taken.ok, reason: taken.reason, taken: taken.taken });
+    ctx.record('depot_take', { ok: taken.ok, reason: taken.reason, taken: factsOf(taken).taken });
     const cobble = carrying('cobblestone') + carrying('cobbled_deepslate');
     const times = Math.min(DEPOT_CRAFT, Math.floor(carrying('stick') / 2), Math.floor(cobble / 3));
     if (times < 1) {
@@ -378,14 +375,15 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
   }
 
   async function surfaceFirst(ctx) {
-    if (typeof actions.surface !== 'function' || blacklist.has('surface')) return null;
+    if (typeof actions.surface !== 'function' || surfaceRetryAt > Date.now()) return null;
     const result = await actions.surface(bot, ctx);
+    if (result?.progress === false) return null;
     if (result) ctx.record('surface', { ok: result.ok });
-    if (result && !result.ok && !result.sourceHandled && !result.waited) blacklist.add('surface', result.reason, 60000);
+    if (result?.ok === false && !['start', 'interrupted'].includes(resultFrom(result, ctx, bot).kind)) surfaceRetryAt = Date.now() + 60000;
     return result;
   }
 
-  const runStep = (ctx, step) => runPlanned(ctx, step, () => executeStep(ctx, step));
+  const runStep = (ctx, step) => runPlanned(ctx, step, attempt => executeStep(attempt, step));
 
   async function executeStep(ctx, step) {
     ctx.record('plan_step', { kind: step.kind, key: step.key, for: step.for, item: step.item, count: step.count ?? step.times });
@@ -420,7 +418,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         let result = step.item === 'stone_pickaxe' && step.times < SPARE_PICKAXES ? await craft(SPARE_PICKAXES) : null;
         if (!result?.ok) result = await craft(step.times);
         // Short of something the plan thought was there: plan for it explicitly for a while.
-        for (const m of result.missing || []) {
+        for (const m of factsOf(result).missing || []) {
           const family = familyOf(m.name, kb);
           if (family) memory.shortfall[family] = { extra: m.short, until: Date.now() + 120000 };
         }
@@ -433,7 +431,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         if (step.dimension && step.dimension !== nether.dimension(bot)) return { ok: false, reason: `needs_dimension:${step.dimension}` };
         const dropMatch = kb[step.key].match;
         if (ctx.adapt && step.key === 'log') return gatherWood({ bot, ctx, skills, actions, memory, anchor: adaptationAnchor,
-          blocks: step.blocks, dropMatch, blacklist });
+          blocks: step.blocks, dropMatch });
         const deep = Number.isFinite(step.mineY);
         if (ctx.adapt && step.key === 'diamond') return mine(ctx, step, dropMatch);
         // Ore that needs a mine is mined from the tunnel once there is one.
@@ -441,9 +439,9 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         // Elsewhere only ore in the open (surface, cave mouths): never a
         // pathfinder tunnel straight down to buried ore.
         const exclude = deep ? (p) => !mining.exposed(bot, p) : undefined;
-        let result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch, blacklist, exclude });
+        let result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch, exclude });
         if (result.reason === 'no_target_in_range') {
-          result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch, blacklist, exclude, radius: 128 });
+          result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch, exclude, radius: 128 });
         }
         if (result.reason === 'no_target_in_range') return deep ? mine(ctx, step, dropMatch) : explore(ctx, step.key);
         // Gravel gives flint one time in ten: the gravel is the progress.
@@ -459,7 +457,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       case 'fill': {
         const isLava = step.liquid === 'lava';
         const findLiquid = async (exclude, observeDestination) => {
-          const args = { liquid: step.liquid, blacklist, exclude, observeDestination };
+          const args = { liquid: step.liquid, exclude, observeDestination };
           const result = await skills.fillBucket(bot, ctx, args);
           return result.reason === 'no_target_in_range' ? skills.fillBucket(bot, ctx, { ...args, radius: 128 }) : result;
         };
@@ -469,49 +467,38 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
               || ctx.adapt.targets.avoid(blockTarget(bot, 'lava_pool', 'fill_bucket', p)), observeDestination);
             if (result.reason === 'no_target_in_range') return explore(ctx, step.key);
             if (method === 'different_pool') {
-              ctx.record('adaptation_use', { task: 'lava_pool', method, ok: result.ok, result: result.filled });
+              ctx.record('adaptation_use', { task: 'lava_pool', method, ok: result.ok, result: factsOf(result).filled });
             }
             return result;
-          }, { learn: result => result.destinationObserved && result.sourcePosition
-            && { kind: 'lava_pool', position: result.sourcePosition, radius: 10 } });
+          }, { learn: result => factsOf(result).destinationObserved && factsOf(result).sourcePosition
+            && { kind: 'lava_pool', position: factsOf(result).sourcePosition, radius: 10 } });
         }
-        const now = Date.now();
-        if (isLava) lavaPools = lavaPools.filter((pool) => pool.until ? pool.until > now : pool.last > now - POOL_FAILURE_WINDOW_MS);
-        const result = await findLiquid(p => isLava && lavaPools.some((pool) => pool.until > Date.now() && samePool(p, pool.position)));
+        const purpose = 'lava_pool_candidate', dimension = nether.dimension(bot);
+        const ledger = ledgerFor(bot, ctx);
+        const result = await findLiquid(p => isLava && ledger.regionHard(p, dimension, purpose));
         if (result.reason === 'no_target_in_range') return explore(ctx, step.key);
-        if (isLava && result.ok) {
-          lavaPools = lavaPools.filter((pool) => pool.until);
-        }
-        if (isLava && result.sourcePosition && !result.ok && result.reason !== 'aborted' && !ctx.signal?.aborted) {
-          const p = result.sourcePosition;
-          let pool = lavaPools.find((entry) => samePool(entry.position, p));
-          if (!pool) {
-            pool = { position: { x: p.x, y: p.y, z: p.z }, failures: [] };
-            lavaPools = [...lavaPools.slice(-15), pool];
-          }
-          pool.last = Date.now();
-          pool.failures = pool.failures.filter((at) => at > pool.last - POOL_FAILURE_WINDOW_MS);
-          pool.failures.push(pool.last);
-          if (pool.failures.length >= 3) {
-            pool.until = pool.last + POOL_COOLDOWN_MS;
-            ctx.record('recovery_switch', { task: 'fill_lava_bucket', to: 'different_pool', at: posKey(pool.position),
-              reason: result.reason, failures: pool.failures.length, until: pool.until });
-          }
-          // This pool has its own cooldown. Leave other pools eligible.
-          return { ...result, sourceHandled: true };
+        if (!isLava) return result;
+        if (result.ok && !result.wait) ledger.clearWhere((e, limit) => e.purpose === purpose && e.dimension === dimension && e.failures < limit);
+        const p = factsOf(result).sourcePosition;
+        if (p && !result.ok) {
+          const recorded = recordTarget(bot, ctx, result, ledgerTarget(bot, purpose, p, { radius: 10 }));
+          const target = recorded.facts?.target;
+          if (target?.excluded && target.key.includes('|lava_pool_candidate|')) ctx.record('recovery_switch', { task: 'fill_lava_bucket', to: 'different_pool', at: posKey(p),
+            reason: result.reason, failures: target.failures, until: target.retryAt });
+          return recorded;
         }
         return result;
       }
       case 'hunt': {
         const supplyFood = step.quartzSupply && step.key === 'food';
         const result = await skills.huntOne(bot, ctx, { mobs: supplyFood ? step.mobs.filter((m) => m !== 'chicken') : step.mobs,
-          dropMatch: supplyFood ? (n) => quartzFoodMatch(bot, n) : kb[step.key].match, blacklist, radius: 96 });
+          dropMatch: supplyFood ? (n) => quartzFoodMatch(bot, n) : kb[step.key].match, radius: 96 });
         if (result.reason === 'no_mob_in_range') {
           if (supplyFood) {
             ctx.record('needs_supplies', { missing: ['food'], food: quartzFoodCount(bot), requiredFood: QUARTZ_MIN_FOOD,
               dimension: 'overworld', source: 'no_mob_in_range', ...quartzProtection(bot) });
             if (typeof skills.pickBerries === 'function') {
-              const berries = await skills.pickBerries(bot, ctx, { blacklist });
+              const berries = await skills.pickBerries(bot, ctx, { purpose: 'berry_materials' });
               if (berries.ok || berries.reason !== 'no_berries') return berries;
             }
           }
@@ -692,7 +679,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     noProgressLimit: 40,
     maxRecoveries: 6,
     recover() {
-      blacklist.clear();
+      torchRetryAt = surfaceRetryAt = 0;
       memory.pathFailures = 0;
       memory.recovery = true;
     },
@@ -727,11 +714,11 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         return { ok: true };
       }
       const result = await runOnce(ctx);
-      if (result.waited) return result;
+      if (result.wait) return result;
       if (result.ok) {
         if (result.progress !== false) memory.steps += 1;
         memory.pathFailures = 0;
-        if (!result.moved) memory.exploreStreak = 0;
+        if (!factsOf(result).moved) memory.exploreStreak = 0;
       } else if ((!ctx.adapt || nether.inNether(bot))
         && ['NoPath', 'Timeout', 'path_timeout', 'not_arrived', 'no_progress', 'chase_stuck'].includes(result.reason)) {
         memory.pathFailures += 1;

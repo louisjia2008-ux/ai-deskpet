@@ -2,6 +2,7 @@
 
 const { goals } = require('mineflayer-pathfinder');
 const { blockTarget } = require('./target-recovery');
+const { complete, resultFrom, failure } = require('./action-result');
 
 const OUTWARD_HEADINGS = Object.freeze([0, 1, -1, 2, -2, 3, -3, 4]);
 async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, timeoutMs = 15000, bearing } = {}) {
@@ -13,25 +14,25 @@ async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, time
   const z = Math.round(from.z + Math.sin(angle) * distance);
   ctx.record?.('adaptation_route', { x, z, heading: turn, bearing: angle });
   const goal = new goals.GoalNearXZ(x, z, 3);
-  const result = await actions.goTo(bot, ctx, goal, { timeoutMs, retryNoProgress: false });
-  if (ctx.signal?.aborted || result.reason === 'aborted') return result;
+  const result = resultFrom(await actions.goTo(bot, ctx, goal, { timeoutMs, retryNoProgress: false }), ctx, bot);
+  if (result.wait || result.kind === 'start' || result.kind === 'interrupted') return result;
   const moved = Math.hypot(bot.entity.position.x - from.x, bot.entity.position.z - from.z);
   if (!result.ok || moved < 6 || !goal.isEnd(bot.entity.position.floored())) {
     memory.heading = (memory.heading || 0) + 1;
-    return result.ok ? { ok: false, reason: 'not_arrived' } : result;
+    return result.ok ? failure('not_arrived', {}, ctx, bot) : result;
   }
-  return { ok: true, moved, progress: false };
+  return complete(false, { moved });
 }
 
 const biome = (bot) => bot.blockAt(bot.entity.position.floored())?.biome?.name
   ?? bot.world?.getBiome?.(bot.entity.position.floored()) ?? null;
 
-async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blacklist, blocks, dropMatch, exclude }) {
+async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blocks, dropMatch, exclude }) {
   const location = { position: anchor || bot.entity.position, target: 'log' };
   const spec = (p) => blockTarget(bot, 'wood', 'gather_log', p, { cells: [p.offset(0, -1, 0)] });
   const avoid = (p) => exclude?.(p) || ctx.adapt.avoids('hard_route', p) || ctx.adapt.targets.avoid(spec(p));
   return ctx.adapt.run('wood', location, async (method, _plan, observe) => {
-    const gather = (radius) => skills.gatherOne(bot, ctx, { blocks, dropMatch, blacklist, exclude: avoid, radius,
+    const gather = (radius) => skills.gatherOne(bot, ctx, { blocks, dropMatch, exclude: avoid, radius,
       destination: { spec, observe } });
     const route = (memory.woodRoute ||= { heading: 0, from: bot.entity.position.clone(), biome: biome(bot) });
     const near = method === 'near_tree';
@@ -44,15 +45,15 @@ async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blacklist
     if (far && (!route.departed || (method === 'different_biome' && biome(bot) !== null && route.biome === biome(bot)
       && route.from.distanceTo(bot.entity.position) < 128))) {
       const move = await outwardLeg(bot, ctx, actions, route, route.from, { distance: 28 });
-      route.departed ||= move.ok;
+      route.departed ||= move.ok && !move.wait;
       return move;
     }
-    const found = await gather(near ? 48 : 128);
-    if (found.ok || near || found.sourceHandled || found.waited || found.reason === 'aborted') return found;
+    const found = resultFrom(await gather(near ? 48 : 128), ctx, bot);
+    if (found.ok || near || found.facts?.target || found.facts?.adaptation || found.kind === 'start' || found.kind === 'interrupted') return found;
     if (!['no_target_in_range', 'not_arrived', 'path_timeout', 'no_progress', 'NoPath', 'Timeout', 'choose_another_target',
       'route_region_avoided'].includes(found.reason)) return found;
     const moved = await outwardLeg(bot, ctx, actions, route, route.from, { distance: far ? 28 : 20 });
-    if (!moved.ok) return moved;
+    if (!moved.ok || moved.wait) return moved;
     return gather(128);
   });
 }

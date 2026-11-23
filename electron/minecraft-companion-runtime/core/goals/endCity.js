@@ -7,6 +7,7 @@
 // a ship's item frame when one is in sight. With no city in view, head away
 // from the main island, bridging over the void between islands.
 
+const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
@@ -30,7 +31,7 @@ const outer = (bot) => Math.hypot(bot.entity.position.x, bot.entity.position.z) 
 const areaKey = (p) => `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`;
 
 function createEndCityGoal({ bot, chests = 2, actions = defaultActions, skills = defaultSkills } = {}) {
-  const blacklist = createBlacklist({ ttlMs: 300000 });
+  const blacklist = createBlacklist({ bot, namespace: 'end_city', ttlMs: 300000, durations: [120000, 3600000] });
   const memory = { looted: new Set(), taken: 0, gatewayUsed: false, pearls: 0, cityAt: null, heading: null,
     explored: 0, searchAttempts: 0, stoneCollected: 0, visited: new Set([areaKey(bot.entity.position)]),
     elytra: false, bridged: 0, seenFrames: 0, emptyCities: [] };
@@ -192,7 +193,7 @@ function createEndCityGoal({ bot, chests = 2, actions = defaultActions, skills =
     if (result.ok || result.reason === 'chest_empty') {
       memory.looted.add(posKey(p));
       memory.taken += Math.max(0, bot.inventory.items().reduce((n, i) => n + i.count, 0) - before);
-      ctx.record('chest_looted', { at: at(p), taken: result.taken || 0, looted: memory.looted.size });
+      ctx.record('chest_looted', { at: at(p), taken: factsOf(result).taken || 0, looted: memory.looted.size });
       return { ok: true };
     }
     blacklist.add(posKey(p), result.reason);

@@ -8,7 +8,8 @@ const defaultActions = require('../actions');
 const { goals } = require('mineflayer-pathfinder');
 const { abortError } = require('../confirm');
 const { countMatching } = require('../perception');
-const { createBlacklist, posKey } = require('../blacklist');
+const { posKey } = require('../blacklist');
+const { ledgerFor, ledgerTarget, recordTarget } = require('../failure-ledger');
 const { loadedSurfaceFeet, naturalWalkingFoot } = require('../../vendor/server/minecraft/houseSurfaceGraph');
 const { recoverFromLogWater, isLogScoutInWater } = require('../logWaterRecovery');
 
@@ -179,7 +180,6 @@ function createGatherBlocksGoal({
   searchRadius = 48,
   maxCandidates = 32,
   actions = defaultActions,
-  blacklist = createBlacklist({ ttlMs: 120000 }),
   findTargets,
   findBeyondRange,
   acceptTarget,
@@ -192,7 +192,6 @@ function createGatherBlocksGoal({
   const target = startCount + count;
 
   const locate = findTargets || (() => defaultFindTargets(bot, blockMatch, searchRadius, maxCandidates, acceptTarget));
-  const availableTargets = () => locate().filter((block) => !blacklist.has(posKey(block.position)));
 
   return {
     name,
@@ -200,6 +199,8 @@ function createGatherBlocksGoal({
     isDone: (state) => countMatching(state.inventory, itemMatch) >= target,
     progress: (state) => countMatching(state.inventory, itemMatch),
     async run(ctx) {
+      const ledger = ledgerFor(bot, ctx), spec = p => ledgerTarget(bot, 'gather_blocks', p);
+      const availableTargets = () => locate().filter(block => !ledger.skip(spec(block.position)));
       let candidates = availableTargets();
       if (candidates.length === 0 && findBeyondRange) candidates = await findBeyondRange(ctx, availableTargets);
       if (candidates.length === 0) {
@@ -212,15 +213,10 @@ function createGatherBlocksGoal({
       ctx.record('target_selected', { block: block.name, position: key, options: candidates.length });
 
       const reach = await actions.goToDig(bot, ctx, block);
-      if (!reach.ok) {
-        blacklist.add(key, reach.reason);
-        return reach;
-      }
+      if (!reach.ok || reach.wait) return recordTarget(bot, ctx, reach, spec(block.position));
       const dig = await actions.digBlock(bot, ctx, block);
-      if (!dig.ok) {
-        blacklist.add(key, dig.reason);
-        return dig;
-      }
+      if (!dig.ok) return recordTarget(bot, ctx, dig, spec(block.position));
+      ledger.clearOnSuccess(spec(block.position));
       const pickup = await actions.collectDrops(bot, ctx, block.position.offset(0.5, 0.5, 0.5), itemMatch);
       return pickup.ok ? { ok: true } : pickup;
     },

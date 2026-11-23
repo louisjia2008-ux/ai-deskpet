@@ -1,5 +1,6 @@
 'use strict';
 
+const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { countKey } = require('../knowledge');
 const { createOutfitGoal } = require('./outfit');
@@ -100,9 +101,9 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
         for (const position of chests(m)) {
           if (atChest(position)?.name !== 'chest') continue;
           const result = await storeInChest(bot, ctx, { position, wants });
-          if (!result.contents) return result;
-          m.autonomyStock[chestKey(position)] = result.contents;
-          for (const [name, count] of Object.entries(result.stored || {})) {
+          if (!factsOf(result).contents) return result;
+          m.autonomyStock[chestKey(position)] = factsOf(result).contents;
+          for (const [name, count] of Object.entries(factsOf(result).stored || {})) {
             const left = wants.find((r) => r.match(name));
             if (left) left.count -= count;
           }
@@ -153,7 +154,7 @@ function createProgression({ bot, kb, homeOf, avoidFor, built }) {
             for (const [name, count] of Object.entries(needs)) {
               if (count <= 0 || !stock[name]) continue;
               const result = await takeItems(bot, ctx, { position, itemMatch: (item) => item === name, count });
-              if (result.ok) stock[name] -= result.taken;
+              if (result.ok) stock[name] -= factsOf(result).taken;
               if (result.reason === 'chest_empty' || result.reason === 'chest_missing') {
                 stock[name] = 0;
                 return { ok: true };

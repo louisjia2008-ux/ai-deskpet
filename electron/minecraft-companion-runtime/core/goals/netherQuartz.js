@@ -265,7 +265,7 @@ function quartzProtection(bot) {
 function createNetherQuartzGoal({ bot, count = 16, roam = 96, skills = defaultSkills, actions = defaultActions,
   excavationFactory = (options) => require('../quartzExcavation').createExcavation(options) } = {}) {
   if (!Number.isSafeInteger(count) || count < 1) throw new TypeError('count must be a positive integer');
-  const blacklist = createBlacklist({ ttlMs: 180000 });
+  const blacklist = createBlacklist({ bot, namespace: 'nether_quartz', ttlMs: 180000 });
   const memory = { explore: {} };
   const makeTrip = () => createPortalTrip({ bot, memory, actions, walkOnly: true, protectedBridge: true });
   let trip = makeTrip();

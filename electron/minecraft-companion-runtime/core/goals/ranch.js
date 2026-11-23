@@ -4,13 +4,15 @@
 // does one thing: make or place fences, set the gate, lead an animal in, or
 // breed two adults.
 
+const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const defaultHusbandry = require('../husbandry');
 const { planNext } = require('../planner');
 const { KNOWLEDGE, countKey } = require('../knowledge');
-const { createBlacklist, posKey } = require('../blacklist');
+const { posKey } = require('../blacklist');
+const { ledgerFor, ledgerTarget, recordTarget } = require('../failure-ledger');
 const { sleep } = require('../confirm');
 const { createPlannerRunner, DOWN } = require('./common');
 
@@ -22,12 +24,11 @@ const FEED_RESERVE = 4;
 
 function createRanchGoal({ bot, kind = 'cow', target = 3, size = 6, center = null,
   skills = defaultSkills, actions = defaultActions, husbandry = defaultHusbandry, kb = KNOWLEDGE, exclude = () => false, waitMs = 3000 } = {}) {
-  const blacklist = createBlacklist({ ttlMs: 60000 });
   const memory = { center, pen: null, table: null, steps: 0, bredAt: 0, born: 0 };
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   const inPenArea = (p) => memory.pen && p.x >= memory.pen.corner.x - 1 && p.x <= memory.pen.corner.x + size
     && p.z >= memory.pen.corner.z - 2 && p.z <= memory.pen.corner.z + size;
-  const { step, inventoryFor, tableHere } = createPlannerRunner({ bot, skills, kb, memory, blacklist,
+  const { step, inventoryFor, tableHere } = createPlannerRunner({ bot, skills, kb, memory, purpose: 'farm_gather',
     avoid: (p) => inPenArea(p) || exclude(p) });
 
   const penCount = () => (memory.pen ? husbandry.animalsIn(bot, memory.pen, kind).length : 0);
@@ -66,15 +67,16 @@ function createRanchGoal({ bot, kind = 'cow', target = 3, size = 6, center = nul
     }
 
     // The fence line first, then the gate.
-    const missing = pen.fences.filter((p) => !kb.fence.match(blockAt(p)?.name || '') && !blacklist.has(posKey(p)));
+    const ledger = ledgerFor(bot, ctx), fence = p => ledgerTarget(bot, 'ranch_fence', p);
+    const animal = e => ledgerTarget(bot, 'ranch_lure', e.position, { entity: e.id });
+    const missing = pen.fences.filter(p => !kb.fence.match(blockAt(p)?.name || '') && !ledger.skip(fence(p)));
     if (missing.length) {
       const need = planNext({ requirements: [{ key: 'fence', count: missing.length }, { key: 'fence_gate', count: blockAt(pen.gate)?.name.endsWith('_fence_gate') ? 0 : 1 }],
         inventory, stations, kb });
       if (need && countKey('fence', inventory, kb) === 0) return step(ctx, need);
       ctx.record('ranch', { action: 'fence', position: posKey(missing[0]) });
       const placed = await skills.placeAt(bot, ctx, missing[0], (n) => kb.fence.match(n), { faces: DOWN });
-      if (!placed.ok) blacklist.add(posKey(missing[0]), placed.reason, 15000);
-      return placed;
+      return recordTarget(bot, ctx, placed, fence(missing[0]));
     }
     const gate = blockAt(pen.gate);
     if (!gate?.name.endsWith('_fence_gate')) {
@@ -85,7 +87,7 @@ function createRanchGoal({ bot, kind = 'cow', target = 3, size = 6, center = nul
       const placed = await skills.placeAt(bot, ctx, pen.gate, (n) => kb.fence_gate.match(n),
         { faces: DOWN, stand: { x: pen.gate.x, y: pen.gate.y, z: pen.gate.z - 1 } });
       // An animal standing in the opening wanders off again by itself.
-      if (placed.reason === 'cell_occupied_by_entity') { await sleep(waitMs, ctx.signal); return { ok: true, waited: true }; }
+      if (placed.reason === 'cell_occupied_by_entity') { await sleep(waitMs, ctx.signal); return waiting('ranch_opening_occupied'); }
       return placed;
     }
     const facing = gate.getProperties?.().facing;
@@ -111,14 +113,13 @@ function createRanchGoal({ bot, kind = 'cow', target = 3, size = 6, center = nul
     }
     // More to lead in: the nearest one outside the pen.
     const outside = Object.values(bot.entities)
-      .filter((e) => e.name === kind && e.position && !pen.contains(e.position) && !blacklist.has(`mob:${e.id}`)
+      .filter((e) => e.name === kind && e.position && !pen.contains(e.position) && !ledger.skip(animal(e))
         && !husbandry.isBaby(bot, e) && e.position.distanceTo(bot.entity.position) < 64)
       .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0];
     if (outside && adults.length < Math.max(2, target - 1)) {
       ctx.record('ranch', { action: 'lure', id: outside.id, distance: Math.round(outside.position.distanceTo(bot.entity.position)) });
       const result = await husbandry.lure(bot, ctx, pen, outside);
-      if (!result.ok) blacklist.add(`mob:${outside.id}`, result.reason, 20000);
-      return result;
+      return recordTarget(bot, ctx, result, animal(outside));
     }
     if (adults.length < 2) {
       // One that just slipped away is still in sight: try it again shortly
@@ -128,14 +129,14 @@ function createRanchGoal({ bot, kind = 'cow', target = 3, size = 6, center = nul
       if (known) {
         if (pen.contains(bot.entity.position)) return husbandry.leave(bot, ctx, pen);
         await sleep(waitMs, ctx.signal);
-        return { ok: true, waited: true };
+        return waiting('animals_settling');
       }
       return skills.explore(bot, ctx, memory);
     }
     // Parents on cooldown: wait it out, out of the pen.
     if (pen.contains(bot.entity.position)) return husbandry.leave(bot, ctx, pen);
     await sleep(waitMs, ctx.signal);
-    return { ok: true, waited: true };
+    return waiting('animals_breeding');
   }
 
   return {
@@ -148,7 +149,7 @@ function createRanchGoal({ bot, kind = 'cow', target = 3, size = 6, center = nul
     progress: () => memory.steps,
     async run(ctx) {
       const result = await runOnce(ctx);
-      if (result.ok && !result.waited) memory.steps += 1;
+      if (result.ok && !result.wait) memory.steps += 1;
       return result;
     },
   };

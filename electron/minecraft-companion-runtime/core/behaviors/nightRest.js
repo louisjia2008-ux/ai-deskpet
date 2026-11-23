@@ -7,6 +7,7 @@
 // where the bot stands. Underground work (a branch mine) is left alone.
 // With no house and nothing to do (a task just ended), it digs in where it is.
 
+const { waiting, factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
@@ -67,7 +68,7 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, p
         // the owner it was told to guard was killed twenty blocks away.
         if (state.isDay === false && where()) {
           await sleep(3000, ctx.signal);
-          return { ok: true, waited: true };
+          return waiting('sheltering_until_daylight');
         }
         ctx.record('night_rest', { action: 'dig_out' });
         const out = await skills.digOut(bot, ctx, bunker);
@@ -92,7 +93,7 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, p
         const dug = await skills.digIn(bot, ctx, { prepareSeal: prepareSeals() });
         if (!dug.ok) return dug;
         ctx.record('night_rest', { action: 'dug_in' });
-        bunker = dug.bunker;
+        bunker = factsOf(dug).bunker;
         bot.companionSheltered = true;
         return { ok: true };
       }
@@ -139,7 +140,7 @@ function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, p
         if (shut) return shut;
       }
       await sleep(3000, ctx.signal);
-      return { ok: true, waited: true, reason: 'sheltering_until_daylight' };
+      return waiting('sheltering_until_daylight');
     },
   };
   const onDeath = () => { bunker = null; shutForSleep = false; };

@@ -8,6 +8,7 @@
 // decides from what is in sight now: crystals still standing, the dragon's
 // synced phase and health.
 
+const { complete, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const end = require('../end');
@@ -26,7 +27,7 @@ const CHARGE = 8;
 const TAKEOFF = 4;
 
 function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
-  const crystalBlacklist = createBlacklist({ ttlMs: 240000 });
+  const crystalBlacklist = createBlacklist({ bot, namespace: 'dragon', ttlMs: 240000 });
   const memory = {
     arrows: 0, crystalsSeen: new Set(), crystalsGone: 0, damage: 0, lastHealth: null,
     killed: false, spots: {}, shelter: null, opened: new Set(),
@@ -72,7 +73,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
       const ahead = (d) => feet.offset(Math.round(-here.x / flat * d), 0, Math.round(-here.z / flat * d));
       if ([1, 3, 5, 7].some((d) => end.cloudOver(bot, ahead(d), 1))) {
         await sleep(1000, ctx.signal);
-        return { ok: true, waited: true };
+        return waiting('dimension_action_pending');
       }
       const bridged = await end.bridgeToward(bot, ctx, new Vec3(0, feet.y, 0), { maxSteps: 40 });
       ctx.record('end_bridge', { steps: bridged.steps ?? 0, stopped: bridged.stopped || bridged.reason || null });
@@ -152,7 +153,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
     if (end.cloudOver(bot, new Vec3(standAt.x - 0.5, bot.entity.position.y, standAt.z - 0.5), 1.5)) {
       ctx.record('melee_spot_clouded');
       await sleep(600, ctx.signal);
-      return { ok: true, waited: true };
+      return waiting('dimension_action_pending');
     }
     // Behind its head: go round wide, out of reach of the wings, not past them.
     {
@@ -308,7 +309,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
     const hit = memory.damage > before;
     ctx.record('dragon_shot', { hit, health: end.dragonHealth(bot) });
     // A miss is still the fight going on, not a stall.
-    return { ok: true, waited: !hit };
+    return hit ? complete() : waiting('dimension_action_pending');
   }
 
   /** Waits for a perch in a pit near the portal, out of reach of the dragon's wings. */
@@ -335,11 +336,11 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
       // Recovery and survival leave a sheltered bot where it is.
       bot.companionSheltered = true;
       await sleep(500, ctx.signal);
-      return { ok: true, waited: true };
+      return waiting('dimension_action_pending');
     }
     if (memory.exposedUntil && now < memory.exposedUntil && bot.health >= 10) {
       await sleep(500, ctx.signal);
-      return { ok: true, waited: true };
+      return waiting('dimension_action_pending');
     }
     const here = bot.entity.position.clone();
     const a = Math.atan2(here.z, here.x);
@@ -353,7 +354,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
       if (dug.ok) { memory.shelter = dug.top; bot.companionSheltered = true; return { ok: true }; }
     }
     await sleep(1000, ctx.signal);
-    return { ok: true, waited: true };
+    return waiting('dimension_action_pending');
   }
 
   async function leave(ctx) {
@@ -400,7 +401,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
         if (phase !== 3) return meleePerched(ctx, dragon);
         // Still landing: be at the portal when it sits.
         await end.walkTo(bot, ctx, end.surfaceAt(bot, 0, 9) || CENTER, 2, 6000);
-        return { ok: true, waited: true };
+        return waiting('dimension_action_pending');
       }
       // Taking off it flies out straight ahead and up, through anything there:
       // step off its line, to the side.
@@ -414,7 +415,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
           ctx.record('dodge_takeoff', { to: at(away) });
           bot.companionNoEatUntil = Date.now() + 5000;
           await actions.goTo(bot, ctx, new end.goals.GoalNearXZ(away.x, away.z, 1.5), { timeoutMs: 4000, arrived: () => true });
-          return { ok: true, waited: true };
+          return waiting('dimension_action_pending');
         }
       }
       const crystals = end.crystalsOf(bot);

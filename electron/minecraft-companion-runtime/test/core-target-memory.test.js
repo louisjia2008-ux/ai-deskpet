@@ -37,11 +37,11 @@ test('target attempts survive a recreated scope and world reload; recovery, expi
   await run(other, fail);
   await run(target, fail);
   adaptation = create();
-  assert.equal((await run(target, never, recovering)).targetExcluded, true);
+  assert.equal((await run(target, never, recovering)).facts?.target?.excluded, true);
   adaptation = create();
   assert.equal((await run(target, never, never)).reason, 'target_excluded');
-  assert.equal((await run(other, fail, never)).targetExcluded, undefined);
-  assert.equal((await run(other, never, recovering)).targetExcluded, true);
+  assert.equal((await run(other, fail, never)).facts?.target?.excluded, false);
+  assert.equal((await run(other, never, recovering)).facts?.target?.excluded, true);
   environment = null; // unloading a chunk is not evidence that the cell changed
   assert.equal((await run(target, never, never)).reason, 'target_excluded');
   environment = 'air';
@@ -221,7 +221,7 @@ for (const [id, create] of [['cobble_generator', createCobbleGeneratorGoal], ['a
     let machine = make();
     for (let i = 0; i < 3; i++) await machine.run(ctx);
     machine = make();
-    assert.equal((await machine.run(ctx)).reason, 'device_target_excluded');
+    assert.equal((await machine.run(ctx)).wait?.reason, 'device_target_excluded');
     assert.equal(machine.isDone(), false);
     const failures = events.filter(e => e.type === 'target_failure');
     assert.equal(failures.length, 3);
@@ -237,7 +237,7 @@ test('farm replaces an excluded plot rather than lowering its sowing target', as
   const farm = createFarmGoal({ bot, center: anchor, plots: 1, mode: 'sow',
     actions: { goTo: async () => ({ ok: true }) },
     farming: { plotState: () => 'empty', choosePlots: (_r, _p, opts) => [first, second].filter(p => !opts.exclude(p)).slice(0, opts.count),
-      plant: async (_b, _c, p) => { attempts.push(posKey(p)); return posKey(p) === posKey(first) ? fail('plant_unconfirmed') : { ok: true }; } },
+      plant: async (_b, _c, p) => { attempts.push(posKey(p)); return posKey(p) === posKey(first) ? fail('block_changed') : { ok: true }; } },
   });
   for (let i = 0; i < 4; i++) await farm.run(ctx);
   assert.deepEqual(attempts, [first, first, first, second].map(posKey));

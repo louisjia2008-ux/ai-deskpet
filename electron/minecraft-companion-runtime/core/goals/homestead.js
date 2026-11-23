@@ -11,8 +11,9 @@
 //   4. house incomplete     -> place the next block or piece of furniture
 //   5. furniture unverified -> use it
 // The only memory kept across runs is the chosen site, what was left in the
-// furnace, short-lived blacklists, and which furniture has been used.
+// furnace, retry times, and which furniture has been used.
 
+const { complete: finished, createAttempt, factsOf, failure, resultFrom, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
@@ -22,7 +23,8 @@ const { KNOWLEDGE, countKey, familyOf } = require('../knowledge');
 const { createStarterHouse } = require('../blueprints/starterHouse');
 const { filler, pickItem, placedFor, matchesRoofWood, matchesRoofFallback, budget, supply, acquisition, setFallback, restoreFallbacks } = require('../materials');
 const { chooseSite, chooseHillside, evaluateSite, safeCaveDig, canClearTerrain, isSoft, siteWork } = require('../site');
-const { createBlacklist, posKey } = require('../blacklist');
+const { posKey } = require('../blacklist');
+const { ledgerFor, ledgerTarget } = require('../failure-ledger');
 const { sleep, waitUntil } = require('../confirm');
 const { runPlanned } = require('./common');
 const { outwardLeg, gatherWood, OUTWARD_HEADINGS } = require('../adaptation-strategies');
@@ -40,6 +42,7 @@ const BATCH = 16;
 const SITE_METHODS = ['near_flat', 'more_earthwork', 'compact', 'hillside'];
 const SCOUT_RADIUS = 12;
 const SCOUT_SPACING = 24;
+const targetFailure = result => result?.kind === 'target' && !result.facts.target && !result.facts.adaptation;
 const RAW_MEATS = ['beef', 'porkchop', 'mutton', 'chicken', 'rabbit'];
 const STATIONS = ['crafting_table', 'furnace', 'chest'];
 const STORABLE = ['dirt', 'cobblestone', 'cobbled_deepslate', 'stick', 'rotten_flesh', 'feather', 'leather'];
@@ -61,8 +64,13 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     temporary: {},
     materialFallbacks: {},
   };
-  const blacklist = createBlacklist({ ttlMs: 120000 });
-  const skipped = createBlacklist({ ttlMs: 300000 });
+  let retryAt = { conversion: {} };
+  const skipped = new Map();
+  const isSkipped = key => skipped.get(key) > Date.now();
+  const huntExcluded = e => {
+    const ledger = ledgerFor(bot);
+    return ['hunt', 'hunt_far'].some(purpose => ledger.skip(ledgerTarget(bot, purpose, e.position, { entity: e.id })));
+  };
   const reportedUpgradeBlocks = new Map();
   let lastSiteScout = null;
 
@@ -373,7 +381,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       (kb[key].sources.flatMap(source => kb[source.key]?.sources || [source])
         .find(source => source.needs?.cobblestone)?.needs.cobblestone || 0)), 0);
     return budget(inventory, { wood: woodForFurniture(hs, inventory), stone,
-      canConvert: item => !blacklist.has('convert:' + item) });
+      canConvert: item => !(retryAt.conversion[item] > Date.now()) });
   }
 
   function allowFallback(ctx, purpose, reason, detail = {}, masonryFailed = false) {
@@ -402,10 +410,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const { conversion, failure, step } = acquisition(purpose, batch, stock, memory.materialFallbacks, kb);
     if (conversion) {
       ctx.record('home_material_conversion', { ...proof, ...conversion });
-      const result = await skills.craft(bot, ctx, { tablePosition: null, ...conversion });
-      if (!result.ok && !result.waited && !result.sourceHandled && !ctx.signal?.aborted && result.reason !== 'aborted') {
-        blacklist.add('convert:' + conversion.item, result.reason, 30000);
-      }
+      const result = resultFrom(await skills.craft(bot, ctx, { tablePosition: null, ...conversion }), ctx, bot);
+      if (!result.ok && !['start', 'interrupted'].includes(result.kind)) retryAt.conversion[conversion.item] = Date.now() + 30000;
       return result;
     }
     if (failure) {
@@ -415,9 +421,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     }
     if (!step) return null;
     const planned = { ...step, purpose, for: purpose };
-    return runPlanned(ctx, planned, () => {
-      ctx.record('home_material_acquisition', { ...proof, kind: step.kind, key: step.key });
-      return executePlannerStep(ctx, planned);
+    return runPlanned(ctx, planned, attempt => {
+      attempt.record('home_material_acquisition', { ...proof, kind: step.kind, key: step.key });
+      return executePlannerStep(attempt, planned);
     });
   }
 
@@ -472,7 +478,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       // around a house in a forest.
       if (Math.hypot(bot.entity.position.x - a.x, bot.entity.position.z - a.z) > searchRadius) memory.exploreStreak -= 1;
       if (memory.exploreStreak > maxSearchStreak) {
-        return { ok: false, reason: `none_near_site:${why} within ${searchRadius} of ${a.x},${a.y},${a.z}`, giveUp: true };
+        return failure(`none_near_site:${why} within ${searchRadius} of ${a.x},${a.y},${a.z}`, { terminal: true }, ctx);
       }
     } else delete memory.explore.around;
     if (memory.exploreStreak > maxExploreStreak) return { ok: false, reason: `exhausted:${why}` };
@@ -481,7 +487,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   }
 
   const plan = (ctx, args) => planNext({ ...args, kb, stepBlocked: ctx.stepBlocked });
-  const runPlannerStep = (ctx, step, requirement) => runPlanned(ctx, step, () => executePlannerStep(ctx, step, requirement));
+  const runPlannerStep = (ctx, step, requirement) => runPlanned(ctx, step, attempt => executePlannerStep(attempt, step, requirement));
 
   async function executePlannerStep(ctx, step, requirement) {
     ctx.record('plan_step', { kind: step.kind, key: step.key, for: step.for, item: step.item, count: step.count ?? step.times });
@@ -501,7 +507,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         const spot = house.furniture[step.station].position;
         const below = { x: spot.x, y: spot.y - 1, z: spot.z };
         if (blockAt(below)?.boundingBox !== 'block') {
-          blacklist.delete(`site:${posKey(below)}`);
           ctx.record('station_needs_foundation', { station: step.station });
           return placeRecorded(ctx, below, fillMatch(), 'foundation');
         }
@@ -524,9 +529,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         } finally {
           if (carried) await pickUpTable(ctx, carried);
         }
-        if (result.ok && result.usedTable && !carried) memory.verified.crafting_table = true;
+        if (result.ok && factsOf(result).usedTable && !carried) memory.verified.crafting_table = true;
         // Short of something the plan thought was there: plan for it explicitly for a while.
-        for (const m of result.missing || []) {
+        for (const m of factsOf(result).missing || []) {
           const family = familyOf(m.name, kb);
           if (family) memory.shortfall[family] = { extra: m.short, until: Date.now() + 120000 };
         }
@@ -536,22 +541,23 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         if (ctx.adapt && step.key === 'log') {
           const result = await gatherWood({ bot, ctx: autonomous ? { ...ctx, dryRoute: true } : ctx,
             skills, actions, memory, anchor: house?.anchor,
-            blocks: step.blocks, dropMatch: kb.log.match, blacklist, exclude: nearHouseColumn });
-          return woodExhausted(ctx, result.adaptationExhausted) ? { ok: true, progress: false } : result;
+            blocks: step.blocks, dropMatch: kb.log.match, exclude: nearHouseColumn });
+          return woodExhausted(ctx, result.facts?.adaptation?.exhausted) ? finished(false) : result;
         }
         // Nothing within the usual 48 blocks: look as far as the loaded world
         // reaches before walking off to explore (a felled plain, a treeless hill).
         const options = { blocks: step.blocks, dropMatch: kb[step.key].match,
-          blacklist, exclude: nearHouseColumn, ...(step.purpose ? { eligibleFirst: true } : {}) };
+          exclude: nearHouseColumn, ...(step.purpose ? { eligibleFirst: true } : {}) };
         let result = await skills.gatherOne(bot, ctx, options);
         if (result.reason === 'no_target_in_range') result = await skills.gatherOne(bot, ctx, { ...options, radius: 128 });
-        if (!result.ok && step.purpose && !result.sourceHandled && !result.waited && !ctx.signal?.aborted) {
+        result = resultFrom(result, ctx, bot);
+        if (step.purpose && targetFailure(result) && !ctx.signal?.aborted) {
           const switched = step.key === 'log' ? woodExhausted(ctx, { task: 'wood', method: 'search', reason: result.reason })
             : step.key === 'cobblestone' && allowFallback(ctx, step.purpose, result.reason, {}, true);
           return switched ? { ok: true, progress: false } : result;
         }
         if (result.reason === 'no_target_in_range') {
-          if (requirement?.optional) { skipped.add(requirement.key, 'unavailable'); return { ok: true, skipped: requirement.key }; }
+          if (requirement?.optional) { skipped.set(requirement.key, Date.now() + 300000); return { ok: true, skipped: requirement.key }; }
           return explore(ctx, step.key);
         }
         return result;
@@ -565,21 +571,21 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       case 'hunt': {
         // Optional food runs wait until the bot is healthy again.
         if (requirement?.optional && ctx.perceive().health < 12) {
-          skipped.add(requirement.key, 'low_health', 60000);
+          skipped.set(requirement.key, Date.now() + 60000);
           return { ok: true, skipped: requirement.key };
         }
         // Food is wanted close by (a rabbit 93 blocks off led across a lake);
         // sheep for the bed are worth a longer walk.
-        const result = await skills.huntOne(bot, ctx, { mobs: step.mobs, dropMatch: kb[step.key].match, blacklist,
+        const result = await skills.huntOne(bot, ctx, { mobs: step.mobs, dropMatch: kb[step.key].match,
           radius: step.key === 'food' ? 48 : 96,
           ...(step.key === 'wool' ? woolPreference(ctx.perceive().inventory) : {}) });
         // No sheep anywhere near: spiders drop string, four of which make wool.
         if (result.reason === 'no_mob_in_range' && step.key === 'wool') {
-          const spider = await skills.huntOne(bot, ctx, { mobs: ['spider', 'cave_spider'], dropMatch: (n) => n === 'string', blacklist, radius: 48 });
+          const spider = await skills.huntOne(bot, ctx, { mobs: ['spider', 'cave_spider'], dropMatch: (n) => n === 'string', radius: 48 });
           if (spider.reason !== 'no_mob_in_range') return spider;
         }
         if (result.reason === 'no_mob_in_range') {
-          if (requirement?.optional) { skipped.add(requirement.key, 'unavailable'); return { ok: true, skipped: requirement.key }; }
+          if (requirement?.optional) { skipped.set(requirement.key, Date.now() + 300000); return { ok: true, skipped: requirement.key }; }
           return explore(ctx, step.key);
         }
         return result;
@@ -651,7 +657,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         return dug;
       };
       const first = await dig();
-      if (first.ok || first.sourceHandled || ['unloaded', 'protected_player_block', 'unsafe_excavation', 'protected_home'].includes(first.reason)) return first;
+      if (!targetFailure(resultFrom(first, ctx, bot)) || ['protected_player_block', 'unsafe_excavation', 'protected_home'].includes(first.reason)) return first;
       const walk = await alternateStand(bot, ctx, actions, p);
       return walk.ok ? dig() : first;
     }
@@ -722,13 +728,11 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         continue;
       }
       memory.batch = task.batch > 1 ? task.material : null;
-      const result = await placeRecorded(ctx, task.position, material ? n => n === material.item : task.match, task.what,
-        material ? { material: material.item } : task.options);
-      if (material && result.reason === 'no_material') ctx.record('home_material_place_failed',
-        { purpose: task.purpose, what: task.what, reason: result.reason, position: posKey(task.position), ...material });
+      const result = await placeRecorded(ctx, task.position, task.match, task.what,
+        material ? { purpose: task.purpose, selection: material } : task.options);
       const blockedRoof = task.what === 'roof' && memory.house?.variant === 'compact' && !memory.established
         && bot.entity.position.y >= task.position.y + 0.9
-        && !result.ok && !result.waited && !result.sourceHandled && !result.giveUp
+        && targetFailure(result) && !result.facts.terminal
         && ['NoPath', 'not_arrived', 'no_progress', 'path_timeout', 'Timeout'].includes(result.reason);
       if (!blockedRoof) return result;
       // An adjacent panel can make the current corner reachable. Try another
@@ -835,7 +839,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     let failure = 'site_changed';
     if (!valid && state.position.distanceTo(from) > 3) {
       const returned = await actions.goNear(bot, { ...ctx, dryRoute: true }, from, 2, { timeoutMs: 45000, skipAdaptation: true });
-      if (returned.waited || returned.sourceHandled || returned.reason === 'aborted') return returned;
+      if (returned.wait || ['start', 'interrupted'].includes(returned.kind) || returned.facts?.adaptation) return returned;
       if (returned.ok) valid = validate(ctx.perceive());
       else failure = returned.reason;
     }
@@ -855,7 +859,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     let outcome;
     if (ctx.adapt && !counted) {
       const p = ctx.adapt.plan('home_site', { position: memory.searchOrigin || anchor });
-      outcome = ctx.adapt.outcome(p, { ok: false, reason });
+      outcome = ctx.adapt.outcome(p, failure('site_rejected', { originalReason: reason }, ctx, bot));
     }
     ctx.record('site_abandoned', { anchor, reason, built: memory.houseBuilt || 0 });
     // Autonomous goals use the expiring, world-persistent rejected_site lesson.
@@ -864,7 +868,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (movements && memory.protect) movements.exclusionAreasBreak = movements.exclusionAreasBreak.filter((f) => f !== memory.protect);
     if (bot.companionProtectBlock === memory.protectBlock) bot.companionProtectBlock = null;
     if (bot.companionHomeSite === memory.homeSite) bot.companionHomeSite = null;
-    ctx.adapt?.teach('rejected_site', anchor, 'overworld', reason, 32);
     bot.companionChest = null;
     bot.companionSurfaceY = undefined;
     Object.assign(memory, {
@@ -875,8 +878,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       owned: {}, temporary: {}, cleanupRequested: false,
       materialFallbacks: {},
     });
+    ctx.adapt?.teach('rejected_site', anchor, 'overworld', failure('site_rejected', { originalReason: reason }, ctx), 32);
     for (const key of Object.keys(memory.verified)) memory.verified[key] = false;
-    blacklist.clear();
+    retryAt = { conversion: {} };
     skipped.clear();
     reportedUpgradeBlocks.clear();
     return { ...outcome, ok: true, abandoned: true, progress: false };
@@ -884,7 +888,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
 
   async function exploreRelocation(ctx) {
     const r = memory.relocation;
-    if (r.retryAt > Date.now()) return { ok: true, waited: true, reason: 'relocation_routes_exhausted', retryAt: r.retryAt };
+    if (r.retryAt > Date.now()) return waiting('relocation_routes_exhausted', r.retryAt);
     if (r.retryAt) { r.attempt = 0; r.retryAt = 0; }
     const up = await surfaceFirst(ctx);
     if (up) return up;
@@ -908,7 +912,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   }
 
   const nearbyWoolMobs = () => Object.values(bot.entities || {}).some((e) => e.position
-    && e.position.distanceTo(bot.entity.position) <= 24 && !blacklist.has(`mob:${e.id}`)
+    && e.position.distanceTo(bot.entity.position) <= 24 && !huntExcluded(e)
     && ((e.name === 'sheep' && !skills.sheepWool?.(bot, e)?.sheared) || e.name === 'spider'));
   function wantsGuestBed(state) {
     if (!memory.established || memory.upgradesComplete || state.health < 16 || state.food < 12
@@ -952,10 +956,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const fleece = woolPreference(inventory);
       const inArea = e => e.position?.distanceTo(v(area.position)) <= 128;
       const eligible = Object.values(bot.entities || {}).some(e => e.name === 'sheep' && inArea(e) && fleece.accept?.(e) !== false);
-      const result = await skills.huntOne(bot, ctx, { mobs: ['sheep'], dropMatch: kb.wool.match, blacklist, radius: 128,
+      const result = await skills.huntOne(bot, ctx, { mobs: ['sheep'], dropMatch: kb.wool.match, radius: 128,
         targetGoal: 'homestead', ...fleece, accept: e => inArea(e) && fleece.accept?.(e) !== false });
-      if (result.reason !== 'no_mob_in_range') return result.ok && !result.gained ? { ok: false, reason: 'no_wool_collected' } : result;
-      if (eligible) return { ok: true, waited: true, reason: 'no_eligible_sheep_near_home', retryAt: Date.now() + 30_000 };
+      if (result.reason !== 'no_mob_in_range') return result.ok && !factsOf(result).gained ? { ok: false, reason: 'no_wool_collected' } : result;
+      if (eligible) return waiting('no_eligible_sheep_near_home', Date.now() + 30_000);
       // A single entity snapshot only covers tracked mobs, not the search
       // radius. Look from dry ground in each accessible quarter first.
       const e = v(memory.house.entrance);
@@ -977,15 +981,15 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     async function huntSpiders() {
       if (state.isDay !== false) {
         ctx.record('home_finish_step', { step: 'await_spiders_at_night', item: id, missing: Math.max(0, 12 - (inventory.string || 0) - 4 * (inventory.white_wool || 0)) });
-        return { ok: true, waited: true, reason: 'await_spiders_at_night', retryAt: Date.now() + 30_000 };
+        return waiting('await_spiders_at_night', Date.now() + 30_000);
       }
       const home = await returnForUpgrade(ctx);
       if (home) return home;
       ctx.record('home_finish_step', { step: 'spider_string', item: id });
-      const result = await skills.huntOne(bot, ctx, { mobs: ['spider'], dropMatch: kb.string.match, blacklist, radius: 48,
+      const result = await skills.huntOne(bot, ctx, { mobs: ['spider'], dropMatch: kb.string.match, radius: 48,
         targetGoal: 'homestead', accept: e => e.position.distanceTo(v(area.position)) <= 48 });
-      if (result.reason === 'no_mob_in_range') return { ok: true, waited: true, reason: 'no_spider_near_home', retryAt: Date.now() + 30_000 };
-      return result.ok && !result.gained ? { ok: false, reason: 'no_string_collected' } : result;
+      if (result.reason === 'no_mob_in_range') return waiting('no_spider_near_home', Date.now() + 30_000);
+      return result.ok && !factsOf(result).gained ? { ok: false, reason: 'no_string_collected' } : result;
     }
     if (!ctx.adapt) {
       if (Date.now() < (memory.noSheepUntil || 0)) return huntSpiders();
@@ -1017,9 +1021,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       async run(ctx) {
         const state = ctx.perceive();
         if (autonomous) {
-          const result = await bedUpgrade(ctx, 'guestBed') || { ok: true, waited: true, reason: 'roof_not_ready_for_bed' };
-          if (result.ok && !result.waited) steps++;
-          if (result.targetExcluded) memory.guestBedRetryAt = Date.now() + 5 * 60_000;
+          const result = await bedUpgrade(ctx, 'guestBed') || waiting('roof_not_ready_for_bed');
+          if (result.ok && !result.wait) steps++;
+          if (result.facts?.target?.excluded) memory.guestBedRetryAt = Date.now() + 5 * 60_000;
           return result;
         }
         if (wantsGuestBed(state) && steps < 12) {
@@ -1030,15 +1034,15 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           } else {
             const step = plan(ctx, { requirements: [{ key: 'bed', count: 1 }], inventory, stations: { crafting_table: true } });
             if (step?.kind === 'hunt') {
-              const hunt = (mobs, match, options) => skills.huntOne(bot, ctx, { mobs, dropMatch: match, blacklist, radius: 24, ...options });
-              result = await runPlanned(ctx, step, async () => {
+              result = await runPlanned(ctx, step, async attempt => {
+                const hunt = (mobs, match, options) => skills.huntOne(bot, attempt, { mobs, dropMatch: match, radius: 24, ...options });
                 const sheep = await hunt(['sheep'], kb.wool.match, woolPreference(inventory));
                 return sheep.reason === 'no_mob_in_range' ? hunt(['spider'], kb.string.match) : sheep;
               });
             } else if (step && step.kind !== 'gather') result = await runPlannerStep(ctx, step, null);
           }
-          if (result?.ok && !result.waited) { steps += 1; return result; }
-          if (result?.sourceHandled && !result.targetExcluded) return result;
+          if (result?.ok && !result.wait) { steps += 1; return result; }
+          if (result?.wait || result?.kind === 'start' || result?.facts?.adaptation) return result;
         }
         memory.guestBedRetryAt = Date.now() + 5 * 60_000;
         done = true;
@@ -1073,7 +1077,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         const hs = houseState(ctx);
         const state = ctx.perceive();
         const torch = hs.torches[0];
-        if (!torch) return { ok: true, waited: true, reason: hs.blocked.find(b => b.item === 'torch')?.reason || 'lighting_site_unloaded' };
+        if (!torch) return waiting(hs.blocked.find(b => b.item === 'torch')?.reason || 'lighting_site_unloaded');
         if ((state.inventory.torch || 0) > 0) {
           const placed = await placeRecorded(ctx, torch, (n) => n === 'torch', 'torch', { faces: DOWN, requireAir: true, passable: true });
           if (placed.ok) steps++;
@@ -1082,11 +1086,11 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         const step = plan(ctx, { requirements: [{ key: 'torch', count: hs.torches.length }], inventory: state.inventory,
           stations: { crafting_table: hs.placed.crafting_table, furnace: hs.placed.furnace } });
         if (!step || step.kind === 'blocked' || (!autonomous && step.kind !== 'craft')) {
-          return { ok: true, waited: true, reason: 'lighting_materials_unavailable', retryAt: Date.now() + 30_000 };
+          return waiting('lighting_materials_unavailable', Date.now() + 30_000);
         }
         ctx.record('home_finish_step', { step: step.kind, material: step.key, for: 'torch', missing: hs.torches.length });
         const result = await runPlannerStep(ctx, step, null);
-        if (result.ok && !result.waited) steps++;
+        if (result.ok && !result.wait) steps++;
         return result;
       },
     };
@@ -1135,11 +1139,12 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const feet = bot.entity.position.floored();
     if (memory.house && feet.y === memory.house.anchor.y && insideRoom(feet) && supports(blockAt(below(feet)))) return null;
     const result = await actions.surface(bot, ctx);
+    if (result?.progress === false) return null;
     if (result) ctx.record('surface', { ok: result.ok });
     return result;
   }
 
-  async function placeCompactRoof(ctx, position, match, options) {
+  async function placeCompactRoof(ctx, position, match, placeTile) {
     const [base, upper] = memory.house.scaffold;
     const peak = new Vec3(upper.x, upper.y + 1, upper.z);
     const centreTile = position.x === peak.x && position.z === peak.z;
@@ -1185,7 +1190,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       ctx.record('roof_work_step', { at: posKey(bot.entity.position.floored()), position: posKey(position), ok: placed });
       return placed ? { ok: true } : { ok: false, reason: 'roof_step_unconfirmed' };
     }
-    const placed = await skills.placeAt(bot, ctx, position, match, options);
+    const placed = await placeTile();
     if (placed.ok || centreTile || !['not_arrived', 'NoPath', 'Timeout', 'no_progress'].includes(placed.reason)) return placed;
     if (bot.entity.position.y < peak.y + 0.9) return placed;
     // An occluded corner may be visible from another roof panel after the
@@ -1197,13 +1202,14 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const stand = panel.offset(0, 1, 0);
       const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(stand.x, stand.y, stand.z), { timeoutMs: 5000, retryNoProgress: false });
       if (!moved.ok) continue;
-      const retry = await skills.placeAt(bot, ctx, position, match, options);
-      if (retry.ok) return retry;
+      const retry = await placeTile();
+      if (retry.ok || retry.kind !== 'target') return retry;
     }
     return placed;
   }
 
   async function placeRecorded(ctx, position, match, what, options = {}) {
+    ctx = createAttempt(ctx);
     const up = await surfaceFirst(ctx);
     if (up) return up;
     const original = position;
@@ -1212,12 +1218,13 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       position = site.position;
       options = site.options;
     }
+    let placements = 0;
     const place = async (p = position, opts = options) => {
       if (!site) return { ok: false, reason: 'furniture_blocks_exit' };
-      if ([p, ...(opts.alsoClear || [])].some(q => bot.companionPlayerBlock?.(q) && !match(nameAt(q)))) {
+      const matchesPlaced = opts.purpose ? n => placedFor(opts.purpose, n) : match;
+      if ([p, ...(opts.alsoClear || [])].some(q => bot.companionPlayerBlock?.(q) && !matchesPlaced(nameAt(q)))) {
         return { ok: false, reason: 'protected_player_block' };
       }
-      ctx.record('build', { what, position: posKey(p), ...(opts.material ? { material: opts.material } : {}) });
       // A distant hunt/mining trip needs one long walk before local placement.
       if (bot.entity.position.distanceTo(new Vec3(p.x + 0.5, p.y, p.z + 0.5)) > 12) {
         ctx.record('return_home', { for: what });
@@ -1226,14 +1233,30 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         if (!back.ok) return back;
       }
       if (opts.stand && !safeStand(blockAt, opts.stand)) return { ok: false, reason: 'unsafe_build_stand' };
+      const placeTile = async () => {
+        const retry = placements++ > 0;
+        const at = posKey(p);
+        const alreadyPlaced = matchesPlaced(nameAt(p)) && (!opts.verify || opts.verify());
+        const inventory = ctx.perceive().inventory;
+        const selection = opts.purpose && supply(opts.purpose, materialStock(houseState(ctx), inventory), memory.materialFallbacks);
+        ctx.record('build', { attemptId: ctx.attemptId, what, position: at, retry, ...(selection ? { material: selection.item } : {}) });
+        if (alreadyPlaced) return finished(false);
+        if (selection && !selection.item) {
+          const result = failure('no_material', { need: { [opts.purpose]: 1 }, carried: inventory, position: at }, ctx, bot);
+          ctx.record('home_material_place_failed', { attemptId: ctx.attemptId, purpose: opts.purpose, what, position: at, ...selection, result });
+          return result;
+        }
+        const chosen = selection ? n => n === selection.item : match;
+        return resultFrom(await skills.placeAt(bot, ctx, p, chosen, { ...opts, materialNeed: selection?.item || what }), ctx, bot);
+      };
+      const chosen = opts.selection ? n => n === opts.selection.item : match;
       const result = what === 'roof' && memory.house.variant === 'compact' && !memory.established
-        ? await placeCompactRoof(ctx, p, match, opts)
-        : await skills.placeAt(bot, ctx, p, match, opts);
-      if (result.ok && site.changed && posKey(p) === posKey(site.position)) {
+        ? resultFrom(await placeCompactRoof(ctx, p, chosen, placeTile), ctx, bot) : await placeTile();
+      if (result.ok && !result.wait && site.changed && posKey(p) === posKey(site.position)) {
         memory.house.furniture[what] = site.changed;
         ctx.record('home_furniture_moved', { item: what, from: posKey(original), to: posKey(p) });
       }
-      if (result.ok && !result.already && ['scaffold', 'wall', 'roof'].includes(what) && match(nameAt(p))) ownedRecord(what, p);
+      if (result.progress && ['scaffold', 'wall', 'roof'].includes(what) && matchesPlaced(nameAt(p))) ownedRecord(what, p);
       if (what === 'roof' && result.ok && !houseState(ctx).missing.some(b => b.phase === 'roof')) {
         memory.scaffoldActive = false;
         memory.cleanupRequested = scaffoldEntries().length > 0;
@@ -1241,7 +1264,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       return result;
     };
     const groundCover = (q) => naturalCover(blockAt(q)) && supports(blockAt(below(q))) && !bot.companionPlayerBlock?.(q);
-    async function recover(reason) {
+    async function recover(initial) {
+      const { reason } = initial;
       if (optionalStep(what)) {
         // Native placeAt handles classified plant cover. Only earthwork
         // remains eligible for this terrain-repair fallback.
@@ -1268,31 +1292,31 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           }
         }
       }
-      if (['occupied', 'protected_player_block', 'no_support', 'furniture_blocks_exit'].includes(reason)) return { ok: false, reason };
+      if (['occupied', 'protected_player_block', 'no_support', 'furniture_blocks_exit'].includes(reason)) return initial;
       const entrance = memory.house.entrance;
       const exteriorLight = what === 'torch' && position.z < memory.house.anchor.z;
       if ((exteriorLight || (options.stand && posKey(options.stand) === posKey(entrance)))
         && (await crossDoorstep(ctx)).ok) return place(position, { ...options, stand: entrance });
       const walked = await alternateStand(bot, ctx, actions, options.stand || position,
         { avoid: q => optionalStep(what) && idAt(memory.house.furniture.torches, q) });
-      return walked.ok ? place() : { ok: false, reason };
+      return walked.ok ? place() : initial;
     }
-    const first = await place();
-    const result = first.ok || first.sourceHandled || ['unloaded', 'no_material', 'aborted'].includes(first.reason)
-      ? first : await recover(first.reason);
+    const first = resultFrom(await place(), ctx, bot);
+    const recoverable = targetFailure(first) || (first.kind === 'environment' && first.reason === 'place_unconfirmed');
+    const result = recoverable ? resultFrom(await recover(first), ctx, bot) : first;
     // The functional house may now finish as soon as this door is placed.
-    if (what === 'door' && result.ok && !result.already && ctx.perceive().isDay === true) await setDoor(ctx, true);
-    if (ctx.adapt && !memory.pinned && !memory.established && result.ok && !result.already && memory.searchOrigin) {
+    if (what === 'door' && result.progress && ctx.perceive().isDay === true) await setDoor(ctx, true);
+    if (ctx.adapt && !memory.pinned && !memory.established && result.progress && memory.searchOrigin) {
       ctx.adapt.outcome(ctx.adapt.plan('home_site', { position: memory.searchOrigin }), result);
     }
-    if (ctx.adapt && !memory.pinned && !memory.established && !result.ok && !result.sourceHandled && memory.searchOrigin
+    if (ctx.adapt && !memory.pinned && !memory.established && targetFailure(result) && memory.searchOrigin
       && ['place_unconfirmed', 'not_arrived', 'NoPath', 'no_support'].includes(result.reason)
       && (memory.houseBuilt || 0) < memory.house.blocks.length * 0.75) {
       const route = ctx.adapt.plan('home_site', { position: memory.searchOrigin });
       const outcome = ctx.adapt.outcome(route, result);
-      if (outcome.adaptationSwitched) {
+      if (outcome.facts?.adaptation?.switched) {
         const abandoned = await abandonSite(ctx, result.reason, true);
-        return abandoned.ok ? { ...outcome, ...abandoned } : abandoned;
+        return abandoned.ok ? resultFrom(abandoned, ctx, bot) : abandoned;
       }
       return outcome;
     }
@@ -1479,11 +1503,11 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           if (!bot.entity.position.floored().equals(stand)) {
             const moved = await actions.goTo(bot, { ...ctx, nearDestination: true }, new goals.GoalBlock(stand.x, stand.y, stand.z),
               { timeoutMs: 5000, retryNoProgress: false });
-            if (!moved.ok) return { ...moved, giveUp: true };
+            if (!moved.ok) return resultFrom({ ...moved, facts: { ...moved.facts, terminal: true } }, ctx, bot);
           }
           const result = await replaceRoofPanel(ctx, work);
           replaced = result.ok;
-          return replaced || ctx.signal?.aborted ? result : { ...result, giveUp: true };
+          return replaced || ctx.signal?.aborted ? result : resultFrom({ ...result, facts: { ...result.facts, terminal: true } }, ctx, bot);
         } finally {
           if (movements) movements.canDig = canDig;
         }
@@ -1550,7 +1574,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const abandoned = await abandonSite(ctx, reason, true);
     if (!abandoned.ok || memory.house) return abandoned;
     ctx.record('home_access_relocated', { anchor, reason, block, position: posKey(obstruction) });
-    return { ok: false, reason: 'home_site_relocated', sourceHandled: true, giveUp: true };
+    return failure('home_site_relocated', { terminal: true }, ctx);
   }
 
   async function escapeHome(ctx) {
@@ -1701,14 +1725,14 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (memory.bunker) {
       bot.companionSheltered = true;
       await sleep(3000, ctx.signal);
-      return { ok: true, waited: true, reason: 'sheltering_until_daylight' };
+      return waiting('sheltering_until_daylight');
     }
     // Walls and roof are enough to spend the night in: without a door yet, the doorway gets plugged.
     const shellDone = !hs.missing.length;
     // A bed still in the bag goes down at its spot before dark.
-    if (bedsSafe(hs) && !hs.placed.bed && countKey('bed', state.inventory, kb) > 0 && !blacklist.has('night:bed')) {
+    if (bedsSafe(hs) && !hs.placed.bed && countKey('bed', state.inventory, kb) > 0 && !(retryAt.nightBed > Date.now())) {
       const placed = await placeBed(ctx, 'bed', { alsoClear: [] });
-      if (!placed.ok) blacklist.add('night:bed', placed.reason, 60000);
+      if (!placed.ok) retryAt.nightBed = Date.now() + 60000;
       return placed;
     }
     // Already dark and far from home: the walk back is where nights kill.
@@ -1746,28 +1770,28 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         } else {
           const door = house.furniture.door;
           const open = [door.position, door.upper].find((p) => blockAt(p)?.boundingBox !== 'block');
-          if (open && countKey('filler', state.inventory, kb) && !blacklist.has('plug')) {
+          if (open && countKey('filler', state.inventory, kb) && !(retryAt.plug > Date.now())) {
             memory.doorPlug = true;
             ctx.record('night', { action: 'plug_doorway' });
             const plugged = await skills.placeAt(bot, ctx, open, fillMatch());
-            if (!plugged.ok) blacklist.add('plug', plugged.reason, 20000);
+            if (!plugged.ok) retryAt.plug = Date.now() + 20000;
             return plugged;
           }
         }
       }
       bot.companionSheltered = true;
       await sleep(3000, ctx.signal);
-      return { ok: true, waited: true, reason: 'sheltering_until_daylight' };
+      return waiting('sheltering_until_daylight');
     }
-    if (blacklist.has('bunker')) return null;
+    if ((retryAt.bunker > Date.now())) return null;
     ctx.record('night', { action: 'dig_in' });
     const dug = await skills.digIn(bot, ctx, { avoid: nearHouseColumn, prepareSeal: autonomous });
     if (dug.ok) {
       ctx.record('night', { action: 'dug_in' });
-      memory.bunker = dug.bunker; bot.companionSheltered = true;
+      memory.bunker = factsOf(dug).bunker; bot.companionSheltered = true;
     }
     // Nowhere to dig in (sand, water): keep working through the night instead of retrying.
-    else if (['no_bunker_spot', 'no_seal_block'].includes(dug.reason)) blacklist.add('bunker', dug.reason, 60000);
+    else if (['no_bunker_spot', 'no_seal_block'].includes(dug.reason)) retryAt.bunker = Date.now() + 60000;
     return dug;
   }
 
@@ -1785,16 +1809,16 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       if (memory.verified[id] || !hs.placed[id]) continue;
       ctx.record('verify', { furniture: id });
       const result = await skills.useBed(bot, ctx, { position: f[id].position });
-      if (result.ok || result.spawnSet) {
+      if (result.ok || factsOf(result).spawnSet) {
         memory.verified[id] = true;
       }
-      if (result.spawnSet && !result.ok) return { ok: true, spawnSet: true };
+      if (factsOf(result).spawnSet && !result.ok) return { ok: true, spawnSet: true };
       return result;
     }
     if (!memory.verified.crafting_table) {
       ctx.record('verify', { furniture: 'crafting_table' });
       const result = await skills.craft(bot, ctx, { item: 'stick', times: 1, tablePosition: f.crafting_table.position });
-      if (result.ok && result.usedTable) memory.verified.crafting_table = true;
+      if (result.ok && factsOf(result).usedTable) memory.verified.crafting_table = true;
       return result;
     }
     if (!memory.verified.furnace) {
@@ -1812,7 +1836,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     // Start the route budget over without forgetting concrete exclusions.
     maxRecoveries: 6,
     recover() {
-      blacklist.clear();
+      retryAt = { conversion: {} };
       skipped.clear();
       memory.recovery = true;
       // A fresh round of exploring for a site: the count is kept across asks
@@ -1864,9 +1888,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const result = await runOnce(ctx);
       // Waiting (for dusk, out the night) is not progress: counting it would
       // refill the stall budget of a step that keeps failing every morning.
-      if (result.ok && !result.waited) {
+      if (result.ok && !result.wait) {
         memory.steps += 1;
-        if (!result.moved) memory.exploreStreak = 0;
+        if (!factsOf(result).moved) memory.exploreStreak = 0;
       }
       return result;
     },
@@ -1893,19 +1917,19 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         const top = memory.bunker?.top;
         if (top && Math.hypot(state.position.x - top.x, state.position.z - top.z) < 2) {
           await sleep(3000, ctx.signal);
-          return { ok: true, waited: true, reason: 'sheltering_until_daylight' };
+          return waiting('sheltering_until_daylight');
         }
         memory.bunker = null;
-        if (blacklist.has('early_bunker')) {
+        if ((retryAt.earlyBunker > Date.now())) {
           await sleep(3000, ctx.signal);
-          return { ok: true, waited: true, reason: 'waiting_for_safe_daylight' };
+          return waiting('waiting_for_safe_daylight');
         }
         const dug = await skills.digIn(bot, ctx, { prepareSeal: autonomous });
         if (dug.ok) {
           ctx.record('night', { action: 'dug_in' });
-          memory.bunker = dug.bunker; bot.companionSheltered = true;
+          memory.bunker = factsOf(dug).bunker; bot.companionSheltered = true;
         }
-        else blacklist.add('early_bunker', dug.reason, 60_000);
+        else retryAt.earlyBunker = Date.now() + 60_000;
         return dug;
       }
       if (ctx.adapt && !memory.pinned) {
@@ -1932,11 +1956,11 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
               const started = Date.now();
               const moved = await outwardLeg(bot, travelCtx, actions, route, origin,
                 { distance: method === 'relocate' ? 28 : 40, bearing: route.bearing });
-              if (ctx.signal?.aborted || moved.reason === 'aborted' || moved.sourceHandled || moved.waited) return moved;
+              if (ctx.signal?.aborted || moved.wait || ['start', 'interrupted'].includes(moved.kind) || moved.facts?.adaptation) return moved;
               const here = ctx.perceive();
               const distance = Math.hypot(here.position.x - from.x, here.position.z - from.z);
               ctx.record('home_relocation_leg', { method, from, position: here.position, distance, inWater: here.inWater,
-                ok: moved.ok, reason: moved.reason, elapsedMs: Date.now() - started });
+                ok: moved.ok, reason: moved.reason, result: resultFrom(moved, ctx, bot), elapsedMs: Date.now() - started });
               if (here.inWater || (!moved.ok && distance < 16)) {
                 if (moved.ok) route.heading += 1; // An X/Z goal can finish in water.
                 continue;
@@ -2027,12 +2051,12 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     // No shell to sleep in yet and out searching: back on the site's own
     // ground before dusk, rather than dig in on whatever rock the search
     // ended on (bare stone without a pickaxe gives no block to seal with).
-    if (!atNight && state.timeOfDay >= 10800 && hs.missing.length && !blacklist.has('dusk_home')) {
+    if (!atNight && state.timeOfDay >= 10800 && hs.missing.length && !(retryAt.duskHome > Date.now())) {
       const e = memory.house.entrance;
       if (bot.entity.position.distanceTo(new Vec3(e.x, e.y, e.z)) > 48) {
         ctx.record('night', { action: 'dusk_home' });
         const back = await actions.goNear(bot, ctx, new Vec3(e.x, e.y, e.z), 3, { timeoutMs: 90000 });
-        if (!back.ok) blacklist.add('dusk_home', back.reason, 120000);
+        if (!back.ok) retryAt.duskHome = Date.now() + 120000;
         return back;
       }
     }
@@ -2042,9 +2066,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         const night = await nightStep(ctx, hs, state);
         if (night) return night;
       }
-    } else if (hs.placed.door && doorOpen() === false && !blacklist.has('door')) {
+    } else if (hs.placed.door && doorOpen() === false && !(retryAt.door > Date.now())) {
       const opened = await setDoor(ctx, true);
-      if (opened && !opened.ok) blacklist.add('door', opened.reason, 30000);
+      if (opened && !opened.ok) retryAt.door = Date.now() + 30000;
       if (opened) return opened;
     }
     // Stone tools first, then a few pieces of food so lost health can be eaten back.
@@ -2054,10 +2078,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     // Not while it is set aside as unavailable (no tree in reach): re-added at
     // once, it was "skipped" twice a second for good.
     const fallbackRoofOpen = memory.materialFallbacks.roof && hs.missing.some(b => b.purpose === 'roof');
-    if (hs.placed.crafting_table && !skipped.has('crafting_table') && !fallbackRoofOpen) {
+    if (hs.placed.crafting_table && !isSkipped('crafting_table') && !fallbackRoofOpen) {
       early.unshift({ key: 'crafting_table', count: 1, optional: true });
     }
-    if (!autonomous && !skipped.has('food')) early.push({ key: 'food', count: 4, optional: true });
+    if (!autonomous && !isSkipped('food')) early.push({ key: 'food', count: 4, optional: true });
     if (!hs.placed.door && hs.placed.crafting_table && !countKey('door', inventory, kb)) {
       const door = plan(ctx, { requirements: [{ key: 'door', count: 1 }], inventory, stations });
       if (door?.kind === 'craft' && door.key === 'door') return runPlannerStep(ctx, door, null);
@@ -2069,35 +2093,35 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (hs.placed.furnace) {
       const raw = RAW_MEATS.map((name) => [name, state.inventory[name] || 0]).sort((x, y) => y[1] - x[1])[0];
       const fuel = Object.keys(state.inventory).some((n) => n === 'coal' || n === 'charcoal' || kb.planks.match(n) || kb.log.match(n));
-      if (raw[1] >= 3 && fuel && !blacklist.has('cook')) {
+      if (raw[1] >= 3 && fuel && !(retryAt.cook > Date.now())) {
         ctx.record('cook', { item: raw[0], count: raw[1] });
         const cooked = await skills.smelt(bot, ctx, { input: raw[0], count: Math.min(raw[1], 8),
           furnacePosition: memory.house.furniture.furnace.position, memory: memory.furnace });
         memory.furnace.item = raw[0];
         if (cooked.ok) memory.verified.furnace = true;
-        else blacklist.add('cook', cooked.reason, 120000);
+        else retryAt.cook = Date.now() + 120000;
         return cooked;
       }
     }
     // Animals close by are food in the bag for later: on mountains and in
     // forests the next one may be a long, failing chase away once hunger hits.
-    if (!autonomous && !atNight && state.health >= 12 && countKey('food', state.inventory, kb) < 10 && !blacklist.has('stockpile')) {
+    if (!autonomous && !atNight && state.health >= 12 && countKey('food', state.inventory, kb) < 10 && !(retryAt.stockpile > Date.now())) {
       const animals = Object.values(bot.entities || {}).some((e) => FOOD_MOBS.has(e.name) && e.position
-        && e.position.distanceTo(bot.entity.position) <= 16 && !blacklist.has(`mob:${e.id}`));
+        && e.position.distanceTo(bot.entity.position) <= 16 && !huntExcluded(e));
       if (animals) {
         ctx.record('stockpile_food', {});
-        const hunted = await skills.huntOne(bot, ctx, { mobs: [...FOOD_MOBS], dropMatch: kb.food.match, blacklist, radius: 16 });
-        if (!hunted.ok) blacklist.add('stockpile', hunted.reason, 60000);
+        const hunted = await skills.huntOne(bot, ctx, { mobs: [...FOOD_MOBS], dropMatch: kb.food.match, radius: 16 });
+        if (!hunted.ok) retryAt.stockpile = Date.now() + 60000;
         return hunted;
       }
     }
     // Then the bed, placed at its spot in the future house: from the first
     // night on, the bot sleeps through the dark and respawns at home.
-    if (!autonomous && bedsSafe(hs) && !hs.placed.bed && !skipped.has('wool') && !blacklist.has('early_bed')) {
+    if (!autonomous && bedsSafe(hs) && !hs.placed.bed && !isSkipped('wool') && !(retryAt.earlyBed > Date.now())) {
       if (countKey('bed', state.inventory, kb) > 0) {
         const placed = await placeBed(ctx, 'bed');
         // An animal in the way or uneven ground: build on and come back to it.
-        if (!placed.ok) blacklist.add('early_bed', placed.reason, 120000);
+        if (!placed.ok) retryAt.earlyBed = Date.now() + 120000;
         return placed;
       }
       const bedReq = [{ key: 'bed', count: 1, optional: true }];
@@ -2113,7 +2137,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (ready) return ready;
     const material = tasks.find(task => task.purpose);
     const action = material && !work.fills.length && await materialStep(ctx, material, hs);
-    if (action && !action.waited) return action;
+    if (action && !action.wait) return action;
     const reqs = requirements(state, hs, work);
     const step = plan(ctx, { requirements: reqs, inventory, stations });
     if (step && step.kind !== 'blocked') return runPlannerStep(ctx, step, reqs.find(r => r.key === step.for));

@@ -21,6 +21,7 @@
 // The line starts at the rail on the stairs' top and only ever grows from its
 // end, so each new rail joins the previous one and curves shape themselves.
 
+const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
@@ -275,7 +276,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
         ctx.record('village_rail_ground_occupied', { at: cell, tries, by: Object.values(bot.entities)
           .filter((e) => e.position && e.position.distanceTo(v(cell)) < 2).map((e) => (e === bot.entity ? 'bot' : e.name)) });
         await sleep(1000, ctx.signal);
-        return { ...filled, waited: tries < 10 };
+        return tries < 10 ? waiting('retrying_villager_transport') : filled;
       }
       if (!filled.ok) return filled;
     }
@@ -408,7 +409,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
       ctx.record('village_cart_in_corridor', { k, rail: block?.name, powered: block?.getProperties?.().powered,
         velocity: cart.velocity ? +cart.velocity.norm().toFixed(3) : null });
       await sleep(2000, ctx.signal);
-      return { ok: false, reason: 'cart_in_corridor', waited: true };
+      return waiting('cart_in_corridor');
     }
     // Behind the cart: the next cell out along the line, or one more step past
     // its end; failing that (a fence, a hay bale) a cell beside that one, from
@@ -452,7 +453,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
       // Several pushes in vain at the entrance: break the cart there instead.
       memory.doorPushes = (memory.doorPushes || 0) + 1;
       if (k === 3 && memory.doorPushes % 4 === 0) return takeBackCart(ctx, bot.entities[cart.id] || cart);
-      return { ok: false, reason: 'corridor_full', waited: true };
+      return waiting('corridor_full');
     }
     return { ok: false, reason: 'cart_did_not_move' };
   }
@@ -464,7 +465,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
       const from = cart.position.clone();
       await sleep(500, ctx.signal);
       // Still rolling (down the stairs, along the tunnel): let it.
-      if (bot.entities[cart.id]?.position && bot.entities[cart.id].position.distanceTo(from) > 0.3) return { ok: true, waited: true };
+      if (bot.entities[cart.id]?.position && bot.entities[cart.id].position.distanceTo(from) > 0.3) return waiting('villager_cart_rolling');
       return push(ctx, cart);
     }
     // An empty cart on the stub: its villager walked off. Take the cart and the rail back.
@@ -519,7 +520,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
       for (const e of free) standingStill(e);
       if (!free.length) ctx.record('village_no_villager', { around: villagersAround().length, candidates: candidates().length });
       // Waiting for a villager to stop is no lack of progress (the brain doesn't count it).
-      return { ok: false, reason: free.length ? 'villagers_walking' : 'no_villager', waited: true };
+      return waiting(free.length ? 'villagers_walking' : 'no_villager');
     }
     // Only one the line can reach from its end.
     const blocked = blockedCells();
@@ -532,7 +533,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
     });
     if (!villager) {
       ctx.record('village_no_reachable_villager', { waiting: waiting.length, end });
-      return { ok: false, reason: 'no_reachable_villager', waited: true };
+      return waiting('no_reachable_villager');
     }
     memory.choosingSince = null;
     const result = await loadVillager(ctx, villager, cellOf(villager));

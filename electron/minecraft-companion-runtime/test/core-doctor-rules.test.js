@@ -1,6 +1,9 @@
 const { strict: assert } = require('node:assert');
 const { test } = require('node:test');
-const { createDoctor } = require('../core/doctor');
+const { createDoctor, recordDoctorInput } = require('../core/doctor');
+
+const completed = { ok: true, progress: true };
+const failureResult = (reason, kind = 'target') => ({ ok: false, kind, reason, facts: {} });
 
 const position = (x, z = 0) => ({ x, y: 64, z });
 const observation = { type: 'doctor_observation', position: position(0), dimension: 'overworld', isDay: true };
@@ -14,7 +17,7 @@ function ofRule(rows, rule) { return replay(rows).alerts.filter((event) => event
 
 test('D2 reports repeated failures in the same area and clears after arrival', () => {
   const failedLeg = { type: 'home_route_leg', from: position(2), position: position(3),
-    advanced: false, reason: 'path_timeout' };
+    advanced: false, result: failureResult('path_timeout') };
   const result = replay([[0, failedLeg], [12, failedLeg], [24, failedLeg], [25, { type: 'home_route_arrived' }]]);
   const alert = result.alerts.find((event) => event.rule === 'D2');
   assert.equal(alert.at, 24_000);
@@ -24,7 +27,7 @@ test('D2 reports repeated failures in the same area and clears after arrival', (
 });
 
 test('D2 ignores normal shelter and isolated failures at different targets', () => {
-  const targetFailure = { type: 'target_failure', reason: 'path_timeout', goal: 'homestead' };
+  const targetFailure = { type: 'target_failure', result: failureResult('path_timeout'), goal: 'homestead' };
   const rows = [[0, { ...observation, isDay: false, sleeping: true, sheltered: true }]];
   for (let i = 0; i < 3; i++) rows.push([i * 10 + 1, { ...targetFailure, position: position(3) }]);
   rows.push([31, observation]);
@@ -34,7 +37,7 @@ test('D2 ignores normal shelter and isolated failures at different targets', () 
 
 test('D3 detects repeated unchanged inventory work and repeated blocked placement', () => {
   const plan = { type: 'plan_step', kind: 'gather', key: 'log', for: 'planks', count: 2, behavior: 'goal:homestead' };
-  const failed = { type: 'behavior_finished', behavior: plan.behavior, ok: false, reason: 'path_timeout' };
+  const failed = { type: 'behavior_finished', behavior: plan.behavior, result: failureResult('path_timeout') };
   const unchanged = [[0, { ...observation, inventory: { oak_planks: 2 } }],
     [1, plan], [8, failed], [11, plan], [18, failed], [21, plan], [28, failed], [31, plan]];
   assert.equal(ofRule(unchanged, 'D3')[0].since, 1000);
@@ -43,7 +46,7 @@ test('D3 detects repeated unchanged inventory work and repeated blocked placemen
   const blocked = [];
   for (let i = 0; i < 4; i++) {
     blocked.push([i * 10, { type: 'build', what: 'wall', position: '1,64,2', behavior: 'goal:homestead' }],
-      [i * 10 + 1, { type: 'behavior_finished', behavior: 'goal:homestead', ok: false, reason: 'no_material' }]);
+      [i * 10 + 1, { type: 'behavior_finished', behavior: 'goal:homestead', result: failureResult('no_material', 'material') }]);
   }
   assert.match(ofRule(blocked, 'D3')[0].summary, /wall build at \(1, 64, 2\)/);
 });
@@ -165,7 +168,7 @@ test('D6 detects a new far target pursued after a successful dusk return', () =>
   const behavior = 'goal:homestead';
   const rows = [[0, { ...observation, home, position: position(90), timeOfDay: 11_639 }],
     [1, { type: 'night', action: 'dusk_home', behavior }],
-    [20, { type: 'behavior_finished', behavior, ok: true }],
+    [20, { type: 'behavior_finished', behavior, result: completed }],
     [28, { type: 'target_selected', behavior, position: '135,64,0' }],
     [30, { ...observation, home, position: position(52), timeOfDay: 12_239 }],
     [60, { ...observation, home, position: position(133), timeOfDay: 12_839, isDay: false }]];
@@ -179,14 +182,14 @@ test('D5 treats farm edits, inventory gain and successful mining as steps and cl
   const rows = [[0, farm], [0, start], [0, { ...observation, inventory: {} }]];
   for (let i = 1; i <= 14; i++) {
     if (i === 8) rows.push([235, { type: 'farm', action: 'plant', plot: '1,64,2', behavior: start.behavior }],
-      [237, { type: 'behavior_finished', behavior: start.behavior, ok: true }]);
+      [237, { type: 'behavior_finished', behavior: start.behavior, result: completed }]);
     rows.push([i * 30, { ...observation, inventory: i > 1 ? { wheat_seeds: 1 } : {} }]);
   }
   rows.push([421, { type: 'goal_set', goal: 'outfit', generation: 2 }],
     [422, { type: 'behavior_started', behavior: 'goal:outfit' }]);
   for (let i = 15; i <= 26; i++) {
     if (i === 22) rows.push([651, { type: 'mine_ore', position: '2,22,4', behavior: 'goal:outfit' }],
-      [653, { type: 'behavior_finished', behavior: 'goal:outfit', ok: true }]);
+      [653, { type: 'behavior_finished', behavior: 'goal:outfit', result: completed }]);
     rows.push([i * 30, observation]);
   }
   assert.deepEqual(ofRule(rows, 'D5'), []);
@@ -198,7 +201,7 @@ test('D5 treats confirmed grass breaking as work even when no seed drops', () =>
   for (let i = 0; i <= 12; i++) {
     rows.push([i * 30, { ...observation, inventory: {} }]);
     if (i === 7) rows.push([i * 30 + 1, { type: 'farm', action: 'seeds', behavior }],
-      [i * 30 + 5, { type: 'behavior_finished', ok: true, behavior }]);
+      [i * 30 + 5, { type: 'behavior_finished', result: completed, behavior }]);
   }
   assert.deepEqual(ofRule(rows, 'D5'), []);
   rows.splice(rows.findIndex(([at]) => at === 215), 0, [214, { type: 'explore', behavior, x: 10, z: 20 }]);
@@ -220,25 +223,25 @@ test('D7 does not count time waiting under shelter or idle with no demand', () =
   assert.deepEqual(ofRule(rows, 'D7'), []);
 });
 
-function switching(reason) {
+function switching(result) {
   const rows = [];
   for (let i = 0; i < 6; i++) {
     rows.push([i * 54, { type: 'autonomy_choice', card: 'homestead', goal: 'homestead' }],
-      [i * 54 + 2, { type: 'goal_yielded', card: 'homestead', goal: 'homestead', reason, until: (i * 54 + 52) * 1000 }]);
+      [i * 54 + 2, { type: 'goal_yielded', card: 'homestead', goal: 'homestead', result, until: (i * 54 + 52) * 1000 }]);
   }
   return rows;
 }
 
 test('D8 pairs each selection with a yield and reports sustained switching once', () => {
-  const alerts = ofRule(switching('adaptation_exhausted'), 'D8');
+  const alerts = ofRule(switching(failureResult('adaptation_exhausted')), 'D8');
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].at, 218_000);
   assert.deepEqual(alerts[0].evidence, [1, 3, 5, 7, 9, 2, 4, 6, 8, 10]);
 });
 
 test('D8 exempts intentional waits and ignores a yield without a preceding selection', () => {
-  const rows = switching('waiting_for_daylight');
-  rows.push([330, { type: 'goal_yielded', card: 'homestead', reason: 'adaptation_exhausted' }]);
+  const rows = switching({ ok: true, wait: { reason: 'dawn', until: null } });
+  rows.push([330, { type: 'goal_yielded', card: 'homestead', result: failureResult('adaptation_exhausted') }]);
   assert.deepEqual(ofRule(rows, 'D8'), []);
 });
 
@@ -251,12 +254,41 @@ test('D2 through D8 bound their retained evidence under bursts of distinct tasks
     const behavior = 'goal:' + card;
     apply({ type: 'autonomy_choice', card, goal: card });
     apply({ type: 'plan_step', kind: 'gather', key: card, count: 1, behavior });
-    apply({ type: 'target_failure', goal: card, position: position(i * 16), reason: 'path_timeout' });
+    apply({ type: 'target_failure', goal: card, position: position(i * 16), result: failureResult('path_timeout') });
     apply({ type: 'home_route_shore', phase: 'alternate', bank: position(i * 10), returns: 2 });
     apply({ type: 'build', what: 'wall', behavior, position: '1,64,2' });
-    apply({ type: 'goal_yielded', card, goal: card, reason: 'adaptation_exhausted' });
+    apply({ type: 'goal_yielded', card, goal: card, result: failureResult('adaptation_exhausted') });
   }
   assert.ok(doctor.size().rules <= 48 * 13 + 32 * 8 + 257 + 48 * 4 + 256 + 32 * 2 + 13 + 24 * 5 + 32);
   doctor.reset();
   assert.equal(doctor.size().rules, 0);
+});
+
+
+test('D5 requires gain in the planned material during mining', () => {
+  const behavior = 'goal:build_cobble_generator';
+  const rows = [[0, { type: 'goal_set', goal: 'build_cobble_generator' }],
+    [0, { type: 'behavior_started', behavior }],
+    [0, recordDoctorInput({ type: 'plan_step', kind: 'gather', key: 'raw_iron', for: 'water_bucket', behavior }, 3)]];
+  for (let i = 0; i <= 10; i++) {
+    if (i > 0) {
+      rows.push([i * 30 - 12, { type: 'mine_loot', behavior, position: i + ',12,0' }],
+        [i * 30 - 10, { type: 'behavior_finished', behavior, result: completed }]);
+    }
+    rows.push([i * 30, { ...observation, position: position(i * 3),
+      inventory: { raw_iron: 2, cobblestone: 21 + i, coal: 12 + i } }]);
+  }
+  assert.equal(ofRule(rows, 'D5')[0].at, 300_000);
+  rows.at(-1)[1].inventory.raw_iron = 3;
+  assert.deepEqual(ofRule(rows, 'D5'), []);
+});
+
+test('a typed daylight wait suppresses D1 and D5 without reading the reason text', () => {
+  const behavior = 'goal:homestead';
+  const rows = [[0, { type: 'goal_set', goal: 'homestead' }],
+    [0, { type: 'behavior_started', behavior }],
+    [0, { type: 'behavior_finished', behavior,
+      result: { ok: true, wait: { reason: 'ready_at_dawn', until: 400_000 } } }]];
+  for (let i = 0; i <= 12; i++) rows.push([i * 30, observation]);
+  assert.deepEqual(replay(rows).alerts, []);
 });

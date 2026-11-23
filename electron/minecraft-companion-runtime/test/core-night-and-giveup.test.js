@@ -11,6 +11,8 @@ const { perceive } = require('../core/perception');
 const { isSurveyNight } = require('../core/survey-plan-actions');
 const { createStance } = require('../core/stance');
 const { prepareShelterSeal, digIn } = require('../core/skills');
+const { factsOf, failure } = require('../core/action-result');
+const { ledgerFor, ledgerTarget } = require('../core/failure-ledger');
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -28,7 +30,7 @@ test('a goal that gives up ends at once with its reason, not after the stall bud
   const brain = createBrain({ perceive: () => ({}), onEvent: (e) => events.push(e), noProgressLimit: 40 });
   let runs = 0;
   brain.setGoal({ name: 'homestead', band: BAND.GOAL, isDone: () => false, progress: () => 0,
-    async run() { runs += 1; return { ok: false, reason: 'none_near_site:log within 128 of 0,64,0', giveUp: true }; } });
+    async run(ctx) { runs += 1; return failure('none_near_site:log within 128 of 0,64,0', { terminal: true }, ctx); } });
   await brain.tick();
   await wait(20);
   const failed = events.find((e) => e.type === 'goal_failed');
@@ -106,7 +108,8 @@ test('the carried sand can become a stable lid before the bunker site is selecte
   }
   const first = sandyBot();
   const result = await prepareShelterSeal(first.bot, {}, { want: 1 });
-  assert.deepEqual(result, { ok: true, gained: 1, method: 'craft_sandstone' });
+  assert.deepEqual(result, { ok: true, progress: true });
+  assert.deepEqual(factsOf(result), { gained: 1, method: 'craft_sandstone' });
   assert.equal(first.items[0].count, 3);
   const automatic = sandyBot();
   assert.equal((await digIn(automatic.bot, {}, { prepareSeal: true })).reason, 'no_bunker_spot');
@@ -218,12 +221,10 @@ test('buried by sand, the bot digs its head free before anything else', async ()
 
 test('hunting skips animals far above or below, and leaves an unreachable one alone for five minutes', async () => {
   const skills = require('../core/skills');
-  const { createBlacklist } = require('../core/blacklist');
   const bot = { entity: { position: new Vec3(0, 30, 0) }, entities: {
     1: { id: 1, name: 'pig', position: new Vec3(20, 70, 0) },
     2: { id: 2, name: 'pig', position: new Vec3(40, 32, 0) },
   } };
-  const blacklist = createBlacklist({ ttlMs: 60000 });
   const recorded = [];
   const ctx = { record: (type, data) => recorded.push({ type, ...data }), signal: new AbortController().signal };
   // goNear fails: the cave-level pig is out of reach.
@@ -231,13 +232,14 @@ test('hunting skips animals far above or below, and leaves an unreachable one al
   const original = actions.goNear;
   actions.goNear = async () => ({ ok: false, reason: 'path_timeout' });
   try {
-    const result = await skills.huntOne(bot, ctx, { mobs: ['pig'], dropMatch: () => true, radius: 96, blacklist });
+    const result = await skills.huntOne(bot, ctx, { mobs: ['pig'], dropMatch: () => true, radius: 96 });
     assert.equal(result.reason, 'path_timeout');
   } finally { actions.goNear = original; }
   // The pig on the hill forty blocks up was never picked; the one tried is set aside.
   assert.deepEqual(recorded.filter((r) => r.type === 'hunt_target').map((r) => r.distance), [40]);
-  assert.equal(blacklist.has('mob:2'), true);
-  assert.equal(blacklist.has('mob:1'), false);
+  const skipped = id => ledgerFor(bot).skip(ledgerTarget(bot, 'hunt_far', bot.entities[id].position, { entity: id }));
+  assert.ok(skipped(2));
+  assert.equal(skipped(1), null);
 });
 
 // Regressed, this test hangs rather than fails: the starved loop starves the

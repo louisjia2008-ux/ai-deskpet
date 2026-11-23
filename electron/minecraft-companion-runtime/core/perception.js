@@ -59,6 +59,7 @@ function perceive(bot, { hostileRange = 16, now = Date.now } = {}) {
     position: position.clone(),
     onGround: self.onGround === true,
     inWater: self.isInWater === true,
+    selfStuck: Boolean(bot.companionSelfStuck?.state()),
     oxygen: Number.isFinite(bot.oxygenLevel) ? bot.oxygenLevel : null,
     isDay: isDaylight(timeOfDay),
     timeOfDay,

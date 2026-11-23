@@ -9,6 +9,7 @@ const { createBrain, BAND } = require('../core/brain');
 const { createCompanion } = require('../core/companion');
 const { createSurvivalBehaviors, enabledDuringSurvey } = require('../core/behaviors/survival');
 const { sleep } = require('../core/confirm');
+const { factsOf } = require('../core/action-result');
 
 const site = { x: 0.5, z: 0.5 };
 const origin = new Vec3(0.5, 64, 0.5);
@@ -118,7 +119,9 @@ test('survey hunger uses a safe owned food item and waits for server-visible foo
   const state = { alive: true, health: 20, food: 6, position: origin, hostiles: [], inventory: { bread: 2, chorus_fruit: 1 } };
   const eat = createSurvivalBehaviors({ bot, surveyArea: () => site }).find(({ name }) => name === 'eat');
   assert.equal(eat.want(state), 1);
-  assert.deepEqual(await eat.run(context(state)), { ok: true, ate: 'bread' });
+  const result = await eat.run(context(state));
+  assert.deepEqual(result, { ok: true, progress: true });
+  assert.equal(factsOf(result).ate, 'bread');
   assert.equal(released, true);
   assert.equal(fruit.count, 1);
   assert.equal(bread.count, 1);

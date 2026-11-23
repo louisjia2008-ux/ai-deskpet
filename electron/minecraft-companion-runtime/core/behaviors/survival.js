@@ -3,13 +3,13 @@
 // goal while one of them wants the body and the goal re-plans afterwards.
 // Kept deliberately simple; hardening them is the next milestone.
 
+const { complete, waiting, factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
 const { BAND } = require('../brain');
 const { sleep, waitUntil, abortError } = require('../confirm');
 const { isFireResistancePotion, hasEffect } = require('../netherStructures');
-const { createBlacklist } = require('../blacklist');
 const { isHostile } = require('../perception');
 const { createStance } = require('../stance');
 const { goals } = require('mineflayer-pathfinder');
@@ -310,7 +310,7 @@ const FEEDING_RANGE = 32;
 
 function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defaultSkills, isFood, spare = () => false,
   feeding = () => false, home = () => null, activeGoal = () => null, surveyArea = () => null,
-  suppressDeathDrops = () => false, thresholds = {} } = {}) {
+  suppressDeathDrops = () => false, autonomousHunt = false, thresholds = {} } = {}) {
   // At night an archer is not chased far: out there more of them spawn, and
   // the way home to bed is the better defence.
   const t = { ghastRange: 48, escapeHealth: 6, healHealth: 10, escapeRange: 6, defendRange: 5, rangedRange: 14, nightRangedRange: 6, rangedHealth: 14, eatFood: 14,
@@ -318,7 +318,6 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     walkSpeed: 4, dropsMaxDistance: 600, swimScale: 1, provisionRange: 160,
     stockFood: 6, stockRange: 24, stockWindowMs: 60000,
     ...thresholds };
-  const huntBlacklist = createBlacklist({ ttlMs: 60000 });
   const exploreMemory = {};
   let stuckStreak = 0;
   const foodCheck = isFood || ((name) => Boolean(bot.registry.foodsByName?.[name]));
@@ -550,11 +549,12 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       } finally {
         clearInterval(tracker);
       }
-      if (result.ok) {
+      const { died, hits, yielded } = factsOf(result);
+      if (result.ok || yielded) {
         // What fell where it died (a skull lost to lava shows here as nothing).
-        if (result.died && SKULL_DROPPERS.has(threat.name)) await sleep(600, ctx.signal);
-        const drops = result.died && SKULL_DROPPERS.has(threat.name) ? droppedNear(last, 6) : undefined;
-        ctx.record('defend_result', { mob: threat.name, died: result.died === true, hits: result.hits, ...(result.yielded ? { yielded: true } : {}), ...(drops ? { drops, y: Math.round(last.y) } : {}) });
+        if (died && SKULL_DROPPERS.has(threat.name)) await sleep(600, ctx.signal);
+        const drops = died && SKULL_DROPPERS.has(threat.name) ? droppedNear(last, 6) : undefined;
+        ctx.record('defend_result', { mob: threat.name, died: died === true, hits, ...(yielded ? { yielded: true } : {}), ...(drops ? { drops, y: Math.round(last.y) } : {}) });
       }
       // Spiders drop string (wool where there are no sheep); blazes and wither
       // skeletons fought off in a fortress drop what the expedition is there for.
@@ -583,7 +583,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       if (!surveyArea()) return actions.eat(bot, ctx);
       const before = bot.food;
       const result = await actions.eat(bot, ctx, { survey: true, accepts: safeSurveyItem });
-      if (result.ok) ctx.record('survey_ate', { item: result.ate, before, after: bot.food });
+      if (result.ok && result.progress !== false) ctx.record('survey_ate', { item: factsOf(result).ate, before, after: bot.food });
       return result;
     },
   };
@@ -760,7 +760,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       lavaStuck = { count: Date.now() - lavaStuck.last < 120000 ? lavaStuck.count + 1 : 1, last: Date.now() };
       ctx.record('still_in_lava', { tries: lavaStuck.count });
     }
-    return { ok: true, waited: !done };
+    return done ? complete() : waiting('escaping_lava');
   };
   // A pocket of lava under a low roof has no shore with room to stand: dig
   // out the two blocks above a wall beside the bot, so the wall becomes one.
@@ -1059,7 +1059,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
 
   // Buried (sand fell in on it on the climb out of a pit): eyes inside a full
   // block cost a heart every half second. Nothing else noticed: the bot ate,
-  // then waited to heal in there, and suffocated. Dig the head free first.
+  // then hiddenFor to heal in there, and suffocated. Dig the head free first.
   const fullCube = (b) => b?.boundingBox === 'block' && Array.isArray(b.shapes) && b.shapes.length === 1
     && b.shapes[0].join(',') === '0,0,0,1,1,1';
   const eyeBlock = () => (bot.entity?.position ? bot.blockAt(bot.entity.position.offset(0, 1.62, 0).floored()) : null);
@@ -1136,19 +1136,22 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       const near = feeding();
       const stocking = stockingUp(ctx.perceive());
       const result = await skills.huntOne(bot, ctx, { mobs: FOOD_ANIMALS, dropMatch: foodCheck,
-        radius: stocking ? t.stockRange : near ? FEEDING_RANGE : 96, blacklist: huntBlacklist, accept: (e) => !spare(e),
-        targetGoal: bot.companionTargets ? 'stock_food' : null });
+        radius: stocking ? t.stockRange : near ? FEEDING_RANGE : 96, accept: (e) => !spare(e),
+        targetGoal: autonomousHunt ? 'stock_food' : null });
       if (result.ok) lastHuntAt = Date.now();
       // Nothing to hunt in sight: berries, else look further afield instead of waiting to starve.
       // Could not reach anything: the bot itself is probably stuck (tree top, ledge).
       if (['NoPath', 'Timeout', 'path_timeout', 'no_progress', 'not_arrived', 'chase_stuck'].includes(result.reason)) {
         stuckStreak += 1;
-        if (stuckStreak >= 2 && !result.sourceHandled) { stuckStreak = 0; return actions.unstick(bot, ctx); }
+        if (stuckStreak >= 2 && result.kind === 'target' && !factsOf(result).target) {
+          stuckStreak = 0;
+          return actions.unstick(bot, ctx);
+        }
         return result;
       }
       stuckStreak = 0;
       if (result.reason === 'no_mob_in_range' && !near) {
-        const berries = await skills.pickBerries(bot, ctx, { blacklist: huntBlacklist });
+        const berries = await skills.pickBerries(bot, ctx);
         if (berries.ok || berries.reason !== 'no_berries') return berries;
         // Not out of reach of home: a search for food once ran 1000 blocks
         // off, and the farm and the house were then out of reach.
@@ -1287,13 +1290,13 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
         ctx.record('hide', { from: 'enderman' });
         const dug = await skills.digIn(bot, ctx);
         if (!dug.ok) return dug;
-        hidden = { bunker: dug.bunker, since: Date.now() };
+        hidden = { bunker: factsOf(dug).bunker, since: Date.now() };
         return { ok: true };
       }
-      const waited = Date.now() - hidden.since;
-      if (waited < 90000 && (waited < 25000 || angryEnderman(ctx.perceive(), 24))) {
+      const hiddenFor = Date.now() - hidden.since;
+      if (hiddenFor < 90000 && (hiddenFor < 25000 || angryEnderman(ctx.perceive(), 24))) {
         await sleep(2000, ctx.signal);
-        return { ok: true, waited: true };
+        return waiting('enderman_shelter');
       }
       const out = await skills.digOut(bot, ctx, hidden.bunker);
       hidden = null;
@@ -1434,7 +1437,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
           const dug = await skills.digIn(bot, ctx);
           if (dug.ok) {
             await sleep(8000, ctx.signal);
-            await skills.digOut(bot, ctx, dug.bunker);
+            await skills.digOut(bot, ctx, factsOf(dug).bunker);
           }
         }
         // Wait out its attention while covered; give up after a few seconds either way.

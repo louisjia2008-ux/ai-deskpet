@@ -5,6 +5,7 @@ const { createReadStream } = require('node:fs');
 const { createInterface } = require('node:readline');
 const { parseArgs } = require('node:util');
 const { createDoctor, groupIncidents, D1 } = require('../core/doctor');
+const { createArchiveAdapter } = require('./doctor-replay-legacy');
 
 function corePayload(row) {
   const envelope = row.event || row;
@@ -13,7 +14,18 @@ function corePayload(row) {
   return row.type ? row : null;
 }
 
-async function replay(input, { stationaryOnly = false } = {}) {
+function replayInput(row, payload) {
+  if (row.experiment === 'sample') {
+    return { ...row.observation, type: 'doctor_observation', doctorAt: Date.parse(row.observedAt),
+      engine: row.engine, paused: row.engine?.paused, survey: row.engine?.goal?.name === 'survey_plan' };
+  }
+  if (row.type === 'core' || row.event?.type === 'core') {
+    return { ...payload, doctorAt: payload.doctorAt ?? (row.event || row).at };
+  }
+  return row.type === 'event' ? null : payload;
+}
+
+async function replay(input, { stationaryOnly = false, measureRequiredMaterials = false } = {}) {
   const started = performance.now();
   const alerts = [];
   const recordedAlerts = [];
@@ -29,6 +41,7 @@ async function replay(input, { stationaryOnly = false } = {}) {
     }
   };
   let doctor = createDoctor({ onStationarySegment, stationaryOnly });
+  let convert = createArchiveAdapter({ measureRequiredMaterials });
   let generation;
   let recordedInput = false;
   let legacySequence = 0;
@@ -64,6 +77,7 @@ async function replay(input, { stationaryOnly = false } = {}) {
     if (generation != null && rowGeneration != null && generation !== rowGeneration) {
       finish();
       doctor = createDoctor({ onStationarySegment, stationaryOnly });
+      convert = createArchiveAdapter({ measureRequiredMaterials });
       recordedInput = false;
       legacySequence = 0;
       sequenceLines.clear();
@@ -83,8 +97,7 @@ async function replay(input, { stationaryOnly = false } = {}) {
     sequenceLines.set(sequence, lines);
 
     const before = performance.now();
-    const inputRow = row.type === 'core' ? { type: 'event', event: row } : row;
-    const emissions = doctor.accept(inputRow, sequence);
+    const emissions = doctor.accept(convert(replayInput(row, payload), sequence));
     const durationMs = performance.now() - before;
     acceptMs += durationMs;
     acceptMaxMs = Math.max(acceptMaxMs, durationMs);
@@ -114,6 +127,7 @@ async function main(args) {
     allowPositionals: true,
     options: {
       json: { type: 'boolean' },
+      'measure-required-materials': { type: 'boolean' },
       'stationary-stdin': { type: 'boolean' },
     },
   });
@@ -123,8 +137,10 @@ async function main(args) {
     console.log(JSON.stringify({ stationarySegments, longestStationarySegment, missingSamples }));
     return;
   }
-  if (positionals.length !== 1) throw new Error('Usage: node tools/doctor-replay.js [--json] <core.jsonl | ->');
-  const result = await replay(openInput(positionals[0]));
+  if (positionals.length !== 1) throw new Error('Usage: node tools/doctor-replay.js [--json] [--measure-required-materials] <core.jsonl | ->');
+  const result = await replay(openInput(positionals[0]), {
+    measureRequiredMaterials: values['measure-required-materials'],
+  });
   if (values.json) {
     console.log(JSON.stringify(result));
     return;

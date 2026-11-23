@@ -60,7 +60,7 @@ for (const [kind, elapsed] of [['no_sheep', 45], ['mine_danger', 1440]]) {
     const position = { x: 96, y: 65, z: 55 };
     const reopen = async (args) => createAdaptation({ now: () => at, store: await connect(dataDir, args) });
     const first = await reopen(config);
-    first.teach(kind, position, 'overworld', 'fixture_failure', 40);
+    first.teach(kind, position, 'overworld', 'NoPath', 40);
     assert.equal(fs.statSync(path.join(dataDir, 'adaptation.json')).mode & 0o777, 0o600);
     const restarted = await reopen({ ...config, port: 28002, spawn: [40, 70, 40] });
     assert.equal(restarted.avoids(kind, position), true);

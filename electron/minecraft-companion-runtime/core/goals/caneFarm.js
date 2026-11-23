@@ -15,6 +15,7 @@
 // Only cane gained after the column was cut while the bot waited counts.
 
 const { Vec3 } = require('vec3');
+const { factsOf } = require('../action-result');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -132,7 +133,7 @@ function createCaneFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
     await actions.goTo(bot, ctx, away, { timeoutMs: 15000, arrived: () => !overDig() && !inWaterHole() });
     if (!overDig() && !inWaterHole()) return { ok: true };
     const result = await actions.unstick(bot, ctx);
-    ctx.record('device_step_off', { result: result.ok ? result.moved : result.reason });
+    ctx.record('device_step_off', { result: result.ok ? factsOf(result).moved : result.reason });
     return overDig() || inWaterHole() ? { ok: false, reason: 'trapped_in_device' } : { ok: true };
   }
 

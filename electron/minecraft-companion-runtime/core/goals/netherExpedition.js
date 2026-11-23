@@ -12,6 +12,7 @@
 // Every run() decides from where the bot is and what it holds, like the
 // quartz goal: a death in the nether sends it back through the portal.
 
+const { factsOf, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
@@ -39,7 +40,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
   for (const [name, value] of Object.entries({ blazeRods, witherSkulls, trades, skullTries })) {
     if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${name} must be a non-negative integer`);
   }
-  const blacklist = createBlacklist({ ttlMs: 120000 });
+  const blacklist = createBlacklist({ bot, namespace: 'nether', ttlMs: 120000, durations: [30000, 60000] });
   const memory = {
     explore: {}, fortress: null, bastion: null, spawner: null, visited: { fortress: false, bastion: false },
     trades: 0, barter: {}, kills: {}, witherKills: 0, scannedAt: 0, scannedFrom: null, waitSince: 0, towerFails: {},
@@ -579,11 +580,11 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
       if (near && !(apples >= 2 && inFortress())) {
         ctx.record('fall_back', { health: Math.round(state.health), from: near.name });
         const moved = await actions.fleeFrom(bot, ctx, near.position, { distance: 16, timeoutMs: 10000 });
-        return moved.ok || bot.entity.position.distanceTo(here) >= 4 ? { ok: true, waited: true } : moved;
+        return moved.ok || bot.entity.position.distanceTo(here) >= 4 ? waiting('dimension_action_pending') : moved;
       }
       actions.haltBody(bot);
       await sleep(2000, ctx.signal);
-      return { ok: true, waited: true };
+      return waiting('dimension_action_pending');
     }
     // Wither skeletons spawn anywhere in the fortress's bounds, on the
     // netherrack under and beside the decks too: one is worth a short climb
@@ -615,7 +616,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
       });
       if (result.ok) {
         memory.kills[name] = (memory.kills[name] || 0) + 1;
-        ctx.record('kill', { mob: name, kills: memory.kills[name], gained: result.gained });
+        ctx.record('kill', { mob: name, kills: memory.kills[name], gained: factsOf(result).gained });
       }
       return result;
     }
@@ -659,7 +660,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
       }
       actions.haltBody(bot);
       await sleep(2000, ctx.signal);
-      return { ok: true, waited: true };
+      return waiting('dimension_action_pending');
     }
     memory.waitSince = 0;
     return patrol(ctx, memory.fortress, 'fortress', state);
@@ -700,7 +701,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
     const result = await actions.goNear(bot, ctx, pick.offset(0, 1, 0), 2, { timeoutMs: 45000 });
     const high = pick.y + 1 - here.y > CLIMB;
     memory.highMisses = !result.ok && high ? (memory.highMisses || 0) + 1 : 0;
-    return result.ok ? { ok: true, waited: true } : result;
+    return result.ok ? waiting('dimension_action_pending') : result;
   }
 
   /** No floor known yet (seen from afar): walk towards the first block seen. */
@@ -858,7 +859,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
     if (brute) {
       ctx.record('avoid_brute', { distance: Math.round(brute.position.distanceTo(here)) });
       const moved = await actions.fleeFrom(bot, ctx, brute.position.clone(), { distance: 20, timeoutMs: 15000 });
-      return moved.ok || bot.entity.position.distanceTo(here) >= 4 ? { ok: true, waited: true } : moved;
+      return moved.ok || bot.entity.position.distanceTo(here) >= 4 ? waiting('dimension_action_pending') : moved;
     }
     // Piglins further off or on another level: walk over to the nearest one
     // that no brute stands beside, then barter from up close.
@@ -871,7 +872,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
       ctx.record('approach', { kind: 'piglin', distance: Math.round(far.position.distanceTo(here)), dy: Math.round(far.position.y - here.y) });
       const moved = await actions.goNear(bot, ctx, far.position.clone(), 3, { timeoutMs: 45000 });
       if (!moved.ok && bot.entity.position.distanceTo(here) < 4) blacklist.add(`goto-piglin:${far.id}`, moved.reason, 60000);
-      return moved.ok || bot.entity.position.distanceTo(here) >= 4 ? { ok: true, waited: true } : moved;
+      return moved.ok || bot.entity.position.distanceTo(here) >= 4 ? waiting('dimension_action_pending') : moved;
     }
     // No piglin in sight: walk around the bastion's edge to find one.
     const angle = Math.random() * Math.PI * 2;
@@ -879,7 +880,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
     const z = Math.round(centre.z + Math.sin(angle) * 24);
     ctx.record('patrol', { kind: 'bastion', target: `${x},${z}` });
     const result = await actions.goTo(bot, ctx, new goals.GoalNearXZ(x, z, 4), { timeoutMs: 30000, arrived: () => true });
-    return result.ok || bot.entity.position.distanceTo(here) > 8 ? { ok: true, waited: true } : result;
+    return result.ok || bot.entity.position.distanceTo(here) > 8 ? waiting('dimension_action_pending') : result;
   }
 
   // ---- loot on the ground ---------------------------------------------------
@@ -957,7 +958,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
     // explore attempts from there would only burn the no-progress budget.
     if (bot.entity?.isInLava) {
       await sleep(1000, ctx.signal);
-      return { ok: true, waited: true };
+      return waiting('dimension_action_pending');
     }
     // Run out of blocks, a fall into the lava sea has no way out and the walk
     // home has nothing to bridge with (a run with every rod, skull and trade

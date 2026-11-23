@@ -202,15 +202,20 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   let goalOwner = null;
   const priorHomestead = bot.companionHomestead;
   const priorHomeTarget = bot.companionHomeTarget;
+  const priorFailureLedger = bot.companionFailureLedger;
   const homestead = () => goalOwner?.goal?.name === 'homestead' ? goalOwner.goal : director?.memory.homestead;
   bot.companionHomestead = homestead;
   const atHome = (position, world) => String(world || 'overworld').replace(/^minecraft:/, '') === 'overworld'
     && (homeContains(homestead()?.memory?.house, position) || (position && director?.memory.extraChests
       ?.some(p => p.x === Math.floor(position.x) && p.y === Math.floor(position.y) && p.z === Math.floor(position.z))));
   bot.companionHomeTarget = atHome;
-  const adaptation = autonomy ? require('./adaptation').createAdaptation({ store: adaptationStore, onEvent, atHome,
-    playerProtected: (position, world) => world === dimension(bot) && bot.companionPlayerBlock?.(position) }) : null;
-  if (adaptation) bot.companionTargets = adaptation.targets;
+  const playerProtected = (position, world) => world === dimension(bot)
+    && bot.companionPlayerBlock?.(new Vec3(position.x, position.y, position.z));
+  const adaptation = autonomy ? require('./adaptation').createAdaptation({ store: adaptationStore, onEvent, atHome, playerProtected }) : null;
+  const failureLedger = adaptation?.failureLedger || require('./failure-ledger').createFailureLedger({
+    protectedTarget: (position, world) => atHome(position, world) || playerProtected(position, world),
+  });
+  bot.companionFailureLedger = failureLedger;
   const selfStuck = require('./self-stuck').createSelfStuck(bot, { emit: (type, data) => onEvent({ type, at: Date.now(), ...data }) });
   const priorSelfStuck = bot.companionSelfStuck;
   bot.companionSelfStuck = selfStuck;
@@ -258,7 +263,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   const homeMaintenance = createHomeMaintenance({ bot, home: () => director?.memory.homestead,
     activeGoal: () => brain?.status().goal?.name });
   const homeEscape = require('./behaviors/homeEscape').createHomeEscape({ bot, tracker: selfStuck, home: homestead });
-  const behaviors = [...createSurvivalBehaviors({ bot, spare: (entity) => spare(entity),
+  const behaviors = [...createSurvivalBehaviors({ bot, spare: (entity) => spare(entity), autonomousHunt: autonomy,
     feeding: () => FEEDING_GOALS.has(brain?.status().goal?.name),
     // The departure gate is 18; the ordinary survival threshold is 14.
     // Otherwise a healthy bot with food in hand can wait forever at 15–17.
@@ -711,6 +716,10 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       if (bot.companionHomeTarget === atHome) {
         if (priorHomeTarget === undefined) delete bot.companionHomeTarget;
         else bot.companionHomeTarget = priorHomeTarget;
+      }
+      if (bot.companionFailureLedger === failureLedger) {
+        if (priorFailureLedger === undefined) delete bot.companionFailureLedger;
+        else bot.companionFailureLedger = priorFailureLedger;
       }
       if (bot.companionProtectBlock === director.memory.homestead?.memory.protectBlock) {
         if (priorHomeProtection === undefined) delete bot.companionProtectBlock;

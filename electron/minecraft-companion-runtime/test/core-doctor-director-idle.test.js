@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { createDoctor } = require('../core/doctor');
+const { createArchiveAdapter } = require('../tools/doctor-replay-legacy');
 
 const cooldown = { type: 'autonomy_cooldown', card: 'homestead', until: 300_000 };
 const cooling = { id: 'homestead', skipped: 'cooldown', score: 0 };
@@ -9,9 +10,10 @@ const daytime = { type: 'doctor_observation', dimension: 'overworld', isDay: tru
 
 function replay(rows) {
   const doctor = createDoctor();
+  const convert = createArchiveAdapter();
   const idle = [];
   for (const [index, [seconds, row]] of rows.entries()) {
-    idle.push(...doctor.accept({ ...row, at: seconds * 1000 }, index + 1).filter(({ rule }) => rule === 'D7'));
+    idle.push(...doctor.accept(convert({ ...row, at: seconds * 1000 }, index + 1)).filter(({ rule }) => rule === 'D7'));
   }
   return { idle, active: doctor.getStatus().active.some(({ rule }) => rule === 'D7') };
 }

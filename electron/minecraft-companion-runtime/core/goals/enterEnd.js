@@ -7,6 +7,7 @@
 // eye in every empty frame and hop into the portal. Every run() decides from
 // what is in sight now; the sightings are the only thing remembered.
 
+const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultActions = require('../actions');
@@ -17,7 +18,6 @@ const { rememberPortal } = require('./endReturn');
 const defaultSkills = require('../skills');
 const { planNext } = require('../planner');
 const { KNOWLEDGE, countKey } = require('../knowledge');
-const { createBlacklist } = require('../blacklist');
 const { createPlannerRunner } = require('./common');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
@@ -61,7 +61,7 @@ function createEnterEndGoal({ bot, actions = defaultActions, skills = defaultSki
   const memory = { sightings: [], estimate: null, ring: null, thrown: 0, broken: 0, walked: 0, entered: false, closest: Infinity,
     toolSteps: 0, toolsReady: false, toolUses: 0 };
   const toolMemory = { shortfall: {} };
-  const planner = createPlannerRunner({ bot, skills, kb, memory: toolMemory, blacklist: createBlacklist({ ttlMs: 60000 }) });
+  const planner = createPlannerRunner({ bot, skills, kb, memory: toolMemory, purpose: 'farm_gather' });
   const pickaxeUses = () => bot.inventory.items().filter((i) => i.name.endsWith('_pickaxe')).reduce((n, i) => {
     const max = i.maxDurability ?? bot.registry.itemsByName?.[i.name]?.maxDurability ?? 0;
     return n + Math.max(0, max - (i.durabilityUsed ?? 0));
@@ -223,7 +223,7 @@ function createEnterEndGoal({ bot, actions = defaultActions, skills = defaultSki
     // All filled: the portal blocks are on their way from the server.
     if (empty.length === 0) {
       await end.waitUntil(() => stronghold.portalLit(bot, ring.center), { timeoutMs: 3000, signal: ctx.signal });
-      return { ok: true, waited: true };
+      return waiting('dimension_action_pending');
     }
     if (empty.length > (bot.inventory.items().filter((i) => i.name === 'ender_eye').reduce((n, i) => n + i.count, 0))) {
       return fail('not_enough_eyes', { empty: empty.length });

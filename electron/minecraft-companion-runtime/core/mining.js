@@ -17,6 +17,8 @@ const { goals } = require('mineflayer-pathfinder');
 const defaultActions = require('./actions');
 const defaultSkills = require('./skills');
 const { posKey } = require('./blacklist');
+const { ledgerFor, ledgerTarget, recordTarget } = require('./failure-ledger');
+const { failure, resultFrom } = require('./action-result');
 const { abortError } = require('./confirm');
 const { blockTarget, watchDestination } = require('./target-recovery');
 const { pickItem, stableSolid } = require('./materials');
@@ -46,23 +48,18 @@ const MAX_RETURN_LEGS = 80; // y=-53 and a long main tunnel: some 40 legs from t
 const MAX_TURNS = 4;
 // Directions (relative to the staircase) a boxed-in main tunnel restarts in from its foot.
 const RESTART_SIDES = [1, 3];
-const ENTRANCE_COOLDOWN_MS = 10 * 60_000;
 const ENTRANCE_SPACING = 8;
-const cooledEntrances = new WeakMap();
 
-function entranceCooling(bot, p, now = Date.now()) {
-  const entries = cooledEntrances.get(bot);
-  if (!entries) return false;
-  for (const [key, entry] of entries) if (entry.until <= now) entries.delete(key);
-  return [...entries.values()].some(({ at }) => Math.hypot(at.x - p.x, at.z - p.z) < ENTRANCE_SPACING);
+function entranceCooling(bot, p) {
+  return ledgerFor(bot).regionHard(p, ledgerTarget(bot, 'mine_entrance', p).dimension, 'mine_entrance');
 }
 
-function coolEntrance(bot, ctx, p, reason, now = Date.now()) {
-  const entries = cooledEntrances.get(bot) || new Map();
-  cooledEntrances.set(bot, entries);
-  const at = { x: p.x, y: p.y, z: p.z }, until = now + ENTRANCE_COOLDOWN_MS;
-  entries.set(posKey(p), { at, until });
-  ctx?.record('mine_entrance_cooled', { at: posKey(p), reason, until });
+function coolEntrance(bot, ctx, p, cause) {
+  const spec = ledgerTarget(bot, 'mine_entrance', p, { radius: ENTRANCE_SPACING });
+  const result = typeof cause === 'string' ? failure('mine_entrance_rejected', { originalReason: cause }, ctx)
+    : resultFrom(cause, ctx, bot);
+  const saved = ledgerFor(bot, ctx || {}).record(result, spec);
+  if (saved) ctx?.record('mine_entrance_cooled', { at: posKey(p), reason: result.facts.originalReason || result.reason, until: saved.retryAt });
 }
 
 const add = (p, dx, dy, dz) => ({ x: p.x + dx, y: p.y + dy, z: p.z + dz });
@@ -193,7 +190,7 @@ async function tossRubble(bot, ctx) {
  * Does one thing towards ore of `blocks` at height `y`: mine a visible ore,
  * walk back to the tunnel front, or dig one more block of tunnel.
  */
-async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, start = null, closed = false,
+async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, closed = false,
   actions = defaultActions, skills = defaultSkills, observeDestination }) {
   const feet = bot.entity.position.floored();
   if (memory.mine?.floorRepair) return repairFloor(bot, ctx, memory.mine, skills);
@@ -221,8 +218,11 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
   if (memory.mine) {
     const wanted = (name) => blocks(name) || LOOT_ORES.has(name);
     const target = (p) => blockTarget(bot, 'diamond', 'mine_ore', p);
+    const ledger = ledgerFor(bot, ctx), spec = p => ledgerTarget(bot, 'ore', p);
+    const underRoute = p => posKey(p.offset(0, 1, 0)) in memory.mine.cells;
+    const hasFiller = pickItem('filler', bot.inventory.items());
     const ore = visibleOre(bot, wanted, bot.entity.position)
-      .filter((b) => !blacklist.has(posKey(b.position)) && harvestable(bot, b)
+      .filter((b) => !ledger.skip(spec(b.position)) && harvestable(bot, b) && (!underRoute(b.position) || hasFiller)
         && (!observeDestination || !ctx.adapt.targets.avoid(target(b.position)))
         && (!closed || (actions.withinReach(bot, b.position) && FACES.every(([dx, dy, dz]) => {
           const p = b.position.offset(dx, dy, dz), adjacent = bot.blockAt(p);
@@ -232,19 +232,17 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
       // An ore under a recorded walking cell is part of the route home. Take
       // it only when the hole can be filled again, and confirm that repair
       // before allowing the tunnel to advance.
-      const routeFloor = posKey(ore.position.offset(0, 1, 0)) in memory.mine.cells;
-      if (routeFloor && !pickItem('filler', bot.inventory.items())) { blacklist.add(posKey(ore.position), 'route_floor'); return { ok: true, progress: false }; }
+      const routeFloor = underRoute(ore.position);
       ctx.record(blocks(ore.name) ? 'mine_ore' : 'mine_loot', { block: ore.name, position: posKey(ore.position) });
       const approach = () => actions.goToDig(bot, ctx, ore, { timeoutMs: 15000 });
       const reach = observeDestination ? await watchDestination(bot, ctx, target(ore.position), observeDestination, approach,
         { knownMine: memory.mine }) : await approach();
-      if (!reach.ok) {
-        if (!reach.sourceHandled && !reach.waited && !actions.isHomeTarget?.(bot, ore.position)) blacklist.add(posKey(ore.position), reach.reason);
-        return reach;
-      }
+      const remember = result => recordTarget(bot, ctx, result, spec(ore.position), { leaf: !observeDestination });
+      if (!reach.ok || reach.wait) return remember(reach);
       const block = bot.blockAt(ore.position) || ore;
       const dug = await actions.digBlock(bot, ctx, block, { tool: pickFor(bot, block) });
-      if (!dug.ok) { blacklist.add(posKey(ore.position), dug.reason); return dug; }
+      if (!dug.ok) return remember(dug);
+      ledger.clearOnSuccess(spec(ore.position));
       if (routeFloor) memory.mine.floorRepair = { x: ore.position.x, y: ore.position.y, z: ore.position.z };
       // The hole is ours, not a cave: later tunnel steps may open into it.
       memory.mine.open ||= {};
@@ -276,7 +274,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
     const out = await leaveMine(bot, ctx, memory, actions);
     if (out?.ok) { mine.exitFailures = 0; return out; }
     if (out && (mine.exitFailures = (mine.exitFailures || 0) + 1) < 3) return out;
-    coolEntrance(bot, ctx, mine.entrance, out?.reason || 'exhausted');
+    coolEntrance(bot, ctx, mine.entrance, out || 'exhausted');
     memory.mineDir = (mine.dir + 1) % 4;
     memory.mine = null;
     return fail('mine_exhausted');
@@ -289,7 +287,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
     const back = (await walkTunnel(bot, ctx, mine, 'front', actions))
       || await actions.goTo(bot, ctx, new goals.GoalBlock(front.x, front.y, front.z),
         { timeoutMs: 8000, arrived: (at) => at.floored().equals(front) });
-    if (back.reason === 'aborted' || ctx.signal?.aborted) return back;
+    if (back.wait || ['start', 'interrupted'].includes(back.kind) || back.reason === 'aborted' || ctx.signal?.aborted) return back;
     // Legs that each succeed yet never end at the front (a cell that cannot
     // be stood in any more) loop as surely as failing ones.
     mine.returns = (mine.returns || 0) + 1;
@@ -299,7 +297,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, blacklist, sta
       const reason = back.ok ? 'front_unreached' : back.reason;
       ctx.record('recovery_switch', { task: 'mine_front', to: 'retire_entrance', entrance: posKey(mine.entrance), reason });
       ctx.record('mine_abandoned', { reason });
-      coolEntrance(bot, ctx, mine.entrance, reason);
+      coolEntrance(bot, ctx, mine.entrance, back.ok ? reason : back);
       mine.retiring = true;
     }
     return { ...back, progress: advanced };

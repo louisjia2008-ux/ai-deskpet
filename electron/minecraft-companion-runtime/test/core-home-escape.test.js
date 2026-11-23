@@ -7,7 +7,7 @@ const { goals } = require('mineflayer-pathfinder');
 const { createStarterHouse } = require('../core/blueprints/starterHouse');
 const { createHomesteadGoal } = require('../core/goals/homestead');
 const { createSelfStuck } = require('../core/self-stuck');
-const { createTargetMemory, targetsFor } = require('../core/target-memory');
+const { createFailureLedger, targetsFor } = require('../core/failure-ledger');
 const { topology, safeStand } = require('../core/home-topology');
 const { drySiteAccess } = require('../core/dry-route');
 const { posKey } = require('../core/blacklist');
@@ -108,7 +108,7 @@ test('three different path failures roll back only the stationary cluster, inclu
   const events = [];
   let now = 0;
   const bot = { entity: { position: new Vec3(0, 10, 0) }, blockAt: () => null };
-  bot.companionTargets = createTargetMemory({ now: () => now });
+  bot.companionFailureLedger = createFailureLedger({ now: () => now });
   bot.companionSelfStuck = createSelfStuck(bot, { now: () => now, emit: (type, fields) => events.push({ type, ...fields }) });
   const targets = targetsFor(bot, { record: (type, fields) => events.push({ type, ...fields }) });
   const site = x => ({ goal: 'homestead', step: 'roof', position: { x, y: 12, z: 5 } });
@@ -118,12 +118,12 @@ test('three different path failures roll back only the stationary cluster, inclu
     await targets.run(site(4), failure);
   }
   now = 61_000;
-  assert.equal((await targets.run(site(4), failure, failure)).targetExcluded, true);
+  assert.equal((await targets.run(site(4), failure, failure)).facts.target.excluded, true);
   await targets.run(site(5), () => ({ ok: false, reason: 'NoPath' }));
   assert.equal((await targets.run(site(6), () => ({ ok: false, reason: 'path_timeout' }))).reason, 'self_stuck');
   assert.equal(targets.excluded(site(4)), null);
-  assert.equal(bot.companionTargets.snapshot()[0].failures, 2);
-  assert.equal(bot.companionTargets.snapshot().length, 1);
+  assert.equal(bot.companionFailureLedger.snapshot()[0].failures, 2);
+  assert.equal(bot.companionFailureLedger.snapshot().length, 1);
   assert.ok(events.some(e => e.type === 'target_failure_revoked' && e.target === '4,12,5' && e.excluded));
   assert.deepEqual(events.find(e => e.type === 'self_stuck').targets, ['4,12,5', '5,12,5', '6,12,5']);
 });
@@ -162,11 +162,11 @@ test('one animal with three blocked approaches sends the body out through the cl
   bot.companionHomestead = () => home;
   const events = [];
   const record = (type, data) => events.push({ type, ...data });
-  bot.companionTargets = createTargetMemory();
+  bot.companionFailureLedger = createFailureLedger();
   bot.companionSelfStuck = createSelfStuck(bot, { emit: record });
   const failPath = { ok: false, reason: 'NoPath' };
-  assert.equal(actions.originFailure(bot, failPath, position, house.interiorCenter), failPath);
-  assert.equal(actions.originFailure(bot, failPath, position.offset(3, 0, 0), pig.position), failPath);
+  assert.equal(actions.originFailure(bot, failPath, position, house.interiorCenter).kind, 'target');
+  assert.equal(actions.originFailure(bot, failPath, position.offset(3, 0, 0), pig.position).kind, 'target');
 
   const food = createDefaultCards({ bot, progression: true }).cards.find(c => c.id === 'stock_food');
   const state = { alive: true, isDay: true, health: 20, food: 20, inventory: {}, position };
@@ -177,9 +177,9 @@ test('one animal with three blocked approaches sends the body out through the cl
   assert.equal(open, false);
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    assert.equal((await goal.run(ctx)).reason, 'self_stuck');
+    assert.equal((await goal.run(ctx)).kind, 'start');
   }
-  assert.deepEqual(bot.companionTargets.snapshot(), []);
+  assert.deepEqual(bot.companionFailureLedger.snapshot(), []);
   assert.equal(events.filter(e => e.type === 'hunt_target' && e.mob === 'pig').length, 3);
   assert.equal(events.filter(e => e.type === 'target_failure' || e.type === 'target_excluded').length, 0);
   assert.equal(events.find(e => e.type === 'self_stuck')?.reason, 'route_origin_home_exit_blocked');
@@ -274,30 +274,27 @@ test('saved home positions are purged from route and target memory when home bec
   const p = house.entrance;
   const far = { ...p, x: p.x + 40 };
   const spec = position => ({ goal: 'homestead', step: 'place_torch', position });
-  let saved;
+  let saved = {
+    targets: [p, far].map(position => ({ key: ['overworld', 'homestead', 'place_torch', posKey(position)].join('|'),
+      failures: 3, until: 1000, reason: 'nopath', witness: null })),
+    lessons: [p, far].map(position => ({ kind: 'hard_route', dimension: 'overworld', position, radius: 6, until: 1000, reason: 'nopath' })),
+  };
   let activeHome = null;
   const options = { now: () => 10, atHome: (position, dimension) => dimension === 'overworld' && homeContains(activeHome, position),
     store: { load: () => saved, save: profile => { saved = JSON.parse(JSON.stringify(profile)); } } };
-  let adaptation = createAdaptation(options);
-  for (const position of [p, far]) {
-    adaptation.teach('hard_route', position, 'overworld', 'NoPath', 6);
-    const targets = adaptation.targets.scope();
-    for (let i = 0; i < 3; i += 1) await targets.run(spec(position), () => ({ ok: false, reason: 'NoPath' }));
-  }
-  delete saved.targets[0].position; // Legacy coordinate-keyed profile.
-  adaptation = createAdaptation(options);
+  const adaptation = createAdaptation(options);
   activeHome = house;
   adaptation.pruneHome();
   adaptation.teach('hard_route', p, 'overworld', 'NoPath', 6);
-  const targets = adaptation.targets.scope();
+  const targets = adaptation.failureLedger.scope();
   assert.equal(targets.excluded(spec(p)), null);
   assert.ok(targets.excluded(spec(far)));
   assert.equal(adaptation.avoids('hard_route', p), false);
   assert.equal(adaptation.avoids('hard_route', far), true);
-  assert.deepEqual(saved.lessons.map(e => e.position), [far]);
-  assert.deepEqual(saved.targets.map(e => e.position), [far]);
+  assert.deepEqual(saved.failureLedger.entries.filter(e => e.purpose === 'hard_route').map(e => e.position), [far]);
+  assert.deepEqual(saved.failureLedger.entries.filter(e => e.purpose === 'target').map(e => e.position), [far]);
   await targets.run(spec(p), () => ({ ok: false, reason: 'NoPath' }));
-  assert.equal(saved.targets.length, 1);
+  assert.equal(saved.failureLedger.entries.length, 2);
 });
 
 test('route ladders distinguish starting regions while one shaft keeps its learned rung across heights', async () => {

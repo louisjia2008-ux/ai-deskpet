@@ -7,7 +7,6 @@ const { createDoctorRules, DOCTOR_RULE_THRESHOLDS, isDoctorFailureEvent } = requ
 const RECENT_LIMIT = 24;
 const MAX_TEXT = 300;
 const TERMINAL = new Set(['goal_done', 'goal_cleared', 'goal_failed', 'goal_yielded', 'stopped']);
-const WAIT_REASONS = new Set(['sheltering_until_daylight', 'waiting_for_daylight', 'waiting_for_wheat']);
 
 function text(value) {
   return typeof value === 'string' ? value.slice(0, MAX_TEXT) : null;
@@ -25,6 +24,9 @@ function homeOf(home) {
 
 function recordDoctorInput(event, doctorSequence, botPosition) {
   const input = { ...event, doctorSequence };
+  if (event.type === 'plan_step' && ['gather', 'hunt', 'craft', 'smelt'].includes(event.kind)) {
+    input.requiredItem = text(event.key || event.item);
+  }
   if (isDoctorFailureEvent(event)) input.doctorPosition = point(botPosition);
   return input;
 }
@@ -45,22 +47,6 @@ function groupIncidents(alerts) {
   return [...groups.values()];
 }
 
-function unwrap(entry) {
-  if (entry.experiment === 'sample') {
-    const observation = entry.observation || {};
-    return { ...observation, type: 'doctor_observation', recordedAt: Date.parse(entry.observedAt),
-      engine: entry.engine, paused: entry.engine?.paused, survey: entry.engine?.goal?.name === 'survey_plan' };
-  }
-  if (entry.type === 'event') {
-    if (entry.event?.type === 'core' && entry.event.payload) {
-      return { ...entry.event.payload, recordedAt: entry.event.at };
-    }
-    return null;
-  }
-  if (entry.event?.payload) return entry.event.payload;
-  return entry;
-}
-
 function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
   const stationary = createStationaryRule(onStationarySegment);
   const rules = stationaryOnly ? null : createDoctorRules();
@@ -73,7 +59,7 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
   let context = emptyContext();
   let goalGeneration = null;
   let behavior = null;
-  let lastWaitAt = null;
+  let waitUntil = null;
   let nightSheltered = false;
   let observation = null;
 
@@ -89,7 +75,7 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
     latestIncident.clear();
     incidentCount = sequence = 0;
     context = emptyContext();
-    goalGeneration = lastWaitAt = now = null;
+    goalGeneration = waitUntil = now = null;
     behavior = null;
     nightSheltered = false;
     observation = null;
@@ -113,7 +99,8 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
     } else if (event.type === 'site_chosen') {
       context = { ...context, home: homeOf(event) || context.home };
     }
-    if (event.type === 'behavior_finished' && WAIT_REASONS.has(event.reason)) lastWaitAt = now;
+    if (event.type === 'goal_set' || event.type === 'behavior_started' || TERMINAL.has(event.type)) waitUntil = null;
+    if (event.result?.wait) waitUntil = event.result.wait.until ?? Infinity;
     if (event.type === 'behavior_started') behavior = text(event.behavior);
     if (['behavior_finished', 'behavior_abandoned'].includes(event.type) && event.behavior === behavior) behavior = null;
     if (event.type === 'doctor_observation' && Object.hasOwn(event.engine || {}, 'running')) behavior = text(event.engine.running);
@@ -138,12 +125,11 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
     return id;
   }
 
-  function accept(entry, legacySequence) {
-    if (!entry || typeof entry !== 'object') return [];
-    let event = unwrap(entry);
+  function accept(input, fallbackSequence) {
+    let event = input;
     if (!event || typeof event.type !== 'string' || event.type === 'doctor_alert') return [];
     const observationEvent = event.type === 'doctor_observation';
-    const timestamp = Number.isFinite(event.at) ? event.at : (event.doctorAt ?? event.recordedAt);
+    const timestamp = Number.isFinite(event.at) ? event.at : (event.doctorAt);
     if (!Number.isFinite(event.at) && !observationEvent) {
       event = { ...event, at: timestamp, position: event.position ?? point(event.at) };
     }
@@ -158,7 +144,7 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
       latestIncident.clear();
       nightSheltered = false;
       observation = null;
-      lastWaitAt = null;
+      waitUntil = null;
       behavior = null;
     }
     const ending = TERMINAL.has(event.type) && (goalGeneration === null || event.generation == null
@@ -184,13 +170,14 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
     const inactive = context.goal === 'survey_plan' || Boolean(fresh && (!fresh.alive || fresh.paused || fresh.survey
       || (context.goal === 'follow_owner' && fresh.following)));
     const sleepingAtHome = fresh?.isDay === false && fresh.sleepingAtHome;
-    const waiting = inactive || Boolean(fresh?.isDay === false && (fresh.rested || sleepingAtHome || nightSheltered
-      || (lastWaitAt !== null && now - lastWaitAt < D1.maxGapMs)));
-    const recordedSequence = event.doctorSequence ?? legacySequence;
+    const scheduledWait = waitUntil !== null && now < waitUntil;
+    const waiting = inactive || scheduledWait || Boolean(fresh?.isDay === false
+      && (fresh.rested || sleepingAtHome || nightSheltered || now < event.activityWaitUntil));
+    const recordedSequence = event.doctorSequence ?? fallbackSequence;
     const evidence = Number.isSafeInteger(recordedSequence) ? recordedSequence : sequence + 1;
     sequence = Math.max(sequence, evidence);
     const frame = { at: now, evidence, context, goalGeneration, behavior, inactive, sleepingAtHome,
-      waiting, isDay: fresh?.isDay, dimension: fresh?.dimension };
+      waiting, scheduledWait, isDay: fresh?.isDay, dimension: fresh?.dimension };
     const results = rules?.ingest(event, frame) || {};
     const stationaryResult = stationary.ingest(event, frame);
     const emitted = [];

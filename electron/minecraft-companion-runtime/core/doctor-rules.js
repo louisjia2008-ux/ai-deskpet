@@ -20,14 +20,11 @@ const DOCTOR_RULE_THRESHOLDS = Object.freeze({
     duskDistance: 48, nightDistance: 72, growth: 12, legGrowth: 4, minimumMs: 50_000,
     nightMs: 90_000, maxSampleGapMs: 45_000, evidenceMs: 120_000, mineDepth: 12, interruptions: 2,
     departureSamples: 3, homeRadiusSlack: 2 }),
-  D7: Object.freeze({ waitMs: 120_000, maxCooldowns: 32 }),
+  D7: Object.freeze({ waitMs: 120_000 }),
   // Several completed select/yield pairs, excluding the first few fair retries.
-  D8: Object.freeze({ count: 5, windowMs: 600_000, minWaitAttempts: 2, maxCards: 24 }),
+  D8: Object.freeze({ count: 5, windowMs: 600_000, maxCards: 24 }),
 });
 
-const EXPECTED_FAILURES = new Set(['aborted', 'self_stuck', 'reserve_work_ended', 'waiting',
-  'adaptation_other_work', 'sheltering_until_daylight', 'deferred', 'awaiting_daylight',
-  'night_shelter', 'night_restricted']);
 const GOAL_ENDED = new Set(['goal_done', 'goal_cleared', 'goal_failed', 'goal_yielded']);
 const MILESTONES = new Set(['goal_done', 'depot_built', 'autonomy_milestone']);
 const IDLE_REASON = 'no_eligible_card_until_retry';
@@ -67,11 +64,14 @@ function evidence(entries) { return entries.map((entry) => entry.evidence); }
 function detect(key, since, summary, events) {
   return { key, severity: 'alert', since, summary, evidence: evidence(events) };
 }
-function explicitWait(reason) { return /(?:shelter|wait|await|defer).*(?:night|daylight|dawn)|night_(?:shelter|restricted)/.test(reason || ''); }
+function isDoctorFailureEvent(event) {
+  return event.result?.ok === false && event.result.kind !== 'interrupted'
+    && (['target_failure', 'home_route_leg', 'behavior_finished'].includes(event.type)
+      || (event.type === 'adaptation_attempt' && event.task !== 'goal'));
+}
 
-function failureReason(event) {
-  const reason = shortText(event.reason)?.toLowerCase();
-  return reason && !EXPECTED_FAILURES.has(reason) && !explicitWait(reason) ? reason : null;
+function attemptOf(result) {
+  return result?.attemptId == null ? null : JSON.stringify([result.attemptId, result.facts?.retry ?? 0]);
 }
 
 function adaptationIdentity(event) {
@@ -80,49 +80,43 @@ function adaptationIdentity(event) {
 }
 
 function failureLocation(event, frame, build) {
-  const reason = failureReason(event);
-  if (!reason) return null;
+  if (!isDoctorFailureEvent(event)) return null;
+  const { kind, reason } = event.result;
+  const attempt = attemptOf(event.result) ?? frame.evidence;
+  const failure = { kind, reason: shortText(reason), attempt };
   if (event.type === 'home_route_leg' && event.advanced === false) {
     const location = point(event.from || event.position);
     const destination = point(event.destination);
-    return location && { reason, location, scope: 'home route', key: destination && pointText(destination),
+    return location && { ...failure, location, scope: 'home route', key: kind === 'start' ? null : destination && pointText(destination),
       origin: true, provesWork: true };
+  }
+  if (kind === 'start') {
+    if (event.type === 'target_failure') return null;
+    const location = point(event.doctorPosition) || point(frame.context.position);
+    const scope = shortText(event.behavior) || 'start';
+    return location && { ...failure, location, scope, origin: true, recovery: true };
   }
   if (event.type === 'target_failure') {
     const location = point(event.position);
     const scope = shortText(event.goal) || shortText(event.behavior) || 'target';
-    return location && { reason, location, scope,
-      key: shortText(event.key) || shortText(event.target), attemptAt: event.failureAt };
+    return location && { ...failure, location, scope, key: shortText(event.key) || shortText(event.target) };
   }
-  if (event.type === 'adaptation_attempt' && event.outcome === 'failure' && event.task !== 'goal') {
+  if (event.type === 'adaptation_attempt') {
     const location = point(event.position);
-    return location && { reason, location, scope: shortText(event.task) || 'adaptation',
+    return location && { ...failure, location, scope: shortText(event.task) || 'adaptation',
       key: adaptationIdentity(event), provesWork: true, recovery: event.task === 'mine_hazard', regionAnchor: location };
   }
-  if (event.type === 'behavior_finished' && event.ok === false && build) {
-    const shortage = reason === 'no_material';
+  if (build) {
+    const shortage = kind === 'material';
     const scope = shortText(event.behavior);
-    return { reason, location: build.position, scope, shortage,
+    return { ...failure, location: build.position, scope, shortage,
       key: shortage ? [build.what, scope, event.generation].join(':') : build.id };
-  }
-  // These results describe the body's current position, not an action target.
-  if (event.type === 'behavior_finished' && event.ok === false && event.behavior === 'home_escape') {
-    const location = point(frame.context.position);
-    return location && { reason, location, scope: event.behavior, origin: true, recovery: true };
   }
   return null;
 }
 
-function isDoctorFailureEvent(event) {
-  const candidate = event.type === 'target_failure'
-    || (event.type === 'adaptation_attempt' && event.outcome === 'failure' && event.task !== 'goal')
-    || (event.type === 'home_route_leg' && event.advanced === false)
-    || (event.type === 'behavior_finished' && event.ok === false);
-  return candidate && failureReason(event) !== null;
-}
-
 function sameFailure(group, failure, radius) {
-  return group.reason === failure.reason && group.scope === failure.scope && group.key === failure.key
+  return group.kind === failure.kind && group.reason === failure.reason && group.scope === failure.scope && group.key === failure.key
     && (!group.dimension || !failure.dimension || group.dimension === failure.dimension)
     && distance(group.location, failure.location) <= radius
     && (!Number.isFinite(group.location.y) || !Number.isFinite(failure.location.y)
@@ -133,14 +127,14 @@ function resolvedGroup(group, event, build, at) {
   if (event.type === 'home_route_arrived') return group.scope === 'home route' || group.recovery;
   if (event.type === 'self_stuck_escaped') return group.origin;
   if (event.type === 'site_abandoned') return group.shortage;
-  if (event.type === 'adaptation_attempt' && event.outcome === 'success') {
+  if (event.type === 'adaptation_attempt' && event.result?.ok === true && !event.result.wait) {
     return group.scope === event.task && group.key === adaptationIdentity(event);
   }
   if (event.type === 'target_reached') {
     return group.key != null && group.key === (shortText(event.key) || shortText(event.target));
   }
   if (group.shortage && event.type === 'goal_done') return group.scope === 'goal:' + event.goal;
-  if (build && event.ok === true && at > group.lastAt) {
+  if (build && event.result?.ok === true && !event.result.wait && at > group.lastAt) {
     // Count repeated stock-outs of the same local construction job, even if
     // earlier stock-outs were temporarily relieved by successful placement.
     const expected = group.shortage ? group.confirmed && group.lastPosition : group.location;
@@ -187,9 +181,8 @@ function repeatFailures() {
           append(groups, group, settings.maxGroups);
         }
         trim(group.entries, at, group.windowMs);
-        const attemptAt = Number.isFinite(failure.attemptAt) ? failure.attemptAt : at;
-        if (!group.entries.some((entry) => entry.attemptAt === attemptAt)) {
-          append(group.entries, { ...mark(frame), attemptAt }, settings.maxFailures);
+        if (!group.entries.some((entry) => entry.attempt === failure.attempt)) {
+          append(group.entries, { ...mark(frame), attempt: failure.attempt }, settings.maxFailures);
           group.lastAt = at;
           group.lastPosition = failure.location;
           const failurePosition = point(event.doctorPosition)
@@ -285,19 +278,18 @@ function repeatedPlans() {
 
   function outcome(event, frame) {
     const previous = [...steps.values()].find((step) => step.pending && samePlanOwner(step.signature, event));
-    if (!previous) return;
+    if (!previous || !event.result || (previous.pending !== true && previous.pending !== event.attemptId)) return;
     previous.pending = false;
-    if (event.ok === true) {
-      // The outcome alone is not a milestone, but it does break a streak of
-      // failures. Mining fronts and useful navigation often yield ok before
-      // the final count changes.
+    const attempt = attemptOf(event.result);
+    if (attempt && previous.outcomes.some((entry) => entry.attempt === attempt)) return;
+    if (event.result.ok) {
       if (previous.failures || previous.interruptions) steps.delete(previous.signature.id);
-    } else if (event.ok === false && failureReason(event)) {
-      previous.failures++;
-      append(previous.outcomes, mark(frame), settings.failedAttempts);
-    } else if (event.ok === false && event.reason === 'aborted') {
+    } else if (event.result.kind === 'interrupted') {
       previous.interruptions++;
-      append(previous.outcomes, mark(frame), settings.failedAttempts);
+      append(previous.outcomes, { ...mark(frame), attempt }, settings.failedAttempts);
+    } else {
+      previous.failures++;
+      append(previous.outcomes, { ...mark(frame), attempt }, settings.failedAttempts);
     }
   }
 
@@ -332,11 +324,11 @@ function repeatedPlans() {
       }
       if (event.type === 'behavior_finished') {
         outcome(event, frame);
-        if (build && event.ok === true) {
+        if (build && event.result?.ok === true && !event.result.wait) {
           steps.delete(build.id);
           if (shortage && samePlanOwner(shortage, event)) shortage = null;
         }
-        if (build && event.ok === false && failureReason(event) === 'no_material') {
+        if (build && event.result?.kind === 'material') {
           shortage = { ...mark(frame), behavior: shortText(event.behavior), generation: event.generation ?? null };
         }
       }
@@ -351,7 +343,7 @@ function repeatedPlans() {
       if (shortage && at - shortage.at > settings.windowMs) shortage = null;
       if (active && steps.get(active.signature.id) !== active) active = null;
 
-      const buildFailure = build && event.ok === false && failureReason(event);
+      const buildFailure = build && isDoctorFailureEvent(event) && event.result.kind !== 'start';
       if (!frame.waiting && (event.type === 'plan_step' || buildFailure)) {
         const signature = buildFailure ? { id: build.id, material: build.what, output: build.what,
           stock: null, outputStock: null, position: build.position } : planSignature(event, inventory);
@@ -371,9 +363,16 @@ function repeatedPlans() {
             for (const previous of steps.values()) {
               if (samePlanOwner(previous.signature, event)) previous.pending = false;
             }
-            step.pending = true;
+            step.pending = event.attemptId ?? true;
           }
-          if (buildFailure) step.failures++;
+          if (buildFailure) {
+            const attempt = attemptOf(event.result);
+            if (attempt && step.outcomes.some((entry) => entry.attempt === attempt)) {
+              return { detection: undefined, completed };
+            }
+            step.failures++;
+            append(step.outcomes, { ...mark(frame), attempt }, settings.count);
+          }
           append(step.marks, mark(frame), settings.count);
           boundedSet(steps, signature.id, step, settings.maxSteps);
           const buildingBlocked = !buildFailure && shortage && samePlanOwner(shortage, event)
@@ -397,6 +396,7 @@ function repeatedPlans() {
         + ' minutes with repeated unsuccessful attempts.', receipts), completed };
     },
     reset() { steps.clear(); inventory = null; active = null; shortage = null; },
+    counts: () => inventory,
     size() { return steps.size + Object.keys(inventory || {}).length + Number(Boolean(shortage))
       + [...steps.values()].reduce((count, step) => count + step.marks.length + step.outcomes.length, 0); },
   };
@@ -530,14 +530,14 @@ function daylightProgress() {
   let previous = null;
   let homeMilestone = null;
   let working = false;
-  let waiting = false;
+  let plannedItem = null;
   let search = null;
 
   function clearClock() { since = previous = null; }
   function clearGoal() {
     clearClock();
-    working = waiting = false;
-    search = null;
+    working = false;
+    plannedItem = search = null;
     pending.clear();
     targets.clear();
   }
@@ -548,7 +548,7 @@ function daylightProgress() {
   }
   function observedProgress(event, frame) {
     const inventory = event.inventory;
-    if (!inventory || typeof inventory !== 'object') return false;
+    if (!inventory || typeof inventory !== 'object') return [];
     const goal = frame.context.goal;
     if (goal === 'stock_food' && !targets.has('doctor:food')) boundedSet(targets, 'doctor:food', null, settings.maxTargets);
     if (goal === 'farm' || goal === 'harvest_wheat') {
@@ -556,31 +556,35 @@ function daylightProgress() {
         if (!targets.has(crop)) boundedSet(targets, crop, null, settings.maxTargets);
       }
     }
-    let advanced = false;
+    const gained = [];
     for (const [item, previousCount] of targets) {
       const count = item === 'doctor:food'
         ? Object.entries(inventory).reduce((total, [name, quantity]) => total
           + (/^(?:cooked_)?(?:beef|porkchop|chicken|mutton|rabbit|cod|salmon)$|^(?:bread|baked_potato|apple|carrot|mushroom_stew)$/.test(name)
             && Number.isFinite(quantity) ? quantity : 0), 0)
         : observedItemCount(inventory, item);
-      if (previousCount !== null && count > previousCount) advanced = true;
+      if (previousCount !== null && count > previousCount) gained.push(item);
       targets.set(item, count);
     }
-    return advanced;
+    return gained;
   }
   return {
-    progress(event, build, frame, planCompleted) {
-      let advanced = MILESTONES.has(event.type) || planCompleted;
+    progress(event, build, frame, planCompleted, inventory) {
+      let milestone = MILESTONES.has(event.type);
+      let advanced = planCompleted;
+      let relevant = false;
       if (event.type === 'goal_set' || GOAL_ENDED.has(event.type) || event.type === 'stopped') clearGoal();
       if (event.type === 'site_abandoned' || event.type === 'site_chosen') {
         receipts.clear();
         search = null;
-        advanced ||= event.type === 'site_chosen';
+        milestone ||= event.type === 'site_chosen';
       }
       if (event.type === 'plan_step') {
-        for (const value of [event.item || event.key, event.for]) {
-          const item = shortText(value);
-          if (item && !targets.has(item)) boundedSet(targets, item, null, settings.maxTargets);
+        plannedItem = shortText(event.requiredItem);
+        for (const item of [shortText(event.item || event.key), shortText(event.for), plannedItem]) {
+          if (!item || targets.has(item)) continue;
+          const baseline = item === plannedItem && inventory ? observedItemCount(inventory, item) : null;
+          boundedSet(targets, item, baseline, settings.maxTargets);
         }
       }
       const behavior = shortText(event.behavior);
@@ -599,15 +603,14 @@ function daylightProgress() {
         if (event.type === 'behavior_finished') {
           const receipt = pending.get(behavior);
           pending.delete(behavior);
-          if (event.ok === true && receipt && (receipt === 'grass_break' || complete(receipt))) advanced = true;
-          if (['crops_growing', 'no_available_plot', 'waiting_for_wheat', 'sheltering_until_daylight'].includes(event.reason)) {
-            waiting = true;
-          }
+          if (event.result?.progress === true && receipt && (receipt === 'grass_break' || complete(receipt))) advanced = true;
         }
         if (event.type === 'behavior_abandoned' || event.type === 'behavior_started') pending.delete(behavior);
       }
-      if (build && event.ok === true && build.what !== 'scaffold' && complete(build.id)) advanced = true;
-      if (event.type === 'home_relocation_leg' && event.ok === true && !event.inWater) {
+      if (build && event.result?.progress === true && build.what !== 'scaffold' && complete(build.id)) {
+        advanced = relevant = true;
+      }
+      if (event.type === 'home_relocation_leg' && event.result?.progress === true && !event.inWater) {
         const from = point(event.from);
         const to = point(event.position);
         if (from && to) {
@@ -622,20 +625,22 @@ function daylightProgress() {
       if (event.type === 'doctor_observation') {
         const home = point(event.home?.anchor);
         const id = home && [pointText(home), event.home.usable === true, event.home.finished === true].join(':');
-        if (id && id !== homeMilestone) advanced = true;
+        if (id && id !== homeMilestone) milestone = true;
         homeMilestone = id;
-        if (observedProgress(event, frame)) advanced = true;
+        const gained = observedProgress(event, frame);
+        advanced ||= gained.length > 0;
+        relevant ||= gained.includes(plannedItem);
       }
-      if (advanced) clearClock();
-      if (['plan_step', 'build', 'farm', 'site_dig', 'site_fill', 'home_relocation_leg', 'explore_for'].includes(event.type)) waiting = false;
+      const plannedProgress = milestone || (plannedItem ? relevant : advanced);
+      if (plannedProgress || frame.scheduledWait) clearClock();
       working ||= event.type === 'plan_step' || event.type === 'build'
         || (event.type === 'behavior_started' && behavior?.startsWith('goal:'));
-      return advanced;
+      return { routeProgress: milestone || advanced, plannedProgress };
     },
     ingest(event, frame, idle) {
       const { at, context } = frame;
       if (event.type !== 'doctor_observation') return undefined;
-      if (!working || idle || waiting || event.isDay !== true || frame.waiting || !context.goal) {
+      if (!working || idle || event.workWaiting || event.isDay !== true || frame.waiting || !context.goal) {
         clearClock();
         return null;
       }
@@ -707,7 +712,7 @@ function distanceAtDusk() {
         protection = shelterStarted = null;
       }
       if (event.type === 'behavior_finished' && sameProtection) {
-        if (event.ok === true && protection.action === 'dusk_home') {
+        if (event.result?.progress === true && protection.action === 'dusk_home') {
           homeward = { ...mark(frame), behavior: protection.behavior, generation: protection.generation,
             startedAt: protection.at, intent: protection.evidence };
         }
@@ -807,38 +812,15 @@ function distanceAtDusk() {
 
 function directorIdle() {
   const settings = DOCTOR_RULE_THRESHOLDS.D7;
-  const cooldowns = new Map();
   let idle = null;
-
-  function idleDeadline(event, at) {
-    if (event.reason === IDLE_REASON && Number.isFinite(event.until) && event.until > at) return { until: event.until };
-    if (event.reason != null || !Array.isArray(event.scores)) return null;
-    // Old idle records have scores without a reason or deadline. Corroborate
-    // a card skipped for cooldown with an actual, still-live cooldown receipt.
-    let current = null;
-    for (const score of event.scores) {
-      if (!score || typeof score !== 'object') continue;
-      if (!score.skipped && score.score > 0) return null;
-      const cooldown = score.skipped === 'cooldown' && cooldowns.get(shortText(score.id));
-      if (cooldown?.until > at && (!current || cooldown.until < current.until)) current = cooldown;
-    }
-    return current;
-  }
-
   return {
     ingest(event, frame) {
-      if (event.type === 'autonomy_cooldown') {
-        const card = shortText(event.card);
-        if (card && Number.isFinite(event.until) && event.until > frame.at) {
-          boundedSet(cooldowns, card, { until: event.until, receipt: mark(frame) }, settings.maxCooldowns);
-        }
-      }
       if (event.type === 'autonomy_idle') {
-        const deadline = idleDeadline(event, frame.at);
         const start = idle && frame.at <= idle.until ? idle.start : mark(frame);
-        idle = deadline ? { ...deadline, start } : null;
+        idle = event.reason === IDLE_REASON && event.until > frame.at
+          ? { until: event.until, start, cooldownSequence: event.cooldownSequence }
+          : null;
       }
-      if (event.type === 'autonomy_disabled') cooldowns.clear();
       if (event.type === 'autonomy_choice' || event.type === 'goal_set' || event.type === 'autonomy_disabled') idle = null;
       if (!idle || frame.at >= idle.until) {
         idle = null;
@@ -850,12 +832,13 @@ function directorIdle() {
         return null;
       }
       if (frame.at - idle.start.at < settings.waitMs || frame.context.goal) return null;
-      const receipts = idle.receipt ? [idle.receipt, idle.start, mark(frame)] : [idle.start, mark(frame)];
+      const receipts = [idle.start, mark(frame)];
+      if (Number.isSafeInteger(idle.cooldownSequence)) receipts.unshift({ evidence: idle.cooldownSequence });
       return detect('idle:' + idle.start.evidence, idle.start.at,
         'The director has spent ' + minutes(frame.at - idle.start.at) + ' minutes waiting for a card to retry with no task running.',
         receipts);
     },
-    reset() { idle = null; cooldowns.clear(); },
+    reset() { idle = null; },
     isIdle() { return Boolean(idle); },
   };
 }
@@ -889,13 +872,9 @@ function cardSwitches() {
         const matching = selected && (event.card ? event.card === selected.card : event.goal === selected.goal)
           && (selected.generation === null || event.generation == null || event.generation === selected.generation);
         if (matching) {
-          const waited = explicitWait(event.reason);
-          // A rest can be physically correct while its short retry budget causes
-          // the director to repeat an equivalent choice throughout one night.
-          const night = waited && frame.isDay === false && event.waits >= settings.minWaitAttempts
-            && event.waitMs > 0 && Number.isFinite(event.until) && event.until > at;
-          if (event.type === 'goal_yielded' && (night || (!waited && !frame.waiting
-            && event.reason !== 'waiting' && !Number.isFinite(event.waits)))) {
+          const night = event.waitBudgetExhausted && frame.isDay === false && event.until > at;
+          const blocked = event.result?.ok === false && !['interrupted', 'start'].includes(event.result.kind);
+          if (event.type === 'goal_yielded' && (night || (blocked && !frame.waiting))) {
             const key = selected.card + (night ? ':night' : ':blocked');
             const entries = cycles.get(key) || [];
             append(entries, { ...mark(frame), selection: selected, night }, settings.count);
@@ -950,13 +929,13 @@ function createDoctorRules() {
         buildAttempts.delete(behavior);
       }
       const repeated = plans.ingest(event, frame, build);
-      const advanced = progress.progress(event, build, frame, repeated.completed);
+      const { routeProgress, plannedProgress } = progress.progress(event, build, frame, repeated.completed, plans.counts());
       const idleDetection = idle.ingest(event, frame);
       return {
         D2: failures.ingest(event, frame, build),
         D3: repeated.detection,
-        D4: route.ingest(event, frame, advanced),
-        D5: advanced ? null : progress.ingest(event, frame, idle.isIdle()),
+        D4: route.ingest(event, frame, routeProgress),
+        D5: plannedProgress ? null : progress.ingest(event, frame, idle.isIdle()),
         D6: dusk.ingest(event, frame),
         D7: idleDetection,
         D8: switches.ingest(event, frame),

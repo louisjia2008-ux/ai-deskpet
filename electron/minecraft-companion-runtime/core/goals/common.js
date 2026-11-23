@@ -6,23 +6,26 @@
 const { Vec3 } = require('vec3');
 const { familyOf } = require('../knowledge');
 const { naturalCover } = require('../natural-cover');
+const { createAttempt, resultFrom, waiting, factsOf } = require('../action-result');
 
 const DOWN = [new Vec3(0, -1, 0)];
 // A table this close is used rather than another one made.
 const TABLE_NEAR = 16;
 
 async function runPlanned(ctx, step, execute) {
-  if (step.kind === 'blocked') return { ok: true, waited: true, reason: 'planning_sources_blocked', retryAt: step.retryAt };
+  if (step.kind === 'blocked') return waiting('planning_sources_blocked', step.retryAt);
   const until = ctx.stepBlocked?.(step.kind, step.key || step.station);
-  if (until) return { ok: true, waited: true, reason: 'planning_source_blocked', retryAt: until };
-  const result = await execute();
-  if (ctx.adapt && result?.ok && !result.waited && !result.transit && !result.moved && !result.skipped
-    && !result.idle && result.progress !== false && !result.sourceHandled) ctx.adapt.progress();
-  const handled = !result?.transit && !result?.sourceHandled ? ctx.stepOutcome?.(step, result) : null;
-  return handled?.sourceHandled ? handled : result;
+  if (until) return waiting('planning_source_blocked', until);
+  ctx = createAttempt(ctx);
+  const raw = await execute(ctx);
+  const result = resultFrom(raw, ctx);
+  const data = factsOf(raw);
+  if (data.transit || (!result.ok && (data.target || data.adaptation || data.terminal))) return result;
+  if (result.progress && !data.moved && !data.skipped && !data.idle) ctx.adapt?.progress();
+  return ctx.stepOutcome?.(step, result) ?? result;
 }
 
-function createPlannerRunner({ bot, skills, kb, memory, blacklist, avoid = () => false }) {
+function createPlannerRunner({ bot, skills, kb, memory, purpose = 'gather', avoid = () => false }) {
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   memory.shortfall = memory.shortfall || {};
 
@@ -77,20 +80,20 @@ function createPlannerRunner({ bot, skills, kb, memory, blacklist, avoid = () =>
     return inventory;
   }
 
-  const step = (ctx, planned) => runPlanned(ctx, planned, () => executeStep(ctx, planned));
+  const step = (ctx, planned) => runPlanned(ctx, planned, attempt => executeStep(attempt, planned));
 
   async function executeStep(ctx, planned) {
     ctx.record('plan_step', { kind: planned.kind, key: planned.key, for: planned.for, item: planned.item });
     switch (planned.kind) {
       case 'gather': {
-        const result = await skills.gatherOne(bot, ctx, { blocks: planned.blocks, dropMatch: kb[planned.key].match, blacklist, exclude: avoid });
+        const result = await skills.gatherOne(bot, ctx, { blocks: planned.blocks, dropMatch: kb[planned.key].match, purpose, exclude: avoid });
         if (result.reason === 'no_target_in_range') return skills.explore(bot, ctx, memory);
         return result;
       }
       case 'craft': {
         const result = await skills.craft(bot, ctx, { item: planned.item, times: planned.times,
           tablePosition: planned.table ? memory.table : null });
-        for (const m of result.missing || []) {
+        for (const m of factsOf(result).missing || []) {
           const family = familyOf(m.name, kb);
           if (family) memory.shortfall[family] = { extra: m.short, until: Date.now() + 120000 };
         }
