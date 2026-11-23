@@ -5,16 +5,16 @@
 //     not moved for a while (a pit, a ledge, a tree top) -> unstick,
 //   - full bag: drops can no longer be picked up -> store or throw away junk,
 //   - death loop: the bot keeps dying in the same place -> leave the place,
-//     sit nights out in a bunker, and after too many deaths end the goal.
+//     and after too many deaths end the goal.
 // They watch the brain's events and the bot's deaths; the brain still decides
 // who owns the body, so survival reflexes keep outranking them.
 
-const { waiting, factsOf, isComplete } = require('../action-result');
+const { isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
 const { BAND } = require('../brain');
-const { sleep } = require('../confirm');
+const { nightBudget } = require('./nightRest');
 const { upgrades } = require('../armor');
 
 const PATH_FAILURES = new Set(['NoPath', 'Timeout', 'path_timeout', 'not_arrived', 'no_progress', 'chase_stuck', 'leg_blocked']);
@@ -82,7 +82,6 @@ function createRecovery({
   skills = defaultSkills,
   now = Date.now,
   thresholds = {},
-  activeGoal = () => null,
   stopOnDeathLoop = () => true,
 } = {}) {
   if (!bot) throw new TypeError('bot is required');
@@ -106,7 +105,6 @@ function createRecovery({
     // (a creeper waiting there at night). Two more of those still end it.
     respawnGraceMs: 60000,
     respawnDeathsAllowed: 2,
-    bunkerPollMs: 3000,
     ...thresholds,
   };
   let brain = null;
@@ -114,7 +112,6 @@ function createRecovery({
   let anchor = null; // { position, at }: where the bot last stood still since
   const deaths = []; // { position, at }
   let danger = null; // { center, until, left }
-  let bunker = null; // { bunker, since }
 
   const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
   const resetMotion = (position) => {
@@ -156,7 +153,7 @@ function createRecovery({
   }
 
   function stuckReason(state) {
-    if (!goalTrack.active || state.sheltered || bunker) return null;
+    if (!goalTrack.active || state.sheltered) return null;
     if (goalTrack.pathStreak >= t.pathFailures) return 'path_failures';
     if (anchor && now() - anchor.at >= t.stillMs && goalTrack.failsSinceAnchor > 0 && goalTrack.lastOkAt <= anchor.at) {
       return 'not_moving';
@@ -247,7 +244,6 @@ function createRecovery({
     const respawn = Boolean(previous && respawnedAt >= previous.at && at - respawnedAt <= t.respawnGraceMs);
     deaths.push({ position, at, dimension, cause, respawn });
     while (deaths.length && at - deaths[0].at > t.deathWindowMs) deaths.shift();
-    bunker = null;
     bot.companionSheltered = false;
     const near = deaths.filter((d) => d.dimension === dimension && at - d.at <= t.clusterMs
       && distance(d.position, position) <= t.clusterRadius);
@@ -302,8 +298,8 @@ function createRecovery({
     name: 'leave_danger',
     band: BAND.MAINTENANCE,
     want(state) {
-      if (!nearDanger(state) || danger.left || state.sheltered || bunker) return 0;
-      return state.isDay === false ? 0 : 0.95;
+      if (!nearDanger(state) || danger.left || state.sheltered) return 0;
+      return nightBudget(state).dusk ? 0 : 0.95;
     },
     async run(ctx) {
       const target = escapeTarget(ctx.perceive().position);
@@ -345,43 +341,6 @@ function createRecovery({
     return false;
   }
 
-  // In a dangerous place after dark, a sealed 1x1 shaft is the only safe bed.
-  const nightBunker = {
-    name: 'danger_bunker',
-    band: BAND.MAINTENANCE,
-    want(state) {
-      if (bunker) return 1;
-      // Nights only matter in the overworld.
-      if (!dangerActive() || state.isDay !== false || state.sheltered || dimensionOf(bot) !== 'overworld') return 0;
-      // Pearls are hunted in the dark, and the deaths are the hunt's own:
-      // shut in, a bot sat out whole nights of the hunt it was set.
-      if (activeGoal() === 'hunt_pearls') return 0;
-      // Already far from the deaths: the goal's own night handling is enough.
-      return state.position && distance(state.position, danger.center) < t.leaveDistance * 2 ? 1 : 0;
-    },
-    async run(ctx) {
-      if (!bunker) {
-        ctx.record('danger_bunker', { action: 'dig_in' });
-        const dug = await skills.digIn(bot, ctx);
-        if (!dug.ok) return dug;
-        bunker = { bunker: factsOf(dug).bunker, since: now() };
-        bot.companionSheltered = true;
-        return { ok: true };
-      }
-      if (ctx.perceive().isDay === false) {
-        await sleep(t.bunkerPollMs, ctx.signal);
-        return waiting('sheltering_until_daylight');
-      }
-      ctx.record('danger_bunker', { action: 'dig_out' });
-      const out = await skills.digOut(bot, ctx, bunker.bunker);
-      if (isComplete(out)) {
-        bunker = null;
-        bot.companionSheltered = false;
-      }
-      return out;
-    },
-  };
-
   // Armour made and left in the bag (an outfit cut short by hunger): put it
   // on. A world hunted pearls with a full iron set in its bag, and the bag
   // so full that nothing it dug could be picked up.
@@ -407,12 +366,11 @@ function createRecovery({
   };
 
   return {
-    behaviors: [unstick, tidy, wear, leaveDanger, nightBunker],
+    behaviors: [unstick, tidy, wear, leaveDanger],
     observe,
     attach(target) { brain = target; },
     lastDeathCause: () => deaths.at(-1)?.cause ?? null,
-    status: () => ({ goal: { ...goalTrack }, deaths: deaths.length, danger: dangerActive() ? { ...danger } : null,
-      bunker: Boolean(bunker) }),
+    status: () => ({ goal: { ...goalTrack }, deaths: deaths.length, danger: dangerActive() ? { ...danger } : null }),
     dispose() {
       bot.removeListener?.('death', onDeath);
       bot.removeListener?.('messagestr', onMessage);

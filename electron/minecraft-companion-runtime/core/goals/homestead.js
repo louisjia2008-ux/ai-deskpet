@@ -4,6 +4,7 @@
 
 const { complete: finished, createAttempt, factsOf, failure, isComplete, resultFrom, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
+const { nightBudget } = require('../behaviors/nightRest');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -282,10 +283,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const station = STATIONS.find(id => posKey(f[id].position) === key);
     if (station) return n => n === station;
     if (bedKeys.some(id => idAt([f[id].position, f[id].head], p))) return kb.bed.match;
-    // No door yet: at night the doorway is plugged with dirt or stone, dug out again by day.
     if (posKey(f.door.position) === key || posKey(f.door.upper) === key) {
-      return (n) => (n.endsWith('_door') && nameAt(f.door.position)?.endsWith('_door') && nameAt(f.door.upper)?.endsWith('_door'))
-        || (memory.doorPlug && filler(n));
+      return n => n.endsWith('_door') && nameAt(f.door.position)?.endsWith('_door') && nameAt(f.door.upper)?.endsWith('_door');
     }
     if (memory.temporary[key]) return (n) => memory.temporary[key]?.name === n;
     if (house.scaffold.some((p2) => posKey(p2) === key) && memory.scaffoldActive) return filler;
@@ -879,7 +878,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     bot.companionSurfaceY = undefined;
     Object.assign(memory, {
       house: null, protect: null, homeSite: null, established: false, siteDigs: 0, houseBuilt: 0, houseBed: false,
-      relocate: false, explore: {}, exploreStreak: 0, scaffoldActive: false, doorPlug: false,
+      relocate: false, explore: {}, exploreStreak: 0, scaffoldActive: false,
       relocation: { anchor, attempt: 0 }, siteAccessFailures: 0,
       furnace: { item: null, input: 0, output: 0 }, validated: false,
       owned: {}, temporary: {}, cleanupRequested: false,
@@ -965,11 +964,13 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     }
     const area = { position: memory.house.anchor, target: id === 'bed' ? 'primary' : 'guest' };
     async function huntSheep() {
-      ctx.record('home_finish_step', { step: 'sheep_wool', item: id, radius: 128 });
+      const radius = Math.min(128, nightBudget(ctx.perceive(), memory.house.interiorCenter).maxOutingDistance);
+      if (radius <= 0) return waiting('waiting_for_safe_daylight');
+      ctx.record('home_finish_step', { step: 'sheep_wool', item: id, radius });
       const fleece = woolPreference(inventory);
       const inArea = e => e.position?.distanceTo(v(area.position)) <= 128;
       const eligible = Object.values(bot.entities || {}).some(e => e.name === 'sheep' && inArea(e) && fleece.accept?.(e) !== false);
-      const result = await skills.huntOne(bot, ctx, { mobs: ['sheep'], dropMatch: kb.wool.match, radius: 128,
+      const result = await skills.huntOne(bot, ctx, { mobs: ['sheep'], dropMatch: kb.wool.match, radius,
         targetGoal: 'homestead', ...fleece, accept: e => inArea(e) && fleece.accept?.(e) !== false });
       if (result.reason !== 'no_mob_in_range') return result.ok && !factsOf(result).gained ? { ok: false, reason: 'no_wool_collected' } : result;
       if (eligible) return waiting('no_eligible_sheep_near_home', Date.now() + 30_000);
@@ -980,7 +981,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const quarter = (p) => (p.x >= e.x ? 1 : 0) + (p.z >= e.z ? 2 : 0);
       const dry = dryComponent(blockAt, bot.entity.position, 40);
       const look = [...dry.values()].filter(p => !searched.includes(quarter(p))
-        && p.distanceTo(e) >= 25 && p.distanceTo(e) <= 44 && p.distanceTo(bot.entity.position) >= 12)
+        && p.distanceTo(e) >= 25 && p.distanceTo(e) <= 44
+        && p.distanceTo(bot.entity.position) >= 12 && p.distanceTo(bot.entity.position) <= radius)
         .sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))[0];
       if (look) {
         searched.push(quarter(look));
@@ -992,14 +994,12 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       return result;
     }
     async function huntSpiders() {
-      if (state.isDay !== false) {
-        ctx.record('home_finish_step', { step: 'await_spiders_at_night', item: id, missing: Math.max(0, 12 - (inventory.string || 0) - 4 * (inventory.white_wool || 0)) });
-        return waiting('await_spiders_at_night', Date.now() + 30_000);
-      }
+      const radius = Math.min(48, nightBudget(ctx.perceive(), memory.house.interiorCenter).maxOutingDistance);
+      if (radius <= 0) return waiting('waiting_for_safe_daylight');
       const home = await returnForUpgrade(ctx);
       if (home) return home;
       ctx.record('home_finish_step', { step: 'spider_string', item: id });
-      const result = await skills.huntOne(bot, ctx, { mobs: ['spider'], dropMatch: kb.string.match, radius: 48,
+      const result = await skills.huntOne(bot, ctx, { mobs: ['spider'], dropMatch: kb.string.match, radius,
         targetGoal: 'homestead', accept: e => e.position.distanceTo(v(area.position)) <= 48 });
       if (result.reason === 'no_mob_in_range') return waiting('no_spider_near_home', Date.now() + 30_000);
       return result.ok && !factsOf(result).gained ? { ok: false, reason: 'no_string_collected' } : result;
@@ -1016,10 +1016,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       if (method === 'sheep') return huntSheep();
       if (method === 'spider_string') return huntSpiders();
       ctx.record('home_finish_step', { step: 'shelter_first', item: id });
-      if (state.isDay === false) {
-        const sheltered = await nightStep(ctx, hs, state);
-        if (sheltered && !sheltered.ok) return sheltered;
-      }
       return { ok: false, reason: 'bed_hunt_exhausted' };
     }, { learn: (result, attempt) => attempt.method === 'sheep' && result.reason === 'no_mob_in_range'
       ? { kind: 'no_sheep', position: area.position, radius: 128 } : null });
@@ -1319,7 +1315,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const recoverable = targetFailure(first) || (first.kind === 'environment' && first.reason === 'place_unconfirmed');
     const result = recoverable ? resultFrom(await recover(first), ctx, bot) : first;
     // The functional house may now finish as soon as this door is placed.
-    if (what === 'door' && result.progress && ctx.perceive().isDay === true) await setDoor(ctx, true);
+    if (what === 'door' && result.progress) await setDoor(ctx, true);
     if (ctx.adapt && !memory.pinned && !memory.established && result.progress && memory.searchOrigin) {
       ctx.adapt.outcome(ctx.adapt.plan('home_site', { position: memory.searchOrigin }), result);
     }
@@ -1367,7 +1363,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const { y } = memory.house.anchor;
     if (cell.y !== y) return null;
     if (isBed(blockAt(cell)) && at.y - y > 0.4 && !raisedBedLandings(at).length) return 'bed_under_low_roof';
-    if (memory.doorPlug && bot.companionSheltered) return null;
     const roof = room();
     if (roof.known && roof.cells.has(posKey(cell)) && !roof.reachable.has(posKey(cell))
       && (memory.established || (roof.open && houseState().scaffoldLeft))) return 'interior_cut_off';
@@ -1732,86 +1727,15 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     return { ok: true };
   }
 
-  function enterShelter(ctx) {
+  async function enterShelter(ctx) {
     const e = memory.house?.entrance, at = bot.entity.position;
     if (!e || insideRoom(at.floored()) || at.z > e.z + 1 || Math.abs(at.y - e.y) > 1
       || Math.hypot(at.x - e.x - 0.5, at.z - e.z - 0.5) > 6) return null;
+    if (doorOpen() === false) {
+      const opened = await setDoor(ctx, true);
+      if (opened && !isComplete(opened)) return opened;
+    }
     return crossDoorstep(ctx, true);
-  }
-
-  async function nightStep(ctx, hs, state) {
-    const house = memory.house;
-    if (memory.bunker) {
-      bot.companionSheltered = true;
-      await sleep(3000, ctx.signal);
-      return waiting('sheltering_until_daylight');
-    }
-    // Walls and roof are enough to spend the night in: without a door yet, the doorway gets plugged.
-    const shellDone = !hs.missing.length;
-    // A bed still in the bag goes down at its spot before dark.
-    if (bedsSafe(hs) && !hs.placed.bed && countKey('bed', state.inventory, kb) > 0 && !(retryAt.nightBed > Date.now())) {
-      const placed = await placeBed(ctx, 'bed', { alsoClear: [] });
-      if (!placed.ok) retryAt.nightBed = Date.now() + 60000;
-      return placed;
-    }
-    // Already dark and far from home: the walk back is where nights kill.
-    // Dig in where the bot is instead.
-    const homeDistance = bot.entity.position.distanceTo(new Vec3(house.interiorCenter.x + 0.5, house.interiorCenter.y, house.interiorCenter.z + 0.5));
-    const strandedFar = homeDistance > 64;
-    if (hs.placed.bed && !memory.bedRefusedAt && !strandedFar) {
-      const available = bedKeys.filter((id) => hs.placed[id] && ![house.furniture[id].position, house.furniture[id].head]
-        .some((p) => String(blockAt(p)?.getProperties?.().occupied) === 'true'));
-      for (const id of available) {
-        const bed = house.furniture[id].position;
-        const centre = new Vec3(bed.x + 0.5, bed.y, bed.z + 0.5);
-        if (bot.entity.position.distanceTo(centre) > 4) {
-          ctx.record('night', { action: 'go_home' });
-          return actions.goNear(bot, ctx, centre, 2, { timeoutMs: 60000 });
-        }
-        ctx.record('night', { action: 'sleep', bed: id });
-        const slept = await skills.useBed(bot, ctx, { position: bed });
-        if (slept.ok) { memory.verified[id] = true; return slept; }
-      }
-      // Monsters too close to sleep: do not keep trying all night.
-      if (!shellDone && available.length) memory.bedRefusedAt = Date.now();
-    }
-    if (shellDone && !strandedFar) {
-      if (!insideRoom(bot.entity.position.floored())) {
-        ctx.record('night', { action: 'shelter' });
-        const crossed = await enterShelter(ctx);
-        if (crossed?.ok) return crossed;
-        return actions.goNear(bot, ctx, v(house.interiorCenter), 0, { timeoutMs: 40000, exact: true });
-      }
-      if (insideRoom(bot.entity.position.floored())) {
-        if (hs.placed.door) {
-          const shut = await setDoor(ctx, false);
-          if (shut) return shut;
-        } else {
-          const door = house.furniture.door;
-          const open = [door.position, door.upper].find((p) => blockAt(p)?.boundingBox !== 'block');
-          if (open && countKey('filler', state.inventory, kb) && !(retryAt.plug > Date.now())) {
-            memory.doorPlug = true;
-            ctx.record('night', { action: 'plug_doorway' });
-            const plugged = await skills.placeAt(bot, ctx, open, fillMatch());
-            if (!plugged.ok) retryAt.plug = Date.now() + 20000;
-            return plugged;
-          }
-        }
-      }
-      bot.companionSheltered = true;
-      await sleep(3000, ctx.signal);
-      return waiting('sheltering_until_daylight');
-    }
-    if ((retryAt.bunker > Date.now())) return null;
-    ctx.record('night', { action: 'dig_in' });
-    const dug = await skills.digIn(bot, ctx, { avoid: nearHouseColumn, prepareSeal: autonomous });
-    if (dug.ok) {
-      ctx.record('night', { action: 'dug_in' });
-      memory.bunker = factsOf(dug).bunker; bot.companionSheltered = true;
-    }
-    // Nowhere to dig in (sand, water): keep working through the night instead of retrying.
-    else if (['no_bunker_spot', 'no_seal_block'].includes(dug.reason)) retryAt.bunker = Date.now() + 60000;
-    return dug;
   }
 
   async function verifyStep(ctx, hs) {
@@ -1897,8 +1821,13 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     requestCleanup: () => { memory.cleanupRequested = scaffoldEntries().length > 0; },
     needsCleanup: () => Boolean(memory.cleanupRequested),
     clearScaffold,
+    shelterSite: () => {
+      const house = memory.house;
+      if (!house || !(memory.established || memory.houseBuilt >= house.blocks.length && doorOpen() !== null)) return null;
+      return { house, inside: insideRoom(bot.entity.position.floored()) };
+    },
     shelterDoor: (ctx, open) => {
-      if (!memory.established || !insideRoom(bot.entity.position.floored())) return null;
+      if (!memory.house || !insideRoom(bot.entity.position.floored())) return null;
       return doorOpen() === open ? { ok: true, already: true } : setDoor(ctx, open);
     },
     isDone: (state) => complete(state),
@@ -1936,33 +1865,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     }
     if (memory.relocate && memory.house && !memory.pinned && !memory.established) return abandonSite(ctx, 'repeated_nearby_deaths');
     if (!memory.house) {
-      if (memory.bunker && state.isDay !== false) {
-        const out = await skills.digOut(bot, ctx, memory.bunker);
-        if (isComplete(out)) {
-          ctx.record('night', { action: 'dug_out' });
-          memory.bunker = null; bot.companionSheltered = false;
-        }
-        return out;
-      }
-      if (state.isDay === false) {
-        const top = memory.bunker?.top;
-        if (top && Math.hypot(state.position.x - top.x, state.position.z - top.z) < 2) {
-          await sleep(3000, ctx.signal);
-          return waiting('sheltering_until_daylight');
-        }
-        memory.bunker = null;
-        if ((retryAt.earlyBunker > Date.now())) {
-          await sleep(3000, ctx.signal);
-          return waiting('waiting_for_safe_daylight');
-        }
-        const dug = await skills.digIn(bot, ctx, { prepareSeal: autonomous });
-        if (dug.ok) {
-          ctx.record('night', { action: 'dug_in' });
-          memory.bunker = factsOf(dug).bunker; bot.companionSheltered = true;
-        }
-        else retryAt.earlyBunker = Date.now() + 60_000;
-        return dug;
-      }
       if (ctx.adapt && !memory.pinned) {
         if (memory.relocation?.candidate) {
           const chosen = await useScoutedSite(ctx, state);
@@ -2063,48 +1965,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     bot.companionChest = hs.placed.chest ? memory.house.furniture.chest.position : null;
     const inventory = plannerInventory(state);
     const stations = { crafting_table: hs.placed.crafting_table, furnace: hs.placed.furnace };
-    // Homeward travel may start before dark; shelter and the door use perception.
-    const atNight = state.isDay === false;
-    if (!atNight) { memory.bedRefusedAt = null; memory.doorPlug = false; }
-    // After a death the bot is no longer in its bunker: forget it.
-    if (memory.bunker) {
-      const top = memory.bunker.top;
-      const at = bot.entity.position;
-      if (Math.hypot(at.x - (top.x + 0.5), at.z - (top.z + 0.5)) > 1.5 || at.y > top.y + 0.5 || at.y < top.y - 5) memory.bunker = null;
-    }
-    if (memory.bunker && !atNight) {
-      ctx.record('night', { action: 'dig_out' });
-      const out = await skills.digOut(bot, ctx, memory.bunker);
-      if (isComplete(out)) {
-        ctx.record('night', { action: 'dug_out' });
-        memory.bunker = null; bot.companionSheltered = false;
-      }
-      return out;
-    }
-    bot.companionSheltered = false;
-    // No shell to sleep in yet and out searching: back on the site's own
-    // ground before dusk, rather than dig in on whatever rock the search
-    // ended on (bare stone without a pickaxe gives no block to seal with).
-    if (!atNight && state.timeOfDay >= 10800 && hs.missing.length && !(retryAt.duskHome > Date.now())) {
-      const e = memory.house.entrance;
-      if (bot.entity.position.distanceTo(new Vec3(e.x, e.y, e.z)) > 48) {
-        ctx.record('night', { action: 'dusk_home' });
-        const back = await actions.goNear(bot, ctx, new Vec3(e.x, e.y, e.z), 3, { timeoutMs: 90000 });
-        if (!back.ok) retryAt.duskHome = Date.now() + 120000;
-        return back;
-      }
-    }
-    if (atNight) {
-      // The permanent night-rest behavior owns established autonomous homes.
-      if (!autonomous || !memory.established || ctx.behavior !== 'home_maintenance') {
-        const night = await nightStep(ctx, hs, state);
-        if (night) return night;
-      }
-    } else if (hs.placed.door && doorOpen() === false && !(retryAt.door > Date.now())) {
-      const opened = await setDoor(ctx, true);
-      if (opened && !opened.ok) retryAt.door = Date.now() + 30000;
-      if (opened) return opened;
-    }
     // Stone tools first, then a few pieces of food so lost health can be eaten back.
     const early = gear.filter((key) => EARLY_GEAR.has(key)).map((key) => ({ key, count: 1 }));
     // A spare table in the bag, once the house has its own: four planks spare
@@ -2139,7 +1999,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     }
     // Animals close by are food in the bag for later: on mountains and in
     // forests the next one may be a long, failing chase away once hunger hits.
-    if (!autonomous && !atNight && state.health >= 12 && countKey('food', state.inventory, kb) < 10 && !(retryAt.stockpile > Date.now())) {
+    if (!autonomous && !nightBudget(state).dusk && state.health >= 12 && countKey('food', state.inventory, kb) < 10 && !(retryAt.stockpile > Date.now())) {
       const animals = Object.values(bot.entities || {}).some((e) => FOOD_MOBS.has(e.name) && e.position
         && e.position.distanceTo(bot.entity.position) <= 16 && !huntExcluded(e));
       if (animals) {

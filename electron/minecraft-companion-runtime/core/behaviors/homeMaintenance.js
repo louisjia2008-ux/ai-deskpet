@@ -1,4 +1,5 @@
 'use strict';
+const { nightBudget } = require('./nightRest');
 // Reuse the established home's planner without replacing the current player
 // or device goal. Survival and night rest stay above this maintenance work.
 const { complete } = require('../action-result');
@@ -65,7 +66,7 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, mayRepair =
     if (!goal?.memory.established || typeof goal.maintenance !== 'function' || !overworld()) return null;
     const active = activeGoal(), status = goal.maintenance(state);
     const safe = now() >= retryAt && state.alive !== false && state.health >= 10 && state.food > 12
-      && state.isDay !== false && !state.sheltered && !state.hostiles?.some(h => h.distance <= 8);
+      && !nightBudget(state).dark && !state.sheltered && !state.hostiles?.some(h => h.distance <= 8);
     const repair = safe && mayRepair() && goal.repairPart?.(state);
     if (repair) return repair;
     if (OWN_GEAR.has(active) && !(active === 'outfit' && status.missing.includes('chest'))) return null;

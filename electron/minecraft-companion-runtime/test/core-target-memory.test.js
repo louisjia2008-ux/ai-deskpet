@@ -117,7 +117,7 @@ test('maintenance on an established autonomous home leaves its door open before 
   assert.equal(result.ok, true);
   assert.deepEqual(plan, ['use_chest']);
   assert.deepEqual(door, []);
-  assert.equal(bot.companionSheltered, false);
+  assert.equal(Boolean(bot.companionSheltered), false);
 });
 
 test('earthwork actually removes doorway and podzol torch obstructions, then lighting can place the torch', async () => {

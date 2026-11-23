@@ -9,6 +9,7 @@ const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
 const { BAND } = require('../brain');
 const { DANGER } = require('../scheduling');
+const { nightBudget } = require('./nightRest');
 const { sleep, waitUntil, abortError } = require('../confirm');
 const { isFireResistancePotion, hasEffect } = require('../netherStructures');
 const { isHostile } = require('../perception');
@@ -433,7 +434,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     // In shelter only something that got right next to the bot is fought.
     if (state.sheltered) return threats(state).find((h) => h.distance <= 2) || null;
     const area = surveyArea();
-    const localRangedRange = area ? t.rangedRange : state.isDay === false ? t.nightRangedRange : t.rangedRange;
+    const localRangedRange = area ? t.rangedRange : nightBudget(state).dark ? t.nightRangedRange : t.rangedRange;
     const fights = threats(state).filter((h) => (!area || h.distance <= 3 || surveyDistance(area, h.position) <= SURVEY_ROUTE_RADIUS)
       && h.name !== 'creeper' && !((avoided(state, h) && h.distance > 2.5) || (CHARGERS.has(h.name) && h.distance > BRUTE_FIGHT && !standing(state, h)))
       && (h.distance <= (NEUTRAL.has(h.name) ? 2.5 : t.defendRange)
@@ -1090,7 +1091,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   const safeFoodCount = (state) => Object.entries(state.inventory)
     .reduce((n, [name, count]) => n + (count > 0 && foodCheck(name) && !RISKY_FOODS.has(name) ? count : 0), 0);
   const stockingUp = (state) => Date.now() - lastHuntAt < t.stockWindowMs && safeFoodCount(state) < t.stockFood
-    && dimensionOf(bot) === 'overworld' && state.isDay !== false && !threats(state).some((h) => h.distance <= 16)
+    && dimensionOf(bot) === 'overworld' && !nightBudget(state).dusk && !threats(state).some((h) => h.distance <= 16)
     && animalNear(state, t.stockRange);
   const provision = {
     name: 'provision',
@@ -1105,7 +1106,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       // health and 16 food failed its obsidian forty times without ever healing.
       const needsFood = state.food <= t.provisionFood
         || (state.health < t.provisionInjured && state.food < t.recoverFood);
-      if (state.sheltered) return 0;
+      if (state.sheltered || nightBudget(state).dusk) return 0;
       // Out hunting with animals still close by: a few more for the bag. One
       // kill at a time, the bot was back out hunting every few minutes of
       // mining, and spent a third of its hours on it.
@@ -1121,8 +1122,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       if (reading(state).stance !== 'calm') return 0;
       // Chasing animals at low health gets the bot killed at night; by day with
       // nothing hostile around it is the only way back to regenerating.
-      if (state.health < t.provisionHealth && state.food > DANGER.food
-        && (state.isDay === false || threats(state).some((h) => h.distance <= 16))) return 0;
+      if (state.health < t.provisionHealth && state.food > DANGER.food && threats(state).some((h) => h.distance <= 16)) return 0;
       return 0.5;
     },
     async run(ctx) {

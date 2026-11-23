@@ -353,10 +353,10 @@ function createBrain({
         const stillWanted = candidates().some((b) => b.name === current.name && b.goalEntry === current.goalEntry);
         if (!stillWanted) {
           await preempt('goal_cleared');
-        } else if (best && best.behavior.name !== current.name
+        } else if ((current.isGoal && !taskAllowed(state, current.def)) || best && best.behavior.name !== current.name
             && (best.tier > running.tier || best.tier === BAND.GOAL && !best.behavior.isGoal
               && outranks(best, rating(current, running.want, inputs)))) {
-          const by = best.behavior.name;
+          const by = best?.behavior.name ?? 'task_unavailable';
           emit('preempted', { behavior: current.name, by, attemptId: running.attemptId, ...correlation(current.goalEntry) });
           interruptedWork(running.controller.signal, by);
           await preempt(`preempted_by:${by}`);

@@ -7,11 +7,11 @@ const { Vec3 } = require('vec3');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { createBrain } = require('./brain');
 const { schedulingInputs } = require('./scheduling');
-const { perceive, isDaylight, ownedItems, countInventory } = require('./perception');
+const { perceive, ownedItems, countInventory } = require('./perception');
 const { createDoctor, recordDoctorInput, D1 } = require('./doctor');
 const { createSurvivalBehaviors, enabledDuringSurvey } = require('./behaviors/survival');
 const { createRecovery } = require('./behaviors/recovery');
-const { createNightRest } = require('./behaviors/nightRest');
+const { createNightRest, isDaylight, nightShelter } = require('./behaviors/nightRest');
 const { createEndHazards } = require('./behaviors/endHazards');
 const { createHomeMaintenance } = require('./behaviors/homeMaintenance');
 const { createGatherLogsGoal } = require('./goals/gatherBlocks');
@@ -52,49 +52,10 @@ const { installOpenDoorPassage, uninstallOpenDoorPassage } = require('./openDoor
 const { installSurveyActions } = require('./survey-plan-actions');
 const { applyWalkOnlyMovements } = require('./nether');
 
-// How long a hunt for a night mob keeps night rest away after its last step.
-const NIGHT_HUNT_MS = 5 * 60 * 1000;
 // Goals that bring food themselves: hunger leaves the body to them. Following
 // the owner keeps hunting close by too: chasing food 145 blocks off left the
 // owner it had just been asked to guard to the zombies.
 const FEEDING_GOALS = new Set(['farm', 'harvest_wheat', 'stock_food', 'follow_owner']);
-
-// Out after dark only with a sword in the bag and a chestplate on.
-function fitForNight(bot) {
-  return Boolean(bot.inventory?.items?.().some((i) => i.name.endsWith('_sword')) && bot.inventory?.slots?.[6]);
-}
-
-// Goals that go on through the night: building the house handles its own
-// nights, pearls are hunted in the dark, and the owner is guarded where they
-// stand. Once the house was built, a guard at night went home to bed and left
-// the owner to the zombies.
-const NIGHT_GOALS = new Set(['homestead', 'guest_bed', 'hunt_pearls', 'follow_owner', 'come_to_owner']);
-
-/**
- * Where night rest takes the bot: { bed, centre } of the finished house,
- * { bed: null, centre: null } to dig in where it stands, or null to go on.
- * Any other task stops for the night, house or no house: a farm with nothing
- * to do but wait for wheat stood the whole night out in the open.
- */
-function nightShelter(bot, { house, goal, hunt, now = Date.now() }) {
-  if (NIGHT_GOALS.has(goal)) return null;
-  // Nor while a goal hunts a mob that only comes out at night (spiders for a bow's string):
-  // sleeping skips the very night it waits for. Only armed and armoured, though: respawned
-  // empty-handed it went straight back out and died again and again.
-  if (goal && hunt && now - hunt.at < NIGHT_HUNT_MS && fitForNight(bot)) return null;
-  // No finished house: dig in where the bot stands. Left waiting on the plot
-  // of a house it never built, an idle bot was blown up by a creeper, then
-  // killed by a phantom.
-  if (!house) return { bed: null, centre: null };
-  const available = (p) => {
-    const block = bot.blockAt(new Vec3(p.x, p.y, p.z));
-    // Out of sight means far away; a loaded cell must contain a free bed.
-    return !block || (block.name.endsWith('_bed') && String(block.getProperties?.().occupied) !== 'true');
-  };
-  const bed = [house.furniture.bed, house.furniture.guestBed].find((candidate) =>
-    candidate && available(candidate.position) && (!candidate.head || available(candidate.head)))?.position;
-  return { bed: bed ?? null, centre: house.interiorCenter };
-}
 
 // Never build scaffolding, pillar up or parkour on the surface: the bot must not leave
 // self-placed obstacles behind, and a target that needs such moves is skipped.
@@ -191,8 +152,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   const configuredMovements = configureMovements(bot);
 
   // Stuck bodies, full bags and death loops are recovered for every goal alike.
-  const recovery = createRecovery({ bot, activeGoal: () => brain?.status().goal?.name,
-    stopOnDeathLoop: () => !director?.ownsGoal() });
+  const recovery = createRecovery({ bot, stopOnDeathLoop: () => !director?.ownsGoal() });
   // Animals the current goal keeps (a ranch's herd) are not hunted for food.
   let spare = () => false;
   let director = null;
@@ -254,19 +214,15 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       })]);
     } finally { clearTimeout(timer); }
   }
-  // Nights: home to bed once the house is done, dug in where it stands before
-  // that (see nightShelter).
-  const nightRest = createNightRest({ bot,
-    shelterDoor: (ctx, open) => director?.memory.homestead?.shelterDoor?.(ctx, open),
-    enterShelter: (ctx) => director?.memory.homestead?.enterShelter?.(ctx),
+  const nightRest = createNightRest({ bot, adaptation,
+    activeGoal: () => brain?.status().goal?.name,
+    shelterDoor: (ctx, open) => homestead()?.shelterDoor?.(ctx, open),
+    enterShelter: (ctx) => homestead()?.enterShelter?.(ctx),
     prepareSeals: () => Boolean(autonomy && director?.isEnabled() && !survey && !paused && (!goalOwner || director.ownsGoal())
-      && !director.memory.homestead?.memory.established),
+      && !homestead()?.memory.established),
     home: () => {
-      const homestead = director?.memory.homestead;
-      const built = homestead?.memory;
-      const spot = nightShelter(bot, { house: built?.established ? built.house : null,
-        goal: brain?.status().goal?.name || null, hunt: bot.companionNightHunt });
-      return spot?.centre ? { ...spot, inside: homestead.isInside() } : spot;
+      const site = homestead()?.shelterSite?.();
+      return site ? { ...nightShelter(bot, site), inside: site.inside, entrance: site.house.entrance } : { bed: null, centre: null };
     } });
   const homeMaintenance = createHomeMaintenance({ bot, home: () => director?.memory.homestead,
     activeGoal: () => brain?.status().goal?.name,
@@ -347,6 +303,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   });
   brain = createBrain({
     schedule,
+    taskAllowed: (state, def) => Boolean(survey) || nightRest.taskAllowed(state, def.name),
     abandonMs: retirementTimeoutMs,
     perceive: () => perceive(bot),
     behaviors,

@@ -1,21 +1,9 @@
 'use strict';
 
+const { nightBudget, travelTicks } = require('./behaviors/nightRest');
+
 const DEFAULT_TASK_VALUE = 50;
 const DANGER = Object.freeze({ health: 6, food: 6, riskyFoodHealth: 8, healingHealth: 10, air: 8, woundedAir: 16 });
-
-function travelTicks(from, to) {
-  if (!from || !to) return Infinity;
-  // Two blocks per second includes ordinary path detours. Elevation costs more than flat walking.
-  return Math.ceil(10 * Math.hypot(from.x - to.x, from.z - to.z) + 20 * Math.abs(from.y - to.y));
-}
-
-function nightBudget(state, home) {
-  const time = state.timeOfDay;
-  const dark = state.isDay === false;
-  const ticksToDark = dark ? 0 : Number.isFinite(time) ? (12_542 - time + 24_000) % 24_000 : Infinity;
-  const distanceHome = state.position && home ? Math.hypot(state.position.x - home.x, state.position.z - home.z) : 0;
-  return { dark, dusk: ticksToDark <= 1_742, ticksToDark, distanceHome, returnTicks: travelTicks(state.position, home) };
-}
 
 function schedulingInputs(state, { home, task } = {}) {
   return { state, home, task, ...nightBudget(state, home) };

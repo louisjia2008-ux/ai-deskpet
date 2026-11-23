@@ -1,154 +1,204 @@
 'use strict';
-// Nights once the house is finished. The homestead goal handles its own
-// nights while it builds; after that every other goal (a mining trip, a
-// machine) would just carry on in the dark. This behavior outranks goals at
-// night: walk home and sleep in the bed (which skips the night), or wait in
-// the house if monsters are too close to sleep; caught far from home, dig in
-// where the bot stands. Underground work (a branch mine) is left alone.
-// With no house and nothing to do (a task just ended), it digs in where it is.
 
-const { waiting, factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
-const defaultActions = require('../actions');
-const defaultSkills = require('../skills');
-const { BAND } = require('../brain');
 const { sleep } = require('../confirm');
 
-const dimensionOf = (bot) => String(bot?.game?.dimension || 'overworld').replace(/^minecraft:/, '');
+const DAY_TICKS = 24_000;
+const DARK = 12_542;
+const DAWN = 23_461;
+const DUSK = 10_800;
+const LAST_SEAL_TICK = 12_100;
+const WALK_TICKS_PER_BLOCK = 10; // Two blocks per second leaves room for path detours.
+const SHELTER_TICKS = 120; // Six seconds to pass the threshold or start a local shelter.
+const NEAR_DOOR_TICKS = 60;
+const NIGHT_HUNT_MS = 5 * 60_000;
+const NIGHT_GOALS = new Set(['hunt_pearls', 'follow_owner', 'come_to_owner']);
+const overworld = (dimension) => String(dimension ?? 'overworld').replace(/^minecraft:/, '') === 'overworld';
 
-// Within this the bed is used straight away (useBed walks to it).
-const NEAR_BED = 16;
-const SEAL_PREPARE_START = 10800;
-const SEAL_PREPARE_END = 12100;
+function isDaylight(time) {
+  return Number.isFinite(time) ? time < DARK || time >= DAWN : null;
+}
 
-/**
- * `home()` returns { bed, centre, inside? } once the house is finished (bed
- * null if it is gone), { bed: null, centre: null } to dig in in place, or null.
- */
-function createNightRest({ bot, home, shelterDoor = null, enterShelter = null, prepareSeals = () => false,
-  actions = defaultActions, skills = defaultSkills, now = Date.now,
-  farDistance = 64, retryBedMs = 20000 } = {}) {
-  if (!bot || typeof home !== 'function') throw new TypeError('bot and home are required');
-  let bunker = null;
-  let bedRefusedUntil = 0;
-  let shutForSleep = false;
+function travelTicks(from, to) {
+  if (!from || !to) return Infinity;
+  return Math.ceil(WALK_TICKS_PER_BLOCK * Math.hypot(from.x - to.x, from.z - to.z)
+    + 2 * WALK_TICKS_PER_BLOCK * Math.abs(from.y - to.y));
+}
 
-  const where = () => {
-    try { return home(); } catch { return null; }
+function nightBudget(state, home) {
+  const time = state.timeOfDay;
+  const surface = overworld(state.dimension);
+  const dark = surface && (isDaylight(time) ?? state.isDay) === false;
+  const ticksToDark = dark ? 0 : surface && Number.isFinite(time) ? (DARK - time + DAY_TICKS) % DAY_TICKS : Infinity;
+  const dusk = ticksToDark <= DARK - DUSK;
+  const distanceHome = state.position && home ? Math.hypot(state.position.x - home.x, state.position.z - home.z) : 0;
+  const returnTicks = travelTicks(state.position, home);
+  const maxOutingDistance = dusk ? 0 : Math.max(0, (ticksToDark - SHELTER_TICKS - (home ? returnTicks : 0)) / (2 * WALK_TICKS_PER_BLOCK));
+  return { dark, dusk, ticksToDark, distanceHome, returnTicks, maxOutingDistance };
+}
+
+function allowedAtNight(bot, goal, hunt, now) {
+  return NIGHT_GOALS.has(goal) || Boolean(goal && hunt && now - hunt.at < NIGHT_HUNT_MS
+    && bot.inventory?.items?.().some(item => item.name.endsWith('_sword')) && bot.inventory?.slots?.[6]);
+}
+
+function nightShelter(bot, { house, goal, hunt, now = Date.now() }) {
+  if (allowedAtNight(bot, goal, hunt, now)) return null;
+  if (!house) return { bed: null, centre: null };
+  const available = (p) => {
+    const block = bot.blockAt(new Vec3(p.x, p.y, p.z));
+    return !block || (block.name.endsWith('_bed') && String(block.getProperties?.().occupied) !== 'true');
   };
-  const needsSeal = state => state.isDay === true && state.timeOfDay >= SEAL_PREPARE_START && state.timeOfDay < SEAL_PREPARE_END
+  const bed = [house.furniture.bed, house.furniture.guestBed].find(candidate =>
+    candidate && available(candidate.position) && (!candidate.head || available(candidate.head)))?.position;
+  return { bed: bed ?? null, centre: house.interiorCenter };
+}
+
+function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, enterShelter, prepareSeals = () => false, adaptation,
+  actions = require('../actions'), skills = require('../skills'), now = Date.now, retryBedMs = 20_000 } = {}) {
+  if (!bot || typeof home !== 'function') throw new TypeError('bot and home are required');
+  const { complete, factsOf, failure, isComplete, waiting } = require('../action-result');
+  const { BAND } = require('../brain');
+  const { shelterSealCount } = require('../skills');
+  let bunker = null, shutForSleep = false, missedReturn = false, bedRefusedUntil = 0;
+  const reset = () => {
+    bunker = null;
+    shutForSleep = missedReturn = false;
+    bedRefusedUntil = 0;
+    bot.companionSheltered = false;
+  };
+  const late = (budget, goal) => (budget.dusk || budget.maxOutingDistance === 0)
+    && !allowedAtNight(bot, goal, bot.companionNightHunt, now());
+  const view = (state) => ({ ...state, position: state.position ?? bot.entity?.position, dimension: bot.game?.dimension });
+  const timing = (state, spot) => nightBudget(view(state), spot?.centre);
+  const needsSeal = (state, budget) => !budget.dark && budget.ticksToDark <= DARK - DUSK && budget.ticksToDark > DARK - LAST_SEAL_TICK
     && !state.sheltered && !state.inWater && state.onGround !== false && !state.hostiles?.some(e => e.distance <= 8)
-    && prepareSeals() && defaultSkills.shelterSealCount(state.inventory) < 2 && !actions.underground?.(bot);
+    && prepareSeals() && shelterSealCount(state.inventory) < 2 && !actions.underground?.(bot);
+  const wait = async (ctx) => {
+    await sleep(3_000, ctx.signal);
+    return waiting('sheltering_until_daylight');
+  };
+
+  async function digIn(ctx, budget) {
+    ctx.record('night_rest', { action: 'dig_in', distance: budget.distanceHome, ticksToDark: budget.ticksToDark,
+      returnTicks: Number.isFinite(budget.returnTicks) ? budget.returnTicks : null });
+    const dug = await skills.digIn(bot, ctx, {
+      avoid: p => bot.companionHomeSite?.(p) || bot.blockAt?.(p.offset(0, -1, 0))?.name === 'farmland',
+      prepareSeal: prepareSeals(),
+    });
+    if (!isComplete(dug)) return dug;
+    bunker = factsOf(dug).bunker;
+    if (bunker) {
+      bot.companionSheltered = true;
+      ctx.record('night_rest', { action: 'dug_in', top: bunker.top });
+    }
+    return dug;
+  }
+
+  async function goHome(ctx, spot, budget) {
+    const timeoutMs = Math.max(2_000, (budget.ticksToDark - SHELTER_TICKS) * 50);
+    const expiry = AbortSignal.timeout(timeoutMs);
+    const signal = ctx.signal ? AbortSignal.any([ctx.signal, expiry]) : expiry;
+    const travel = { ...ctx, signal, dryRoute: true };
+    let moved;
+    try {
+      const crossed = await enterShelter?.(travel);
+      if (isComplete(crossed) || crossed?.wait || ctx.signal?.aborted) return crossed;
+      ctx.record('night_rest', { action: budget.dark ? 'go_home' : 'dusk_home', distance: Math.round(budget.distanceHome),
+        ticksToDark: budget.ticksToDark, returnTicks: budget.returnTicks });
+      const destination = spot.entrance && budget.returnTicks > NEAR_DOOR_TICKS ? spot.entrance : spot.centre;
+      moved = await actions.goNear(bot, travel, destination, 0, { exact: true, retryNoProgress: false, timeoutMs });
+    } catch (error) {
+      if (!expiry.aborted || ctx.signal?.aborted) throw error;
+    }
+    if (expiry.aborted && !ctx.signal?.aborted) {
+      missedReturn = true;
+      return failure('path_timeout', {}, ctx, bot);
+    }
+    if (moved?.ok === false && !['start', 'interrupted'].includes(moved.kind) && !ctx.signal?.aborted) missedReturn = true;
+    return moved;
+  }
 
   const behavior = {
     name: 'night_rest',
     band: BAND.MAINTENANCE,
+    taskAllowed(state, goal) {
+      if (!overworld(bot.game?.dimension)) return true;
+      if (bunker || shutForSleep) return false;
+      return !late(timing(state, home()), goal);
+    },
     want(state) {
-      if (dimensionOf(bot) !== 'overworld') return 0;
-      if (bunker) return 0.8;
-      if (shutForSleep && state.isDay === true) return 0.8;
-      if (needsSeal(state)) return 0.5;
-      if (state.isDay !== false || state.sheltered) return 0;
-      const spot = where();
-      if (!spot) return 0;
-      // The house roof also looks like "underground" to terrain detection.
-      if (!spot.inside && typeof actions.underground === 'function' && actions.underground(bot)) return 0;
+      if (!overworld(bot.game?.dimension)) return 0;
+      if (bunker || shutForSleep) return 0.8;
+      const spot = home(), budget = timing(state, spot);
+      if (needsSeal(state, budget)) return 0.5;
+      if (!spot || !late(budget, activeGoal())) {
+        missedReturn = false;
+        return 0;
+      }
       return 0.8;
     },
     async run(ctx) {
-      const state = ctx.perceive();
-      if (shutForSleep && state.isDay === true) {
-        const opened = await shelterDoor?.(ctx, true);
-        if (opened?.ok !== false) shutForSleep = false;
-        return opened || { ok: true };
-      }
+      const state = ctx.perceive(), spot = home(), budget = timing(state, spot);
+      const hold = spot && late(budget, activeGoal());
       if (bunker) {
-        // Dug in only for want of anything to do: a task given meanwhile (the
-        // owner asking to be followed) digs it out. It had sat sealed in while
-        // the owner it was told to guard was killed twenty blocks away.
-        if (state.isDay === false && where()) {
-          await sleep(3000, ctx.signal);
-          return waiting('sheltering_until_daylight');
-        }
+        if (hold) return wait(ctx);
         ctx.record('night_rest', { action: 'dig_out' });
-        const out = await skills.digOut(bot, ctx, bunker);
+        const rescue = { ...ctx, rescue: 'surface', adapt: ctx.adapt ?? adaptation?.scope(() => !ctx.signal?.aborted) };
+        const out = await skills.digOut(bot, rescue, bunker);
         if (isComplete(out)) {
           ctx.record('night_rest', { action: 'dug_out' });
-          bunker = null;
-          bot.companionSheltered = false;
+          reset();
         }
         return out;
       }
-      if (needsSeal(state)) {
+      if (needsSeal(state, budget) && !shutForSleep) {
         const stock = await skills.prepareShelterSeal(bot, ctx);
         ctx.record('night_rest', { action: 'prepare_seal', ...stock });
         return stock;
       }
-      const spot = where();
-      if (!spot) return { ok: true };
-      // No bed left (broken, not yet replaced): the house itself is the shelter.
-      const anchor = spot.bed || spot.centre;
-      const bed = anchor ? new Vec3(anchor.x + 0.5, anchor.y, anchor.z + 0.5) : null;
-      const distance = bed ? bot.entity.position.distanceTo(bed) : Infinity;
-      if (distance > farDistance) {
-        ctx.record('night_rest', { action: 'dig_in', distance: Math.round(distance) });
-        const dug = await skills.digIn(bot, ctx, { prepareSeal: prepareSeals() });
-        if (!dug.ok) return dug;
-        ctx.record('night_rest', { action: 'dug_in' });
-        bunker = factsOf(dug).bunker;
-        bot.companionSheltered = true;
-        return { ok: true };
+      if (!hold) {
+        if (!shutForSleep) return complete(false);
+        const opened = await shelterDoor?.(ctx, true);
+        if (opened == null || isComplete(opened)) reset();
+        return opened ?? complete();
       }
-      if (spot.inside === false && enterShelter) {
-        const crossed = await enterShelter(ctx);
-        if (crossed?.ok) return crossed;
+      if (!spot.inside && actions.underground?.(bot)) return digIn(ctx, budget);
+      if (spot.inside === false && spot.centre && !missedReturn
+        && (budget.returnTicks + SHELTER_TICKS <= budget.ticksToDark || budget.dark && budget.returnTicks <= NEAR_DOOR_TICKS)) {
+        return goHome(ctx, spot, budget);
       }
-      if (spot.bed && now() >= bedRefusedUntil) {
-        // Close by, the bed is walked to by using it: a walk to "near the bed"
-        // could end outside the wall beside it, and the next night_rest found
-        // it still too far and walked again, all night long.
-        if (distance > NEAR_BED) {
-          ctx.record('night_rest', { action: 'go_home', distance: Math.round(distance) });
-          return actions.goNear(bot, ctx, bed, 2, { timeoutMs: 90000 });
-        }
-        ctx.record('night_rest', { action: 'sleep' });
-        const slept = await skills.useBed(bot, ctx, { position: spot.bed });
-        if (slept.ok) return slept;
-        // The owner may have occupied the preferred bed while we approached.
-        const otherBed = where()?.bed;
-        if (otherBed && !bed.equals(new Vec3(otherBed.x + 0.5, otherBed.y, otherBed.z + 0.5))) {
-          ctx.record('night_rest', { action: 'sleep', fallback: true });
-          const other = await skills.useBed(bot, ctx, { position: otherBed });
-          if (other.ok) return other;
-        }
-        // Monsters nearby: wait indoors for a while, then try the bed again.
-        bedRefusedUntil = now() + retryBedMs;
-      }
-      const centre = new Vec3(spot.centre.x + 0.5, spot.centre.y, spot.centre.z + 0.5);
-      if (spot.inside === false) {
-        ctx.record('night_rest', { action: 'shelter' });
-        return actions.goNear(bot, ctx, centre, 0, { timeoutMs: 40000, exact: true });
-      }
-      if (bot.entity.position.distanceTo(centre) > 2) {
-        ctx.record('night_rest', { action: 'shelter' });
-        return actions.goNear(bot, ctx, centre, 1, { timeoutMs: 40000 });
-      }
+      if (!spot.centre || spot.inside === false) return digIn(ctx, budget);
+
       if (shelterDoor && !shutForSleep) {
-        // A cancelled close may already have reached the server. Take
-        // ownership before awaiting it so dawn can still reopen the door.
+        // The server may close the door just before we are preempted.
         shutForSleep = true;
         const shut = await shelterDoor(ctx, false);
-        if (!shut?.ok && !ctx.signal?.aborted) shutForSleep = false;
+        if (shut != null && !isComplete(shut)) {
+          if (!ctx.signal?.aborted) shutForSleep = false;
+          return shut;
+        }
+        bot.companionSheltered = true;
         if (shut) return shut;
       }
-      await sleep(3000, ctx.signal);
-      return waiting('sheltering_until_daylight');
+      if (budget.dark && spot.bed && now() >= bedRefusedUntil) {
+        ctx.record('night_rest', { action: 'sleep' });
+        const slept = await skills.useBed(bot, ctx, { position: spot.bed });
+        if (isComplete(slept) || slept?.wait || ctx.signal?.aborted) return slept;
+        bedRefusedUntil = now() + retryBedMs;
+        const other = home()?.bed;
+        if (other && (other.x !== spot.bed.x || other.y !== spot.bed.y || other.z !== spot.bed.z)) {
+          ctx.record('night_rest', { action: 'sleep', fallback: true });
+          return skills.useBed(bot, ctx, { position: other });
+        }
+      }
+      if (shutForSleep && budget.dark) bot.companionSheltered = true;
+      return wait(ctx);
     },
   };
-  const onDeath = () => { bunker = null; shutForSleep = false; };
-  bot.on?.('death', onDeath);
-  behavior.dispose = () => bot.removeListener?.('death', onDeath);
+  bot.on?.('death', reset);
+  behavior.dispose = () => bot.removeListener?.('death', reset);
   return behavior;
 }
 
-module.exports = { createNightRest };
+module.exports = { createNightRest, isDaylight, nightBudget, nightShelter, travelTicks };

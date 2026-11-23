@@ -1,4 +1,6 @@
 'use strict';
+
+const { isDaylight } = require('./behaviors/nightRest');
 // A plain, serializable snapshot of what the bot can observe right now.
 // Behaviors decide from this snapshot only; they never cache "what happened".
 
@@ -31,10 +33,6 @@ function countInventory(items) {
   return counts;
 }
 
-function isDaylight(timeOfDay) {
-  return Number.isFinite(timeOfDay) ? timeOfDay < 12542 || timeOfDay > 23460 : null;
-}
-
 function perceive(bot, { hostileRange = 16, now = Date.now } = {}) {
   const self = bot?.entity;
   if (!self || !self.position || !Number.isFinite(bot.health)) return { alive: false, at: now() };
@@ -57,6 +55,7 @@ function perceive(bot, { hostileRange = 16, now = Date.now } = {}) {
     health: bot.health,
     food: bot.food,
     position: position.clone(),
+    dimension: bot.game?.dimension,
     onGround: self.onGround === true,
     inWater: self.isInWater === true,
     selfStuck: Boolean(bot.companionSelfStuck?.state()),

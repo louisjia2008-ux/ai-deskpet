@@ -8,6 +8,7 @@
 
 const { isComplete, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
+const { nightBudget } = require('../behaviors/nightRest');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const defaultFarming = require('../farming');
@@ -71,8 +72,11 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     // instead of going back. Walk back to the farm first.
     const c = memory.center;
     const at = bot.entity.position;
+    const budget = nightBudget(state, bot.companionHomestead?.()?.memory.house?.interiorCenter);
+    if (budget.maxOutingDistance <= 0) return waiting('waiting_for_safe_daylight');
     const enough = mode === 'sow' ? plotCount : Math.min(4, plotCount);
-    const fits = (p) => farming.choosePlots(blockAt, p, { count: plotCount, exclude: (q) => exclude(q) || unavailable(q, targets, false),
+    const fits = (p) => Math.hypot(p.x - at.x, p.z - at.z) <= budget.maxOutingDistance
+      && farming.choosePlots(blockAt, p, { count: plotCount, exclude: (q) => exclude(q) || unavailable(q, targets, false),
       findWater: (w, r) => farming.findWater(bot, w, r) }).length >= enough;
     const moveTo = (ground) => {
       ctx.record('farm', { action: 'move', from: posKey(memory.center), to: posKey(ground) });

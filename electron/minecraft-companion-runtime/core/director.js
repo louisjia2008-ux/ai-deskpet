@@ -5,6 +5,7 @@
 const { stepTarget } = require('./planner');
 const { createAdaptation } = require('./adaptation');
 const { complete, failure, isComplete } = require('./action-result');
+const { nightBudget } = require('./behaviors/nightRest');
 
 const RISKS = new Set(['low', 'medium', 'high']);
 const MINUTE = 60_000;
@@ -13,7 +14,7 @@ const RESERVE_WORK_MS = 45_000;
 /** How far a card's need counts right now; risky work waits for daylight and a healthy body. */
 function riskFactor(risk, state) {
   if (risk === 'low') return 1;
-  const night = state.isDay === false;
+  const night = nightBudget(state).dark;
   const weak = state.health < 12 || state.food < 8;
   if (risk === 'high') return night || weak ? 0 : 0.8;
   return night ? 0.4 : weak ? 0.6 : 1;
@@ -168,7 +169,7 @@ function createDirector({
         if (result?.wait) {
           if (card === 'homestead' && result.wait.reason === 'sheltering_until_daylight') {
             const state = perceive();
-            if (state?.isDay === false && state.sheltered) return null;
+            if (state && nightBudget(state).dark && state.sheltered) return null;
           }
           waits += 1;
           waitMs += Math.max(0, elapsedMs);
@@ -240,7 +241,7 @@ function createDirector({
       let card = choice.card;
       let reserveUntil = null;
       if (Number.isFinite(retryAt) && (!card || reserveCards.includes(card))) {
-        card = state.isDay === true
+        card = state.isDay === true && !nightBudget(state).dusk
           ? chooseNext(state, memory, reserveCards, { stage, cooldowns, now: at }).card || card
           : null;
         if (card) reserveUntil = Math.min(retryAt, at + RESERVE_WORK_MS);

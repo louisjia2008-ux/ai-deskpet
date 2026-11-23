@@ -10,7 +10,7 @@ const { goals } = require('mineflayer-pathfinder');
 const actions = require('../core/actions');
 const { createAdaptation } = require('../core/adaptation');
 const { createBrain } = require('../core/brain');
-const { createHomesteadGoal } = require('../core/goals/homestead');
+const { createNightRest } = require('../core/behaviors/nightRest');
 const { classifyReason, complete, createAttempt, failure, factsOf, isComplete, resultFrom, waiting } = require('../core/action-result');
 const { reasons } = require('../core/action-reasons');
 
@@ -69,30 +69,39 @@ test('canonical completion and wait have only outcome fields', () => {
   assert.equal(isComplete(failure('still_below_surface')), false);
 });
 
-test('an exhausted dawn exit keeps the homestead bunker until the bot actually emerges', async () => {
+test('an exhausted dawn exit keeps the night bunker until the bot actually emerges', async () => {
   // R3.2 seed 2: side_stairs fails, then digOut returns the do_other_work wait.
   // The following log entry wrongly claimed dug_out while the body was at Y60.
   const bunker = { top: { x: 0, y: 63, z: 0 } };
-  const bot = { entity: { position: new Vec3(0.5, 60, 0.5) }, companionSheltered: true };
+  const bot = { entity: { position: new Vec3(0.5, 63, 0.5) } };
   const records = [];
   const outcomes = [failure('still_below_surface'), waiting('adaptation_other_work', 20_000), complete()];
-  const goal = createHomesteadGoal({ bot, autonomous: true, skills: { digOut: async () => {
-    const outcome = outcomes.shift();
-    if (isComplete(outcome)) bot.entity.position.y = bunker.top.y;
-    return outcome;
-  } } });
-  goal.memory.bunker = bunker;
-  const ctx = { perceive: () => ({ isDay: true }), record: (type, data) => records.push({ type, ...data }) };
-  assert.equal((await goal.run(ctx)).reason, 'still_below_surface');
-  assert.deepEqual(await goal.run(ctx), waiting('adaptation_other_work', 20_000));
+  const rest = createNightRest({ bot, home: () => ({ centre: null }), actions: { underground: () => false }, skills: {
+    digIn: async () => {
+      bot.entity.position.y = 60;
+      return { ok: true, bunker };
+    },
+    digOut: async (_bot, _ctx, shaft) => {
+      assert.equal(shaft, bunker);
+      const outcome = outcomes.shift();
+      if (isComplete(outcome)) bot.entity.position.y = bunker.top.y;
+      return outcome;
+    },
+  } });
+  let isDay = false;
+  const ctx = { perceive: () => ({ isDay }), record: (type, data) => records.push({ type, ...data }) };
+  await rest.run(ctx);
+  isDay = true;
+  assert.equal((await rest.run(ctx)).reason, 'still_below_surface');
+  assert.deepEqual(await rest.run(ctx), waiting('adaptation_other_work', 20_000));
   assert.equal(bot.entity.position.y, 60);
-  assert.equal(goal.memory.bunker, bunker);
+  assert.equal(rest.taskAllowed(ctx.perceive(), 'homestead'), false);
   assert.equal(bot.companionSheltered, true);
-  assert.deepEqual(records, []);
-  assert.equal(isComplete(await goal.run(ctx)), true);
-  assert.equal(goal.memory.bunker, null);
+  assert.equal(records.some(event => event.action === 'dug_out'), false);
+  assert.equal(isComplete(await rest.run(ctx)), true);
+  assert.equal(rest.taskAllowed(ctx.perceive(), 'homestead'), true);
   assert.equal(bot.companionSheltered, false);
-  assert.deepEqual(records, [{ type: 'night', action: 'dug_out' }]);
+  assert.deepEqual(records.at(-1), { type: 'night_rest', action: 'dug_out' });
 });
 
 function pathBot({ wet = false } = {}) {

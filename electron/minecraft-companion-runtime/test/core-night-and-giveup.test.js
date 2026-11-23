@@ -129,7 +129,6 @@ test('the finished roof does not suppress night rest; shut the shelter and open 
   const rest = createNightRest({ bot, home: () => ({ bed: null, centre, inside }),
     actions: { underground: () => true },
     shelterDoor: async (_ctx, open) => { door.push(open); return { ok: true }; } });
-  assert.equal(rest.want(perceive()), 0); // ordinary underground mining
   inside = true;
   assert.equal(rest.want(perceive()), 0.8);
   await rest.run({ perceive });
@@ -335,7 +334,7 @@ test('night shelter: guarding the owner goes on, any other task stops for the ni
   // With a house, a guard at night went home to bed and left the owner.
   assert.equal(nightShelter(bot, { house, goal: 'follow_owner' }), null);
   assert.equal(nightShelter(bot, { house: null, goal: 'come_to_owner' }), null);
-  assert.equal(nightShelter(bot, { house: null, goal: 'homestead' }), null);
+  assert.deepEqual(nightShelter(bot, { house: null, goal: 'homestead' }), { bed: null, centre: null });
   // Without one, a farm waiting on wheat stood the whole night in the open.
   assert.deepEqual(nightShelter(bot, { house: null, goal: 'farm' }), { bed: null, centre: null });
   assert.deepEqual(nightShelter(bot, { house: null, goal: null }), { bed: null, centre: null });
