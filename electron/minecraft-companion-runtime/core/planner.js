@@ -14,12 +14,15 @@ const { KNOWLEDGE, FUELS, countKey } = require('./knowledge');
 // (repeater, torch, redstone, iron pickaxe, iron, stone pickaxe, wood...).
 const MAX_DEPTH = 24;
 
-function planNext({ requirements, inventory, stations = {}, kb = KNOWLEDGE, stepBlocked = () => 0 }) {
+const stepTarget = (step, dimension) => ({ purpose: 'director_step', entity: `${step.kind}/${step.key || step.station}`, dimension });
+const stepRetryAt = (step, planning) => planning?.ledger?.skip(stepTarget(step, planning.dimension))?.until || 0;
+
+function planNext({ requirements, inventory, stations = {}, kb = KNOWLEDGE, planning }) {
   const virt = { ...inventory };
   const restore = (snapshot) => Object.assign(virt, snapshot);
   const check = (step) => {
     if (!step || step.kind === 'blocked') return step;
-    const retryAt = stepBlocked(step.kind, step.key || step.station);
+    const retryAt = stepRetryAt(step, planning);
     return retryAt ? { kind: 'blocked', key: step.key || step.station, retryAt } : step;
   };
 
@@ -163,4 +166,4 @@ function planNext({ requirements, inventory, stations = {}, kb = KNOWLEDGE, step
   return deferred || null;
 }
 
-module.exports = { planNext };
+module.exports = { stepTarget, stepRetryAt, planNext };

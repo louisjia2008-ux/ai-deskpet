@@ -148,17 +148,17 @@ test('three failed planning attempts block the source and the planner moves on',
   const { director, advance, governor, events } = fixture();
   director.tick();
   const hooks = governor();
-  const ctx = { stepBlocked: hooks.stepBlocked, stepOutcome: (s, r) => hooks.stepOutcome(s, r, (type, data) => events.push({ type, ...data })) };
+  const ctx = { planning: hooks.planning(), stepOutcome: (s, r) => hooks.stepOutcome(s, r, (type, data) => events.push({ type, ...data })) };
   const step = { kind: 'smelt', key: 'charcoal' };
   for (let i = 0; i < 3; i++) await runPlanned(ctx, step, async () => ({ ok: false, reason: 'block_changed' }));
   assert.equal(events.at(-1).step, 'smelt/charcoal');
   assert.equal(events.at(-1).until, 601_000);
-  const args = { inventory: { oak_log: 2, stick: 1 }, stations: { furnace: true }, stepBlocked: hooks.stepBlocked };
+  const args = { inventory: { oak_log: 2, stick: 1 }, stations: { furnace: true }, planning: hooks.planning() };
   assert.equal(planNext({ ...args, requirements: [{ key: 'charcoal', count: 1 }] }).kind, 'blocked');
   assert.equal(planNext({ ...args, requirements: [{ key: 'charcoal', count: 1 }, { key: 'dirt', count: 1 }] }).key, 'dirt');
   assert.equal((await runPlanned(ctx, step, () => assert.fail('blocked action ran'))).wait?.reason, 'planning_source_blocked');
   advance(600_000);
-  assert.equal(ctx.stepBlocked('smelt', 'charcoal'), 0);
+  assert.equal(planNext({ ...args, requirements: [{ key: 'charcoal', count: 1 }] }).kind, 'smelt');
 });
 
 test('charcoal planning reserves its log before choosing fuel', () => {

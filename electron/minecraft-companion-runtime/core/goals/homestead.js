@@ -493,7 +493,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     return skills.explore(bot, ctx, memory.explore);
   }
 
-  const plan = (ctx, args) => planNext({ ...args, kb, stepBlocked: ctx.stepBlocked });
+  const plan = (ctx, args) => planNext({ ...args, kb, planning: ctx.planning });
   const runPlannerStep = (ctx, step, requirement) => runPlanned(ctx, step, attempt => executePlannerStep(attempt, step, requirement));
 
   async function executePlannerStep(ctx, step, requirement) {
@@ -1866,6 +1866,15 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     memory,
     restoreConstruction,
     status,
+    work(state) {
+      if (!memory.house || memory.established) return null;
+      const hs = houseState(), tasks = buildTasks(hs);
+      const remaining = Math.max(tasks.length, hs.missing.length);
+      if (remaining > 2) return { remaining, ready: false };
+      const stock = materialStock(hs, state.inventory);
+      return { remaining, ready: tasks.every(task => (task.purpose
+        ? supply(task.purpose, stock, memory.materialFallbacks).carried : countKey(task.material, state.inventory, kb)) > 0) };
+    },
     maintenance,
     observeParts,
     repairPart,

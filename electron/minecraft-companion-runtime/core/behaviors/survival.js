@@ -8,6 +8,7 @@ const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
 const { BAND } = require('../brain');
+const { DANGER } = require('../scheduling');
 const { sleep, waitUntil, abortError } = require('../confirm');
 const { isFireResistancePotion, hasEffect } = require('../netherStructures');
 const { isHostile } = require('../perception');
@@ -284,7 +285,6 @@ const STEP_BLOCKS = new Set(['cobblestone', 'netherrack', 'blackstone', 'cobbled
 const GOLDEN_APPLES = new Set(['golden_apple', 'enchanted_golden_apple']);
 const SHOOTERS = new Set(['blaze', 'ghast']);
 // Air (of 20) below which a hurt bot in water goes up before anything else.
-const HURT_AIR = 16;
 const KEPT_DROPS = new Set(['string', 'blaze_rod', 'wither_skeleton_skull', 'ender_pearl']);
 // The mobs that can drop one of them.
 const KEEPERS = new Set(['spider', 'cave_spider', 'blaze', 'wither_skeleton', 'enderman']);
@@ -313,8 +313,8 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   suppressDeathDrops = () => false, autonomousHunt = false, thresholds = {} } = {}) {
   // At night an archer is not chased far: out there more of them spawn, and
   // the way home to bed is the better defence.
-  const t = { ghastRange: 48, escapeHealth: 6, healHealth: 10, escapeRange: 6, defendRange: 5, rangedRange: 14, nightRangedRange: 6, rangedHealth: 14, eatFood: 14,
-    eatQuietRange: 4, provisionFood: 12, provisionHealth: 10, recoverHealth: 10, provisionInjured: 16, recoverFood: 18, oxygen: 8, dropsTtlMs: 270000,
+  const t = { ghastRange: 48, escapeHealth: DANGER.health, healHealth: DANGER.healingHealth, escapeRange: 6, defendRange: 5, rangedRange: 14, nightRangedRange: 6, rangedHealth: 14, eatFood: 14,
+    eatQuietRange: 4, provisionFood: 12, provisionHealth: 10, recoverHealth: 10, provisionInjured: 16, recoverFood: 18, oxygen: DANGER.air, dropsTtlMs: 270000,
     walkSpeed: 4, dropsMaxDistance: 600, swimScale: 1, provisionRange: 160,
     stockFood: 6, stockRange: 24, stockWindowMs: 60000,
     ...thresholds };
@@ -323,7 +323,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   const foodCheck = isFood || ((name) => Boolean(bot.registry.foodsByName?.[name]));
   const hasSafeFood = (state, desperate) => Object.entries(state.inventory)
     .some(([name, count]) => count > 0 && foodCheck(name) && (desperate || !RISKY_FOODS.has(name)));
-  const desperateForFood = (state) => state.food <= 6 || state.health <= 8;
+  const desperateForFood = (state) => state.food <= DANGER.food || state.health <= DANGER.riskyFoodHealth;
   const safeSurveyItem = (item) => isSurveySurvivalItem(bot, item);
   // Zombified piglins (and piglins, while the bot wears gold) leave the bot
   // alone unless provoked, and hitting one turns the whole group. Only a mob
@@ -573,7 +573,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     want(state) {
       if (threats(state).some((h) => h.distance <= t.eatQuietRange)) return 0;
       // A goal mid-dodge (out of a taking-off dragon's path) must not stop to eat.
-      if ((bot.companionNoEatUntil || 0) > Date.now() && state.health > 6) return 0;
+      if ((bot.companionNoEatUntil || 0) > Date.now() && state.health > DANGER.health) return 0;
       const hungry = state.food <= t.eatFood || (state.health < 16 && state.food < 20);
       // Risky food (rotten flesh, raw chicken) only when starving or nearly dead.
       if (!hungry) return 0;
@@ -1007,7 +1007,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     // breathe cutting every meal short kept a hurt bot from ever eating
     // (340 times over, half an hour in a flooded cave).
     want: (state) => (state.inWater && Number.isFinite(state.oxygen)
-      && (state.oxygen < t.oxygen || (state.oxygen < HURT_AIR && state.health < t.recoverHealth)) ? 1 : 0),
+      && (state.oxygen < t.oxygen || (state.oxygen < DANGER.woundedAir && state.health < t.recoverHealth)) ? 1 : 0),
     async run(ctx) {
       bot.pathfinder?.setGoal(null);
       bot.setControlState('jump', true);
@@ -1121,7 +1121,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       if (reading(state).stance !== 'calm') return 0;
       // Chasing animals at low health gets the bot killed at night; by day with
       // nothing hostile around it is the only way back to regenerating.
-      if (state.health < t.provisionHealth && state.food > 6
+      if (state.health < t.provisionHealth && state.food > DANGER.food
         && (state.isDay === false || threats(state).some((h) => h.distance <= 16))) return 0;
       return 0.5;
     },

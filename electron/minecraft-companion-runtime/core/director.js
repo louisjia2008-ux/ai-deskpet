@@ -2,6 +2,7 @@
 // Score autonomous cards when the body is available. A running goal can
 // yield after bounded waits or consecutive failures.
 
+const { stepTarget } = require('./planner');
 const { createAdaptation } = require('./adaptation');
 const { complete, failure, isComplete } = require('./action-result');
 
@@ -112,8 +113,6 @@ function createDirector({
   function governor(card, definition) {
     let waits = 0, waitMs = 0, streak = null;
     const ledger = adaptation?.failureLedger;
-    const destination = (kind, item) => ({ purpose: 'director_step', entity: `${kind}/${item}`,
-      dimension: perceive()?.dimension });
     let recoveredRevision = null;
     return {
       adapt: adaptation && ((valid) => adaptation.scope(valid)),
@@ -137,14 +136,12 @@ function createDirector({
         if (p.method === 'do_other_work') return adaptation.defer(p);
         return null;
       },
-      stepBlocked(kind, item) {
-        return ledger?.skip(destination(kind, item))?.until || 0;
-      },
+      planning: () => ({ ledger, dimension: perceive()?.dimension }),
       stepOutcome(step, result, record) {
         clearFailures(card, result);
         if (!ledger || !result || result.wait || ['start', 'interrupted'].includes(result.kind)
           || result.facts?.target || result.facts?.adaptation || result.facts?.terminal) return result;
-        const target = destination(step.kind, step.key || step.station);
+        const target = stepTarget(step, perceive()?.dimension);
         if (streak && (streak.entity !== target.entity || streak.dimension !== target.dimension) && !ledger.skip(streak)) {
           ledger.clearOnSuccess(streak);
         }

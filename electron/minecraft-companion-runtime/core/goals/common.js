@@ -4,6 +4,7 @@
 // homestead uses, without a house to put the table in.
 
 const { Vec3 } = require('vec3');
+const { stepRetryAt } = require('../planner');
 const { familyOf } = require('../knowledge');
 const { naturalCover } = require('../natural-cover');
 const { createAttempt, resultFrom, waiting, factsOf } = require('../action-result');
@@ -14,7 +15,7 @@ const TABLE_NEAR = 16;
 
 async function runPlanned(ctx, step, execute) {
   if (step.kind === 'blocked') return waiting('planning_sources_blocked', step.retryAt);
-  const until = ctx.stepBlocked?.(step.kind, step.key || step.station);
+  const until = stepRetryAt(step, ctx.planning);
   if (until) return waiting('planning_source_blocked', until);
   ctx = createAttempt(ctx);
   const raw = await execute(ctx);

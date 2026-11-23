@@ -111,9 +111,7 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, mayRepair =
 
   return {
     name: 'home_maintenance',
-    // A smaller want cannot preempt work in the same band. Keep house work
-    // below survival maintenance so eating/rest can cancel even a long hunt.
-    band: BAND.MAINTENANCE - 1,
+    band: BAND.MAINTENANCE,
     want(state) {
       const work = next(current(), state);
       return work === 'home' ? 0.2 : work ? 0.1 : 0;

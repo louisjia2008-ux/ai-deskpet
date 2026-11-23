@@ -4,12 +4,15 @@
 
 const { complete, failure, createAttempt, FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior, resultFrom } = require('./action-result');
 const { interruptedWork } = require('./work-target');
+const { DANGER, DEFAULT_TASK_VALUE, maintenanceUrgency, schedulingInputs } = require('./scheduling');
 const BAND = Object.freeze({ IDLE: 0, GOAL: 50, MAINTENANCE: 100, DEFENSE: 120, ESCAPE: 130 });
 const START_RETRY_DELAY_MS = 2_000; // Let the blocked body settle without increasing the backoff.
 
 function createBrain({
   perceive,
   behaviors = [],
+  schedule = schedulingInputs,
+  taskAllowed = () => true,
   permanentEnabled = () => true,
   now = Date.now,
   onEvent = () => {},
@@ -69,7 +72,7 @@ function createBrain({
     return {
       name: `goal:${def.name}`,
       band: BAND.GOAL,
-      want: (state) => (isGoalDone(entry, state) ? 0 : 1),
+      want: (state) => (taskAllowed(state, def) && !isGoalDone(entry, state) ? 1 : 0),
       run: (ctx) => def.run(ctx),
       isGoal: true,
       goalEntry: entry,
@@ -85,8 +88,14 @@ function createBrain({
   }
 
   function choose(state) {
+    const def = goal?.def;
+    let task;
+    if (def) {
+      try { task = def.work?.(state); } catch { /* Progress estimates are optional. */ }
+      task = { ...task, returning: task?.returning || def.name === 'return_and_store' };
+    }
+    const inputs = schedule(state, { task });
     let best = null;
-    let bestWant = 0;
     for (const behavior of candidates()) {
       const cooldown = failures.get(behavior.name);
       const times = recentFailures.get(behavior.name);
@@ -96,12 +105,24 @@ function createBrain({
         emit('want_error', { behavior: behavior.name, reason: describe(error), ...correlation(behavior.goalEntry) });
       }
       if (want <= 0) continue;
-      if (!best || behavior.band > best.band || (behavior.band === best.band && want > bestWant)) {
-        best = behavior;
-        bestWant = want;
-      }
+      const choice = rating(behavior, want, inputs);
+      if (choice.value > 0 && outranks(choice, best)) best = choice;
     }
-    return best;
+    return { best, inputs };
+  }
+
+  function rating(behavior, want, inputs) {
+    const { state } = inputs;
+    if (behavior.band >= BAND.DEFENSE || behavior.band === BAND.IDLE) return { behavior, tier: behavior.band, value: want, want };
+    if (behavior.name === 'eat' && state.food <= DANGER.food) return { behavior, tier: BAND.DEFENSE, value: want, want };
+    const value = behavior.band === BAND.GOAL
+      ? (behavior.goalEntry?.autonomy?.value?.() ?? DEFAULT_TASK_VALUE)
+      : maintenanceUrgency(behavior.name, want, inputs);
+    return { behavior, tier: BAND.GOAL, value, want };
+  }
+
+  function outranks(candidate, other) {
+    return !other || candidate.tier > other.tier || candidate.tier === other.tier && candidate.value > other.value;
   }
 
   function failGoalEvaluation(entry, state, error, phase) {
@@ -205,9 +226,9 @@ function createBrain({
     if (delay > 0) failures.set(name, { count, until: at + delay });
   }
 
-  function start(behavior) {
+  function start({ behavior, want, tier, value }) {
     const controller = new AbortController();
-    const entry = { behavior, controller, preempted: false };
+    const entry = { behavior, controller, want, tier, preempted: false };
     const isCurrent = () => !disposed && (!behavior.isGoal || behavior.goalEntry === goal);
     const ctx = createAttempt({
       signal: controller.signal,
@@ -225,7 +246,7 @@ function createBrain({
     if (autonomous) {
       behavior.goalEntry.startedAt = now();
       ctx.adapt = autonomous.adapt?.(() => running === entry && isCurrent() && !controller.signal.aborted);
-      ctx.stepBlocked = autonomous.stepBlocked;
+      ctx.planning = autonomous.planning?.();
       ctx.stepOutcome = (step, result) => {
         if (isCurrent() && !controller.signal.aborted) return autonomous.stepOutcome(step, result, ctx.record);
       };
@@ -279,7 +300,7 @@ function createBrain({
       });
     inFlight.add(entry);
     running = entry;
-    emit('behavior_started', { behavior: behavior.name, band: behavior.band, attemptId: ctx.attemptId, ...correlation(behavior.goalEntry) });
+    emit('behavior_started', { behavior: behavior.name, band: tier, urgency: value, attemptId: ctx.attemptId, ...correlation(behavior.goalEntry) });
   }
 
   async function preempt(reason, entry = running, required = false) {
@@ -325,23 +346,27 @@ function createBrain({
       if (idleGoal && !paused && !running && isGoalDone(idleGoal, state)) {
         await settleGoal(idleGoal, state, complete(false), false);
       }
-      const best = choose(state);
+      let { best, inputs } = choose(state);
       if (running) {
         const current = running.behavior;
         // A goal replaced by another one of the same name is no longer wanted.
         const stillWanted = candidates().some((b) => b.name === current.name && b.goalEntry === current.goalEntry);
         if (!stillWanted) {
           await preempt('goal_cleared');
-        } else if (best && best.band > current.band) {
-          emit('preempted', { behavior: current.name, by: best.name, attemptId: running.attemptId, ...correlation(current.goalEntry) });
-          interruptedWork(running.controller.signal, best.name);
-          await preempt(`preempted_by:${best.name}`);
+        } else if (best && best.behavior.name !== current.name
+            && (best.tier > running.tier || best.tier === BAND.GOAL && !best.behavior.isGoal
+              && outranks(best, rating(current, running.want, inputs)))) {
+          const by = best.behavior.name;
+          emit('preempted', { behavior: current.name, by, attemptId: running.attemptId, ...correlation(current.goalEntry) });
+          interruptedWork(running.controller.signal, by);
+          await preempt(`preempted_by:${by}`);
         } else {
           return;
         }
+        if (!running && !disposed) best = choose(safePerceive() || state).best;
       }
       // Re-choose after any preemption: the world may have changed while waiting.
-      const next = running || disposed ? null : choose(safePerceive() || state);
+      const next = running || disposed ? null : best;
       if (next) start(next);
     } finally {
       deciding = false;

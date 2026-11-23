@@ -120,7 +120,7 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     // something is always ripe, and the harvest would never end.
     if (mode !== 'sow' && (mode === 'harvest' || countKey('bread', state.inventory, kb) < bread) && (inventory.wheat || 0) >= 3) {
       const breadStep = planNext({ requirements: [{ key: 'bread', count: countKey('bread', state.inventory, kb) + 1 }], inventory, stations, kb,
-        stepBlocked: ctx.stepBlocked });
+        planning: ctx.planning });
       if (breadStep && breadStep.kind !== 'farm') return step(ctx, { ...breadStep, for: 'bread' });
     }
     const ripe = mode !== 'sow' && byState('ripe')[0];
@@ -140,7 +140,7 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     // farm short of seeds in the desert tilled the same plots 400 times.
     const untilled = byState('untilled')[0];
     if (untilled && (inventory.wheat_seeds || 0) > 0) {
-      const hoeStep = planNext({ requirements: [{ key: 'hoe', count: 1 }], inventory, stations, kb, stepBlocked: ctx.stepBlocked });
+      const hoeStep = planNext({ requirements: [{ key: 'hoe', count: 1 }], inventory, stations, kb, planning: ctx.planning });
       if (hoeStep) return step(ctx, { ...hoeStep, for: 'hoe' });
       ctx.record('farm', { action: 'till', plot: posKey(untilled) });
       return work('till', untilled);
@@ -174,6 +174,11 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
         && (!(state.inventory.wheat_seeds > 0) || !count(['empty']));
     },
     progress: () => memory.steps,
+    work(state) {
+      if (mode !== 'sow') return null;
+      const remaining = plotCount - count(['growing', 'ripe']);
+      return { remaining, ready: (state.inventory.wheat_seeds || 0) >= remaining && countKey('hoe', state.inventory, kb) > 0 };
+    },
     async run(ctx) {
       const result = await runOnce(ctx);
       if (isComplete(result)) memory.steps += 1;

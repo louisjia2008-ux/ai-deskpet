@@ -6,6 +6,7 @@ const { dimension } = require('./nether');
 const { Vec3 } = require('vec3');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { createBrain } = require('./brain');
+const { schedulingInputs } = require('./scheduling');
 const { perceive, isDaylight, ownedItems, countInventory } = require('./perception');
 const { createDoctor, recordDoctorInput, D1 } = require('./doctor');
 const { createSurvivalBehaviors, enabledDuringSurvey } = require('./behaviors/survival');
@@ -341,7 +342,11 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
     spare = goal.spares || (() => false);
     try { return brain.setGoal(goal, metadata); } catch (error) { retireGoal(owner); throw error; }
   };
+  const schedule = (state, details) => schedulingInputs(state, {
+    home: homestead()?.memory.house?.interiorCenter, ...details,
+  });
   brain = createBrain({
+    schedule,
     abandonMs: retirementTimeoutMs,
     perceive: () => perceive(bot),
     behaviors,

@@ -63,6 +63,7 @@ function perceive(bot, { hostileRange = 16, now = Date.now } = {}) {
     oxygen: Number.isFinite(bot.oxygenLevel) ? bot.oxygenLevel : null,
     isDay: isDaylight(timeOfDay),
     timeOfDay,
+    dimension: String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, ''),
     // Set by a goal while the bot waits out the night in a sealed bunker or the finished house.
     sheltered: bot.companionSheltered === true,
     inventory: countInventory(ownedItems(bot)),

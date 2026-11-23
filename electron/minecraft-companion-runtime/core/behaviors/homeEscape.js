@@ -11,7 +11,7 @@ const { factsOf } = require('../action-result');
 function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultActions }) {
   return {
     name: 'home_escape',
-    band: BAND.MAINTENANCE + 1,
+    band: BAND.MAINTENANCE,
     want(state) {
       if (!state.alive || bot.isSleeping || String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '') !== 'overworld') return 0;
       const goal = home();

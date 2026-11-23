@@ -92,7 +92,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
   let torchRetryAt = 0, surfaceRetryAt = 0;
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   const nameAt = (p) => blockAt(p)?.name || null;
-  const plan = (ctx, args) => planNext({ ...args, kb, stepBlocked: ctx.stepBlocked });
+  const plan = (ctx, args) => planNext({ ...args, kb, planning: ctx.planning });
   // Stations put down along the way join the caller's (a copy: never theirs to keep).
   stations = { ...stations };
   const portableMemory = {};
