@@ -1,23 +1,13 @@
 'use strict';
-// Chooses what the bot does next when no player has given it a task.
-//
-// The director never moves the body. Whenever the brain has had no goal for a
-// moment it scores every registered card against the current world and hands
-// the brain the most needed goal. A running goal normally finishes before the
-// next choice, but bounded waits and repeated failures can yield the body.
-// Nothing is remembered about "how far" a goal got; the next choice reads the
-// world again, so deaths and player interruptions need no recovery.
-//
-// A card: { id, stage, risk: 'low'|'medium'|'high', requires?(state, memory),
-//           need(state, memory) -> 0..100, create(memory) -> goal }
+// Score autonomous cards when the body is available. A running goal can
+// yield after bounded waits or consecutive failures.
 
 const { createAdaptation } = require('./adaptation');
-const { failure } = require('./action-result');
+const { complete, failure } = require('./action-result');
 
 const RISKS = new Set(['low', 'medium', 'high']);
 const MINUTE = 60_000;
 const RESERVE_WORK_MS = 45_000;
-const stepKey = (kind, item) => `${kind}/${item}`;
 
 /** How far a card's need counts right now; risky work waits for daylight and a healthy body. */
 function riskFactor(risk, state) {
@@ -28,10 +18,7 @@ function riskFactor(risk, state) {
   return night ? 0.4 : weak ? 0.6 : 1;
 }
 
-/**
- * Pure choice: the highest-scoring eligible card, plus every card's score
- * (and why it was left out) for the event log.
- */
+/** Choose the highest-scoring eligible card and record why others were left out. */
 function chooseNext(state, memory, cards, { stage = 0, cooldowns = new Map(), now = Date.now() } = {}) {
   const scores = [];
   let best = null;
@@ -88,12 +75,19 @@ function createDirector({
   const emit = (type, data = {}) => {
     try { onEvent({ type, at: now(), ...data }); } catch { /* observers never break the loop */ }
   };
+  const adapt = adaptation?.scope(() => true);
+  const generic = card => adapt?.plan('goal', { target: card });
+  function clearFailures(card, result) {
+    const p = result?.ok && !result.wait && result.progress !== false && generic(card);
+    if (p?.failures) adapt.outcome(p, result);
+  }
 
   function settle(type, event) {
     const { id, expedition } = own;
     own = null;
     if (expedition) memory.homePending = true;
     if (type === 'goal_done') {
+      clearFailures(id, complete());
       adaptation?.progress();
       if (id === 'wheat_farm') {
         memory.wheatFarmDone = true;
@@ -117,16 +111,15 @@ function createDirector({
 
   function governor(card, definition) {
     let waits = 0, waitMs = 0, streak = null;
-    const generic = () => adaptation?.plan('goal', { target: card });
     const ledger = adaptation?.failureLedger;
-    const destination = (kind, item) => ({ purpose: 'director_step', entity: stepKey(kind, item),
+    const destination = (kind, item) => ({ purpose: 'director_step', entity: `${kind}/${item}`,
       dimension: perceive()?.dimension });
     let recoveredRevision = null;
     return {
       adapt: adaptation && ((valid) => adaptation.scope(valid)),
       managesFailures: Boolean(adaptation),
       async before(ctx) {
-        const p = generic();
+        const p = generic(card);
         if (!p) return null;
         if (p.method === 'recover' && recoveredRevision !== `${p.key}:${p.revision}`) {
           if (typeof definition.recover === 'function') {
@@ -148,6 +141,7 @@ function createDirector({
         return ledger?.skip(destination(kind, item))?.until || 0;
       },
       stepOutcome(step, result, record) {
+        clearFailures(card, result);
         if (!ledger || !result || result.wait || ['start', 'interrupted'].includes(result.kind)
           || result.facts?.target || result.facts?.adaptation || result.facts?.terminal) return result;
         const target = destination(step.kind, step.key || step.station);
@@ -164,10 +158,11 @@ function createDirector({
         return { ...result, facts: { ...result.facts, target: evidence } };
       },
       outcome(result, elapsedMs) {
+        clearFailures(card, result); // Direct steps such as tilling bypass the planner.
         const at = now();
         const p = result?.ok === false && !result.facts?.target && !result.facts?.adaptation && !result.facts?.terminal
-          && !['start', 'interrupted', 'material'].includes(result.kind) ? generic() : null;
-        const handled = p ? adaptation.scope(() => true).outcome(p, result) : result;
+          && !['start', 'interrupted', 'material'].includes(result.kind) ? generic(card) : null;
+        const handled = p ? adapt.outcome(p, result) : result;
         const exhausted = handled?.facts?.adaptation?.exhausted;
         if (exhausted) {
           return { card, reason: 'adaptation_exhausted', task: exhausted.task, method: exhausted.method, key: exhausted.key,

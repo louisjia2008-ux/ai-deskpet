@@ -167,7 +167,7 @@ test('a rolling minute limits mixed failure kinds across intervening successes',
       return runs === 11 ? complete() : failure(['self_stuck', 'aborted', 'unloaded', 'no_material'][runs % 4], {}, ctx);
     } }] });
   for (let i = 0; i < 23; i++) {
-    at = i * 1000;
+    at = i * 2000;
     allow = true;
     await brain.tick();
     await brain.idle();

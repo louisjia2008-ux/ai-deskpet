@@ -1,13 +1,14 @@
 'use strict';
 
 const { Vec3 } = require('vec3');
-const { classifyReason, failure, rescueOf, resultFrom } = require('./action-result');
+const { classifyReason, failure, rescueOf, resultFrom, waterRouteFailure } = require('./action-result');
 const { homeContains } = require('./home-topology');
 
 const MINUTE = 60_000;
 const MAX = 1024;
 const REGION_MAX = 128;
 const STAGED_MAX = 32;
+const CELL_CONFIRMATIONS = new Set(['till_unconfirmed', 'plant_unconfirmed', 'place_unconfirmed']);
 const policies = {
   // Persistent targets and lessons retain the original target-memory and adaptation limits.
   target: [30 * MINUTE, 3, true], chase: [10 * MINUTE, 3, true],
@@ -19,7 +20,7 @@ const policies = {
   hunt: [MINUTE, 1], hunt_far: [5 * MINUTE, 1], berry: [MINUTE, 1],
   guard_hunt: [30_000, 1],
   berry_materials: [2 * MINUTE, 1], ranch_fence: [15_000, 1], ranch_lure: [20_000, 1],
-  director_step: [10 * MINUTE, 3], mine_entrance: [10 * MINUTE, 1],
+  director_step: [10 * MINUTE, 3], mine_entrance: [10 * MINUTE, 1], route_water: [2 * MINUTE, 2],
   lava_pool_candidate: [10 * MINUTE, 3, false, 30 * MINUTE],
   // R6 callers retain their existing per-purpose duration while using the same ledger.
   legacy_30000: [30_000, 1], legacy_60000: [MINUTE, 1], legacy_120000: [2 * MINUTE, 1],
@@ -178,10 +179,11 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
     }
 
     function record(result, spec, { ladder, extending = false, review = reviewFailure } = {}) {
-      if (!valid() || result?.ok !== false || result.kind !== 'target' || result.facts?.rescue) return null;
+      if (!valid() || result?.ok !== false || result.facts?.rescue) return null;
       let fields = context(spec);
+      const confirmation = result.kind === 'environment' && fields?.goal && spec.entity == null && CELL_CONFIRMATIONS.has(result.reason);
       const rule = fields && policy(fields);
-      if (!rule || protectedCell(fields)) return null;
+      if (!rule || protectedCell(fields) || (result.kind !== 'target' && !confirmation)) return null;
       const [ttl, limit, , window] = rule;
       if (window) {
         const pool = [...entries.values()].find(e => e.purpose === fields.purpose && e.dimension === fields.dimension
@@ -197,7 +199,7 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
       const recent = window && [...(found?.recent || []).filter(at => at > failureAt - window), failureAt];
       const failures = recent ? recent.length : region ? 1 : (found?.failures || 0) + (recoveryPending ? 0 : 1);
       const sameReasonFailures = found?.reason === result.reason ? Math.min(limit, found.sameReasonFailures + (recoveryPending ? 0 : 1)) : 1;
-      const until = failureAt + (window && failures < limit ? window : ttl);
+      const until = failureAt + (window && failures < limit ? window : confirmation ? MINUTE : ttl);
       const state = { ...fields, reason: result.reason, attemptId: result.attemptId, failures, sameReasonFailures,
         witness: observed(spec), until, ...(ladder ? { ladder } : {}), ...(recent ? { recent } : {}) };
       const undo = () => {
@@ -271,6 +273,7 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
         }
         return result;
       }
+      if (waterRouteFailure(result) && result.facts.target) return result;
       const saved = record(result, spec, { extending });
       if (!saved) return bot?.companionSelfStuck?.state() ? failure('self_stuck', {}, ctx, bot) : result;
       const { undo: _undo, ...target } = saved;
@@ -278,7 +281,7 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
     }
     return { record, skip, clearOnSuccess, regionHard, clearWhere, run, avoid, recovering, capture, handoff, excluded: skip };
   }
-  const snapshot = persistent => [...entries.values()].filter(e => active(e) && (!persistent || policy(e)[2]));
+  const snapshot = persistent => [...entries.values()].filter(e => active(e) && (!persistent || (policy(e)[2] && !CELL_CONFIRMATIONS.has(e.reason))));
   const persisted = () => ({ entries: snapshot(true), staged: [...staged.values()].filter(e => e.until > now())
     .slice(-REGION_MAX).map(e => ({ ...e, items: e.items.filter(item => !item.revoked && !protectedCell(item)) })) });
   return { ...scope(), scope, snapshot, persisted, pruneProtected, stage, finish, revoke };
@@ -309,7 +312,7 @@ function ledgerFor(bot, ctx = {}) {
   const scope = scoped || ledger.scope(() => !ctx.signal?.aborted, ctx.record);
   const tracker = bot.companionSelfStuck;
   return !tracker || rescueOf(ctx) ? scope : { ...scope, record(result, spec, options) {
-    return scope.record(result, spec, { ...options, review: (fields, error, undo) => fields.position
+    return scope.record(result, spec, { ...options, review: (fields, error, undo) => fields.position && !waterRouteFailure(error)
       && tracker.failed(fields.target, error.reason, null, undo) });
   } };
 }

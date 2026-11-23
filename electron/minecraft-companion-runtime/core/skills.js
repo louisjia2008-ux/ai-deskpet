@@ -15,7 +15,7 @@ const { isLog, isSurfaceLog } = require('./goals/gatherBlocks');
 const { isAir, naturalCover, plantPartner, isWaterlogged } = require('./natural-cover');
 const { blockTarget, watchDestination } = require('./target-recovery');
 const { accepts, pickItem, seal: sealMatch, isSealSoil, isSealRock, SANDSTONE } = require('./materials');
-const { complete, factsOf, failure, resultFrom, settleAction, waiting } = require('./action-result');
+const { complete, factsOf, failure, resultFrom, settleAction, waiting, waterRouteFailure, waterRouteTarget } = require('./action-result');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
@@ -630,7 +630,6 @@ async function smelt(bot, ctx, { input, count, furnacePosition, memory }) {
   return fail('smelt_no_output');
 }
 
-/** Kills the nearest matching animal and collects its drops. */
 /** A sheep's fleece from its metadata: color name and whether it has been sheared. */
 function sheepWool(bot, entity) {
   const index = bot.registry.entitiesByName?.sheep?.metadataKeys?.indexOf('wool') ?? -1;
@@ -640,9 +639,7 @@ function sheepWool(bot, entity) {
   return { color: COLORS[value & 15], sheared: Boolean(value & 16) };
 }
 
-// An animal far above or below (on a cliff, the bot down a cave) is reached,
-// if at all, by a long dig: hungry, the bot chased pigs 80 blocks off from 40
-// blocks down for ten minutes and mined 180 cobblestone on the way.
+// Limit vertical pursuit to animals reachable without a long climb or dig.
 const HUNT_HEIGHT = 10;
 async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, accept = () => true, penalty = () => 0, targetGoal = null }) {
   const { alternateStand, dimensionOf } = require('./target-recovery');
@@ -664,15 +661,17 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, accept = () => 
   const target = Object.values(bot.entities)
     .filter((e) => mobs.includes(e.name) && e.position && e.position.distanceTo(here) <= radius
        && Math.abs(e.position.y - here.y) <= HUNT_HEIGHT && !ledger.skip(nearby(e)) && !ledger.skip(nearby(e, 'hunt_far')) && accept(e)
-       && !targets?.excluded(spec(e)) && !ledger.regionHard(e.position, dimensionOf(bot)))
+       && !targets?.excluded(spec(e)) && !ledger.skip(waterRouteTarget(bot, ctx, e.position, e.id))
+       && !ledger.regionHard(e.position, dimensionOf(bot)))
     .sort((a, b) => score(a) - score(b))[0];
   if (!target) return fail('no_mob_in_range');
   const chase = async () => {
     ctx.record('hunt_target', { mob: target.name, distance: Math.round(target.position.distanceTo(bot.entity.position)) });
     // Far animals: walk over first; the fight itself has a short timeout.
     if (target.position.distanceTo(bot.entity.position) > 12) {
-      const near = resultFrom(await actions.goNear(bot, ctx, target.position.clone(), 4, { timeoutMs: 60000 }), ctx, bot);
-      if (near.wait || near.kind === 'start' || near.kind === 'interrupted' || near.facts?.target || near.facts?.adaptation) return near;
+      const near = resultFrom(await actions.goNear(bot, ctx, target.position.clone(), 4, { timeoutMs: 60000, routeEntity: target.id }), ctx, bot);
+      if (near.wait || near.kind === 'start' || near.kind === 'interrupted' || waterRouteFailure(near)
+        || near.facts?.target || near.facts?.adaptation) return near;
       if (!bot.entities[target.id]) return near.ok ? fail('mob_gone') : near;
       if (!near.ok && bot.entities[target.id].position.distanceTo(bot.entity.position) > 8) {
         return targets ? near : recordTarget(bot, ctx, near, nearby(target, 'hunt_far'));
@@ -689,7 +688,6 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, accept = () => 
     if (!result.ok || result.wait) return targets ? result : recordTarget(bot, ctx, result, nearby(target));
     ledger.clearOnSuccess(nearby(target));
     ledger.clearOnSuccess(nearby(target, 'hunt_far'));
-    // Pick up everything it dropped: a sheep killed for mutton also gives the wool a bed needs.
     const before = actions.countItems(bot, dropMatch);
     const picked = await actions.collectDrops(bot, ctx, last, () => true, { radius: 8 });
     const wanted = actions.countItems(bot, dropMatch) - before;

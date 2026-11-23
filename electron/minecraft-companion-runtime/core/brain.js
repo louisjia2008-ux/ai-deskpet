@@ -1,13 +1,10 @@
 'use strict';
-// The single decision point for the bot's body.
-//
-// Every tick re-reads the world and picks exactly one behavior to own the body.
-// Tasks never "resume": when an interruption ends, the goal simply looks at the
-// current state again and decides what is still missing. Progress lives in the
-// world (inventory, placed blocks), not in a step pointer.
+// Each tick reads the world and chooses one behavior to own the body.
+// Interrupted goals resume by reading the changed inventory and blocks.
 
 const { complete, failure, createAttempt, FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior, resultFrom } = require('./action-result');
 const BAND = Object.freeze({ IDLE: 0, GOAL: 50, MAINTENANCE: 100, DEFENSE: 120, ESCAPE: 130 });
+const START_RETRY_DELAY_MS = 2_000; // Let the blocked body settle without increasing the backoff.
 
 function createBrain({
   perceive,
@@ -196,7 +193,11 @@ function createBrain({
     }
     const previous = failures.get(name);
     if (result.wait?.until > at && isRescueBehavior(name)) failures.set(name, { count: previous?.count || 0, until: result.wait.until });
-    if (result.wait || ['start', 'interrupted'].includes(result.kind)) return;
+    if (result.wait || result.kind === 'interrupted') return;
+    if (result.kind === 'start') {
+      if (!isRescueBehavior(name)) failures.set(name, { count: previous?.count || 0, until: at + START_RETRY_DELAY_MS });
+      return;
+    }
     if (result.ok) return failures.delete(name);
     const count = ((isGoal ? goal?.stalls : previous?.count) || 0) + 1;
     const delay = isGoal ? Math.min(3000, goalRetryDelayMs * count) : Math.min(maxCooldownMs, failureCooldownMs * 2 ** (count - 1));
@@ -217,7 +218,7 @@ function createBrain({
       },
       ...correlation(behavior.goalEntry),
       behavior: behavior.name,
-    });
+    }, safePerceive());
     entry.attemptId = ctx.attemptId;
     const autonomous = behavior.goalEntry?.autonomy;
     if (autonomous) {
@@ -266,11 +267,7 @@ function createBrain({
           if (running === entry) running = null;
           inFlight.delete(entry);
           if (entry.abandoned) emit('behavior_unblocked', { behavior: behavior.name, ...correlation(behavior.goalEntry) });
-          // Every re-plan yields a turn to packets and requests first. A
-          // behavior that settled after long synchronous work (a 128-block
-          // scan for a tree that was not there) used to be re-run from a
-          // microtask: stdin was never read again, and the host stopped
-          // answering status and chat for good while the bot looped on.
+          // Yield to packets and stdin after each attempt, even if it settled synchronously.
           if (!disposed) {
             deferredTick = new Promise((resolve) => setImmediate(() => {
               deferredTick = null;
