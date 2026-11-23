@@ -122,7 +122,16 @@ function createArchiveAdapter({ measureRequiredMaterials = false } = {}) {
     const timestamp = Number.isFinite(event.at) ? event.at : event.doctorAt;
     const at = latest = Math.max(latest ?? -Infinity, Number.isFinite(timestamp) ? timestamp : latest ?? 0);
     const input = { ...event, doctorSequence: event.doctorSequence ?? sequence };
-    if (modern) return input;
+    if (modern) {
+      const result = input.result;
+      // R3 logged the failed bunker exit on the surrounding homestead
+      // behavior before the result carried the owner of the recovery work.
+      if (input.type === 'behavior_finished' && input.behavior === 'goal:homestead'
+        && result?.kind === 'start' && result.reason === 'still_below_surface' && !Object.keys(result.facts ?? {}).length) {
+        input.result = { ...result, facts: { rescue: 'surface' } };
+      }
+      return input;
+    }
     if (measureRequiredMaterials && input.type === 'plan_step' && ['gather', 'hunt', 'craft', 'smelt'].includes(input.kind)) {
       input.requiredItem = input.key || input.item;
     }

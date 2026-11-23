@@ -1,17 +1,6 @@
 'use strict';
-// The full chain: from an empty inventory to gear (stone, then iron tools and
-// a shield) and a finished, furnished starter house whose furniture has been
-// used for real (crafted at the table, smelted in the furnace, stored in the
-// chest, slept in or set spawn at the bed).
-//
-// Every run() looks at the world and does exactly one thing:
-//   1. no site yet          -> choose one (or explore)
-//   2. site work left       -> dig an obstacle / fill a hole
-//   3. planner has a step   -> gather / craft / smelt / hunt / place a station
-//   4. house incomplete     -> place the next block or piece of furniture
-//   5. furniture unverified -> use it
-// The only memory kept across runs is the chosen site, what was left in the
-// furnace, retry times, and which furniture has been used.
+// Choose a site, build a usable house through the material planner, and
+// confirm optional upgrades against the current world.
 
 const { complete: finished, createAttempt, factsOf, failure, resultFrom, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
@@ -72,6 +61,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     return ['hunt', 'hunt_far'].some(purpose => ledger.skip(ledgerTarget(bot, purpose, e.position, { entity: e.id })));
   };
   const reportedUpgradeBlocks = new Map();
+  const verifiedParts = new Map();
   let lastSiteScout = null;
 
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
@@ -321,7 +311,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (!memory.house || !p || !insideHouse(p)) return false;
     const block = blockAt(p);
     if (!block) return false;
-    if (workSite().foundation.some((cell) => posKey(cell) === posKey(p))) {
+    if (idAt(memory.house.foundation, p) || idAt(memory.house.torchSupports, p)) {
       return block.boundingBox === 'block' && !['water', 'lava', 'bubble_column'].includes(block.name);
     }
     return expectedAt(p)(block.name, block);
@@ -445,23 +435,40 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (!memory.house) return null;
     const hs = houseState();
     const usable = complete(state, hs);
-    const upgrades = [
-      ...memory.house.furniture.torches.map(p => {
-        const blocked = hs.blocked.find(b => b.item === 'torch' && posKey(b.position) === posKey(p));
-        if (blocked) return { ...blocked, status: 'blocked' };
-        const placed = torchAt(p);
-        return { item: 'torch', position: p, status: placed ? 'placed' : nameAt(p) ? 'missing' : 'unknown' };
-      }),
-      { item: 'guestBed', position: memory.house.furniture.guestBed.position,
-        status: hs.placed.guestBed === true ? 'placed' : hs.placed.guestBed === null ? 'unknown' : 'missing' },
-    ];
-    const guestBlocked = hs.blocked.find(b => b.item === 'guestBed');
-    if (guestBlocked) upgrades[upgrades.length - 1] = { ...guestBlocked, status: 'blocked' };
-    const visible = upgrades.every(u => u.status === 'placed');
-    if (visible) memory.upgradesComplete = true;
+    const { torches, guestBed } = memory.house.furniture;
+    const part = (item, position, placed) => {
+      const blocked = hs.blocked.find(b => b.item === item && posKey(b.position) === posKey(position));
+      return { item, position, ...(blocked && { reason: blocked.reason }),
+        status: blocked ? 'blocked' : placed === true ? 'placed' : placed === false ? 'missing' : 'unknown' };
+    };
+    const upgrades = [...torches.map(p => part('torch', p, torchAt(p) || (nameAt(p) ? false : null))),
+      part('guestBed', guestBed.position, hs.placed.guestBed)];
+    if (upgrades.every(u => u.status === 'placed')) memory.upgradesComplete = true;
     else if (upgrades.some(u => ['missing', 'blocked'].includes(u.status))) memory.upgradesComplete = false;
     return { anchor: { ...memory.house.anchor }, size: memory.house.size,
       usable, finished: usable && memory.upgradesComplete === true, upgrades };
+  }
+
+  function observeParts(state, at, emit) {
+    if (!memory.established || !isNearHome(32)) return;
+    for (const part of status(state).upgrades) {
+      if (part.status === 'unknown') continue;
+      const key = part.item === 'torch' ? posKey(part.position) : part.item;
+      const prior = verifiedParts.get(key), lost = part.status !== 'placed';
+      if (prior && lost !== prior.lost) {
+        emit(lost ? 'home_part_lost' : 'home_part_restored', { ...part, lastConfirmedAt: prior.at });
+      }
+      if (prior || !lost) verifiedParts.set(key, { at: lost ? prior.at : at, lost });
+    }
+  }
+
+  const isNearHome = distance => bot.entity.position.distanceTo(v(memory.house.entrance)) <= distance;
+  function repairPart(state) {
+    if (!memory.established || state.isDay !== true || !isNearHome(20)) return null;
+    for (const [key, part] of verifiedParts) if (part.lost) {
+      if (key === 'guestBed' ? wantsGuestBed(state) : wantsLighting(state)) return key === 'guestBed' ? 'guestBed' : 'lighting';
+    }
+    return null;
   }
 
   async function explore(ctx, why) {
@@ -883,6 +890,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     retryAt = { conversion: {} };
     skipped.clear();
     reportedUpgradeBlocks.clear();
+    verifiedParts.clear();
+    memory.upgradesComplete = false;
     return { ...outcome, ok: true, abandoned: true, progress: false };
   }
 
@@ -915,10 +924,11 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     && e.position.distanceTo(bot.entity.position) <= 24 && !huntExcluded(e)
     && ((e.name === 'sheep' && !skills.sheepWool?.(bot, e)?.sheared) || e.name === 'spider'));
   function wantsGuestBed(state) {
-    if (!memory.established || memory.upgradesComplete || state.health < 16 || state.food < 12
+    if (!memory.established || state.health < 16 || state.food < 12
       || Date.now() < (memory.guestBedRetryAt || 0)) return false;
     const hs = houseState();
-    if (hs.placed.guestBed === true || hs.blocked.some((b) => b.item === 'guestBed')) return false;
+    if (hs.placed.guestBed === true || (memory.upgradesComplete && hs.placed.guestBed === null)
+      || hs.blocked.some((b) => b.item === 'guestBed')) return false;
     if (autonomous) return true;
     if (state.isDay !== true) return false;
     const spot = memory.house.furniture.guestBed.position;
@@ -942,6 +952,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const hs = houseState(ctx), state = ctx.perceive(), inventory = state.inventory;
     if (!bedsSafe(hs)) return null;
     if (hs.placed[id] === true) return { ok: true, already: true };
+    const { position, head } = memory.house.furniture[id];
+    const support = upgradeSupport(ctx, state, [position, head]);
+    if (support) return support;
     if (countKey('bed', inventory, kb)) return placeBed(ctx, id, { requireAir: true });
     const stations = { crafting_table: hs.placed.crafting_table, furnace: hs.placed.furnace };
     const step = plan(ctx, { requirements: [{ key: 'bed', count: 1 }], inventory, stations });
@@ -1012,50 +1025,49 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       ? { kind: 'no_sheep', position: area.position, radius: 128 } : null });
   }
 
+  function upgradeGoal(name, isDone, work) {
+    let steps = 0;
+    const advance = result => { steps++; return result; };
+    return { name, isDone, progress: () => steps, run: ctx => work(ctx, advance, steps) };
+  }
+
   function guestBedGoal() {
-    let done = false, steps = 0;
-    return {
-      name: 'guest_bed',
-      isDone: () => done || Boolean(memory.house && houseState().placed.guestBed === true),
-      progress: () => steps,
-      async run(ctx) {
-        const state = ctx.perceive();
-        if (autonomous) {
-          const result = await bedUpgrade(ctx, 'guestBed') || waiting('roof_not_ready_for_bed');
-          if (result.ok && !result.wait) steps++;
-          if (result.facts?.target?.excluded) memory.guestBedRetryAt = Date.now() + 5 * 60_000;
-          return result;
+    let done = false;
+    const placed = () => done || Boolean(memory.house && houseState().placed.guestBed === true);
+    return upgradeGoal('guest_bed', placed, async (ctx, advance, steps) => {
+      if (autonomous) {
+        const result = await bedUpgrade(ctx, 'guestBed') || waiting('roof_not_ready_for_bed');
+        if (result.facts?.target?.excluded) memory.guestBedRetryAt = Date.now() + 5 * 60_000;
+        return result.ok && !result.wait ? advance(result) : result;
+      }
+      const state = ctx.perceive(), { inventory } = state;
+      if (wantsGuestBed(state) && steps < 12) {
+        let result;
+        if (countKey('bed', inventory, kb)) result = await placeBed(ctx, 'guestBed', { requireAir: true });
+        else {
+          const step = plan(ctx, { requirements: [{ key: 'bed', count: 1 }], inventory, stations: { crafting_table: true } });
+          if (step?.kind === 'hunt') {
+            result = await runPlanned(ctx, step, async attempt => {
+              const hunt = (mobs, match, options) => skills.huntOne(bot, attempt, { mobs, dropMatch: match, radius: 24, ...options });
+              const sheep = await hunt(['sheep'], kb.wool.match, woolPreference(inventory));
+              return sheep.reason === 'no_mob_in_range' ? hunt(['spider'], kb.string.match) : sheep;
+            });
+          } else if (step && step.kind !== 'gather') result = await runPlannerStep(ctx, step, null);
         }
-        if (wantsGuestBed(state) && steps < 12) {
-          const inventory = state.inventory;
-          let result;
-          if (countKey('bed', inventory, kb)) {
-            result = await placeBed(ctx, 'guestBed', { requireAir: true });
-          } else {
-            const step = plan(ctx, { requirements: [{ key: 'bed', count: 1 }], inventory, stations: { crafting_table: true } });
-            if (step?.kind === 'hunt') {
-              result = await runPlanned(ctx, step, async attempt => {
-                const hunt = (mobs, match, options) => skills.huntOne(bot, attempt, { mobs, dropMatch: match, radius: 24, ...options });
-                const sheep = await hunt(['sheep'], kb.wool.match, woolPreference(inventory));
-                return sheep.reason === 'no_mob_in_range' ? hunt(['spider'], kb.string.match) : sheep;
-              });
-            } else if (step && step.kind !== 'gather') result = await runPlannerStep(ctx, step, null);
-          }
-          if (result?.ok && !result.wait) { steps += 1; return result; }
-          if (result?.wait || result?.kind === 'start' || result?.facts?.adaptation) return result;
-        }
-        memory.guestBedRetryAt = Date.now() + 5 * 60_000;
-        done = true;
-        return { ok: true, skipped: 'guest_bed_optional' };
-      },
-    };
+        if (result?.ok && !result.wait) return advance(result);
+        if (result?.wait || result?.kind === 'start' || result?.facts?.adaptation) return result;
+      }
+      memory.guestBedRetryAt = Date.now() + 5 * 60_000;
+      done = true;
+      return { ok: true, skipped: 'guest_bed_optional' };
+    });
   }
 
   function wantsLighting(state) {
-    if (!memory.established || memory.upgradesComplete || state.health < 16 || state.food < 12) return false;
+    if (!memory.established || state.health < 16 || state.food < 12) return false;
     if (autonomous) {
       const hs = houseState();
-      return hs.torches.length > 0 || memory.house.furniture.torches.some(p => !blockAt(p));
+      return hs.torches.length > 0 || (!memory.upgradesComplete && memory.house.furniture.torches.some(p => !blockAt(p)));
     }
     if (!state.isDay) return false;
     const { x, y, z } = memory.house.anchor;
@@ -1065,35 +1077,37 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       || ((bag.coal || 0) + (bag.charcoal || 0) > 0 && (bag.stick || 0) > 0));
   }
 
+  function upgradeSupport(ctx, state, cells) {
+    const support = cells.map(below).find(p => !supports(blockAt(p)));
+    if (!support) return null;
+    if (!blockAt(support)) return waiting('lighting_site_unloaded');
+    if (countKey('filler', state.inventory, kb)) return placeRecorded(ctx, support, fillMatch(), 'foundation', { requireAir: true });
+    const step = plan(ctx, { requirements: [{ key: 'dirt', count: 1 }], inventory: state.inventory, stations: {} });
+    return step ? runPlannerStep(ctx, step, null) : waiting('lighting_materials_unavailable');
+  }
+
   function lightingGoal() {
-    let steps = 0;
-    return {
-      name: 'home_lighting',
-      isDone: () => Boolean(memory.house?.furniture.torches.every(torchAt)),
-      progress: () => steps,
-      async run(ctx) {
-        const transit = autonomous && await returnForUpgrade(ctx);
-        if (transit) return transit;
-        const hs = houseState(ctx);
-        const state = ctx.perceive();
-        const torch = hs.torches[0];
-        if (!torch) return waiting(hs.blocked.find(b => b.item === 'torch')?.reason || 'lighting_site_unloaded');
-        if ((state.inventory.torch || 0) > 0) {
-          const placed = await placeRecorded(ctx, torch, (n) => n === 'torch', 'torch', { faces: DOWN, requireAir: true, passable: true });
-          if (placed.ok) steps++;
-          return placed;
-        }
-        const step = plan(ctx, { requirements: [{ key: 'torch', count: hs.torches.length }], inventory: state.inventory,
-          stations: { crafting_table: hs.placed.crafting_table, furnace: hs.placed.furnace } });
-        if (!step || step.kind === 'blocked' || (!autonomous && step.kind !== 'craft')) {
-          return waiting('lighting_materials_unavailable', Date.now() + 30_000);
-        }
-        ctx.record('home_finish_step', { step: step.kind, material: step.key, for: 'torch', missing: hs.torches.length });
-        const result = await runPlannerStep(ctx, step, null);
-        if (result.ok && !result.wait) steps++;
-        return result;
-      },
-    };
+    const placed = () => Boolean(memory.house?.furniture.torches.every(torchAt));
+    return upgradeGoal('home_lighting', placed, async (ctx, advance) => {
+      const transit = autonomous && await returnForUpgrade(ctx);
+      if (transit) return transit;
+      const hs = houseState(), state = ctx.perceive(), [torch] = hs.torches;
+      if (!torch) return waiting(hs.blocked.find(b => b.item === 'torch')?.reason || 'lighting_site_unloaded');
+      const support = upgradeSupport(ctx, state, [torch]);
+      if (support) return support;
+      if ((state.inventory.torch || 0) > 0) {
+        const result = await placeRecorded(ctx, torch, n => n === 'torch', 'torch', { faces: DOWN, requireAir: true, passable: true });
+        return result.ok ? advance(result) : result;
+      }
+      const step = plan(ctx, { requirements: [{ key: 'torch', count: hs.torches.length }], inventory: state.inventory,
+        stations: { crafting_table: hs.placed.crafting_table, furnace: hs.placed.furnace } });
+      if (!step || step.kind === 'blocked' || (!autonomous && step.kind !== 'craft')) {
+        return waiting('lighting_materials_unavailable', Date.now() + 30_000);
+      }
+      ctx.record('home_finish_step', { step: step.kind, material: step.key, for: 'torch', missing: hs.torches.length });
+      const result = await runPlannerStep(ctx, step, null);
+      return result.ok && !result.wait ? advance(result) : result;
+    });
   }
 
   function nearHouseTable() {
@@ -1371,7 +1385,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       if (!airspace()) return { ok: false, reason: 'unsafe_escape_step' };
       bot.setControlState('forward', true);
       const reached = await waitUntil(() => !airspace() || (bot.entity.position.floored().equals(candidate)
-        && bot.entity.position.distanceTo(initial) > 0.45), { timeoutMs: 1300, signal: ctx.signal, intervalMs: 25 });
+        && Math.hypot(bot.entity.position.x - candidate.x - 0.5, bot.entity.position.z - candidate.z - 0.5) < 0.25),
+      { timeoutMs: 1300, signal: ctx.signal, intervalMs: 25 });
       return reached && bot.entity.position.floored().equals(candidate) ? { ok: true } : { ok: false, reason: 'escape_step_unconfirmed' };
     } finally {
       bot.setControlState('forward', false);
@@ -1383,15 +1398,15 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const done = () => bot.entity.position.floored().equals(e);
     if (done()) return { ok: true };
     if (doorOpen() === false) await setDoor(ctx, true);
-    const feet = bot.entity.position.floored();
-    const aisle = e.offset(0, 0, 2);
-    // From a side cell next to the door, a diagonal shortcut clips the
-    // wall. Align on the level aisle before asking for the outward route.
-    if (insideRoom(feet) && feet.y === aisle.y && feet.z === aisle.z && Math.abs(feet.x - aisle.x) === 1
-      && safeStand(blockAt, feet) && safeStand(blockAt, aisle)) {
-      const landed = await waitUntil(() => bot.entity.onGround && bot.entity.position.floored().equals(feet)
-        && Math.abs(bot.entity.position.y - feet.y) < 0.1, { timeoutMs: 1000, signal: ctx.signal, intervalMs: 25 });
-      if (landed) await walkOne(ctx, aisle);
+    const feet = () => bot.entity.position.floored(), aisle = e.offset(0, 0, 2);
+    if (insideRoom(feet()) && safeStand(blockAt, feet())) {
+      const { cells, next, known } = room();
+      if (known && cells.has(posKey(feet())) && !next.has(posKey(feet()))) return failure('interior_cut_off', {}, ctx, bot);
+      let step;
+      while (!feet().equals(aisle) && (step = next.get(posKey(feet()))) && insideRoom(step)) {
+        if (!(await walkOne(ctx, step)).ok) break;
+      }
+      if (feet().equals(aisle) && (await crossDoorstep(ctx)).ok) return { ok: true };
     }
     const walked = await actions.goTo(bot, ctx, new goals.GoalBlock(e.x, e.y, e.z),
       { timeoutMs: 6500, retryNoProgress: false });
@@ -1548,7 +1563,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const stands = path.flatMap(p => [p, p.offset(0, 1, 0)]);
     const floors = path.map(p => p.offset(0, -1, 0));
     if (![...stands, ...floors].every(blockAt)) return null;
-    const action = { ...ctx, selfRescue: true };
+    const action = { ...ctx, rescue: 'home_escape' };
     const bad = stands.find(p => !clear(blockAt(p)) && !(p.z === door.z && matches('door', nameAt(p))));
     const missing = floors.find(p => !supports(blockAt(p)));
     if (!bad && !missing) {
@@ -1578,7 +1593,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   }
 
   async function escapeHome(ctx) {
-    const rescue = { ...ctx, selfRescue: true };
+    const rescue = { ...ctx, rescue: 'home_escape' };
     const initial = bot.entity.position.clone();
     const finish = async (method) => {
       if (memory.breach) {
@@ -1848,6 +1863,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     restoreConstruction,
     status,
     maintenance,
+    observeParts,
+    repairPart,
     scoutSite,
     protects,
     wantsGuestBed,

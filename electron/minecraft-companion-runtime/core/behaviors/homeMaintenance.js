@@ -1,13 +1,13 @@
 'use strict';
 // Reuse the established home's planner without replacing the current player
 // or device goal. Survival and night rest stay above this maintenance work.
-const { waiting } = require('../action-result');
+const { complete } = require('../action-result');
 const { BAND } = require('../brain');
 
 // Goals that bring their own tools and gear.
 const OWN_GEAR = new Set(['homestead', 'outfit']);
 
-function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.now,
+function createHomeMaintenance({ bot, home, activeGoal = () => null, mayRepair = () => !activeGoal(), now = Date.now,
   missingGearDelayMs = 5000, noChangeLimit = 3, retryMs = 60000, stepLimitMs = 10 * 60000, watchMs = 1000 } = {}) {
   if (!bot || typeof home !== 'function') throw new TypeError('bot and home are required');
   let gearMissingSince = null;
@@ -61,14 +61,30 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.
   }
 
   const overworld = () => String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '') === 'overworld';
+  function next(goal, state) {
+    if (!goal?.memory.established || typeof goal.maintenance !== 'function' || !overworld()) return null;
+    const active = activeGoal(), status = goal.maintenance(state);
+    const safe = now() >= retryAt && state.alive !== false && state.health >= 10 && state.food > 12
+      && state.isDay !== false && !state.sheltered && !state.hostiles?.some(h => h.distance <= 8);
+    const repair = safe && mayRepair() && goal.repairPart?.(state);
+    if (repair) return repair;
+    if (OWN_GEAR.has(active) && !(active === 'outfit' && status.missing.includes('chest'))) return null;
+    gearMissingSince = status.gear.length ? gearMissingSince ?? now() : null;
+    if (!safe) return null;
+    if (status.missing.length || status.unverified.length
+      || (gearMissingSince !== null && now() - gearMissingSince >= missingGearDelayMs)) return 'home';
+    if (goal.optionalMaintenance && !active && !status.gear.length) {
+      return goal.wantsLighting(state) ? 'lighting' : goal.wantsGuestBed(state) ? 'guestBed' : null;
+    }
+    return null;
+  }
   // House work belongs to the overworld and to a few minutes at a time.
   // Carried through the portal beside the house, a repair walk hung in the
   // Nether for four hours: stop it once the bot is out of the overworld or
   // the step runs long, whether or not the step heeds its abort.
   async function watched(ctx, step) {
     const inner = new AbortController();
-    const onAbort = () => inner.abort(ctx.signal.reason);
-    ctx.signal?.addEventListener?.('abort', onAbort, { once: true });
+    const signal = ctx.signal ? AbortSignal.any([ctx.signal, inner.signal]) : inner.signal;
     const started = now();
     let timer = null;
     const watchdog = new Promise((resolve) => {
@@ -81,7 +97,7 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.
       check();
     });
     try {
-      const run = Promise.resolve().then(() => step({ ...ctx, signal: inner.signal }));
+      const run = Promise.resolve().then(() => step({ ...ctx, signal }));
       const result = await Promise.race([run, watchdog]);
       if (!inner.signal.aborted && result && (result.reason === 'left_overworld' || result.reason === 'maintenance_timeout')) {
         inner.abort(result.reason);
@@ -90,7 +106,6 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.
       return result;
     } finally {
       clearTimeout(timer);
-      ctx.signal?.removeEventListener?.('abort', onAbort);
     }
   }
 
@@ -100,40 +115,20 @@ function createHomeMaintenance({ bot, home, activeGoal = () => null, now = Date.
     // below survival maintenance so eating/rest can cancel even a long hunt.
     band: BAND.MAINTENANCE - 1,
     want(state) {
-      const goal = current();
-      // The outfit gathers tools and gear itself: maintenance planning the same
-      // pickaxe took the body from it every few seconds and failed.
-      if (!goal?.memory.established || typeof goal.maintenance !== 'function') return 0;
-      const status = goal.maintenance(state);
-      // Except the chest it stores into: blown up by a creeper, the outfit
-      // failed chest_missing forty times an ask with maintenance held off.
-      if (OWN_GEAR.has(activeGoal()) && !(activeGoal() === 'outfit' && status.missing.includes('chest'))) return 0;
-      if (status.gear.length) gearMissingSince ??= now();
-      else gearMissingSince = null;
-      if (now() < retryAt || state.alive === false || state.health < 10 || state.food <= 12
-        || state.isDay === false || state.sheltered
-        || state.hostiles?.some((h) => h.distance <= 8)
-        || String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '') !== 'overworld') return 0;
-      const gearReady = gearMissingSince !== null && now() - gearMissingSince >= missingGearDelayMs;
-      if (status.missing.length || status.unverified.length || gearReady) return 0.2;
-      return goal.optionalMaintenance && !activeGoal() && (goal.wantsLighting(state) || goal.wantsGuestBed(state)) ? 0.1 : 0;
+      const work = next(current(), state);
+      return work === 'home' ? 0.2 : work ? 0.1 : 0;
     },
     async run(ctx) {
       const goal = current();
-      if (!goal?.memory.established) return { ok: true };
       const start = ctx.perceive();
+      const work = next(goal, start);
+      if (!work) return complete(false);
       const before = { key: observed(goal, start), still: observed(goal, start, { moved: false }) };
       let result;
       try {
-        const status = goal.maintenance(start);
-        if (goal.optionalMaintenance && !activeGoal() && !status.missing.length && !status.unverified.length && !status.gear.length) {
-          if (!upgrade || upgrade.isDone(start)) {
-            upgrade = goal.wantsLighting(start) ? goal.lightingGoal() : goal.wantsGuestBed(start) ? goal.guestBedGoal() : null;
-          }
-          result = upgrade ? await watched(ctx, (inner) => upgrade.run(inner)) : waiting('home_upgrade_unavailable');
-        } else {
-          result = await watched(ctx, (inner) => goal.run(inner));
-        }
+        const definition = work === 'home' ? goal : (upgrade?.kind === work && !upgrade.goal.isDone(start)
+          ? upgrade.goal : (upgrade = { kind: work, goal: goal[`${work}Goal`]() }).goal);
+        result = await watched(ctx, inner => definition.run(inner));
       } catch (error) {
         if (error?.code !== 'aborted' && error?.code !== 'ABORT_ERR' && error?.name !== 'AbortError') {
           try { accountAttempt(ctx, goal, before); } catch { /* Preserve the original repair exception. */ }

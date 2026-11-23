@@ -8,7 +8,9 @@ const { test } = require('node:test');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('../core/actions');
-const { classifyReason, complete, createAttempt, failure, factsOf, legacyDimensionResult, resultFrom, waiting } = require('../core/action-result');
+const { createAdaptation } = require('../core/adaptation');
+const { createBrain } = require('../core/brain');
+const { classifyReason, complete, createAttempt, failure, factsOf, resultFrom, waiting } = require('../core/action-result');
 const { reasons } = require('../core/action-reasons');
 
 test('reason catalog covers literal failure producers with no duplicate codes or implicit classification', () => {
@@ -61,8 +63,6 @@ test('canonical completion and wait have only outcome fields', () => {
   assert.deepEqual(operation, { ok: true, progress: true });
   assert.deepEqual(factsOf(operation), { ate: 'bread' });
   assert.deepEqual(waiting('daylight'), { ok: true, wait: { reason: 'daylight', until: null } });
-  assert.deepEqual(legacyDimensionResult({ ok: true, waited: true }, { behavior: 'goal:end_dragon' }),
-    waiting('dimension_action_pending'));
 });
 
 function pathBot({ wet = false } = {}) {
@@ -106,10 +106,80 @@ test('first path step failure is distinct from exhausted routes with usable star
   assert.equal(bot.listenerCount('path_reset'), 0);
 });
 
-test('self rescue and known self-stuck failures never look like target rejections', () => {
-  assert.equal(failure('not_arrived', {}, { behavior: 'home_escape' }).kind, 'start');
+test('the same failed movement belongs to rescue inside and becomes start when handed to work', async () => {
+  const ctx = createAttempt({ behavior: 'goal:homestead' });
+  const rescue = failure('not_arrived', {}, { ...ctx, rescue: 'home_escape' }, { inWater: true });
+  assert.equal(rescue.kind, 'target');
+  assert.deepEqual(rescue.facts, { rescue: 'home_escape', source: 'water' });
+  const work = resultFrom(rescue, ctx);
+  assert.equal(work.kind, 'start');
+  assert.equal(work.attemptId, rescue.attemptId);
   assert.equal(failure('block_changed', {}, {}, { selfStuck: true }).kind, 'start');
   assert.equal(failure('aborted', {}, {}, { inWater: true }).kind, 'interrupted');
+  const { failureLedger, scope } = createAdaptation();
+  const adapt = scope(() => true);
+  const position = new Vec3(13, 64, 0);
+  assert.equal(failureLedger.record(rescue, { purpose: 'gather', position }), null);
+  assert.equal(failureLedger.record(work, { purpose: 'rejected_site', position }), null);
+  await adapt.run('route', { position }, async () => rescue);
+  assert.equal(adapt.plan('route', { position }).failures, 0);
+  assert.equal(failureLedger.snapshot().length, 0);
+});
+
+test('failed pit tactics progress from path to pillar to stairs before yielding', async () => {
+  const ctx = createAttempt({ rescue: 'surface' });
+  const position = new Vec3(5, 60, 5);
+  const events = [];
+  const adapt = createAdaptation({ onEvent: event => events.push(event) }).scope(() => true);
+  const methods = [];
+  const run = () => adapt.run('pit', { position }, async method => {
+    methods.push(method);
+    return failure('still_below_surface', {}, ctx);
+  }, { threshold: 1 });
+  assert.equal((await run()).facts.adaptation.switched, true);
+  assert.equal((await run()).facts.adaptation.switched, true);
+  assert.equal((await run()).facts.adaptation.exhausted.reason, 'still_below_surface');
+  assert.equal((await run()).wait.reason, 'adaptation_other_work');
+  assert.deepEqual(methods, ['pathfinder', 'direct_pillar', 'side_stairs']);
+  assert.equal(events.filter(event => event.type === 'adaptation_attempt').length, 3);
+});
+
+test('home escape failure retains exponential behavior cooldown on a wet start', async () => {
+  let at = 0, runs = 0;
+  const brain = createBrain({ now: () => at, perceive: () => ({ alive: true, inWater: true }),
+    behaviors: [{ name: 'home_escape', band: 101, want: () => 1, async run() {
+      runs++;
+      return { ok: false, reason: 'self_escape_unconfirmed' };
+    } }] });
+  for (at of [0, 23, 1999, 2000, 2023]) { await brain.tick(); await brain.idle(); }
+  assert.equal(runs, 2);
+  assert.deepEqual(brain.status().cooldowns, [{ name: 'home_escape', until: 6000 }]);
+  await brain.dispose();
+});
+
+test('a rolling minute limits mixed failure kinds across intervening successes', async () => {
+  let at = 0, allow = false, runs = 0;
+  const events = [];
+  const brain = createBrain({ now: () => at, perceive: () => ({ alive: true }), onEvent: e => events.push(e),
+    failureCooldownMs: 0, behaviors: [{ name: 'probe', band: 1, want: () => Number(allow), async run(ctx) {
+      allow = false;
+      runs++;
+      return runs === 11 ? complete() : failure(['self_stuck', 'aborted', 'unloaded', 'no_material'][runs % 4], {}, ctx);
+    } }] });
+  for (let i = 0; i < 23; i++) {
+    at = i * 1000;
+    allow = true;
+    await brain.tick();
+    await brain.idle();
+  }
+  assert.equal(runs, 21);
+  assert.equal(events.filter(e => e.type === 'behavior_finished' && !e.result.ok).length, 20);
+  assert.equal(events.find(e => e.type === 'behavior_failure_backoff').until, 60_000);
+  at = 60_000;
+  await brain.tick();
+  await brain.idle();
+  assert.equal(runs, 22);
+  await brain.dispose();
 });
 
 test('a cancelled public action returns its attempt outcome before touching the body', async () => {

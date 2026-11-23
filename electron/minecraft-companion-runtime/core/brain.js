@@ -6,7 +6,7 @@
 // current state again and decides what is still missing. Progress lives in the
 // world (inventory, placed blocks), not in a step pointer.
 
-const { complete, failure, createAttempt, legacyDimensionResult } = require('./action-result');
+const { complete, failure, createAttempt, FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior, resultFrom } = require('./action-result');
 const BAND = Object.freeze({ IDLE: 0, GOAL: 50, MAINTENANCE: 100, DEFENSE: 120, ESCAPE: 130 });
 
 function createBrain({
@@ -25,6 +25,7 @@ function createBrain({
   if (!Number.isFinite(abandonMs) || abandonMs <= 0 || abandonMs > 2147483647) throw new TypeError('abandonMs must be a positive timer duration');
   const permanent = behaviors.map(validateBehavior);
   const failures = new Map(); // name -> { count, until }
+  const recentFailures = new Map();
   let goal = null; // unique generation: { def, generation, taskId, best, stalls, reasons }
   let generation = 0;
   let paused = false;
@@ -90,7 +91,8 @@ function createBrain({
     let bestWant = 0;
     for (const behavior of candidates()) {
       const cooldown = failures.get(behavior.name);
-      if (cooldown && cooldown.until > now()) continue;
+      const times = recentFailures.get(behavior.name);
+      if (cooldown?.until > now() || (times?.length === FAILURE_LIMIT && times[0] + FAILURE_WINDOW_MS > now())) continue;
       let want = 0;
       try { want = Number(behavior.want(state)) || 0; } catch (error) {
         emit('want_error', { behavior: behavior.name, reason: describe(error), ...correlation(behavior.goalEntry) });
@@ -185,27 +187,20 @@ function createBrain({
     }
   }
 
-  function recordOutcome(behavior, result) {
-    if (disposed || (behavior.isGoal && behavior.goalEntry !== goal)) return;
-    if (result.wait || result.kind === 'start' || result.kind === 'interrupted') return;
-    if (result.ok) {
-      failures.delete(behavior.name);
-      return;
+  function recordOutcome({ name, isGoal }, result) {
+    const at = now();
+    if (!result.ok) {
+      const times = (recentFailures.get(name) || []).filter(t => t > at - FAILURE_WINDOW_MS);
+      recentFailures.set(name, [...times, at].slice(-FAILURE_LIMIT));
+      if (times.length === FAILURE_LIMIT - 1) emit('behavior_failure_backoff', { behavior: name, until: times[0] + FAILURE_WINDOW_MS });
     }
-    // Goals are bounded by the no-progress budget and pause briefly between
-    // failures, so a step that fails instantly cannot burn the budget in a
-    // second; other behaviors back off so a failing reflex cannot monopolize the body.
-    if (behavior.isGoal) {
-      const stalls = goal?.stalls || 0;
-      if (goalRetryDelayMs > 0) {
-        failures.set(behavior.name, { count: stalls, until: now() + Math.min(3000, goalRetryDelayMs * (stalls + 1)) });
-      }
-      return;
-    }
-    const previous = failures.get(behavior.name);
-    const count = (previous?.count || 0) + 1;
-    const delay = Math.min(maxCooldownMs, failureCooldownMs * 2 ** (count - 1));
-    failures.set(behavior.name, { count, until: now() + delay });
+    const previous = failures.get(name);
+    if (result.wait?.until > at && isRescueBehavior(name)) failures.set(name, { count: previous?.count || 0, until: result.wait.until });
+    if (result.wait || ['start', 'interrupted'].includes(result.kind)) return;
+    if (result.ok) return failures.delete(name);
+    const count = ((isGoal ? goal?.stalls : previous?.count) || 0) + 1;
+    const delay = isGoal ? Math.min(3000, goalRetryDelayMs * count) : Math.min(maxCooldownMs, failureCooldownMs * 2 ** (count - 1));
+    if (delay > 0) failures.set(name, { count, until: at + delay });
   }
 
   function start(behavior) {
@@ -244,14 +239,14 @@ function createBrain({
         const early = autonomous?.before && await autonomous.before(ctx);
         if (controller.signal.aborted || !isCurrent()) return failure('aborted', {}, ctx);
         const raw = early || await behavior.run(ctx);
-        return legacyDimensionResult(raw, ctx, safePerceive());
+        return resultFrom(raw, ctx, safePerceive());
       })
       .catch(failed)
       .then(async (result) => {
         try {
           if (controller.signal.aborted) result = failure('aborted', {}, ctx);
           if (isCurrent()) {
-            if (!entry.preempted) recordOutcome(behavior, result);
+            recordOutcome(behavior, result);
             if (behavior.isGoal) await settleGoal(behavior.goalEntry, safePerceive(), result, entry.preempted);
             // A terminal observer may synchronously submit another goal. Do not
             // let this finished callback perturb that goal's recovery tracking.

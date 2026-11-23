@@ -1137,14 +1137,7 @@ async function digOut(bot, ctx, bunker) {
     const dug = await actions.digBlock(bot, ctx, seal);
     if (!dug.ok) return dug;
   }
-  const saved = bot.companionSurfaceY;
-  bot.companionSurfaceY = top.y;
-  try {
-    const up = await actions.surface(bot, ctx);
-    return up || { ok: true };
-  } finally {
-    bot.companionSurfaceY = saved;
-  }
+  return actions.surface(bot, ctx, { targetY: top.y, bunker: true });
 }
 
 /** Uses the bed: sleeps at night, otherwise sets the respawn point by interacting. */
@@ -1193,4 +1186,4 @@ async function useBed(bot, ctx, { position }) {
 const skills = { gatherOne, craft, placeAt, clearCoverAt, pourLiquid, scoopLiquid, smelt, huntOne, pickBerries, explore, useChest,
   storeItems, storeInChest, takeItems, fillBucket, useBed, digIn, digOut, prepareShelterSeal, tossStacks };
 module.exports = { isFluidSource, sheepWool, shelterSealCount, inventoryCounts, entityInside, aimAtFace };
-for (const [name, execute] of Object.entries(skills)) module.exports[name] = settleAction(execute);
+for (const [name, execute] of Object.entries(skills)) module.exports[name] = settleAction(execute, name === 'digOut' ? 'surface' : undefined);

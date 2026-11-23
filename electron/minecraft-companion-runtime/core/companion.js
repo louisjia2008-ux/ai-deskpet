@@ -261,8 +261,9 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       return spot?.centre ? { ...spot, inside: homestead.isInside() } : spot;
     } });
   const homeMaintenance = createHomeMaintenance({ bot, home: () => director?.memory.homestead,
-    activeGoal: () => brain?.status().goal?.name });
-  const homeEscape = require('./behaviors/homeEscape').createHomeEscape({ bot, tracker: selfStuck, home: homestead });
+    activeGoal: () => brain?.status().goal?.name,
+    mayRepair: () => !paused && director?.isEnabled() && (!goalOwner || director.ownsGoal()) });
+  const homeEscape = require('./behaviors/homeEscape').createHomeEscape({ bot, tracker: selfStuck, home: homestead, adaptation });
   const behaviors = [...createSurvivalBehaviors({ bot, spare: (entity) => spare(entity), autonomousHunt: autonomy,
     feeding: () => FEEDING_GOALS.has(brain?.status().goal?.name),
     // The departure gate is 18; the ordinary survival threshold is 14.
@@ -378,6 +379,10 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
     if (!alive) return;
     const at = Date.now();
     const homeGoal = memory.homestead;
+    if (dimension(bot) === 'overworld') homeGoal?.observeParts?.(state, at, (type, fields) => {
+      const { running: behavior, goal } = brain.status();
+      onEvent({ type, ...fields, behavior, goal: goal?.name || null, at });
+    });
     if (homeGoal && !homeGoal.memory.house && director.isEnabled() && !survey && !paused && (!goalOwner || director.ownsGoal())
       && dimension(bot) === 'overworld') {
       const behavior = brain.status().running;

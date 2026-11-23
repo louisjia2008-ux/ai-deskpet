@@ -25,7 +25,7 @@ function homeOf(home) {
 function recordDoctorInput(event, doctorSequence, botPosition) {
   const input = { ...event, doctorSequence };
   if (event.type === 'plan_step' && ['gather', 'hunt', 'craft', 'smelt'].includes(event.kind)) {
-    input.requiredItem = text(event.key || event.item);
+    input.requiredItem = text(event.kind === 'craft' ? event.item || event.key : event.key || event.item);
   }
   if (isDoctorFailureEvent(event)) input.doctorPosition = point(botPosition);
   return input;

@@ -8,6 +8,9 @@ const { createStarterHouse } = require('../core/blueprints/starterHouse');
 const { chooseSite, evaluateSite, chooseHillside, siteWork } = require('../core/site');
 const { createHomesteadGoal } = require('../core/goals/homestead');
 const { createHomeMaintenance } = require('../core/behaviors/homeMaintenance');
+const { createProgression } = require('../core/goals/progression');
+const { chooseNext } = require('../core/director');
+const { KNOWLEDGE } = require('../core/knowledge');
 const { createFarmGoal } = require('../core/goals/farm');
 const { createStockFoodGoal } = require('../core/goals/stockFood');
 const { createAutoSmelterGoal } = require('../core/goals/autoSmelter');
@@ -192,6 +195,86 @@ test('usable and decorated are distinct; only seeing every upgrade counts as fin
   install(h.furniture.guestBed.position, 'white_bed');
   assert.equal(goal.status(state).finished, false, 'one half is not a bed');
   install(h.furniture.guestBed.head, 'white_bed');
+  assert.equal(goal.status(state).finished, true);
+});
+
+test('a confirmed torch can be repaired during an autonomous outfit, with its support first', async () => {
+  const { h, bot, state, ctx, install } = finishedShell({ allTorches: true });
+  const torch = h.furniture.torches.find(p => p.z < anchor.z);
+  const support = { ...torch, y: torch.y - 1 };
+  const { guestBed } = h.furniture;
+  for (const p of [guestBed.position, guestBed.head]) install(p, 'white_bed');
+  Object.assign(state.inventory, { dirt: 1, iron_sword: 1, iron_pickaxe: 1, shield: 1 });
+  const placements = [], events = [];
+  const emit = (type, fields) => events.push({ type, ...fields });
+  const goal = createHomesteadGoal({ bot, anchor, autonomous: true, gear: [],
+    skills: { async placeAt(_bot, _ctx, position, match) {
+      const item = posKey(position) === posKey(support) ? 'dirt' : 'torch';
+      assert.ok(match(item));
+      placements.push(posKey(position));
+      install(position, item);
+      state.inventory[item]--;
+      return { ok: true };
+    } } });
+  assert.equal(goal.isDone(state), true);
+  goal.observeParts(state, 1000, emit);
+  const read = bot.blockAt;
+  bot.blockAt = p => posKey(p) === posKey(torch) ? null : read(p);
+  goal.observeParts(state, 2000, emit);
+  assert.deepEqual(events, [], 'unloaded is unknown');
+  bot.blockAt = read;
+  install(torch, 'air');
+  install(support, 'air');
+
+  const { cards, stageOf } = createProgression({ bot, kb: KNOWLEDGE, homeOf: () => null });
+  const memory = { homestead: goal, wheatFarmDone: true };
+  assert.equal(chooseNext(state, memory, cards, { stage: stageOf(state, memory) }).card?.id, 'home_lighting');
+  goal.observeParts(state, 3000, emit);
+  goal.observeParts(state, 4000, emit);
+  assert.deepEqual(events, [{ type: 'home_part_lost', item: 'torch', position: torch, status: 'missing', lastConfirmedAt: 1000 }]);
+
+  let mayRepair = false;
+  const maintenance = createHomeMaintenance({ bot, home: () => goal, activeGoal: () => 'outfit', mayRepair: () => mayRepair });
+  assert.equal(maintenance.want(state), 0, 'does not preempt the player');
+  mayRepair = true;
+  assert.equal(maintenance.want({ ...state, isDay: false }), 0);
+  assert.ok(maintenance.want(state) > 0);
+  assert.equal((await maintenance.run(ctx)).ok, true);
+  assert.deepEqual(placements, [posKey(support)]);
+  assert.equal(bot.blockAt(torch).name, 'air');
+  assert.equal((await maintenance.run(ctx)).ok, true);
+  assert.deepEqual(placements, [posKey(support), posKey(torch)]);
+  goal.observeParts(state, 5000, emit);
+  assert.equal(events.at(-1).type, 'home_part_restored');
+  assert.equal(maintenance.want(state), 0);
+  assert.equal(goal.status(state).finished, true);
+});
+
+test('a confirmed guest bed reopens its card when the two halves disappear', async () => {
+  const { h, bot, state, ctx, install } = finishedShell({ allTorches: true });
+  const { position, head } = h.furniture.guestBed;
+  for (const p of [position, head]) install(p, 'white_bed');
+  Object.assign(state.inventory, { white_bed: 1, iron_sword: 1, iron_pickaxe: 1, shield: 1 });
+  const goal = createHomesteadGoal({ bot, anchor, autonomous: true, gear: [],
+    skills: { async placeAt(_bot, _ctx, p, match, options) {
+      assert.ok(match('white_bed'));
+      assert.equal(posKey(p), posKey(position));
+      assert.deepEqual(options.alsoClear, [head]);
+      install(p, 'white_bed');
+      install(head, 'white_bed');
+      return { ok: true };
+    } } });
+  const notices = [];
+  assert.equal(goal.isDone(state), true);
+  goal.observeParts(state, 100, () => {});
+  for (const p of [position, head]) install(p, 'air');
+  goal.observeParts(state, 200, (type, fields) => notices.push({ type, ...fields }));
+  assert.deepEqual(notices, [{ type: 'home_part_lost', item: 'guestBed', position, status: 'missing', lastConfirmedAt: 100 }]);
+  const { cards, stageOf } = createProgression({ bot, kb: KNOWLEDGE, homeOf: () => null });
+  const memory = { homestead: goal, wheatFarmDone: true };
+  const card = chooseNext(state, memory, cards, { stage: stageOf(state, memory) }).card;
+  assert.equal(card?.id, 'guest_bed');
+  assert.equal((await card.create(memory).run(ctx)).ok, true);
   assert.equal(goal.status(state).finished, true);
 });
 

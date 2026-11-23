@@ -7,7 +7,7 @@ const { wet } = require('../dry-route');
 const { goals } = require('mineflayer-pathfinder');
 const { factsOf } = require('../action-result');
 
-function createHomeEscape({ bot, home, tracker, actions = defaultActions }) {
+function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultActions }) {
   return {
     name: 'home_escape',
     band: BAND.MAINTENANCE + 1,
@@ -22,7 +22,7 @@ function createHomeEscape({ bot, home, tracker, actions = defaultActions }) {
     },
     async run(ctx) {
       const goal = home();
-      const rescue = { ...ctx, selfRescue: true };
+      const rescue = { ...ctx, rescue: 'home_escape', adapt: ctx.adapt ?? adaptation?.scope(() => !ctx.signal?.aborted) };
       tracker.takeProbe();
       if (!tracker.state() && goal?.needsCleanup?.()) return goal.clearScaffold(rescue);
       if (!tracker.state() && goal?.memory.breach) return goal.repairHomeBreach(rescue);
@@ -48,12 +48,9 @@ function createHomeEscape({ bot, home, tracker, actions = defaultActions }) {
       }
       const stuck = tracker.state();
       const waterOrigin = stuck?.reason === 'route_origin_water' ? stuck.position : null;
-      function outOfWater(walked) {
-        if (!waterOrigin || bot.entity.isInWater || bot.entity.onGround !== true) return false;
-        const position = bot.entity.position;
-        const feet = position.floored();
-        const confirmed = walked?.ok && ['swam_ashore', 'out_of_pool'].includes(factsOf(walked).moved);
-        return (confirmed || position.distanceTo(waterOrigin) >= 2) && safeStand(p => bot.blockAt(p), feet)
+      function dryLanding() {
+        const feet = bot.entity.position.floored();
+        return !bot.entity.isInWater && bot.entity.onGround === true && safeStand(p => bot.blockAt(p), feet)
           && [-1, 0, 1].every(dy => !wet(bot.blockAt(feet.offset(0, dy, 0))));
       }
       function finish(method) {
@@ -61,19 +58,14 @@ function createHomeEscape({ bot, home, tracker, actions = defaultActions }) {
         ctx.record('self_stuck_escaped', { method, position: bot.entity.position.floored() });
         return { ok: true };
       }
-      // Another survival action or an already-started route can put the body
-      // on the bank before this behavior is scheduled. Verify that landing.
-      if (outOfWater()) return finish('dry_ground');
       const before = bot.entity.position.clone();
-      const walked = await actions.unstick(bot, rescue);
-      if (outOfWater(walked)) return finish('dry_ground');
-      if (bot.entity.position.distanceTo(before) < 2) await actions.surface(bot, rescue);
-      if (waterOrigin) {
-        if (outOfWater(walked)) return finish('dry_ground');
-        return { ok: false, reason: walked.reason || 'self_escape_unconfirmed' };
-      }
-      if (bot.entity.position.distanceTo(before) < 2) return { ok: false, reason: walked.reason || 'self_escape_unconfirmed' };
-      return finish('natural_route');
+      if (waterOrigin && before.distanceTo(waterOrigin) >= 2 && dryLanding()) return finish('dry_ground');
+      const walked = await actions.unstick(bot, rescue, waterOrigin ? { landed: dryLanding } : undefined);
+      const escaped = () => waterOrigin ? dryLanding() && (bot.entity.position.distanceTo(waterOrigin) >= 2
+        || ['swam_ashore', 'out_of_pool'].includes(factsOf(walked).moved)) : bot.entity.position.distanceTo(before) >= 2;
+      const climbed = !escaped() && !walked.wait && await actions.surface?.(bot, rescue);
+      return escaped() ? finish(waterOrigin ? 'dry_ground' : 'natural_route') : climbed?.wait ? climbed : walked.wait ? walked
+        : { ok: false, reason: walked.reason || 'self_escape_unconfirmed' };
     },
   };
 }

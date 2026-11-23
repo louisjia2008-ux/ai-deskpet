@@ -17,7 +17,7 @@ const { pickItem, isSealSoil, isSealRock } = require('./materials');
 const shore = require('./shore-route');
 const { meleeGeometry, meleeSight, MeleeFollowGoal, entitySizeEvidence } = require('./entityGeometry');
 const { surveyDigPermit, withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight } = require('./survey-plan-actions');
-const { complete, createAttempt, factsOf, failure, resultFrom, settleAction, startProblem } = require('./action-result');
+const { complete, createAttempt, factsOf, failure, rescueOf, resultFrom, settleAction, startProblem } = require('./action-result');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
@@ -153,15 +153,19 @@ function offCentre(bot) {
 
 const ROUTE_FAILURE = /^(nopath|timeout|path_timeout|not_arrived|no_progress|leg_blocked|chase_stuck)$/i;
 function routeOrigin(bot) {
-  return startProblem(null, bot) ?? (dimensionOf(bot) === 'overworld' && bot.blockAt && underground(bot) ? 'underground' : null);
+  return startProblem(bot) ?? (dimensionOf(bot) === 'overworld' && bot.blockAt && underground(bot) ? 'underground' : null);
 }
 
 function originFailure(bot, raw, before, destination, ctx) {
   if (!raw || raw.ok) return raw;
   const result = resultFrom(raw, ctx, bot);
-  if (!before || ctx?.selfRescue || !ROUTE_FAILURE.test(result.reason) || bot.entity.position.distanceTo(before) >= 2) return result;
+  if (!before || rescueOf(ctx) || !ROUTE_FAILURE.test(result.reason) || bot.entity.position.distanceTo(before) >= 2) return result;
+  const mine = bot.companionMineRoute;
+  const knownMine = cause => ['underground', 'path_first_step'].includes(cause) && mine
+    && require('./mining').knownOpen(mine, bot.entity.position.floored());
   if (result.kind === 'start') {
-    if (result.facts.source !== 'self_stuck') bot.companionSelfStuck?.force(`route_origin_${result.facts.source}`);
+    const { source } = result.facts;
+    if (source && source !== 'self_stuck' && !knownMine(source)) bot.companionSelfStuck?.force(`route_origin_${source}`);
     return result;
   }
   if (result.kind !== 'target') return result;
@@ -172,10 +176,7 @@ function originFailure(bot, raw, before, destination, ctx) {
   const blockedExit = bot.companionSelfStuck && /^nopath$/i.test(result.reason) && destination && dimensionOf(bot) === 'overworld'
     && home?.isInside?.() && homeContains(home.memory?.house, before) && !isHomeTarget(bot, destination);
   const cause = routeOrigin(bot) || (blockedExit ? 'home_exit_blocked' : null);
-  if (!cause) return result;
-  // A known mine route owns its recovery while deliberately working below ground.
-  if (cause === 'underground' && bot.companionMineRoute
-    && require('./mining').knownOpen(bot.companionMineRoute, bot.entity.position.floored())) return result;
+  if (!cause || knownMine(cause)) return result;
   bot.companionSelfStuck?.force(`route_origin_${cause}`);
   return failure('self_stuck', { source: cause }, ctx ?? result);
 }
@@ -197,7 +198,7 @@ async function goTo(bot, ctx, goal, options = {}) {
   if (Number.isFinite(targetY) && targetY - bot.entity.position.y > 3 && underground(bot)) {
     return withClimbing(bot, targetY, () => goTo(bot, ctx, goal, { ...options, targetY: undefined }));
   }
-  const before = !ctx.selfRescue && !ctx.nearDestination && bot.companionSelfStuck ? bot.entity.position.clone() : null;
+  const before = !rescueOf(ctx) && !ctx.nearDestination && bot.companionSelfStuck ? bot.entity.position.clone() : null;
   const done = (result) => {
     if (result.ok) return result;
     const p = goal.pos || (Number.isFinite(goal.x) && Number.isFinite(goal.z)
@@ -264,10 +265,10 @@ async function goToOnce(bot, ctx, goal, { timeoutMs = 30000, arrived } = {}) {
 
 async function goNear(bot, ctx, position, range = 2, options = {}) {
   ctx = createAttempt(ctx);
-  if (!ctx.selfRescue && !bot.pathfinder?.movements?.companionWalkOnly && isHomeTarget(bot, position)) {
+  if (!rescueOf(ctx) && !bot.pathfinder?.movements?.companionWalkOnly && isHomeTarget(bot, position)) {
     return goHome(bot, ctx, position, range, options);
   }
-  const tracker = !ctx.selfRescue && bot.companionSelfStuck;
+  const tracker = !rescueOf(ctx) && bot.companionSelfStuck;
   const before = tracker && bot.entity.position.clone();
   let result = await goNearAdapted(bot, before ? { ...ctx, nearDestination: true } : ctx, position, range, options);
   result = originFailure(bot, result, before, position, ctx);
@@ -284,7 +285,7 @@ async function goNearAdapted(bot, ctx, position, range, options) {
   // An exact work target already has a ladder (such as wood or diamond).
   // Keep the native travel fallbacks, but give its failed approach one owner.
   if (destination) return watchDestination(bot, ctx, destination.spec, destination.observe, walk, destination);
-  if (!ctx.adapt || options.skipAdaptation || ctx.selfRescue || dimensionOf(bot) !== 'overworld'
+  if (!ctx.adapt || options.skipAdaptation || rescueOf(ctx) || dimensionOf(bot) !== 'overworld'
     || bot.companionSelfStuck?.inTarget() || routeOrigin(bot)
     || bot.entity.position.distanceTo(position) <= range + 1.5) return walk();
   const before = bot.entity.position.clone();
@@ -303,7 +304,7 @@ async function goNearAdapted(bot, ctx, position, range, options) {
 }
 
 async function recoverHomeOrigin(bot, ctx, destination) {
-  const rescue = { ...ctx, selfRescue: true };
+  const rescue = { ...ctx, rescue: 'home_escape' };
   const mine = bot.companionMineRoute;
   for (let attempt = 0; attempt < 8; attempt += 1) {
     if (ctx.signal?.aborted) throw abortError(ctx.signal);
@@ -325,9 +326,9 @@ async function recoverHomeOrigin(bot, ctx, destination) {
     }
     const position = bot.entity.position.clone();
     ctx.record?.('home_route_recovery', { phase: 'finish', reason, from, position, destination, ok: !routeOrigin(bot),
-      result: resultFrom(result, ctx, bot) });
+      result: resultFrom(result, rescue, bot) });
     if (!routeOrigin(bot)) return null;
-    if (factsOf(result).adaptation?.exhausted) return result;
+    if (factsOf(result).adaptation?.exhausted) return resultFrom(result, ctx, bot);
     if (position.distanceTo(from) < 0.75 && !factsOf(result).adaptation?.switched) break;
   }
   return failure('home_origin_unrecovered', { source: routeOrigin(bot) }, ctx, bot);
@@ -532,7 +533,7 @@ async function goNearOnce(bot, ctx, position, range, options) {
     const result = await direct(far ? Math.min(20000, remaining()) : remaining());
     if (result.ok || !ROUTE_FAILURE.test(result.reason)) return result;
     if (result.kind === 'start' && result.facts.source !== 'water') return result;
-    if (dimensionOf(bot) === 'overworld' && !ctx.selfRescue && !bot.pathfinder?.movements?.companionWalkOnly
+    if (dimensionOf(bot) === 'overworld' && !rescueOf(ctx) && !bot.pathfinder?.movements?.companionWalkOnly
       && shore.waterContact(bot, true)) {
       return await walkGroundLegs(bot, scoped, position, goal, route, 'travel', result);
     }
@@ -545,7 +546,7 @@ async function goNearOnce(bot, ctx, position, range, options) {
       const step = 16 / flat;
       const waypoint = new goals.GoalNearXZ(here.x + dx * step, here.z + dz * step, 3);
       const before = here.clone();
-      const guarded = dimensionOf(bot) === 'overworld' && !ctx.selfRescue && !bot.pathfinder?.movements?.companionWalkOnly;
+      const guarded = dimensionOf(bot) === 'overworld' && !rescueOf(ctx) && !bot.pathfinder?.movements?.companionWalkOnly;
       const cost = guarded && shore.routeCost(bot, goal, before);
       const moved = await attempt(waypoint, { timeoutMs: Math.min(20000, remaining()), ...(guarded ? {} : { arrived: () => true }) });
       if (guarded) {
@@ -1074,17 +1075,16 @@ async function blockInflow(bot, ctx, feet) {
   return waitUntil(() => bot.blockAt(feet.offset(0, 1, 0))?.name !== 'water', { timeoutMs: 4000, signal: ctx.signal });
 }
 
-async function unstick(bot, ctx) {
+async function unstick(bot, ctx, { landed = () => true } = {}) {
   const under = bot.blockAt(bot.entity.position.offset(0, -1, 0));
   if (under && under.name.endsWith('_leaves') && await dropThroughLeaves(bot, ctx)) return { ok: true, moved: 'off_canopy' };
   // Shut in by a closed door (shut for the night, never opened again by a
   // goal that is not the house's): the planner passes open doors only. An
   // hour of NoPath went by inside the house. Open it.
   if (await openNearDoor(bot, ctx)) return { ok: true, moved: 'opened_door' };
-  // Afloat out at sea: the planner finds no path over open water. A bot sat
-  // in a kelp bed far from land for over an hour. Swim for the nearest shore.
-  if (await swimAshore(bot, ctx)) return { ok: true, moved: 'swam_ashore' };
-  if (await stepOutOfPool(bot, ctx)) return { ok: true, moved: 'out_of_pool' };
+  // A shore approach that cannot verify a landing falls through to the next method.
+  if (await swimAshore(bot, ctx) && landed()) return { ok: true, moved: 'swam_ashore' };
+  if (await stepOutOfPool(bot, ctx) && landed()) return { ok: true, moved: 'out_of_pool' };
   if (await drainPocket(bot, ctx)) return { ok: true, moved: 'drained_pocket' };
   const pit = shallowPitTarget(bot);
   if (pit && ctx.adapt) {
@@ -1503,16 +1503,17 @@ async function digStairsDown(bot, ctx, target, { maxSteps = 16 } = {}) {
 }
 
 /** Climbs back to the surface reference level (or `targetY`) if the bot is below it. */
-async function surface(bot, ctx, { targetY } = {}) {
+async function surface(bot, ctx, { targetY, bunker = false } = {}) {
+  ctx = { ...ctx, rescue: 'surface' };
   const explicit = Number.isFinite(targetY);
-  const atSurface = () => bot.entity.onGround !== false && !underground(bot);
-  if (!underground(bot)) return null;
+  if ((!bunker && !underground(bot)) || (explicit && bot.entity.position.y >= targetY - 0.1)) return null;
   const start = bot.entity.position.floored();
-  const rim = shallowPitTarget(bot);
+  const rim = shallowPitTarget(bot) || (bunker && explicit && targetY);
   const reference = Math.max(bot.companionSurfaceY ?? start.y + 4, localSurfaceY(bot));
   const target = Math.floor(explicit ? targetY : Math.max(start.y + 2, reference));
-  if (bot.entity.position.y >= target - 1) return null;
-  const reached = () => explicit ? bot.entity.position.y >= target - 0.1 : atSurface();
+  if (!explicit && bot.entity.position.y >= target - 1) return null;
+  const reached = () => explicit ? bot.entity.position.y >= target - 0.1 : bot.entity.onGround !== false && !underground(bot);
+  const climb = (y, options) => withClimbing(bot, y + 4, () => goTo(bot, { ...ctx, nearDestination: true }, new goals.GoalY(y), options));
   if (rim && ctx.adapt) {
     const deadline = Date.now() + 30_000;
     const shaft = { position: start };
@@ -1522,15 +1523,14 @@ async function surface(bot, ctx, { targetY } = {}) {
       const legTarget = Math.min(target, nextRim);
       result = await ctx.adapt.run('pit', shaft, async (method) => {
         if (method === 'pathfinder') {
-          await withClimbing(bot, legTarget + 4, () => goTo(bot, { ...ctx, nearDestination: true }, new goals.GoalY(legTarget),
-            { timeoutMs: Math.max(1, Math.min(12000, deadline - Date.now())), retryNoProgress: false }));
+          await climb(legTarget, { timeoutMs: Math.max(1, Math.min(12000, deadline - Date.now())), retryNoProgress: false });
         } else if (method === 'direct_pillar') {
           await climbPitDirectly(bot, ctx, legTarget);
         } else {
           await digStairsUp(bot, ctx, legTarget, { maxSteps: 8, stop: reached });
         }
         return reached() || bot.entity.position.y >= legTarget - 0.1
-          ? { ok: true, surfaced: reached() } : fail('still_below_surface');
+          ? { ok: true, surfaced: reached() } : failure('still_below_surface', {}, ctx, bot);
       }, { threshold: 1 });
       if (reached() || result.wait || (!result.ok && !factsOf(result).adaptation?.switched)) return result;
       if (factsOf(result).adaptation?.exhausted) return result;
@@ -1538,8 +1538,7 @@ async function surface(bot, ctx, { targetY } = {}) {
     }
     if (result && (nextRim || !result.ok)) return result;
   }
-  const climb = { ...ctx, nearDestination: true };
-  await withClimbing(bot, target + 4, () => goTo(bot, climb, new goals.GoalY(target), { timeoutMs: 30000, arrived: () => true }));
+  await climb(target, { timeoutMs: 30000, arrived: () => true });
   if (reached()) return { ok: true, surfaced: true };
   if (rim) {
     await climbPitDirectly(bot, ctx, Math.min(rim, target));
@@ -1557,8 +1556,8 @@ module.exports = {
   surveyPlace: (bot, ctx, options) => resultFrom(surveyPlace(bot, ctx, options), ctx, bot),
   openSurveyChest, openSurveyDoor: settleAction(openSurveyDoor), closeSurveyDoor: settleAction(closeSurveyDoor), isSurveyNight,
   drainPocket,
-  recentre, surface: settleAction(surface), underground, openSky, localSurfaceY, isHomeTarget, routeOrigin, originFailure,
-  unstick: settleAction(unstick), nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, gatherClimbBlocks,
+  recentre, surface: settleAction(surface, 'surface'), underground, openSky, localSurfaceY, isHomeTarget, routeOrigin, originFailure,
+  unstick: settleAction(unstick, 'unstick'), nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, gatherClimbBlocks,
   digStairsUp, digStairsDown, goTo: settleAction(goTo), goNear: settleAction(goNear), goToDig: settleAction(goToDig), withinReach,
   digBlock: settleAction(digBlock), collectDrops: settleAction(collectDrops), countItems, eat: settleAction(eat), pickFood,
   attack: settleAction(attack), directStep, fleeFrom: settleAction(fleeFrom),

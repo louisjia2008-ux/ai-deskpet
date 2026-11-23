@@ -109,7 +109,7 @@ test('doctor retains bounded history and its public reports are detached from in
       { position: { x: 10 * n, y: 60, z: 0 } });
   }
   assert.equal(doctor.size().recent, RECENT_LIMIT);
-  assert.ok(doctor.size().active <= 8);
+  assert.ok(doctor.size().active <= 9);
   assert.ok(doctor.size().stationary <= 2);
   const snapshot = doctor.getStatus();
   snapshot.active[0].context.position.x = -123;
@@ -118,15 +118,17 @@ test('doctor retains bounded history and its public reports are detached from in
   assert.equal(doctor.getStatus().recent.length, RECENT_LIMIT);
 });
 
-test('doctor depends only on its diagnostic modules and accepts frozen data', () => {
+test('doctor depends only on diagnostics and the pure outcome catalog and accepts frozen data', () => {
   const directory = path.dirname(require.resolve('../core/doctor'));
   for (const file of ['doctor.js', 'doctor-stationary.js', 'doctor-rules.js']) {
     const source = fs.readFileSync(path.join(directory, file), 'utf8');
     for (const dependency of source.matchAll(/\brequire\s*\(\s*['"]([^'"]+)['"]/g)) {
-      assert.ok(['./doctor-stationary', './doctor-rules'].includes(dependency[1]), `${file}: ${dependency[1]}`);
+      assert.ok(['./doctor-stationary', './doctor-rules', './action-reasons'].includes(dependency[1]), `${file}: ${dependency[1]}`);
     }
     assert.doesNotMatch(source, /\bimport\b|\b(eval|Function)\s*\(/);
   }
+  const catalog = fs.readFileSync(path.join(directory, 'action-reasons.js'), 'utf8');
+  assert.doesNotMatch(catalog, /\bimport\b|\b(require|eval|Function)\s*\(/);
   const doctor = createDoctor();
   const payload = Object.freeze({ type: 'doctor_observation', at: 0, position: Object.freeze(initial), isDay: true,
     inventory: Object.freeze({ cobblestone: 1 }) });

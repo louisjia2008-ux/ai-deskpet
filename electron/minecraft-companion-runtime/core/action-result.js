@@ -1,15 +1,12 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
-const { classifyReason } = require('./action-reasons');
+const { classifyReason, FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior } = require('./action-reasons');
 const { countInventory, ownedItems } = require('./perception');
 
 const receipts = new WeakMap();
 const WATER = new Set(['water', 'bubble_column', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass']);
-const LEGACY_DIMENSION_ACTIONS = new Set([
-  'goal:end_city', 'goal:end_dragon', 'goal:end_journey', 'goal:enter_end', 'goal:hunt_pearls',
-  'goal:nether_expedition', 'goal:nether_quartz', 'fight_shulker', 'hide', 'leave_breath', 'retrieve_water', 'ride_levitation',
-]);
+const rescueOf = ctx => ctx?.rescue || (isRescueBehavior(ctx?.behavior) ? ctx.behavior : null);
 
 function createAttempt(ctx = {}) {
   return ctx?.attemptId == null ? { ...ctx, attemptId: randomUUID() } : ctx;
@@ -25,23 +22,26 @@ function waiting(reason, until = null) {
   return { ok: true, wait: { reason, until } };
 }
 
-function startProblem(ctx, state) {
+function startProblem(state) {
   if (state?.source) return state.source;
   const bot = state?.bot ?? state;
   if (state?.selfStuck || bot?.companionSelfStuck?.state?.()) return 'self_stuck';
   const feet = bot?.entity?.position?.floored?.();
   if (state?.inWater || bot?.entity?.isInWater || (feet && WATER.has(bot.blockAt?.(feet)?.name))) return 'water';
-  if (ctx?.selfRescue || ['home_escape', 'unstick'].includes(ctx?.behavior)) return 'self_rescue';
   if (state?.firstStepFailed) return 'path_first_step';
   return null;
 }
 
 function failure(reason, facts = {}, ctx, state) {
   let kind = classifyReason(reason);
-  const source = kind !== 'interrupted' && (facts.source || startProblem(ctx, state));
-  if (source) {
-    kind = 'start';
-    facts = { ...facts, source };
+  const rescue = rescueOf(ctx);
+  if (kind !== 'interrupted') {
+    const source = facts.source || startProblem(state);
+    if (rescue) {
+      if (kind === 'start') kind = 'environment';
+      facts = { ...facts, rescue: facts.rescue || rescue };
+    } else if (source || facts.rescue) kind = 'start';
+    if (source) facts = { ...facts, source };
   }
   if (kind === 'material') {
     const bot = state?.bot ?? state;
@@ -61,11 +61,10 @@ function resultFrom(value, ctx, state) {
   if (value?.ok === false) {
     const { ok, kind, reason, facts, attemptId, ...details } = value;
     const attempt = createAttempt({ ...ctx, attemptId: ctx?.attemptId ?? attemptId });
-    const baseKind = classifyReason(reason);
-    if ((kind === baseKind || kind === 'start') && facts && attemptId === attempt.attemptId && !Object.keys(details).length) return value;
-    const result = failure(reason, { ...details, ...facts }, attempt, state);
-    if (kind === 'start' && result.kind !== 'start' && result.kind !== 'interrupted') result.kind = 'start';
-    return result;
+    classifyReason(reason);
+    if (kind && facts && attemptId === attempt.attemptId && !Object.keys(details).length
+      && (!ctx || kind === 'interrupted' || (rescueOf(ctx) ? facts.rescue && kind !== 'start' : !facts.rescue || kind === 'start'))) return value;
+    return failure(reason, { ...details, ...facts }, attempt, state);
   }
   if (value?.wait) return waiting(value.wait.reason, value.wait.until);
   if (value?.ok !== true || receipts.has(value)) return value?.ok === true ? value : complete();
@@ -73,17 +72,9 @@ function resultFrom(value, ctx, state) {
   return complete(progress ?? !(receipt.already || receipt.idle || receipt.skipped), receipt);
 }
 
-function legacyDimensionResult(value, ctx, state) {
-  if (!LEGACY_DIMENSION_ACTIONS.has(ctx?.behavior)) return resultFrom(value, ctx, state);
-  if (value?.waited) return waiting(value.reason || 'dimension_action_pending', value.retryAt);
-  const { sourceHandled, destinationUnconfirmed, handedOff, waited, sourceFailure, giveUp, ...result } = value ?? {};
-  if (sourceFailure || giveUp) result.facts = { ...result.facts, ...(sourceFailure ? { source: sourceFailure } : {}), ...(giveUp ? { terminal: true } : {}) };
-  return resultFrom(result, ctx, state);
-}
-
-function settleAction(run) {
+function settleAction(run, rescue) {
   return async (bot, ctx, ...args) => {
-    const attempt = createAttempt(ctx);
+    const attempt = createAttempt(rescue ? { ...ctx, rescue } : ctx);
     const interrupted = () => failure('aborted', { cause: attempt.signal?.reason }, attempt);
     if (attempt.signal?.aborted) return interrupted();
     try {
@@ -95,4 +86,5 @@ function settleAction(run) {
   };
 }
 
-module.exports = { classifyReason, complete, createAttempt, factsOf, failure, legacyDimensionResult, resultFrom, settleAction, startProblem, waiting };
+module.exports = { classifyReason, complete, createAttempt, factsOf, failure, FAILURE_LIMIT, FAILURE_WINDOW_MS,
+  isRescueBehavior, rescueOf, resultFrom, settleAction, startProblem, waiting };

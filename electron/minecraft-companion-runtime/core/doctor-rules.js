@@ -1,3 +1,5 @@
+const { FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior } = require('./action-reasons');
+
 // Detector and incident thresholds. Time values are elapsed milliseconds.
 // Each condition requires evidence of the symptom itself. For example, a
 // failed approach is distinct from a failed chase.
@@ -84,6 +86,12 @@ function failureLocation(event, frame, build) {
   const { kind, reason } = event.result;
   const attempt = attemptOf(event.result) ?? frame.evidence;
   const failure = { kind, reason: shortText(reason), attempt };
+  const rescue = shortText(event.result.facts?.rescue)
+    || (event.attemptId != null && isRescueBehavior(event.behavior) ? shortText(event.behavior) : null);
+  if (rescue && event.type === 'behavior_finished') {
+    const location = point(event.doctorPosition) || point(frame.context.position);
+    return location && { ...failure, location, scope: rescue, origin: true, provesWork: true, rescue, behavior: event.behavior };
+  }
   if (event.type === 'home_route_leg' && event.advanced === false) {
     const location = point(event.from || event.position);
     const destination = point(event.destination);
@@ -126,6 +134,7 @@ function sameFailure(group, failure, radius) {
 function resolvedGroup(group, event, build, at) {
   if (event.type === 'home_route_arrived') return group.scope === 'home route' || group.recovery;
   if (event.type === 'self_stuck_escaped') return group.origin;
+  if (group.rescue && event.type === 'behavior_finished' && event.behavior === group.behavior && event.result?.progress) return true;
   if (event.type === 'site_abandoned') return group.shortage;
   if (event.type === 'adaptation_attempt' && event.result?.ok === true && !event.result.wait) {
     return group.scope === event.task && group.key === adaptationIdentity(event);
@@ -183,6 +192,7 @@ function repeatFailures() {
         trim(group.entries, at, group.windowMs);
         if (!group.entries.some((entry) => entry.attempt === failure.attempt)) {
           append(group.entries, { ...mark(frame), attempt: failure.attempt }, settings.maxFailures);
+          if (group.rescue) group.first ??= mark(frame);
           group.lastAt = at;
           group.lastPosition = failure.location;
           const failurePosition = point(event.doctorPosition)
@@ -192,7 +202,7 @@ function repeatFailures() {
           group.plan = null;
           group.retry = null;
           const minimum = group.recovery ? settings.recoveryMinimumMs : settings.minimumMs;
-          group.confirmed = group.entries.length >= settings.count && at - group.entries[0].at >= minimum;
+          group.confirmed = group.entries.length >= settings.count && at - (group.first ?? group.entries[0]).at >= minimum;
           if (group.confirmed && !group.shortage) active = group;
           else if (active === group) active = null;
         }
@@ -212,7 +222,7 @@ function repeatFailures() {
         active = null;
         return null;
       }
-      const first = active.entries[0];
+      const first = active.first ?? active.entries[0];
       const key = active.scope + ':' + active.reason + ':' + first.evidence;
       const retries = active.retry || [];
       const shortage = active.shortage ? ' and the same material request still remains unresolved' : '';
@@ -229,6 +239,43 @@ function repeatFailures() {
     },
     reset() { groups = []; active = null; },
     size() { return groups.length + groups.reduce((count, group) => count + group.entries.length, 0); },
+  };
+}
+
+function frequentFailures() {
+  const behaviors = new Map();
+  return {
+    ingest(event, frame) {
+      const at = frame.at;
+      const name = shortText(event.behavior);
+      let current;
+      // Only a real outer behavior receipt counts. Inner action/adaptation
+      // events and synthesized receipts in older logs cannot add attempts.
+      if (event.type === 'behavior_finished' && event.result?.ok === false && name && event.attemptId != null) {
+        current = behaviors.get(name) ?? { entries: [], reported: false };
+        boundedSet(behaviors, name, current, DOCTOR_RULE_THRESHOLDS.D2.maxGroups);
+      }
+      let active = false;
+      for (const [behavior, group] of behaviors) {
+        while (group.entries.length && at - group.entries[0].at >= FAILURE_WINDOW_MS) group.entries.shift();
+        if (group === current && !group.entries.some(entry => entry.attempt === event.attemptId)) {
+          append(group.entries, { ...mark(frame), attempt: event.attemptId }, FAILURE_LIMIT + 1);
+        }
+        if (!group.entries.length) behaviors.delete(behavior);
+        if (group.entries.length <= FAILURE_LIMIT) group.reported = false;
+        else active = true;
+      }
+      if (current?.entries.length > FAILURE_LIMIT && !current.reported) {
+        current.reported = true;
+        const first = current.entries[0];
+        return detect('high-frequency:' + name + ':' + first.evidence, first.at,
+          name + ' failed more than ' + FAILURE_LIMIT + ' times within ' + FAILURE_WINDOW_MS / 1000 + ' seconds.',
+        [first, current.entries.at(-1)]);
+      }
+      return active ? undefined : null;
+    },
+    reset() { behaviors.clear(); },
+    size() { return [...behaviors.values()].reduce((count, group) => count + group.entries.length, 0); },
   };
 }
 
@@ -526,11 +573,13 @@ function daylightProgress() {
   const receipts = new Map();
   const targets = new Map();
   const pending = new Map();
+  const previousRequirements = new Map();
   let since = null;
   let previous = null;
   let homeMilestone = null;
   let working = false;
   let plannedItem = null;
+  let plannedCraft = false;
   let search = null;
 
   function clearClock() { since = previous = null; }
@@ -538,8 +587,10 @@ function daylightProgress() {
     clearClock();
     working = false;
     plannedItem = search = null;
+    plannedCraft = false;
     pending.clear();
     targets.clear();
+    previousRequirements.clear();
   }
   function complete(id) {
     if (receipts.has(id)) return false;
@@ -580,7 +631,14 @@ function daylightProgress() {
         milestone ||= event.type === 'site_chosen';
       }
       if (event.type === 'plan_step') {
-        plannedItem = shortText(event.requiredItem);
+        const next = shortText(event.requiredItem);
+        // A step can change before the next inventory sample confirms the
+        // previous material was obtained. Keep that requirement for one sample.
+        if (plannedItem && plannedItem !== next) {
+          boundedSet(previousRequirements, plannedItem, true, settings.maxTargets);
+        }
+        plannedItem = next;
+        plannedCraft = event.kind === 'craft';
         for (const item of [shortText(event.item || event.key), shortText(event.for), plannedItem]) {
           if (!item || targets.has(item)) continue;
           const baseline = item === plannedItem && inventory ? observedItemCount(inventory, item) : null;
@@ -622,6 +680,7 @@ function daylightProgress() {
           }
         }
       }
+      const requiresMaterial = Boolean(plannedItem);
       if (event.type === 'doctor_observation') {
         const home = point(event.home?.anchor);
         const id = home && [pointText(home), event.home.usable === true, event.home.finished === true].join(':');
@@ -629,9 +688,13 @@ function daylightProgress() {
         homeMilestone = id;
         const gained = observedProgress(event, frame);
         advanced ||= gained.length > 0;
-        relevant ||= gained.includes(plannedItem);
+        relevant ||= gained.some(item => item === plannedItem || previousRequirements.has(item));
+        // A crafted output confirms the old craft is over. More ore or fuel
+        // may be partial progress, so a gathering requirement stays in force.
+        if (plannedCraft && gained.includes(plannedItem)) plannedItem = null;
+        if (event.inventory && typeof event.inventory === 'object') previousRequirements.clear();
       }
-      const plannedProgress = milestone || (plannedItem ? relevant : advanced);
+      const plannedProgress = milestone || (requiresMaterial ? relevant : advanced);
       if (plannedProgress || frame.scheduledWait) clearClock();
       working ||= event.type === 'plan_step' || event.type === 'build'
         || (event.type === 'behavior_started' && behavior?.startsWith('goal:'));
@@ -654,7 +717,7 @@ function daylightProgress() {
           + ' minutes working in daylight without completing a plan step or reaching a milestone.', [since, previous]);
     },
     reset() { clearGoal(); receipts.clear(); homeMilestone = null; },
-    size() { return receipts.size + targets.size + pending.size; },
+    size() { return receipts.size + targets.size + pending.size + previousRequirements.size; },
   };
 }
 
@@ -906,6 +969,7 @@ function cardSwitches() {
 
 function createDoctorRules() {
   const failures = repeatFailures();
+  const frequency = frequentFailures();
   const plans = repeatedPlans();
   const route = routeLoop();
   const progress = daylightProgress();
@@ -939,14 +1003,15 @@ function createDoctorRules() {
         D6: dusk.ingest(event, frame),
         D7: idleDetection,
         D8: switches.ingest(event, frame),
+        D9: frequency.ingest(event, frame),
       };
     },
     reset() {
-      for (const rule of [failures, plans, route, progress, dusk, idle, switches]) rule.reset();
+      for (const rule of [failures, frequency, plans, route, progress, dusk, idle, switches]) rule.reset();
       buildAttempts.clear();
     },
     size() {
-      return failures.size() + plans.size() + route.size() + progress.size() + dusk.size() + switches.size() + buildAttempts.size;
+      return failures.size() + frequency.size() + plans.size() + route.size() + progress.size() + dusk.size() + switches.size() + buildAttempts.size;
     },
   };
 }

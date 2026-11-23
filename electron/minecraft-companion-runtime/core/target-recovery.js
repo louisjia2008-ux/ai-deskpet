@@ -4,7 +4,7 @@ const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const { isSoft, canClearTerrain } = require('./site');
 const { targetsFor } = require('./failure-ledger');
-const { complete, createAttempt, failure, factsOf, resultFrom, waiting } = require('./action-result');
+const { complete, createAttempt, failure, factsOf, rescueOf, resultFrom, waiting } = require('./action-result');
 
 const v = (p) => new Vec3(p.x, p.y, p.z);
 const dimensionOf = (bot) => String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '');
@@ -24,7 +24,7 @@ async function watchDestination(bot, ctx, spec, observe, attempt, { resolves = t
   knownMine = null, useFailure = null } = {}) {
   ctx = createAttempt(ctx);
   const run = async () => resultFrom(await attempt(), ctx, bot);
-  if (!observe || ctx.selfRescue || bot.companionPlayerBlock?.(spec.position)) return run();
+  if (!observe || rescueOf(ctx) || bot.companionPlayerBlock?.(spec.position)) return run();
   const actions = require('./actions');
   const tracker = bot.companionSelfStuck;
   const blockedOrigin = () => {

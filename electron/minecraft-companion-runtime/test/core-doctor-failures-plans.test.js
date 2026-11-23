@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { createDoctor, recordDoctorInput } = require('../core/doctor');
+const { FAILURE_WINDOW_MS, FAILURE_LIMIT } = require('../core/action-reasons');
 
 const completed = { ok: true, progress: true };
 const failureResult = (reason, kind = 'target', attemptId) => ({ ok: false, kind, reason, facts: {}, attemptId });
@@ -173,4 +174,105 @@ test('D2 anchors a start failure at the body, across changing route destinations
   }
   assert.deepEqual(study.events[0].context.position, body);
   assert.match(study.events[0].summary, /near \(1, 64, 0\)/);
+});
+
+function rescueFailure(attemptId, fields = {}) {
+  return { type: 'behavior_finished', behavior: 'home_escape', attemptId,
+    doctorPosition: point(4), result: failureResult('self_escape_unconfirmed', 'start', attemptId), ...fields };
+}
+
+test('D2 reports a fast self-rescue loop while retaining only bounded recent receipts', () => {
+  const study = exercise('D2');
+  for (let n = 0; n <= 402; n++) study.ingest(n * 0.02, rescueFailure('rescue-' + n));
+  assert.equal(study.events.length, 1);
+  assert.equal(study.events[0].at, 8000);
+  assert.equal(study.events[0].evidence[0], 1);
+  assert.match(study.events[0].summary, /home_escape has failed with self_escape_unconfirmed/);
+  study.ingest(9, { type: 'behavior_finished', behavior: 'home_escape', result: completed });
+  assert.equal(study.active(), false);
+});
+
+test('D2 treats duplicate and geographically distinct self-rescue failures separately', () => {
+  const study = exercise('D2');
+  for (const time of [0, 4, 8, 12]) study.ingest(time, rescueFailure('same-attempt'));
+  for (let n = 0; n < 3; n++) study.ingest(20 + n * 8,
+    rescueFailure('distinct-' + n, { doctorPosition: point(20 + n * 16) }));
+  assert.deepEqual(study.events, []);
+});
+
+test('D9 fires once on the first overflow for a behavior, counting all failure kinds', () => {
+  const study = exercise('D9');
+  const kinds = ['start', 'target', 'material', 'environment', 'interrupted'];
+  const receipt = n => rescueFailure('attempt-' + n,
+    { result: failureResult('fixture_failure', kinds[n % kinds.length], 'attempt-' + n) });
+  for (let n = 0; n < FAILURE_LIMIT; n++) study.ingest(n, receipt(n));
+  study.ingest(FAILURE_LIMIT - 1, receipt(FAILURE_LIMIT - 1));
+  assert.deepEqual(study.events, []);
+  study.ingest(FAILURE_LIMIT, receipt(FAILURE_LIMIT));
+  study.ingest(FAILURE_LIMIT + 1, receipt(FAILURE_LIMIT + 1));
+  assert.equal(study.events.length, 1);
+  assert.equal(study.events[0].at, FAILURE_LIMIT * 1000);
+  assert.match(study.events[0].summary, /home_escape failed more than 20 times within 60 seconds/);
+  study.ingest(FAILURE_LIMIT + FAILURE_WINDOW_MS / 1000 + 2, observed);
+  assert.equal(study.active(), false);
+});
+
+test('D9 ignores distinct behaviors, waits, inner events and failures outside the window', () => {
+  const study = exercise('D9');
+  const spacing = FAILURE_WINDOW_MS / FAILURE_LIMIT / 1000;
+  for (let n = 0; n <= FAILURE_LIMIT + 1; n++) {
+    const at = n * spacing;
+    study.ingest(at, rescueFailure(n));
+    study.ingest(at, rescueFailure('other-' + n, { behavior: 'leave_lava' }));
+    study.ingest(at, rescueFailure('inner-' + n, { type: 'adaptation_attempt' }));
+    study.ingest(at, rescueFailure('wait-' + n, { result: { ok: true, wait: { reason: 'retry' } } }));
+    study.ingest(at, rescueFailure('legacy-' + n, { attemptId: undefined }));
+  }
+  assert.deepEqual(study.events, []);
+});
+
+test('D5 retires a verified craft requirement and counts later unplanned farm work', () => {
+  const study = exercise('D5');
+  const behavior = 'goal:farm';
+  study.ingest(0, { type: 'goal_set', goal: 'farm' });
+  study.ingest(0, { type: 'behavior_started', behavior });
+  study.ingest(0, observed);
+  study.ingest(1, recordDoctorInput({ type: 'plan_step', kind: 'craft', key: 'stone_hoe', item: 'stone_hoe', behavior }));
+  study.ingest(2, { type: 'behavior_finished', behavior, result: completed });
+  for (let seconds = 30; seconds <= 360; seconds += 30) {
+    if (seconds === 330) {
+      study.ingest(321, { type: 'farm', action: 'plant', plot: '2,64,5', behavior });
+      study.ingest(323, { type: 'behavior_finished', behavior, result: completed });
+    }
+    study.ingest(seconds, { ...observed, inventory: { stone_hoe: 1 } });
+  }
+  assert.deepEqual(study.events, []);
+});
+
+test('D5 counts a previous requirement gained before the first sample of a changed plan', () => {
+  const study = exercise('D5');
+  const behavior = 'goal:outfit';
+  study.ingest(0, { type: 'goal_set', goal: 'outfit' });
+  study.ingest(0, { type: 'behavior_started', behavior });
+  study.ingest(0, { ...observed, inventory: { raw_iron: 2 } });
+  study.ingest(1, recordDoctorInput({ type: 'plan_step', kind: 'gather', key: 'raw_iron', behavior }));
+  for (let seconds = 30; seconds < 300; seconds += 30) {
+    study.ingest(seconds, { ...observed, inventory: { raw_iron: 2, cobblestone: seconds } });
+  }
+  study.ingest(291, recordDoctorInput({ type: 'plan_step', kind: 'gather', key: 'log', behavior }));
+  study.ingest(300, { ...observed, inventory: { raw_iron: 8, cobblestone: 300 } });
+  study.ingest(330, { ...observed, inventory: { raw_iron: 8, oak_log: 7, cobblestone: 330 } });
+  assert.deepEqual(study.events, []);
+});
+
+test('D5 still measures one long gathering plan after partial gain in its requested material', () => {
+  const study = exercise('D5');
+  const behavior = 'goal:outfit';
+  study.ingest(0, { type: 'goal_set', goal: 'outfit' });
+  study.ingest(0, observed);
+  study.ingest(1, recordDoctorInput({ type: 'plan_step', kind: 'gather', key: 'raw_iron', count: 6, behavior }));
+  for (let seconds = 30; seconds <= 360; seconds += 30) {
+    study.ingest(seconds, { ...observed, inventory: { raw_iron: 2, cobblestone: seconds } });
+  }
+  assert.equal(study.events[0].at, 360_000);
 });

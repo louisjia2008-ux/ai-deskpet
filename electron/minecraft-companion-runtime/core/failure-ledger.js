@@ -1,7 +1,7 @@
 'use strict';
 
 const { Vec3 } = require('vec3');
-const { classifyReason, failure, resultFrom } = require('./action-result');
+const { classifyReason, failure, rescueOf, resultFrom } = require('./action-result');
 const { homeContains } = require('./home-topology');
 
 const MINUTE = 60_000;
@@ -178,7 +178,7 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
     }
 
     function record(result, spec, { ladder, extending = false, review = reviewFailure } = {}) {
-      if (!valid() || result?.ok !== false || result.kind !== 'target') return null;
+      if (!valid() || result?.ok !== false || result.kind !== 'target' || result.facts?.rescue) return null;
       let fields = context(spec);
       const rule = fields && policy(fields);
       if (!rule || protectedCell(fields)) return null;
@@ -243,7 +243,7 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
     }
     function capture(spec, result) {
       const fields = context(spec);
-      if (!valid() || !fields || protectedCell(fields) || (result?.ok !== false && !result?.progress)
+      if (!valid() || !fields || protectedCell(fields) || result?.facts?.rescue || (result?.ok !== false && !result?.progress)
         || (result?.ok === false && result.kind !== 'target')) return null;
       return { ...fields, result, witness: observed(spec) };
     }
@@ -308,7 +308,7 @@ function ledgerFor(bot, ctx = {}) {
   }
   const scope = scoped || ledger.scope(() => !ctx.signal?.aborted, ctx.record);
   const tracker = bot.companionSelfStuck;
-  return !tracker || ctx.selfRescue ? scope : { ...scope, record(result, spec, options) {
+  return !tracker || rescueOf(ctx) ? scope : { ...scope, record(result, spec, options) {
     return scope.record(result, spec, { ...options, review: (fields, error, undo) => fields.position
       && tracker.failed(fields.target, error.reason, null, undo) });
   } };
@@ -320,7 +320,7 @@ function targetsFor(bot, ctx = {}) {
   const tracker = bot.companionSelfStuck;
   const scope = ledgerFor(bot, ctx);
   return { ...scope, run(spec, attempt, recover) {
-    if (!tracker || ctx.selfRescue || !ledger) return scope.run(spec, attempt, recover, ctx, bot);
+    if (!tracker || rescueOf(ctx) || !ledger) return scope.run(spec, attempt, recover, ctx, bot);
     const before = origin();
     const reviewed = ledger.scope(() => !ctx.signal?.aborted, ctx.record,
       (fields, result, undo) => tracker.failed(fields.target, result.reason, before, undo));

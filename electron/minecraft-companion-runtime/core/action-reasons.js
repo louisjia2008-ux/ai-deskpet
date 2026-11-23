@@ -1,5 +1,10 @@
 'use strict';
 
+const RESCUE = new Set(['home_escape', 'unstick', 'surface', 'pit', 'mine_retreat', 'mine_hazard',
+  'breathe', 'unbury', 'leave_lava', 'leave_fire', 'leave_danger', 'leave_breath', 'escape']);
+const isRescueBehavior = name => RESCUE.has(name);
+const FAILURE_WINDOW_MS = 60_000, FAILURE_LIMIT = 20; // Circuit breaker for otherwise unbounded retries.
+
 // Failure producers share these codes. Templates below cover dynamic reasons.
 const reasons = Object.freeze({
   // Concrete destination, work cell, target entity, or route-specific failure.
@@ -135,4 +140,4 @@ function classifyReason(reason) {
   });
 }
 
-module.exports = { classifyReason, reasons, templates };
+module.exports = { classifyReason, FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior, reasons, templates };

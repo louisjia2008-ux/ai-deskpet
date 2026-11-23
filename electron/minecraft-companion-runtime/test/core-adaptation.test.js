@@ -290,7 +290,7 @@ test('destination handoff ignores known wet, trapped, home, player, or self-resc
   bot.companionSelfStuck.release();
   adaptation = restart();
   use = adaptation.scope(() => true);
-  const reloaded = await use.run('wood', elsewhere, attempt(21, { selfRescue: true }), { threshold: 1 });
+  const reloaded = await use.run('wood', elsewhere, attempt(21, { rescue: 'surface' }), { threshold: 1 });
   assert.equal(reloaded.kind, 'start');
   assert.equal(adaptation.plan('wood', elsewhere).method, 'different_biome');
   assert.equal(adaptation.failureLedger.snapshot(true).length, 0);

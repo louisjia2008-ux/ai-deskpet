@@ -52,17 +52,17 @@ function topology(house, read, { occupy = [], remove = [] } = {}) {
   const threshold = new Vec3(door.x, door.y, door.z);
   const porch = new Vec3(house.entrance.x, house.entrance.y, house.entrance.z);
   const open = walkable(threshold, true) && walkable(porch);
-  const reachable = new Set();
+  const next = new Map();
   const queue = open ? [threshold] : [];
   for (let i = 0; i < queue.length; i++) {
     for (const [dx, dz] of SIDES) {
       const p = queue[i].offset(dx, 0, dz);
       const key = posKey(p);
-      if (cells.has(key) && !reachable.has(key)) { reachable.add(key); queue.push(p); }
+      if (cells.has(key) && !next.has(key)) { next.set(key, queue[i]); queue.push(p); }
     }
   }
-  const disconnected = [...cells.values()].filter(p => !reachable.has(posKey(p)));
-  return { known, open, cells, reachable, disconnected, connected: known && open && cells.size > 0 && !disconnected.length };
+  const disconnected = [...cells.values()].filter(p => !next.has(posKey(p)));
+  return { known, open, cells, reachable: new Set(next.keys()), next, disconnected, connected: known && open && cells.size > 0 && !disconnected.length };
 }
 
 module.exports = { topology, safeStand, supports, clear, isBed, SIDES, homeContains };

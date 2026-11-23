@@ -1,7 +1,7 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
-const { failure, resultFrom, waiting } = require('./action-result');
+const { failure, isRescueBehavior, resultFrom, waiting } = require('./action-result');
 const { createFailureLedger } = require('./failure-ledger');
 
 const MINUTE = 60_000;
@@ -203,6 +203,7 @@ function createAdaptation({ now = Date.now, onEvent = () => {}, store = null, st
   function outcome(p, result, { threshold = LIMIT, valid = () => true, learn = null, observations = [] } = {}) {
     if (!result) return result;
     result = resultFrom(result);
+    if (result.facts?.rescue && !isRescueBehavior(p.task)) return resultFrom(result, {});
     if (!valid() || result.wait || ['start', 'interrupted'].includes(result.kind)) return result;
     const e = entry(p);
     const owned = fields => result.ok ? result : { ...result, facts: { ...result.facts, adaptation: { task: p.task, method: p.method, ...fields } } };
