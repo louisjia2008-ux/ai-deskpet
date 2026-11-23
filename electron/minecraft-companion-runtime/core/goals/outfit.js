@@ -21,11 +21,11 @@ const { upgrades } = require('../armor');
 const CARRY = /(_sword|_pickaxe|_axe)$|^(shield|bow)$/;
 const isAbort = (error) => error?.code === 'aborted';
 
-function createKit({ bot, items, kb = KNOWLEDGE }) {
+function createKit({ bot, items, home, kb = KNOWLEDGE }) {
   const carried = (state, r) => Math.min(r.count, countKey(r.key, state.inventory, kb));
   const food = items.find((r) => r.key === 'food');
   const gathered = items.filter((r) => r !== food);
-  const hunt = food ? createStockFoodGoal({ bot, target: food.count, kb }) : null;
+  const hunt = food ? createStockFoodGoal({ bot, target: food.count, home: () => home?.centre, kb }) : null;
   return {
     name: 'kit',
     // A device with no site: deviceProject walks to a site only while this is unset.
@@ -55,7 +55,7 @@ function createOutfitGoal({ bot, items, home, kb = KNOWLEDGE, ...rest } = {}) {
   for (const r of items) {
     if (!kb[r?.key] || !Number.isSafeInteger(r.count) || r.count < 1) throw new TypeError(`bad item ${JSON.stringify(r)}`);
   }
-  const device = createKit({ bot, items, kb });
+  const device = createKit({ bot, items, home, kb });
   return createDeviceProjectGoal({ bot, name: 'outfit', device, home, kb, carry: (key) => CARRY.test(key), ...rest, countWorn: true });
 }
 

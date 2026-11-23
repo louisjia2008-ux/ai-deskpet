@@ -2,19 +2,22 @@
 // Each tick reads the world and chooses one behavior to own the body.
 // Interrupted goals resume by reading the changed inventory and blocks.
 
-const { complete, failure, createAttempt, FAILURE_LIMIT, FAILURE_WINDOW_MS, isRescueBehavior, resultFrom } = require('./action-result');
+const { complete, failure, createAttempt, resultFrom } = require('./action-result');
 const { interruptedWork } = require('./work-target');
 const { DANGER, DEFAULT_TASK_VALUE, maintenanceUrgency, schedulingInputs } = require('./scheduling');
+const { createScheduleBackoff } = require('./schedule-backoff');
+const isDefinition = (def, methods) => typeof def?.name === 'string' && methods.every(key => typeof def[key] === 'function');
 const BAND = Object.freeze({ IDLE: 0, GOAL: 50, MAINTENANCE: 100, DEFENSE: 120, ESCAPE: 130 });
-const START_RETRY_DELAY_MS = 2_000; // Let the blocked body settle without increasing the backoff.
 
 function createBrain({
   perceive,
   behaviors = [],
+  opportunity,
   schedule = schedulingInputs,
   taskAllowed = () => true,
   permanentEnabled = () => true,
   now = Date.now,
+  backoff = createScheduleBackoff(now),
   onEvent = () => {},
   noProgressLimit = 6,
   failureCooldownMs = 2000,
@@ -24,14 +27,16 @@ function createBrain({
 } = {}) {
   if (typeof perceive !== 'function') throw new TypeError('perceive is required');
   if (!Number.isFinite(abandonMs) || abandonMs <= 0 || abandonMs > 2147483647) throw new TypeError('abandonMs must be a positive timer duration');
-  const permanent = behaviors.map(validateBehavior);
-  const failures = new Map(); // name -> { count, until }
-  const recentFailures = new Map();
+  for (const behavior of behaviors) {
+    if (!isDefinition(behavior, ['want', 'run']) || !Number.isFinite(behavior.band)) {
+      throw new TypeError('Behavior needs name, band, want(state) and run(ctx)');
+    }
+  }
+  const permanent = [...behaviors];
   let goal = null; // unique generation: { def, generation, taskId, best, stalls, reasons }
   let generation = 0;
   let paused = false;
   let running = null; // { behavior, controller, promise }
-  const inFlight = new Set(); // retain every invocation until its promise really settles
   let deferredTick = null; // a tick put off a turn after a behavior that settled at once
   let deciding = false;
   let disposed = false;
@@ -41,20 +46,16 @@ function createBrain({
     if (disposed) throw Object.assign(new Error('Brain is disposed'), { code: 'disposed' });
   }
 
-  function pendingRuns(entries = [...inFlight]) {
-    return entries.filter((entry) => inFlight.has(entry));
-  }
-
-  function retirementError(entries) {
+  function retirementError(entry) {
     return Object.assign(new Error('Aborted behavior has not settled; body ownership remains blocked'), {
       code: 'retirement_timeout', retryable: false,
-      pending: pendingRuns(entries).map((entry) => ({ behavior: entry.behavior.name, ...correlation(entry.behavior.goalEntry) })),
+      pending: [{ behavior: entry.behavior.name, ...correlation(entry.behavior.goalEntry) }],
     });
   }
 
   function assertBodyAvailable() {
     assertActive();
-    if ([...inFlight].some((entry) => entry.abandoned)) throw retirementError([...inFlight]);
+    if (running?.abandoned) throw retirementError(running);
   }
 
   const correlation = (entry) => entry
@@ -80,12 +81,14 @@ function createBrain({
     };
   }
 
-  function candidates() {
-    const list = permanent.filter(permanentEnabled);
-    const g = goalBehavior();
-    if (g) list.push(g);
-    return list;
+  function wantOf(behavior, state) {
+    try { return Number(behavior.want(state)) || 0; } catch (error) {
+      emit('want_error', { behavior: behavior.name, reason: describe(error), ...correlation(behavior.goalEntry) });
+      return 0;
+    }
   }
+
+  const goalEvent = (type, entry, data = {}) => emit(type, { goal: entry?.def.name || null, ...data, ...correlation(entry) });
 
   function choose(state) {
     const def = goal?.def;
@@ -96,14 +99,9 @@ function createBrain({
     }
     const inputs = schedule(state, { task });
     let best = null;
-    for (const behavior of candidates()) {
-      const cooldown = failures.get(behavior.name);
-      const times = recentFailures.get(behavior.name);
-      if (cooldown?.until > now() || (times?.length === FAILURE_LIMIT && times[0] + FAILURE_WINDOW_MS > now())) continue;
-      let want = 0;
-      try { want = Number(behavior.want(state)) || 0; } catch (error) {
-        emit('want_error', { behavior: behavior.name, reason: describe(error), ...correlation(behavior.goalEntry) });
-      }
+    for (const behavior of [...permanent.filter(permanentEnabled), goalBehavior()]) {
+      if (!behavior || backoff.blocked(`body:${behavior.name}`) > now()) continue;
+      const want = wantOf(behavior, state);
       if (want <= 0) continue;
       const choice = rating(behavior, want, inputs);
       if (choice.value > 0 && outranks(choice, best)) best = choice;
@@ -127,9 +125,13 @@ function createBrain({
 
   function failGoalEvaluation(entry, state, error, phase) {
     if (!entry || goal !== entry || disposed) return;
+    finishGoal('goal_failed', entry, () => ({ progress: state ? safeProgress(entry.def, state) : null,
+      reasons: [`goal_${phase}_error: ${describe(error)}`] }));
+  }
+
+  function finishGoal(type, entry, data) {
     goal = null;
-    emit('goal_failed', { goal: entry.def.name, progress: state ? safeProgress(entry.def, state) : null,
-      reasons: [`goal_${phase}_error: ${describe(error)}`], ...correlation(entry) });
+    goalEvent(type, entry, typeof data === 'function' ? data() : data);
   }
 
   function isGoalDone(entry, state) {
@@ -153,29 +155,19 @@ function createBrain({
     // again. Only the invocation which owns this generation may settle it.
     if (!entry || goal !== entry || paused || disposed) return;
     if (isGoalDone(entry, state)) {
-      if (goal !== entry || disposed) return;
-      goal = null;
-      emit('goal_done', { goal: entry.def.name, progress: safeProgress(entry.def, state), ...correlation(entry) });
+      if (goal === entry && !disposed) finishGoal('goal_done', entry, () => ({ progress: safeProgress(entry.def, state) }));
       return;
     }
     // Being interrupted by survival is not a lack of progress, and neither is
     // waiting out the night: a wait neither spends nor refills the budget.
     if (preempted || result.kind === 'start' || result.kind === 'interrupted') return;
     const yielded = entry.autonomy?.outcome(result, now() - entry.startedAt);
-    if (yielded) {
-      goal = null;
-      emit('goal_yielded', { goal: entry.def.name, ...yielded, result, ...correlation(entry) });
-      return;
-    }
+    if (yielded) return finishGoal('goal_yielded', entry, { ...yielded, result });
     if (result.wait) return;
     const progress = safeProgress(entry.def, state);
     // The goal knows it cannot go on here (nothing to build with in reach of
     // the site): end it now and say why, rather than burn the stall budget.
-    if (result.facts?.terminal) {
-      goal = null;
-      emit('goal_failed', { goal: entry.def.name, progress, reasons: [result.reason], result, ...correlation(entry) });
-      return;
-    }
+    if (result.facts?.terminal) return finishGoal('goal_failed', entry, { progress, reasons: [result.reason], result });
     if (progress > entry.best) {
       entry.best = progress;
       entry.stalls = 0;
@@ -193,7 +185,7 @@ function createBrain({
       if (typeof entry.def.recover === 'function' && entry.recoveries < (entry.def.maxRecoveries ?? 0)) {
         entry.recoveries += 1;
         entry.stalls = 0;
-        emit('goal_recovering', { goal: entry.def.name, progress, attempt: entry.recoveries, reasons, ...correlation(entry) });
+        goalEvent('goal_recovering', entry, { progress, attempt: entry.recoveries, reasons });
         if (goal === entry && !disposed) {
           try { await entry.def.recover(); } catch (error) {
             failGoalEvaluation(entry, state, error, 'recovery');
@@ -201,29 +193,8 @@ function createBrain({
         }
         return;
       }
-      goal = null;
-      emit('goal_failed', { goal: entry.def.name, progress, reasons, result, ...correlation(entry) });
+      finishGoal('goal_failed', entry, { progress, reasons, result });
     }
-  }
-
-  function recordOutcome({ name, isGoal }, result) {
-    const at = now();
-    if (!result.ok) {
-      const times = (recentFailures.get(name) || []).filter(t => t > at - FAILURE_WINDOW_MS);
-      recentFailures.set(name, [...times, at].slice(-FAILURE_LIMIT));
-      if (times.length === FAILURE_LIMIT - 1) emit('behavior_failure_backoff', { behavior: name, until: times[0] + FAILURE_WINDOW_MS });
-    }
-    const previous = failures.get(name);
-    if (result.wait?.until > at && isRescueBehavior(name)) failures.set(name, { count: previous?.count || 0, until: result.wait.until });
-    if (result.wait || result.kind === 'interrupted') return;
-    if (result.kind === 'start') {
-      if (!isRescueBehavior(name)) failures.set(name, { count: previous?.count || 0, until: at + START_RETRY_DELAY_MS });
-      return;
-    }
-    if (result.ok) return failures.delete(name);
-    const count = ((isGoal ? goal?.stalls : previous?.count) || 0) + 1;
-    const delay = isGoal ? Math.min(3000, goalRetryDelayMs * count) : Math.min(maxCooldownMs, failureCooldownMs * 2 ** (count - 1));
-    if (delay > 0) failures.set(name, { count, until: at + delay });
   }
 
   function start({ behavior, want, tier, value }) {
@@ -232,6 +203,7 @@ function createBrain({
     const isCurrent = () => !disposed && (!behavior.isGoal || behavior.goalEntry === goal);
     const ctx = createAttempt({
       signal: controller.signal,
+      bodySignal: controller.signal,
       perceive,
       record: (type, data) => {
         if (running === entry && !controller.signal.aborted && isCurrent()) {
@@ -261,6 +233,8 @@ function createBrain({
         if (controller.signal.aborted || !isCurrent()) return failure('aborted', {}, ctx);
         const early = autonomous?.before && await autonomous.before(ctx);
         if (controller.signal.aborted || !isCurrent()) return failure('aborted', {}, ctx);
+        if (!early && (autonomous || behavior.def?.name === 'homestead')) await opportunity?.(ctx, behavior.def.name);
+        if (controller.signal.aborted || !isCurrent()) return failure('aborted', {}, ctx);
         const raw = early || await behavior.run(ctx);
         return resultFrom(raw, ctx, safePerceive());
       })
@@ -269,7 +243,9 @@ function createBrain({
         try {
           if (controller.signal.aborted) result = failure('aborted', {}, ctx);
           if (isCurrent()) {
-            recordOutcome(behavior, result);
+            backoff.observe(behavior.name, result, behavior.isGoal
+              ? { base: goalRetryDelayMs, cap: 3000, stalls: goal?.stalls || 0, emit, cancelled: controller.signal.aborted }
+              : { base: failureCooldownMs, cap: maxCooldownMs, emit, cancelled: controller.signal.aborted });
             if (behavior.isGoal) await settleGoal(behavior.goalEntry, safePerceive(), result, entry.preempted);
             // A terminal observer may synchronously submit another goal. Do not
             // let this finished callback perturb that goal's recovery tracking.
@@ -287,7 +263,6 @@ function createBrain({
           // Even an evaluator/recovery failure must release the body. Otherwise
           // a rejected settlement leaves running pinned forever.
           if (running === entry) running = null;
-          inFlight.delete(entry);
           if (entry.abandoned) emit('behavior_unblocked', { behavior: behavior.name, ...correlation(behavior.goalEntry) });
           // Yield to packets and stdin after each attempt, even if it settled synchronously.
           if (!disposed) {
@@ -298,35 +273,35 @@ function createBrain({
           }
         }
       });
-    inFlight.add(entry);
     running = entry;
     emit('behavior_started', { behavior: behavior.name, band: tier, urgency: value, attemptId: ctx.attemptId, ...correlation(behavior.goalEntry) });
   }
 
   async function preempt(reason, entry = running, required = false) {
-    const entries = pendingRuns(Array.isArray(entry) ? entry : entry ? [entry] : []);
-    if (!entries.length) return true;
-    for (const pending of entries) {
-      pending.preempted = true;
-      pending.controller.abort(reason);
-    }
-    // A Promise cannot be force-cancelled. A timed-out run still holds the bot
-    // through its closure, so keep its ownership and never start a second body.
-    let timer = null;
-    const settled = await Promise.race([Promise.all(entries.map((pending) => pending.promise)).then(() => true),
-      new Promise((resolve) => { timer = setTimeout(() => resolve(false), abandonMs); })]);
+    if (!entry || running !== entry) return true;
+    entry.preempted = true;
+    entry.controller.abort(reason);
+    // The timed-out promise still holds the body until it really settles.
+    let timer;
+    const settled = await Promise.race([entry.promise.then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), abandonMs); })]);
     clearTimeout(timer);
-    if (!settled) {
-      for (const pending of pendingRuns(entries)) {
-        if (!pending.abandoned) {
-          pending.abandoned = true;
-          emit('behavior_abandoned', { behavior: pending.behavior.name, reason: String(reason),
-            code: 'retirement_timeout', blocked: true, ...correlation(pending.behavior.goalEntry) });
-        }
+    if (!settled && running === entry) {
+      if (!entry.abandoned) {
+        entry.abandoned = true;
+        emit('behavior_abandoned', { behavior: entry.behavior.name, reason: String(reason),
+          code: 'retirement_timeout', blocked: true, ...correlation(entry.behavior.goalEntry) });
       }
-      if (required) throw retirementError(entries);
+      if (required) throw retirementError(entry);
     }
     return settled;
+  }
+
+  function detachGoal() {
+    const entry = goal;
+    goal = null;
+    paused = false;
+    return entry;
   }
 
   function safePerceive() {
@@ -334,7 +309,7 @@ function createBrain({
   }
 
   async function tick() {
-    if (deciding || disposed || [...inFlight].some((entry) => entry.abandoned)) return;
+    if (deciding || disposed || running?.abandoned) return;
     deciding = true;
     try {
       const state = safePerceive();
@@ -350,7 +325,7 @@ function createBrain({
       if (running) {
         const current = running.behavior;
         // A goal replaced by another one of the same name is no longer wanted.
-        const stillWanted = candidates().some((b) => b.name === current.name && b.goalEntry === current.goalEntry);
+        const stillWanted = current.isGoal ? !paused && goal === current.goalEntry : permanentEnabled(current);
         if (!stillWanted) {
           await preempt('goal_cleared');
         } else if ((current.isGoal && !taskAllowed(state, current.def)) || best && best.behavior.name !== current.name
@@ -377,48 +352,40 @@ function createBrain({
     tick,
     setGoal(def, metadata = {}) {
       assertBodyAvailable();
-      validateGoal(def);
+      if (!isDefinition(def, ['isDone', 'progress', 'run'])) {
+        throw new TypeError('Goal needs name, isDone(state), progress(state) and run(ctx)');
+      }
       const state = safePerceive();
       const taskId = metadata?.taskId ?? def.metadata?.taskId ?? def.taskId;
       const nextGeneration = ++generation;
       goal = { def, generation: nextGeneration, taskId, autonomy: metadata?.autonomy, best: state ? safeProgress(def, state) : -Infinity,
         stalls: 0, recoveries: 0, reasons: [] };
       paused = false;
-      failures.delete(`goal:${def.name}`);
-      emit('goal_set', { goal: def.name, ...correlation(goal) });
+      backoff.clear(`body:goal:${def.name}`);
+      goalEvent('goal_set', goal);
       // A chore running when the task arrives keeps the body only while it
       // still wants it under the new goal. Asked to follow and guard the
       // owner, the bot first finished a 55-block chase after a sheep, and the
       // owner was killed alone. Fights and escapes are never cut short here.
       const chore = running && !running.behavior.isGoal && running.behavior.band <= BAND.MAINTENANCE ? running : null;
-      if (chore && state) {
-        let want = 0;
-        try { want = Number(chore.behavior.want(state)) || 0; } catch { /* reported by choose() on the next tick */ }
-        if (want <= 0) void preempt('goal_set', chore).catch(() => {});
-      }
+      if (chore && state && wantOf(chore.behavior, state) <= 0) void preempt('goal_set', chore).catch(() => {});
       return nextGeneration;
     },
     async clearGoal(reason = 'cleared') {
       assertActive();
-      const entry = goal;
-      goal = null;
-      paused = false;
+      const active = running, entry = detachGoal();
       // Publish before awaiting abort so an observer never receives an old
       // uncorrelated terminal event after a replacement was installed.
-      if (entry) emit('goal_cleared', { goal: entry.def.name, reason, ...correlation(entry) });
-      await preempt(reason, [...inFlight].filter((pending) => pending.behavior.isGoal), true);
+      if (entry) goalEvent('goal_cleared', entry, { reason });
+      if (active?.behavior.isGoal) await preempt(reason, active, true);
     },
     /** Ends the goal as failed from outside (a death loop, say). */
     async failGoal(reason = 'failed') {
       assertActive();
-      const entry = goal;
+      const active = running, entry = detachGoal();
       if (!entry) return;
       const state = safePerceive();
-      const active = running;
-      goal = null;
-      paused = false;
-      emit('goal_failed', { goal: entry.def.name, progress: state ? safeProgress(entry.def, state) : null,
-        reasons: [reason], ...correlation(entry) });
+      goalEvent('goal_failed', entry, { progress: state ? safeProgress(entry.def, state) : null, reasons: [reason] });
       if (active?.behavior.isGoal) await preempt(reason, active, true);
     },
     /** Suspend goal work only. Permanent safety behaviors still own the body. */
@@ -427,7 +394,7 @@ function createBrain({
       const active = running;
       if (!paused) {
         paused = true;
-        emit('goal_paused', { goal: goal?.def.name || null, reason, ...correlation(goal) });
+        goalEvent('goal_paused', goal, { reason });
       }
       if (active?.behavior.isGoal) await preempt(reason, active, true);
     },
@@ -435,7 +402,7 @@ function createBrain({
       assertBodyAvailable();
       if (!paused) return;
       paused = false;
-      emit('goal_resumed', { goal: goal?.def.name || null, ...correlation(goal) });
+      goalEvent('goal_resumed', goal);
       await tick();
     },
     /** Aborts whatever runs now but keeps the goal; the next tick re-plans. */
@@ -448,19 +415,16 @@ function createBrain({
     /** Legacy task stop: clears goals, but subsequent ticks keep safety active. */
     async stop(reason = 'stopped') {
       assertActive();
-      const entry = goal;
-      goal = null;
-      paused = false;
+      const active = running, entry = detachGoal();
       emit('stopped', { reason, ...correlation(entry) });
-      await preempt(reason, [...inFlight], true);
+      await preempt(reason, active, true);
     },
     /** Terminal all-stop. No future tick or goal can restart this brain. */
     dispose() {
       if (disposal) return disposal;
       disposed = true;
-      goal = null;
-      paused = false;
-      const operation = preempt('disposed', [...inFlight], true);
+      detachGoal();
+      const operation = preempt('disposed', running, true);
       disposal = operation;
       // A caller may retry shutdown after the non-cooperative run finally settles.
       operation.catch(() => { if (disposal === operation) disposal = null; });
@@ -472,20 +436,19 @@ function createBrain({
         running: running?.behavior.name || null,
         paused,
         disposed,
-        blocked: [...inFlight].some((entry) => entry.abandoned),
-        inFlight: [...inFlight].map((entry) => ({ behavior: entry.behavior.name,
-          aborted: entry.controller.signal.aborted, abandoned: Boolean(entry.abandoned), ...correlation(entry.behavior.goalEntry) })),
+        blocked: Boolean(running?.abandoned),
+        inFlight: running ? [{ behavior: running.behavior.name, aborted: running.controller.signal.aborted,
+          abandoned: Boolean(running.abandoned), ...correlation(running.behavior.goalEntry) }] : [],
         goal: goal ? { name: goal.def.name, progress: state ? safeProgress(goal.def, state) : null,
           stalls: goal.stalls, ...correlation(goal) } : null,
-        cooldowns: [...failures].filter(([, f]) => f.until > now()).map(([name, f]) => ({ name, until: f.until })),
+        cooldowns: backoff.state('body:').map(({ name, until }) => ({ name, until })),
       };
     },
     /** Join only one goal generation, never an unrelated safety behavior. */
-    idleGoal: (goalGeneration) => Promise.all([...inFlight]
-      .filter((entry) => goalGeneration !== undefined && entry.behavior.goalEntry?.generation === goalGeneration)
-      .map((entry) => entry.promise)),
+    idleGoal: (goalGeneration) => Promise.all(goalGeneration !== undefined && running?.behavior.goalEntry?.generation === goalGeneration
+      ? [running.promise] : []),
     /** Resolves once the currently running behavior (if any) has settled. */
-    idle: () => inFlight.size ? Promise.all([...inFlight].map((entry) => entry.promise)) : deferredTick ?? Promise.resolve(),
+    idle: () => running ? Promise.all([running.promise]) : deferredTick ?? Promise.resolve(),
   };
 }
 
@@ -499,21 +462,6 @@ function safeProgress(def, state) {
     return Number.isFinite(value) ? value : -Infinity;
   } catch {
     return -Infinity;
-  }
-}
-
-function validateBehavior(behavior) {
-  if (!behavior || typeof behavior.name !== 'string' || !Number.isFinite(behavior.band)
-      || typeof behavior.want !== 'function' || typeof behavior.run !== 'function') {
-    throw new TypeError('Behavior needs name, band, want(state) and run(ctx)');
-  }
-  return behavior;
-}
-
-function validateGoal(def) {
-  if (!def || typeof def.name !== 'string' || typeof def.isDone !== 'function'
-      || typeof def.progress !== 'function' || typeof def.run !== 'function') {
-    throw new TypeError('Goal needs name, isDone(state), progress(state) and run(ctx)');
   }
 }
 

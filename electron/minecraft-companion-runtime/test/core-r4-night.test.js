@@ -101,6 +101,28 @@ test('covered cave waits overnight in a local bunker and resumes the same task a
   await brain.dispose();
 });
 
+test('an expired dusk return cancels traveling and the next attempt digs in locally', async (t) => {
+  const centre = new Vec3(0, 70, 0);
+  const bot = { entity: { position: centre.offset(20, 0, 0) } };
+  const events = [];
+  const ctx = { perceive: () => ({ position: bot.entity.position, timeOfDay: 11_900 }),
+    record: (_type, event) => events.push(event.action) };
+  const rest = createNightRest({
+    bot, home: () => ({ centre, inside: false }),
+    actions: { goNear: (_bot, travel) => new Promise(resolve => {
+      travel.signal.addEventListener('abort', () => resolve({ ok: false, kind: 'interrupted', reason: 'aborted' }));
+    }) },
+    skills: { digIn: async () => ({ ok: true, bunker: { top: bot.entity.position } }) },
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const returning = rest.run(ctx);
+  await Promise.resolve();
+  t.mock.timers.tick((12_542 - 11_900 - 120) * 50);
+  assert.equal((await returning).reason, 'path_timeout');
+  await rest.run(ctx);
+  assert.deepEqual(events, ['dusk_home', 'dig_in', 'dug_in']);
+});
+
 test('the shared outing budget reserves both the departure and return legs and only applies in the overworld', () => {
   const home = new Vec3(0, 70, 0);
   const state = { position: home.offset(25, 2, 0), timeOfDay: 10_500 };

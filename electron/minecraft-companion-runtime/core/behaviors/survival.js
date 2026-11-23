@@ -9,6 +9,7 @@ const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
 const { BAND } = require('../brain');
 const { DANGER } = require('../scheduling');
+const { createForaging, FOOD_MOBS } = require('../work-budget');
 const { nightBudget } = require('./nightRest');
 const { sleep, waitUntil, abortError } = require('../confirm');
 const { isFireResistancePotion, hasEffect } = require('../netherStructures');
@@ -305,7 +306,6 @@ const CALM_UNLESS_PROVOKED = new Set(['zombified_piglin', 'piglin']);
 const OTHER_ATTACKERS = new Set(['wither_skeleton', 'skeleton', 'blaze', 'ghast', 'magma_cube', 'hoglin', 'piglin_brute', 'zombie', 'husk', 'spider', 'cave_spider', 'creeper', 'stray', 'bogged']);
 const PROJECTILES = new Set(['arrow', 'small_fireball', 'fireball', 'spectral_arrow']);
 const wearsGold = (bot) => /^golden_/.test(bot.inventory?.slots?.[5]?.name || '');
-const FOOD_ANIMALS = ['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom'];
 // While a goal brings food itself, only animals this close are hunted.
 const FEEDING_RANGE = 32;
 
@@ -315,12 +315,9 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   // At night an archer is not chased far: out there more of them spawn, and
   // the way home to bed is the better defence.
   const t = { ghastRange: 48, escapeHealth: DANGER.health, healHealth: DANGER.healingHealth, escapeRange: 6, defendRange: 5, rangedRange: 14, nightRangedRange: 6, rangedHealth: 14, eatFood: 14,
-    eatQuietRange: 4, provisionFood: 12, provisionHealth: 10, recoverHealth: 10, provisionInjured: 16, recoverFood: 18, oxygen: DANGER.air, dropsTtlMs: 270000,
-    walkSpeed: 4, dropsMaxDistance: 600, swimScale: 1, provisionRange: 160,
-    stockFood: 6, stockRange: 24, stockWindowMs: 60000,
+    eatQuietRange: 4, provisionFood: 12, recoverHealth: 10, provisionInjured: 16, recoverFood: 18, oxygen: DANGER.air, dropsTtlMs: 270000,
+    walkSpeed: 4, dropsMaxDistance: 600, swimScale: 1,
     ...thresholds };
-  const exploreMemory = {};
-  let stuckStreak = 0;
   const foodCheck = isFood || ((name) => Boolean(bot.registry.foodsByName?.[name]));
   const hasSafeFood = (state, desperate) => Object.entries(state.inventory)
     .some(([name, count]) => count > 0 && foodCheck(name) && (desperate || !RISKY_FOODS.has(name)));
@@ -1085,83 +1082,20 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   };
 
   // Hungry with nothing to eat: hunt the nearest food animal.
-  const animalNear = (state, range) => Object.values(bot.entities || {}).some((e) => FOOD_ANIMALS.includes(e?.name)
-    && e.position && !spare(e) && e.position.distanceTo(state.position) <= range);
-  let lastHuntAt = 0;
-  const safeFoodCount = (state) => Object.entries(state.inventory)
-    .reduce((n, [name, count]) => n + (count > 0 && foodCheck(name) && !RISKY_FOODS.has(name) ? count : 0), 0);
-  const stockingUp = (state) => Date.now() - lastHuntAt < t.stockWindowMs && safeFoodCount(state) < t.stockFood
-    && dimensionOf(bot) === 'overworld' && !nightBudget(state).dusk && !threats(state).some((h) => h.distance <= 16)
-    && animalNear(state, t.stockRange);
+  const animalNear = (state) => Object.values(bot.entities || {}).some(e => FOOD_MOBS.includes(e?.name)
+    && e.position?.distanceTo(state.position) <= FEEDING_RANGE && !spare(e));
+  const forage = createForaging({ bot, skills, home, dropMatch: foodCheck, spare,
+    prepare: ctx => actions.underground?.(bot) && actions.surface?.(bot, ctx),
+    targetGoal: autonomousHunt ? 'stock_food' : null });
   const provision = {
     name: 'provision',
     band: BAND.MAINTENANCE,
     want(state) {
-      // Hunger alone is not the only reason to get food: below 18 a badly
-      // injured bot cannot regenerate, even at food 16. Stop supplying at the
-      // same threshold at which recovery can take over, and eat carried food
-      // first using exactly the eat behavior's risky-food policy.
-      // Hurt to where eat would eat (below 16) and nothing to eat: food it is.
-      // Short of 14 health a bucket of lava is not fetched, and a bot at 11
-      // health and 16 food failed its obsidian forty times without ever healing.
-      const needsFood = state.food <= t.provisionFood
-        || (state.health < t.provisionInjured && state.food < t.recoverFood);
-      if (state.sheltered || nightBudget(state).dusk) return 0;
-      // Out hunting with animals still close by: a few more for the bag. One
-      // kill at a time, the bot was back out hunting every few minutes of
-      // mining, and spent a third of its hours on it.
-      if (stockingUp(state)) return 0.5;
-      if (!needsFood || hasSafeFood(state, desperateForFood(state))) return 0;
-      // The goal itself is getting food (bread from the farm), or keeps the bot
-      // by the owner: an animal close by is still worth it, but no wandering
-      // off after ones long since hunted out.
-      if (feeding() && !animalNear(state, FEEDING_RANGE)) return 0;
-      // Nothing to hunt in the nether but hoglins; wandering off there to look for food kills.
-      if (dimensionOf(bot) !== 'overworld') return 0;
-      // An archer twelve blocks off still hits: hunt only when nothing hostile is about.
-      if (reading(state).stance !== 'calm') return 0;
-      // Chasing animals at low health gets the bot killed at night; by day with
-      // nothing hostile around it is the only way back to regenerating.
-      if (state.health < t.provisionHealth && state.food > DANGER.food && threats(state).some((h) => h.distance <= 16)) return 0;
-      return 0.5;
+      if (dimensionOf(bot) !== 'overworld' || state.sheltered || hasSafeFood(state, desperateForFood(state))
+          || reading(state).stance !== 'calm' || feeding() && !animalNear(state)) return 0;
+      return state.food <= t.provisionFood || state.health < t.provisionInjured && state.food < t.recoverFood ? 0.5 : 0;
     },
-    async run(ctx) {
-      // Animals graze on the surface: hunting from down a cave only digs.
-      if (typeof actions.underground === 'function' && typeof actions.surface === 'function' && actions.underground(bot)) {
-        // A climb that fails still leaves whatever is in reach down here.
-        ctx.record('provision', { action: 'surface' });
-        const surfaced = await actions.surface(bot, ctx);
-        if (surfaced?.wait) return surfaced;
-      }
-      // Animals are visible out to about 100 blocks; go for the nearest one seen.
-      const near = feeding();
-      const stocking = stockingUp(ctx.perceive());
-      const result = await skills.huntOne(bot, ctx, { mobs: FOOD_ANIMALS, dropMatch: foodCheck,
-        radius: stocking ? t.stockRange : near ? FEEDING_RANGE : 96, accept: (e) => !spare(e),
-        targetGoal: autonomousHunt ? 'stock_food' : null });
-      if (result.ok) lastHuntAt = Date.now();
-      // Nothing to hunt in sight: berries, else look further afield instead of waiting to starve.
-      // Could not reach anything: the bot itself is probably stuck (tree top, ledge).
-      if (['NoPath', 'Timeout', 'path_timeout', 'no_progress', 'not_arrived', 'chase_stuck'].includes(result.reason)) {
-        stuckStreak += 1;
-        if (stuckStreak >= 2 && result.kind === 'target' && !factsOf(result).target) {
-          stuckStreak = 0;
-          return actions.unstick(bot, ctx);
-        }
-        return result;
-      }
-      stuckStreak = 0;
-      if (result.reason === 'no_mob_in_range' && !near) {
-        const berries = await skills.pickBerries(bot, ctx);
-        if (berries.ok || berries.reason !== 'no_berries') return berries;
-        // Not out of reach of home: a search for food once ran 1000 blocks
-        // off, and the farm and the house were then out of reach.
-        const centre = home();
-        exploreMemory.around = centre ? { x: centre.x, z: centre.z, radius: t.provisionRange } : null;
-        return skills.explore(bot, ctx, exploreMemory);
-      }
-      return result;
-    },
+    run: ctx => feeding() ? forage(ctx, FEEDING_RANGE, { roam: false }) : forage(ctx),
   };
 
   // Low health with a full stomach: stand still a few seconds and let it regenerate.

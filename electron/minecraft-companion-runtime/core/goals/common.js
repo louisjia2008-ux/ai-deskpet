@@ -7,7 +7,7 @@ const { Vec3 } = require('vec3');
 const { stepRetryAt } = require('../planner');
 const { familyOf } = require('../knowledge');
 const { naturalCover } = require('../natural-cover');
-const { createAttempt, resultFrom, waiting, factsOf } = require('../action-result');
+const { createAttempt, failure, isComplete, resultFrom, waiting, factsOf } = require('../action-result');
 
 const DOWN = [new Vec3(0, -1, 0)];
 // A table this close is used rather than another one made.
@@ -26,6 +26,28 @@ async function runPlanned(ctx, step, execute) {
   return ctx.stepOutcome?.(step, result) ?? result;
 }
 
+function* ring(radius) {
+  for (let dx = -radius; dx <= radius; dx++) {
+    for (let dz = -radius; dz <= radius; dz++) if (Math.max(Math.abs(dx), Math.abs(dz)) === radius) yield [dx, dz];
+  }
+}
+
+async function placeStation(bot, ctx, { skills, station = 'crafting_table', avoid, from = 2, to = 4, columns = ring }) {
+  const here = bot.entity.position.floored();
+  for (let r = from; r <= to; r++) for (const [dx, dz] of columns(r)) {
+    const landings = [0, 1, -1].map(dy => here.offset(dx, dy, dz)).filter(p => {
+      const floor = bot.blockAt(p.offset(0, -1, 0));
+      return naturalCover(bot.blockAt(p)) && floor?.boundingBox === 'block' && floor.name !== 'farmland'
+        && !avoid(p) && !bot.companionPlayerBlock?.(p);
+    });
+    for (const p of columns === ring ? landings.slice(0, 1) : landings) {
+      const placed = await skills.placeAt(bot, ctx, p, n => n === station, { faces: DOWN, requireAir: true });
+      if (placed.reason !== 'cell_occupied_by_entity') return isComplete(placed) ? { ...placed, position: { ...p } } : placed;
+    }
+  }
+  return { ok: false, reason: `no_${station === 'crafting_table' ? 'table' : station}_spot` };
+}
+
 function createPlannerRunner({ bot, skills, kb, memory, purpose = 'gather', avoid = () => false }) {
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   memory.shortfall = memory.shortfall || {};
@@ -40,29 +62,7 @@ function createPlannerRunner({ bot, skills, kb, memory, purpose = 'gather', avoi
     return Boolean(found);
   };
 
-  // `station`: a crafting table by default; a furnace goes down the same way.
-  async function placeNearby(ctx, station = 'crafting_table') {
-    const here = bot.entity.position.floored();
-    // The whole ring at each distance, a step up or down too: in a jungle
-    // farm, grass, leaf litter and wheat filled the 24 cells once tried and
-    // the bread was never baked.
-    for (let r = 2; r <= 4; r += 1) {
-      for (let dx = -r; dx <= r; dx += 1) {
-        for (let dz = -r; dz <= r; dz += 1) {
-          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-          const p = [0, 1, -1].map((dy) => here.offset(dx, dy, dz))
-            .find((q) => naturalCover(blockAt(q)) && blockAt(q.offset(0, -1, 0))?.boundingBox === 'block'
-              && blockAt(q.offset(0, -1, 0))?.name !== 'farmland' && !avoid(q) && !bot.companionPlayerBlock?.(q));
-          if (!p) continue;
-          const placed = await skills.placeAt(bot, ctx, p, (n) => n === station, { faces: DOWN, requireAir: true });
-          // An animal (or the bot) standing there: try the next spot.
-          if (placed.reason === 'cell_occupied_by_entity') continue;
-          return placed.ok ? { ...placed, position: { x: p.x, y: p.y, z: p.z } } : placed;
-        }
-      }
-    }
-    return { ok: false, reason: `no_${station === 'crafting_table' ? 'table' : station}_spot` };
-  }
+  const placeNearby = (ctx, station) => placeStation(bot, ctx, { skills, station, avoid });
 
   async function placeTableNearby(ctx) {
     const placed = await placeNearby(ctx, 'crafting_table');
@@ -110,4 +110,27 @@ function createPlannerRunner({ bot, skills, kb, memory, purpose = 'gather', avoi
   return { step, inventoryFor, tableHere, placeTableNearby, placeNearby };
 }
 
-module.exports = { createPlannerRunner, runPlanned, DOWN };
+function exploreFor(ctx, why, { bot, skills, memory, anchor, searchRadius, maxSearchStreak, maxExploreStreak, siteName = '' }) {
+  memory.exploreStreak++;
+  if (anchor) {
+    const { x, y, z } = anchor, from = bot.entity.position;
+    memory.explore.around = { x, z, radius: searchRadius };
+    if (Math.hypot(from.x - x, from.z - z) > searchRadius) memory.exploreStreak--;
+    if (memory.exploreStreak > maxSearchStreak) {
+      return failure(`none_near_site:${why} within ${searchRadius} of ${siteName}${x},${y},${z}`, { terminal: true }, ctx);
+    }
+  } else delete memory.explore.around;
+  if (memory.exploreStreak > maxExploreStreak) return { ok: false, reason: `exhausted:${why}` };
+  ctx.record('explore_for', { why, streak: memory.exploreStreak });
+  return skills.explore(bot, ctx, memory.explore);
+}
+
+function furnaceStock(inventory, furnace) {
+  if (furnace.item === 'raw_iron') {
+    inventory.raw_iron = (inventory.raw_iron || 0) + furnace.input;
+    inventory.iron_ingot = (inventory.iron_ingot || 0) + furnace.output;
+  }
+  return inventory;
+}
+
+module.exports = { createPlannerRunner, exploreFor, furnaceStock, placeStation, runPlanned, DOWN };

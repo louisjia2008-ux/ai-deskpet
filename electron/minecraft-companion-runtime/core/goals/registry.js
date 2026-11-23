@@ -23,7 +23,7 @@ const GENERATOR_HARVEST = 8;
 const SMELT_COUNT = 4;
 
 /** The finished house as machines need it: chest, stations and centre; null before there is one. */
-function homeOf(memory) {
+function homeOf(memory = {}) {
   const house = memory.homestead?.memory?.house;
   if (!house) return null;
   const f = house.furniture;
@@ -99,7 +99,7 @@ function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = 
         const food = countKey('food', state.inventory, kb);
         return food < 4 ? 1 + (4 - food) / 16 : Math.max(0, (1 - food / foodTarget) * 0.75);
       },
-      create: () => createStockFoodGoal({ bot, target: foodTarget, kb }),
+      create: memory => createStockFoodGoal({ bot, target: foodTarget, kb, home: () => homeOf(memory)?.centre }),
     },
   ];
 

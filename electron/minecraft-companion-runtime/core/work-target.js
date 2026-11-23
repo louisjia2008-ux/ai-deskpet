@@ -15,7 +15,7 @@ const hazardTarget = (bot, position, entity) => ({
 });
 
 async function withWorkTarget(bot, ctx, position, run, entity) {
-  const { signal, behavior } = ctx;
+  const { bodySignal: signal = ctx.signal, behavior } = ctx;
   const ledger = bot.companionFailureLedger;
   if (!position || !signal || !ledger || active.has(signal) || rescueOf(ctx)
       || !(behavior?.startsWith('goal:') || behavior === 'provision')) return run();

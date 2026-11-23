@@ -15,8 +15,8 @@ const { filler, pickItem, placedFor, matchesRoofWood, matchesRoofFallback, budge
 const { chooseSite, chooseHillside, evaluateSite, safeCaveDig, canClearTerrain, isSoft, siteWork } = require('../site');
 const { posKey } = require('../blacklist');
 const { ledgerFor, ledgerTarget } = require('../failure-ledger');
-const { sleep, waitUntil } = require('../confirm');
-const { runPlanned } = require('./common');
+const { waitUntil } = require('../confirm');
+const { exploreFor, furnaceStock, placeStation, runPlanned } = require('./common');
 const { outwardLeg, gatherWood, OUTWARD_HEADINGS } = require('../adaptation-strategies');
 const { alternateStand, clearTerrain } = require('../target-recovery');
 const { topology, safeStand, isBed, clear, supports, SIDES } = require('../home-topology');
@@ -27,7 +27,6 @@ const DEFAULT_GEAR = ['stone_sword', 'stone_tier_pickaxe', 'iron_sword', 'iron_p
 // Stone tools come before the house. Iron needs useful crafting and smelting stations.
 const EARLY_GEAR = new Set(['stone_sword', 'stone_tier_pickaxe', 'pickaxe', 'wooden_pickaxe']);
 const DOWN = [new Vec3(0, -1, 0)];
-const FOOD_MOBS = new Set(['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom']);
 const BATCH = 16;
 const SITE_METHODS = ['near_flat', 'more_earthwork', 'compact', 'hillside'];
 const SCOUT_RADIUS = 12;
@@ -324,7 +323,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const missing = hs.missing.map((b) => `${b.purpose}@${posKey(b.position)}`);
     missing.push(...hs.foundationMissing.map((p) => `foundation@${posKey(p)}`));
     if (hs.accessObstructed) missing.push('entrance');
-    if (state.isDay && hs.placed.door && doorOpen() === false && insideRoom(bot.entity.position.floored())) missing.push('day_door');
     for (const key of essentialPieces)
       if (hs.placed[key] === false && !hs.blocked.some(({ item }) => item === key)) missing.push(key);
     return { missing, unknown: hs.unknown.map(posKey), blocked: hs.blocked,
@@ -346,15 +344,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     return reqs;
   }
 
-  function plannerInventory(state) {
-    const inventory = { ...state.inventory };
-    // Items left in the furnace still count; otherwise they would be gathered twice.
-    if (memory.furnace.item === 'raw_iron') {
-      inventory.raw_iron = (inventory.raw_iron || 0) + memory.furnace.input;
-      inventory.iron_ingot = (inventory.iron_ingot || 0) + memory.furnace.output;
-    }
-    return inventory;
-  }
+  const plannerInventory = state => furnaceStock({ ...state.inventory }, memory.furnace);
 
   function woodForFurniture(hs, inventory) {
     const unmade = (piece, count = 1) => Math.max(0, count - countKey(piece, inventory, kb));
@@ -470,27 +460,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     return null;
   }
 
-  async function explore(ctx, why) {
-    memory.exploreStreak += 1;
-    // With a site, materials are looked for around it: one search ran 850
-    // blocks out after trees, was caught by the night there and died twice.
-    // Nothing within reach ends the task, and the owner hears what is missing.
-    // Before a site is chosen, the owner's spot is the centre to stay around.
-    const a = memory.house?.anchor || near;
-    if (a) {
-      memory.explore.around = { x: a.x, z: a.z, radius: searchRadius };
-      // Still on the way back (respawned 500 blocks off): those legs search
-      // nothing near the site, and once used them all up to say no tree grew
-      // around a house in a forest.
-      if (Math.hypot(bot.entity.position.x - a.x, bot.entity.position.z - a.z) > searchRadius) memory.exploreStreak -= 1;
-      if (memory.exploreStreak > maxSearchStreak) {
-        return failure(`none_near_site:${why} within ${searchRadius} of ${a.x},${a.y},${a.z}`, { terminal: true }, ctx);
-      }
-    } else delete memory.explore.around;
-    if (memory.exploreStreak > maxExploreStreak) return { ok: false, reason: `exhausted:${why}` };
-    ctx.record('explore_for', { why, streak: memory.exploreStreak });
-    return skills.explore(bot, ctx, memory.explore);
-  }
+  const explore = (ctx, why) => exploreFor(ctx, why, { bot, skills, memory, anchor: memory.house?.anchor || near,
+    searchRadius, maxSearchStreak, maxExploreStreak });
 
   const plan = (ctx, args) => planNext({ ...args, kb, planning: ctx.planning });
   const runPlannerStep = (ctx, step, requirement) => runPlanned(ctx, step, attempt => executePlannerStep(attempt, step, requirement));
@@ -583,8 +554,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         // Food is wanted close by (a rabbit 93 blocks off led across a lake);
         // sheep for the bed are worth a longer walk.
         const result = await skills.huntOne(bot, ctx, { mobs: step.mobs, dropMatch: kb[step.key].match,
-          radius: step.key === 'food' ? 48 : 96,
-          ...(step.key === 'wool' ? woolPreference(ctx.perceive().inventory) : {}) });
+          radius: 96, ...(step.key === 'wool' ? woolPreference(ctx.perceive().inventory) : {}) });
         // No sheep anywhere near: spiders drop string, four of which make wool.
         if (result.reason === 'no_mob_in_range' && step.key === 'wool') {
           const spider = await skills.huntOne(bot, ctx, { mobs: ['spider', 'cave_spider'], dropMatch: (n) => n === 'string', radius: 48 });
@@ -1113,21 +1083,11 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   }
 
   async function placePortableTable(ctx) {
-    const here = bot.entity.position.floored();
-    for (let r = 1; r <= 3; r += 1) {
-      for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) {
-        for (const dy of [0, 1, -1]) {
-          const p = here.offset(dx, dy, dz);
-          if (!naturalCover(blockAt(p))) continue;
-          if (blockAt(p.offset(0, -1, 0))?.boundingBox !== 'block' || nearHouseColumn(p)) continue;
-          const placed = await skills.placeAt(bot, ctx, p, (n) => n === 'crafting_table', { faces: DOWN, requireAir: true });
-          if (placed.reason === 'cell_occupied_by_entity') continue;
-          if (placed.ok) ctx.record('portable_table', { action: 'place', position: posKey(p) });
-          return placed.ok ? { ok: true, position: { x: p.x, y: p.y, z: p.z } } : placed;
-        }
-      }
-    }
-    return { ok: false, reason: 'no_table_spot' };
+    const result = await placeStation(bot, ctx, { skills, avoid: nearHouseColumn, from: 1, to: 3,
+      columns: r => [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]] });
+    if (!isComplete(result)) return result;
+    ctx.record('portable_table', { action: 'place', position: posKey(result.position) });
+    return { ok: true, position: result.position };
   }
 
   async function pickUpTable(ctx, position) {
@@ -1868,8 +1828,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     let state = ctx.perceive();
     if (memory.cleanupRequested) return clearScaffold(ctx);
     if (ctx.adapt && !memory.pinned && !memory.established && memory.house && !memory.searchOrigin) {
-      const { x, y, z } = memory.house.anchor;
-      memory.searchOrigin = new Vec3(x, y, z);
+      memory.searchOrigin = v(memory.house.anchor);
     }
     if (memory.relocate && memory.house && !memory.pinned && !memory.established) return abandonSite(ctx, 'repeated_nearby_deaths');
     if (!memory.house) {
@@ -1983,7 +1942,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (hs.placed.crafting_table && !isSkipped('crafting_table') && !fallbackRoofOpen) {
       early.unshift({ key: 'crafting_table', count: 1, optional: true });
     }
-    if (!autonomous && !isSkipped('food')) early.push({ key: 'food', count: 4, optional: true });
     if (!hs.placed.door && hs.placed.crafting_table && !countKey('door', inventory, kb)) {
       const door = plan(ctx, { requirements: [{ key: 'door', count: 1 }], inventory, stations });
       if (door?.kind === 'craft' && door.key === 'door') return runPlannerStep(ctx, door, null);
@@ -2003,18 +1961,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         if (isComplete(cooked)) memory.verified.furnace = true;
         else if (!cooked.wait) retryAt.cook = Date.now() + 120000;
         return cooked;
-      }
-    }
-    // Animals close by are food in the bag for later: on mountains and in
-    // forests the next one may be a long, failing chase away once hunger hits.
-    if (!autonomous && !nightBudget(state).dusk && state.health >= 12 && countKey('food', state.inventory, kb) < 10 && !(retryAt.stockpile > Date.now())) {
-      const animals = Object.values(bot.entities || {}).some((e) => FOOD_MOBS.has(e.name) && e.position
-        && e.position.distanceTo(bot.entity.position) <= 16 && !huntExcluded(e));
-      if (animals) {
-        ctx.record('stockpile_food', {});
-        const hunted = await skills.huntOne(bot, ctx, { mobs: [...FOOD_MOBS], dropMatch: kb.food.match, radius: 16 });
-        if (!hunted.ok) retryAt.stockpile = Date.now() + 60000;
-        return hunted;
       }
     }
     // Then the bed, placed at its spot in the future house: from the first

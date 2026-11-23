@@ -9,7 +9,7 @@ const { waitUntil, runCancellable, sleep, abortError } = require('./confirm');
 const { posKey } = require('./blacklist');
 const { ledgerFor, ledgerTarget, recordTarget, targetsFor } = require('./failure-ledger');
 const { FUELS, COLORS } = require('./knowledge');
-const { ownedItems } = require('./perception');
+const { countInventory, ownedItems } = require('./perception');
 const { withCursorConfirmation } = require('./inventory');
 const { isLog, isSurfaceLog } = require('./goals/gatherBlocks');
 const { isAir, naturalCover, plantPartner, isWaterlogged } = require('./natural-cover');
@@ -657,7 +657,7 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, accept = () => 
   const score = (e) => e.position.distanceTo(here) + penalty(e);
   const target = Object.values(bot.entities)
     .filter((e) => mobs.includes(e.name) && e.position && e.position.distanceTo(here) <= radius
-       && Math.abs(e.position.y - here.y) <= HUNT_HEIGHT && !ledger.skip(nearby(e)) && !ledger.skip(nearby(e, 'hunt_far')) && accept(e)
+       && (!ctx.workArea || ctx.workArea(e.position)) && Math.abs(e.position.y - here.y) <= HUNT_HEIGHT && !ledger.skip(nearby(e)) && !ledger.skip(nearby(e, 'hunt_far')) && accept(e)
        && !targets?.excluded(spec(e)) && !ledger.skip(waterRouteTarget(bot, ctx, e.position, e.id))
        && !ledger.regionHard(e.position, dimensionOf(bot)))
     .sort((a, b) => score(a) - score(b))[0];
@@ -678,7 +678,7 @@ async function huntOne(bot, ctx, { mobs, dropMatch, radius = 48, accept = () => 
     const tracker = setInterval(() => { if (bot.entities[target.id]) last = bot.entities[target.id].position.clone(); }, 100);
     let result;
     try {
-      result = await actions.attack(bot, ctx, target.id, { timeoutMs: 25000 });
+      result = await actions.attack(bot, ctx, target.id, { timeoutMs: 25000, canPursue: ctx.workArea });
     } finally {
       clearInterval(tracker);
     }
@@ -710,7 +710,7 @@ async function pickBerries(bot, ctx, { radius = 32, purpose = 'berry' } = {}) {
   for (const [key, until] of picked) if (until <= Date.now()) picked.delete(key);
   const ripe = bot.findBlocks({ matching: bush.id, maxDistance: radius, count: 16,
     useExtraInfo: (b) => Number(b.getProperties?.().age) >= 2 })
-    .filter(p => !ledger.skip(target(p)) && !picked.has(posKey(p)))
+    .filter(p => (!ctx.workArea || ctx.workArea(p)) && !ledger.skip(target(p)) && !picked.has(posKey(p)))
     .map((p) => bot.blockAt(p)).filter(Boolean);
   if (!ripe.length) return fail('no_berries');
   const block = ripe[0];
@@ -734,14 +734,17 @@ async function pickBerries(bot, ctx, { radius = 32, purpose = 'berry' } = {}) {
 async function explore(bot, ctx, memory, { distance = 32, timeoutMs = 40000, retryNoProgress } = {}) {
   memory.tried = memory.tried || [];
   const here = bot.entity.position;
-  const directions = Array.from({ length: 8 }, (_, i) => (i * Math.PI) / 4);
+  const point = angle => here.offset(Math.cos(angle) * distance, 0, Math.sin(angle) * distance);
+  const allowed = angle => !ctx.workArea || ctx.workArea(point(angle));
+  const directions = Array.from({ length: 8 }, (_, i) => (i * Math.PI) / 4).filter(allowed);
+  if (!directions.length) return waiting('work_budget', Date.now() + 5000);
   // Keep successful headings, and head back toward the centre past the roaming radius.
   const around = memory.around;
   const off = around ? Math.hypot(here.x - around.x, here.z - around.z) : 0;
-  if (around && off > around.radius) {
+  if (around && off > around.radius && allowed(Math.atan2(around.z - here.z, around.x - here.x))) {
     memory.heading = Math.atan2(around.z - here.z, around.x - here.x);
     memory.blocked = false;
-  } else if (memory.heading === undefined || memory.blocked) {
+  } else if (memory.heading === undefined || memory.blocked || !allowed(memory.heading)) {
     const fresh = directions.filter((a) => !memory.tried.slice(-4).includes(a));
     memory.heading = (fresh.length ? fresh : directions)[Math.floor(Math.random() * (fresh.length || directions.length))];
     memory.blocked = false;
@@ -759,109 +762,86 @@ async function explore(bot, ctx, memory, { distance = 32, timeoutMs = 40000, ret
   return moved >= 10 ? { ok: true, moved: Math.round(moved) } : fail(result.ok ? 'explore_blocked' : result.reason);
 }
 
-/**
- * Opens the chest and stores `count` of each named item (all of it when no
- * count). Confirmed by the bag emptying, not by the deposit call returning.
- */
-async function storeItems(bot, ctx, { position, items }) {
+async function withChest(bot, ctx, position, prepare) {
   const moved = await goToBlock(bot, ctx, position);
-  if (!moved.ok) return moved;
+  if (!isComplete(moved)) return moved;
   const block = bot.blockAt(v(position));
   if (block?.name !== 'chest') return fail('chest_missing');
-  const freeBefore = bot.inventory.emptySlotCount();
-  const stored = {};
+  const transfer = prepare();
+  if (typeof transfer !== 'function') return transfer;
   let chest;
   try {
     chest = await runCancellable(() => bot.openContainer(block), { signal: ctx.signal, timeoutMs: 5000, timeoutCode: 'open_timeout' });
-    for (const { name, count } of items) {
-      const type = bot.registry.itemsByName[name]?.id;
-      const have = bot.inventory.items().filter((i) => i.name === name).reduce((sum, i) => sum + i.count, 0);
-      const n = Math.min(have, count ?? have);
-      if (!Number.isInteger(type) || n <= 0) continue;
-      try {
-        await chest.deposit(type, null, n);
-        stored[name] = n;
-      } catch (error) {
-        if (isAbort(error)) throw error;
-        break; // the chest is full
-      }
-    }
+    return await transfer(chest);
   } catch (error) {
     if (isAbort(error)) throw error;
     return fail('chest_failed');
   } finally {
-    try { chest?.close(); } catch { /* ignore */ }
+    try { chest?.close(); } catch { /* chest may already be closed */ }
   }
-  // Mineflayer syncs the inventory only once the window is closed.
-  const freed = Object.keys(stored).length > 0
-    && await waitUntil(() => bot.inventory.emptySlotCount() > freeBefore, { timeoutMs: 2000, signal: ctx.signal });
-  return freed ? { ok: true, stored } : fail('chest_full');
 }
 
-/** Takes every matching stack out of a chest; ok once the inventory holds more of it. */
+async function storeItems(bot, ctx, { position, items }) {
+  let freeBefore;
+  const result = await storeInChest(bot, ctx, { position,
+    wants: items.map(({ name, count }) => ({ match: item => item === name, count: count ?? Infinity })),
+  }, () => { freeBefore = bot.inventory.emptySlotCount(); });
+  if (!isComplete(result)) return result;
+  // Mineflayer syncs the inventory only when the window is closed.
+  const freed = Object.keys(result.stored).length > 0
+    && await waitUntil(() => bot.inventory.emptySlotCount() > freeBefore, { timeoutMs: 2000, signal: ctx.signal });
+  return freed ? { ok: true, stored: result.stored } : fail('chest_full');
+}
+
+/** Takes matching stacks and confirms that the bag gained them after closing. */
 async function takeItems(bot, ctx, { position, itemMatch, count: requested = Infinity }) {
-  const moved = await goToBlock(bot, ctx, position);
-  if (!moved.ok) return moved;
-  const block = bot.blockAt(v(position));
-  if (block?.name !== 'chest') return fail('chest_missing');
-  const count = () => ownedItems(bot).filter((i) => itemMatch(i.name)).reduce((sum, i) => sum + i.count, 0);
-  const before = count();
-  let chest;
-  try {
-    chest = await runCancellable(() => bot.openContainer(block), { signal: ctx.signal, timeoutMs: 5000, timeoutCode: 'open_timeout' });
-    const stacks = chest.containerItems().filter((i) => itemMatch(i.name));
-    if (stacks.length === 0) return fail('chest_empty');
-    let remaining = requested;
-    for (const stack of stacks) {
-      const amount = Math.min(stack.count, remaining);
-      if (amount <= 0) break;
-      try {
-        await chest.withdraw(stack.type, null, amount);
-        remaining -= amount;
-      } catch (error) {
-        if (isAbort(error)) throw error;
-        break; // inventory full: keep what earlier stacks already moved
+  const count = () => ownedItems(bot).filter(i => itemMatch(i.name)).reduce((sum, i) => sum + i.count, 0);
+  let before;
+  const result = await withChest(bot, ctx, position, () => {
+    before = count();
+    return async chest => {
+      const stacks = chest.containerItems().filter(i => itemMatch(i.name));
+      if (!stacks.length) return fail('chest_empty');
+      let remaining = requested;
+      for (const stack of stacks) {
+        const amount = Math.min(stack.count, remaining);
+        if (amount <= 0) break;
+        try {
+          await chest.withdraw(stack.type, null, amount);
+          remaining -= amount;
+        } catch (error) {
+          if (isAbort(error)) throw error;
+          break;
+        }
       }
-    }
-  } catch (error) {
-    if (isAbort(error)) throw error;
-    return fail('chest_failed');
-  } finally {
-    try { chest?.close(); } catch { /* ignore */ }
-  }
-  // Mineflayer syncs the inventory only once the window is closed.
+      return { ok: true };
+    };
+  });
+  if (!isComplete(result)) return result;
   const gained = await waitUntil(() => count() > before, { timeoutMs: 2000, signal: ctx.signal });
   return gained ? { ok: true, taken: count() - before } : fail('take_unconfirmed');
 }
 
-/** Opens the chest and stores one item; confirmed by the container contents. */
-async function useChest(bot, ctx, { position, itemMatch }) {
-  const moved = await goToBlock(bot, ctx, position);
-  if (!moved.ok) return moved;
-  const block = bot.blockAt(v(position));
-  if (block?.name !== 'chest') return fail('chest_missing');
-  const item = bot.inventory.items().find((i) => itemMatch(i.name));
-  if (!item) return fail('nothing_to_store');
-  let chest;
-  try {
-    chest = await runCancellable(() => bot.openContainer(block), { signal: ctx.signal, timeoutMs: 5000, timeoutCode: 'open_timeout' });
-    const before = chest.containerItems().filter((i) => i.name === item.name).reduce((s, i) => s + i.count, 0);
-    await chest.deposit(item.type, null, 1);
-    const stored = await waitUntil(() => chest.containerItems().filter((i) => i.name === item.name)
-      .reduce((s, i) => s + i.count, 0) > before, { timeoutMs: 2000, signal: ctx.signal });
-    return stored ? { ok: true, stored: item.name } : fail('chest_unconfirmed');
-  } catch (error) {
-    if (isAbort(error)) throw error;
-    return fail('chest_failed');
-  } finally {
-    try { chest?.close(); } catch { /* ignore */ }
-  }
+/** Stores one item and confirms it in the open chest. */
+function useChest(bot, ctx, { position, itemMatch }) {
+  return withChest(bot, ctx, position, () => {
+    const item = bot.inventory.items().find(i => itemMatch(i.name));
+    if (!item) return fail('nothing_to_store');
+    return async chest => {
+      const stored = await depositObserved(chest, ctx, item, 1);
+      return stored ? { ok: true, stored: item.name } : fail('chest_unconfirmed');
+    };
+  });
 }
 
-function chestCounts(chest) {
-  const counts = {};
-  for (const item of chest.containerItems()) counts[item.name] = (counts[item.name] || 0) + item.count;
-  return counts;
+const chestCounts = chest => countInventory(chest.containerItems());
+
+async function depositObserved(chest, ctx, item, amount) {
+  const count = () => chestCounts(chest)[item.name] || 0;
+  const before = count();
+  await chest.deposit(item.type, null, amount);
+  await waitUntil(() => count() > before, { timeoutMs: 2000, signal: ctx.signal });
+  return Math.max(0, count() - before);
 }
 
 /**
@@ -869,43 +849,31 @@ function chestCounts(chest) {
  * the chest holds afterwards as the server shows it. With no wants it only
  * reads the contents.
  */
-async function storeInChest(bot, ctx, { position, wants = [] }) {
-  const moved = await goToBlock(bot, ctx, position);
-  if (!moved.ok) return moved;
-  const block = bot.blockAt(v(position));
-  if (block?.name !== 'chest') return fail('chest_missing');
-  let chest;
-  try {
-    chest = await runCancellable(() => bot.openContainer(block), { signal: ctx.signal, timeoutMs: 5000, timeoutCode: 'open_timeout' });
+function storeInChest(bot, ctx, { position, wants = [] }, beforeOpen) {
+  const deposit = async chest => {
     const stored = {};
     for (const { match, count } of wants) {
       let left = count;
       for (const item of bot.inventory.items().filter((i) => match(i.name))) {
         if (left <= 0) break;
-        const n = Math.min(left, item.count);
-        const before = chestCounts(chest)[item.name] || 0;
-        try {
-          await chest.deposit(item.type, null, n);
-        } catch (error) {
+        let added;
+        try { added = await depositObserved(chest, ctx, item, Math.min(left, item.count)); } catch (error) {
           if (isAbort(error)) throw error;
-          break; // chest full: what did go in is still counted below
+          break;
         }
-        await waitUntil(() => (chestCounts(chest)[item.name] || 0) > before, { timeoutMs: 2000, signal: ctx.signal });
-        const added = (chestCounts(chest)[item.name] || 0) - before;
-        if (added > 0) stored[item.name] = (stored[item.name] || 0) + added;
-        left -= Math.max(0, added);
+        if (added) stored[item.name] = (stored[item.name] || 0) + added;
+        left -= added;
       }
     }
     const contents = chestCounts(chest);
     // Nothing went in (a full chest): not progress, even though the chest was read.
     if (wants.length && Object.keys(stored).length === 0) return fail('chest_full', { contents });
     return { ok: true, contents, stored };
-  } catch (error) {
-    if (isAbort(error)) throw error;
-    return fail('chest_failed');
-  } finally {
-    try { chest?.close(); } catch { /* ignore */ }
-  }
+  };
+  return withChest(bot, ctx, position, () => {
+    beforeOpen?.();
+    return deposit;
+  });
 }
 
 const sourceLevel = (block) => Number(block?.getProperties?.().level);
@@ -978,7 +946,6 @@ async function fillBucketAt(bot, ctx, target, full, liquid) {
  * head with a block. Nothing can reach the bot in a sealed 1x1 shaft. Returns
  * the bunker so digOut can undo it exactly.
  */
-const SOLID = (b) => b && b.boundingBox === 'block' && !/water|lava|gravel|sand/.test(b.name);
 // Sand and gravel only fall into a gap beneath them. The shaft is dug from
 // the top down with open air above it, so its walls and floor may be sand:
 // a desert has nothing else.

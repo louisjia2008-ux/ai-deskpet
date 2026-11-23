@@ -39,6 +39,25 @@ function dominantWood(inventory) {
   return log ? log.replace(/_log$/, '') : 'oak';
 }
 
+const craft = (item, needs, { yields = 1, table = true, pick = () => item, maxBatch, when } = {}) => ({
+  kind: 'craft', yields, ...(maxBatch === undefined ? {} : { maxBatch }), needs, table, pick, ...(when ? { when } : {}),
+});
+const recipe = (item, needs, { match = exact(item), tool, ...options } = {}) => ({
+  match, ...(tool ? { tool } : {}), sources: [craft(item, needs, options)],
+});
+const toolAlias = (key, ...names) => ({ match: exact(...names), tool: true, sources: [{ kind: 'alias', key }] });
+const gatherOre = (item, ore, tool, mineY, match = exact(item)) => ({
+  match, sources: [{ kind: 'gather', blocks: exact(`${ore}_ore`, `deepslate_${ore}_ore`), tool, mineY }],
+});
+
+function armor(tiers, resource) {
+  const parts = { helmet: 5, chestplate: 8, leggings: 7, boots: 4 };
+  return Object.fromEntries(Object.entries(parts).map(([piece, count]) => {
+    const [item, ...upgrades] = tiers.map(tier => `${tier}_${piece}`);
+    return [item, recipe(item, { [resource]: count }, { tool: true, match: exact(item, ...upgrades) })];
+  }));
+}
+
 const KNOWLEDGE = {
   log: { match: isLog, sources: [{ kind: 'gather', blocks: isLog }] },
   planks: {
@@ -46,80 +65,34 @@ const KNOWLEDGE = {
     // Every recipe takes one kind of planks (3 birch + 1 oak make no chest),
     // so only the most plentiful kind counts.
     count: (inv) => Math.max(0, ...WOODS.map((w) => inv[`${w}_planks`] || 0)),
-    sources: [{
-      kind: 'craft', yields: 4, needs: { log: 1 }, table: false,
-      // Craft planks from whatever log is most plentiful.
+    // Craft planks from whatever log is most plentiful.
+    sources: [craft('oak_planks', { log: 1 }, { yields: 4, table: false,
       pick: (inv) => `${(byMost(inv, WOODS.map((w) => `${w}_log`)) || 'oak_log').replace(/_log$/, '')}_planks`,
-    }],
+    })],
   },
-  stick: { match: exact('stick'), sources: [{ kind: 'craft', yields: 4, needs: { planks: 2 }, table: false, pick: () => 'stick' }] },
-  crafting_table: {
-    match: exact('crafting_table'),
-    sources: [{ kind: 'craft', yields: 1, needs: { planks: 4 }, table: false, pick: () => 'crafting_table' }],
-  },
-  wooden_pickaxe: {
-    match: exact('wooden_pickaxe'),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { planks: 3, stick: 2 }, table: true, pick: () => 'wooden_pickaxe' }],
-  },
+  stick: recipe('stick', { planks: 2 }, { yields: 4, table: false }),
+  crafting_table: recipe('crafting_table', { planks: 4 }, { table: false }),
+  wooden_pickaxe: recipe('wooden_pickaxe', { planks: 3, stick: 2 }, { tool: true }),
   // Tool tiers: a better tool satisfies a lower requirement.
-  pickaxe: {
-    match: exact('wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'),
-    tool: true,
-    sources: [{ kind: 'alias', key: 'wooden_pickaxe' }],
-  },
-  iron_tier_pickaxe: {
-    match: exact('iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'),
-    tool: true,
-    sources: [{ kind: 'alias', key: 'iron_pickaxe' }],
-  },
-  stone_tier_pickaxe: {
-    match: exact('stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'),
-    tool: true,
-    sources: [{ kind: 'alias', key: 'stone_pickaxe' }],
-  },
+  pickaxe: toolAlias('wooden_pickaxe', 'wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'),
+  iron_tier_pickaxe: toolAlias('iron_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'),
+  stone_tier_pickaxe: toolAlias('stone_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'),
   cobblestone: {
     match: exact('cobblestone', 'cobbled_deepslate'),
     sources: [{ kind: 'gather', blocks: exact('stone', 'cobblestone', 'deepslate', 'cobbled_deepslate'), tool: 'pickaxe' }],
   },
-  stone_pickaxe: {
-    match: exact('stone_pickaxe'),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { cobblestone: 3, stick: 2 }, table: true, pick: () => 'stone_pickaxe' }],
-  },
-  stone_sword: {
-    match: exact('stone_sword', 'iron_sword', 'diamond_sword', 'netherite_sword'),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { cobblestone: 2, stick: 1 }, table: true, pick: () => 'stone_sword' }],
-  },
-  furnace: {
-    match: exact('furnace'),
-    sources: [{ kind: 'craft', yields: 1, needs: { cobblestone: 8 }, table: true, pick: () => 'furnace' }],
-  },
-  coal: {
-    match: exact('coal', 'charcoal'),
-    sources: [{ kind: 'gather', blocks: exact('coal_ore', 'deepslate_coal_ore'), tool: 'pickaxe', mineY: 16 }],
-  },
-  raw_iron: {
-    match: exact('raw_iron'),
-    sources: [{ kind: 'gather', blocks: exact('iron_ore', 'deepslate_iron_ore'), tool: 'stone_tier_pickaxe', mineY: 16 }],
-  },
+  stone_pickaxe: recipe('stone_pickaxe', { cobblestone: 3, stick: 2 }, { tool: true }),
+  stone_sword: recipe('stone_sword', { cobblestone: 2, stick: 1 },
+    { tool: true, match: exact('stone_sword', 'iron_sword', 'diamond_sword', 'netherite_sword') }),
+  furnace: recipe('furnace', { cobblestone: 8 }),
+  coal: gatherOre('coal', 'coal', 'pickaxe', 16, exact('coal', 'charcoal')),
+  raw_iron: gatherOre('raw_iron', 'iron', 'stone_tier_pickaxe', 16),
   iron_ingot: { match: exact('iron_ingot'), sources: [{ kind: 'smelt', input: 'raw_iron', inputItem: 'raw_iron' }] },
-  iron_sword: {
-    match: exact('iron_sword', 'diamond_sword', 'netherite_sword'),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { iron_ingot: 2, stick: 1 }, table: true, pick: () => 'iron_sword' }],
-  },
-  iron_pickaxe: {
-    match: exact('iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { iron_ingot: 3, stick: 2 }, table: true, pick: () => 'iron_pickaxe' }],
-  },
-  shield: {
-    match: exact('shield'),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { iron_ingot: 1, planks: 6 }, table: true, pick: () => 'shield' }],
-  },
+  iron_sword: recipe('iron_sword', { iron_ingot: 2, stick: 1 },
+    { tool: true, match: exact('iron_sword', 'diamond_sword', 'netherite_sword') }),
+  iron_pickaxe: recipe('iron_pickaxe', { iron_ingot: 3, stick: 2 },
+    { tool: true, match: exact('iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe') }),
+  shield: recipe('shield', { iron_ingot: 1, planks: 6 }, { tool: true }),
   charcoal: {
     match: exact('charcoal'),
     sources: [{ kind: 'smelt', input: 'log', inputItem: (inv) => byMost(inv, Object.keys(inv).filter(KNOWLEDGE.log.match)) }],
@@ -128,76 +101,47 @@ const KNOWLEDGE = {
     match: exact('coal', 'charcoal'),
     sources: [{ kind: 'alias', key: 'charcoal' }],
   },
-  torch: {
-    match: exact('torch'),
-    sources: [{ kind: 'craft', yields: 4, needs: { torch_fuel: 1, stick: 1 }, table: false, pick: () => 'torch' }],
-  },
+  torch: recipe('torch', { torch_fuel: 1, stick: 1 }, { yields: 4, table: false }),
   wool: {
     match: (n) => n.endsWith('_wool') && COLORS.some((c) => n === `${c}_wool`),
     // A bed needs three wool of one color, so only the most common color counts.
     count: (inv) => Math.max(0, ...COLORS.map((c) => inv[`${c}_wool`] || 0)),
     // Four string make a white wool: where there are no sheep, spiders still are.
     sources: [
-      { kind: 'craft', yields: 1, maxBatch: 1, needs: { string: 4 }, table: false, pick: () => 'white_wool', when: (inv) => (inv.string || 0) >= 4 },
+      craft('white_wool', { string: 4 }, { maxBatch: 1, table: false, when: inv => (inv.string || 0) >= 4 }),
       { kind: 'hunt', mobs: ['sheep'] },
     ],
   },
   string: { match: exact('string'), sources: [{ kind: 'hunt', mobs: ['spider', 'cave_spider'] }] },
-  bed: {
+  bed: recipe('white_bed', { wool: 3, planks: 3 }, {
     match: (n) => n.endsWith('_bed'),
-    sources: [{
-      kind: 'craft', yields: 1, needs: { wool: 3, planks: 3 }, table: true,
-      pick: (inv) => `${(byMost(inv, COLORS.map((c) => `${c}_wool`)) || 'white_wool').replace(/_wool$/, '')}_bed`,
-    }],
-  },
-  chest: { match: exact('chest'), sources: [{ kind: 'craft', yields: 1, needs: { planks: 8 }, table: true, pick: () => 'chest' }] },
-  door: {
+    pick: (inv) => `${(byMost(inv, COLORS.map((c) => `${c}_wool`)) || 'white_wool').replace(/_wool$/, '')}_bed`,
+  }),
+  chest: recipe('chest', { planks: 8 }),
+  door: recipe('oak_door', { planks: 6 }, {
     match: (n) => n.endsWith('_door') && WOODS.some((w) => n === `${w}_door`),
-    sources: [{ kind: 'craft', yields: 3, needs: { planks: 6 }, table: true, pick: (inv) => `${dominantWood(inv)}_door` }],
-  },
+    yields: 3, pick: (inv) => `${dominantWood(inv)}_door`,
+  }),
   // Redstone machine parts. Natural redstone and quartz ore are mined where
   // they are seen; deep branch mining and the Nether are separate steps.
-  bucket: { match: exact('bucket'), sources: [{ kind: 'craft', yields: 1, needs: { iron_ingot: 3 }, table: true, pick: () => 'bucket' }] },
+  bucket: recipe('bucket', { iron_ingot: 3 }),
   water_bucket: { match: exact('water_bucket'), sources: [{ kind: 'fill', liquid: 'water', bucket: 'bucket' }] },
   lava_bucket: { match: exact('lava_bucket'), sources: [{ kind: 'fill', liquid: 'lava', bucket: 'bucket' }] },
-  hopper: {
-    match: exact('hopper'),
-    sources: [{ kind: 'craft', yields: 1, needs: { iron_ingot: 5, chest: 1 }, table: true, pick: () => 'hopper' }],
-  },
-  redstone: {
-    match: exact('redstone'),
-    sources: [{ kind: 'gather', blocks: exact('redstone_ore', 'deepslate_redstone_ore'), tool: 'iron_tier_pickaxe', mineY: -53 }],
-  },
-  diamond: {
-    match: exact('diamond'),
-    sources: [{ kind: 'gather', blocks: exact('diamond_ore', 'deepslate_diamond_ore'), tool: 'iron_tier_pickaxe', mineY: -58 }],
-  },
+  hopper: recipe('hopper', { iron_ingot: 5, chest: 1 }),
+  redstone: gatherOre('redstone', 'redstone', 'iron_tier_pickaxe', -53),
+  diamond: gatherOre('diamond', 'diamond', 'iron_tier_pickaxe', -58),
   // The way to the Nether: a portal of obsidian lit with flint and steel.
-  diamond_pickaxe: {
-    match: exact('diamond_pickaxe', 'netherite_pickaxe'),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { diamond: 3, stick: 2 }, table: true, pick: () => 'diamond_pickaxe' }],
-  },
-  diamond_sword: {
-    match: exact('diamond_sword', 'netherite_sword'),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { diamond: 2, stick: 1 }, table: true, pick: () => 'diamond_sword' }],
-  },
-  ...Object.fromEntries([['helmet', 5], ['chestplate', 8], ['leggings', 7], ['boots', 4]].map(([piece, diamonds]) => [`diamond_${piece}`, {
-    match: exact(`diamond_${piece}`, `netherite_${piece}`),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { diamond: diamonds }, table: true, pick: () => `diamond_${piece}` }],
-  }])),
+  diamond_pickaxe: recipe('diamond_pickaxe', { diamond: 3, stick: 2 },
+    { tool: true, match: exact('diamond_pickaxe', 'netherite_pickaxe') }),
+  diamond_sword: recipe('diamond_sword', { diamond: 2, stick: 1 },
+    { tool: true, match: exact('diamond_sword', 'netherite_sword') }),
+  ...armor(['diamond', 'netherite'], 'diamond'),
   obsidian: {
     match: exact('obsidian'),
     sources: [{ kind: 'cast', tool: 'diamond_pickaxe', water: 'water_bucket', lava: 'lava_bucket' }],
   },
   flint: { match: exact('flint'), sources: [{ kind: 'gather', blocks: exact('gravel'), rare: true }] },
-  flint_and_steel: {
-    match: exact('flint_and_steel'),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { iron_ingot: 1, flint: 1 }, table: false, pick: () => 'flint_and_steel' }],
-  },
+  flint_and_steel: recipe('flint_and_steel', { iron_ingot: 1, flint: 1 }, { tool: true, table: false }),
   quartz: {
     match: exact('quartz'),
     // A wooden pickaxe wears out on the netherrack of the way before the quartz is in.
@@ -208,85 +152,45 @@ const KNOWLEDGE = {
   sand: { match: exact('sand'), sources: [{ kind: 'gather', blocks: exact('sand') }] },
   glass: { match: exact('glass'), sources: [{ kind: 'smelt', input: 'sand', inputItem: 'sand' }] },
   sugar_cane: { match: exact('sugar_cane'), sources: [{ kind: 'gather', blocks: exact('sugar_cane') }] },
-  redstone_torch: {
-    match: exact('redstone_torch'),
-    sources: [{ kind: 'craft', yields: 1, needs: { redstone: 1, stick: 1 }, table: false, pick: () => 'redstone_torch' }],
-  },
-  repeater: {
-    match: exact('repeater'),
-    sources: [{ kind: 'craft', yields: 1, needs: { redstone_torch: 2, redstone: 1, stone: 3 }, table: true, pick: () => 'repeater' }],
-  },
-  piston: {
-    match: exact('piston'),
-    sources: [{ kind: 'craft', yields: 1, needs: { planks: 3, cobblestone: 4, iron_ingot: 1, redstone: 1 }, table: true, pick: () => 'piston' }],
-  },
-  observer: {
-    match: exact('observer'),
-    sources: [{ kind: 'craft', yields: 1, needs: { cobblestone: 6, redstone: 2, quartz: 1 }, table: true, pick: () => 'observer' }],
-  },
-  bow: {
-    match: exact('bow'),
-    sources: [{ kind: 'craft', yields: 1, needs: { stick: 3, string: 3 }, table: true, pick: () => 'bow' }],
-  },
-  dispenser: {
-    match: exact('dispenser'),
-    sources: [{ kind: 'craft', yields: 1, needs: { cobblestone: 7, bow: 1, redstone: 1 }, table: true, pick: () => 'dispenser' }],
-  },
+  redstone_torch: recipe('redstone_torch', { redstone: 1, stick: 1 }, { table: false }),
+  repeater: recipe('repeater', { redstone_torch: 2, redstone: 1, stone: 3 }),
+  piston: recipe('piston', { planks: 3, cobblestone: 4, iron_ingot: 1, redstone: 1 }),
+  observer: recipe('observer', { cobblestone: 6, redstone: 2, quartz: 1 }),
+  bow: recipe('bow', { stick: 3, string: 3 }),
+  dispenser: recipe('dispenser', { cobblestone: 7, bow: 1, redstone: 1 }),
   // Armour, worn rather than used up: a better piece satisfies a lower one.
-  ...Object.fromEntries([['helmet', 5], ['chestplate', 8], ['leggings', 7], ['boots', 4]].map(([piece, ingots]) => [`iron_${piece}`, {
-    match: exact(`iron_${piece}`, `diamond_${piece}`, `netherite_${piece}`),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { iron_ingot: ingots }, table: true, pick: () => `iron_${piece}` }],
-  }])),
+  ...armor(['iron', 'diamond', 'netherite'], 'iron_ingot'),
   // Arrows for the end crystals and the dragon.
   feather: { match: exact('feather'), sources: [{ kind: 'hunt', mobs: ['chicken'] }] },
-  arrow: {
-    match: exact('arrow'),
-    sources: [{ kind: 'craft', yields: 4, needs: { flint: 1, stick: 1, feather: 1 }, table: true, pick: () => 'arrow' }],
-  },
+  arrow: recipe('arrow', { flint: 1, stick: 1, feather: 1 }, { yields: 4 }),
   // The way to the End: blaze rods come from a nether fortress (netherExpedition.js),
   // ender pearls from endermen at night (huntPearls.js); the eyes are crafted from both.
   blaze_rod: { match: exact('blaze_rod'), sources: [] },
-  blaze_powder: {
-    match: exact('blaze_powder'),
-    sources: [{ kind: 'craft', yields: 2, needs: { blaze_rod: 1 }, table: false, pick: () => 'blaze_powder' }],
-  },
+  blaze_powder: recipe('blaze_powder', { blaze_rod: 1 }, { yields: 2, table: false }),
   ender_pearl: { match: exact('ender_pearl'), sources: [{ kind: 'hunt', mobs: ['enderman'] }] },
-  ender_eye: {
-    match: exact('ender_eye'),
-    sources: [{ kind: 'craft', yields: 1, needs: { ender_pearl: 1, blaze_powder: 1 }, table: false, pick: () => 'ender_eye' }],
-  },
+  ender_eye: recipe('ender_eye', { ender_pearl: 1, blaze_powder: 1 }, { table: false }),
   food: { match: exact(...MEATS), sources: [{ kind: 'hunt', mobs: ['cow', 'pig', 'sheep', 'chicken', 'rabbit'] }] },
   // Ranching: a fenced pen with a gate.
-  fence: {
+  fence: recipe('oak_fence', { planks: 4, stick: 2 }, {
     match: (n) => WOODS.some((w) => n === `${w}_fence`),
-    sources: [{ kind: 'craft', yields: 3, needs: { planks: 4, stick: 2 }, table: true, pick: (inv) => `${dominantWood(inv)}_fence` }],
-  },
-  fence_gate: {
+    yields: 3, pick: inv => `${dominantWood(inv)}_fence`,
+  }),
+  fence_gate: recipe('oak_fence_gate', { planks: 2, stick: 4 }, {
     match: (n) => WOODS.some((w) => n === `${w}_fence_gate`),
-    sources: [{ kind: 'craft', yields: 1, needs: { planks: 2, stick: 4 }, table: true, pick: (inv) => `${dominantWood(inv)}_fence_gate` }],
-  },
+    pick: inv => `${dominantWood(inv)}_fence_gate`,
+  }),
   // Farming: a hoe tills, seeds come from breaking grass, wheat from the farm.
-  hoe: {
-    match: exact('wooden_hoe', 'stone_hoe', 'iron_hoe', 'golden_hoe', 'diamond_hoe', 'netherite_hoe'),
-    tool: true,
-    sources: [{ kind: 'alias', key: 'stone_hoe' }],
-  },
-  stone_hoe: {
-    match: exact('stone_hoe', 'iron_hoe', 'diamond_hoe', 'netherite_hoe'),
-    tool: true,
-    sources: [{ kind: 'craft', yields: 1, needs: { cobblestone: 2, stick: 2 }, table: true, pick: () => 'stone_hoe' }],
-  },
+  hoe: toolAlias('stone_hoe', 'wooden_hoe', 'stone_hoe', 'iron_hoe', 'golden_hoe', 'diamond_hoe', 'netherite_hoe'),
+  stone_hoe: recipe('stone_hoe', { cobblestone: 2, stick: 2 },
+    { tool: true, match: exact('stone_hoe', 'iron_hoe', 'diamond_hoe', 'netherite_hoe') }),
   wheat_seeds: { match: exact('wheat_seeds'), sources: [{ kind: 'gather', blocks: exact('short_grass', 'tall_grass') }] },
   wheat: { match: exact('wheat'), sources: [{ kind: 'farm', crop: 'wheat' }] },
-  bread: { match: exact('bread'), sources: [{ kind: 'craft', yields: 1, needs: { wheat: 3 }, table: true, pick: () => 'bread' }] },
+  bread: recipe('bread', { wheat: 3 }),
   dirt: { match: exact('dirt'), sources: [{ kind: 'gather', blocks: exact('dirt', 'grass_block', 'coarse_dirt') }] },
   filler: { match: filler, sources: [{ kind: 'alias', key: 'cobblestone' }] },
-  sandstone: { match: exact('sandstone'),
-    sources: [{ kind: 'craft', yields: 1, maxBatch: 16, needs: { sand: 4 }, table: false, pick: () => 'sandstone' }] },
+  sandstone: recipe('sandstone', { sand: 4 }, { maxBatch: 16, table: false }),
   red_sand: { match: exact('red_sand'), sources: [{ kind: 'gather', blocks: exact('red_sand') }] },
-  red_sandstone: { match: exact('red_sandstone'),
-    sources: [{ kind: 'craft', yields: 1, maxBatch: 16, needs: { red_sand: 4 }, table: false, pick: () => 'red_sandstone' }] },
+  red_sandstone: recipe('red_sandstone', { red_sand: 4 }, { maxBatch: 16, table: false }),
 };
 
 // Fuel accepted by the furnace, in preference order, with items smelted per unit.

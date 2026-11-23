@@ -1,6 +1,7 @@
 'use strict';
 
 const { withWorkTarget, hazardTarget } = require('./work-target');
+const { localOpportunity, opportunityAllowed } = require('./work-budget');
 // Branch mining at a fixed height, one block of tunnel per call.
 //
 // The bot digs a walkable staircase down from the surface to the target
@@ -33,12 +34,13 @@ const GRAVITY = new Set(['sand', 'red_sand', 'gravel', 'suspicious_sand', 'suspi
 // Rubble kept when the bag fills up: one stack of stone for sealing and climbing.
 const RUBBLE = new Set(['cobblestone', 'cobbled_deepslate', 'dirt', 'gravel', 'granite', 'diorite', 'andesite', 'tuff',
   'calcite', 'flint', 'sand', 'netherrack']);
-// Ore a player takes whenever it shows in a tunnel wall, whatever the trip is
-// for, and what it drops. Copper is left: common, bulky and not worth a slot.
-const LOOT_ORES = new Set(['coal', 'iron', 'gold', 'redstone', 'lapis', 'diamond', 'emerald']
-  .flatMap((o) => [`${o}_ore`, `deepslate_${o}_ore`]));
-const LOOT_DROPS = new Set(['coal', 'raw_iron', 'raw_gold', 'redstone', 'lapis_lazuli', 'diamond', 'emerald']);
-const isLoot = (name) => LOOT_DROPS.has(name);
+// Material shortages that can be filled on an already confirmed mine route.
+const LOOT = { coal: ['coal', 6], iron: ['raw_iron', 8], gold: ['raw_gold', 4],
+  redstone: ['redstone', 4], lapis: ['lapis_lazuli', 2], diamond: ['diamond', 3], emerald: ['emerald', 2] };
+const LOOT_ORES = new Set(Object.keys(LOOT).flatMap(name => [`${name}_ore`, `deepslate_${name}_ore`]));
+const LOOT_DROPS = new Set(Object.values(LOOT).map(([name]) => name));
+const isLoot = name => LOOT_DROPS.has(name);
+const loot = name => LOOT[name.replace(/^deepslate_/, '').replace(/_ore$/, '')];
 // Cheapest pickaxe first: stone wears out on the rock, not the iron one the deep ore needs.
 const PICKS = ['stone_pickaxe', 'wooden_pickaxe', 'iron_pickaxe', 'golden_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'];
 const CHEAP_PICKS = PICKS.slice(0, 2);
@@ -218,19 +220,28 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
   // Ore already open to the tunnel first: the ore asked for, and any other
   // ore worth taking that the carried pickaxes can harvest.
   if (memory.mine) {
-    const wanted = (name) => blocks(name) || LOOT_ORES.has(name);
+    const state = ctx.perceive?.();
+    const wanted = name => blocks(name) || LOOT_ORES.has(name);
+    const wantedNearby = b => {
+      if (blocks(b.name)) return true;
+      if (!state) return false;
+      const [drop, min] = loot(b.name);
+      const stock = state.inventory[drop] || 0;
+      return stock < min && !underRoute(b.position) && opportunityAllowed(bot, state, b.position) &&
+        FACES.every(([dx, dy, dz]) => !LIQUID.test(bot.blockAt(b.position.offset(dx, dy, dz))?.name || ''));
+    };
     const target = (p) => blockTarget(bot, 'diamond', 'mine_ore', p);
     const ledger = ledgerFor(bot, ctx), spec = p => ledgerTarget(bot, 'ore', p);
     const underRoute = p => posKey(p.offset(0, 1, 0)) in memory.mine.cells;
     const hasFiller = pickItem('filler', bot.inventory.items());
     const ore = visibleOre(bot, wanted, bot.entity.position)
-      .filter((b) => !ledger.skip(spec(b.position)) && !ledger.skip(hazardTarget(bot, b.position)) && harvestable(bot, b) && (!underRoute(b.position) || hasFiller)
+      .filter((b) => wantedNearby(b) && !ledger.skip(spec(b.position)) && !ledger.skip(hazardTarget(bot, b.position)) && harvestable(bot, b) && (!underRoute(b.position) || hasFiller)
         && (!observeDestination || !ctx.adapt.targets.avoid(target(b.position)))
         && (!closed || (actions.withinReach(bot, b.position) && FACES.every(([dx, dy, dz]) => {
           const p = b.position.offset(dx, dy, dz), adjacent = bot.blockAt(p);
           return adjacent && !LIQUID.test(adjacent.name) && (!isPassable(adjacent) || knownOpen(memory.mine, p));
         }))))[0];
-    if (ore) return withWorkTarget(bot, ctx, ore.position, async () => {
+    const takeOre = ctx => withWorkTarget(bot, ctx, ore.position, async () => {
       // An ore under a recorded walking cell is part of the route home. Take
       // it only when the hole can be filled again, and confirm that repair
       // before allowing the tunnel to advance.
@@ -249,13 +260,14 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
       // The hole is ours, not a cave: later tunnel steps may open into it.
       memory.mine.open ||= {};
       memory.mine.open[posKey(ore.position)] = true;
-      const collected = await actions.collectDrops(bot, ctx, ore.position.offset(0.5, 0.5, 0.5), (n) => dropMatch(n) || isLoot(n));
+      const collected = await actions.collectDrops(bot, ctx, ore.position.offset(0.5, 0.5, 0.5), (n) => dropMatch(n) || loot(ore.name)?.[0] === n);
       if (routeFloor) {
         const repaired = await repairFloor(bot, ctx, memory.mine, skills);
         if (!repaired.ok) return repaired;
       }
       return collected;
     });
+    if (ore) return blocks(ore.name) ? takeOre(ctx) : localOpportunity(bot, ctx, 'mine', ore.position, takeOre);
   }
   if (typeof bot.inventory.emptySlotCount === 'function' && bot.inventory.emptySlotCount() <= 3) {
     ctx.record('mine_toss_rubble', {});

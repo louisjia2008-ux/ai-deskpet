@@ -7,6 +7,10 @@ const { Vec3 } = require('vec3');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { createBrain } = require('./brain');
 const { schedulingInputs } = require('./scheduling');
+const { createOpportunisticHunt, FOOD_MOBS } = require('./work-budget');
+const { createScheduleBackoff } = require('./schedule-backoff');
+const { KNOWLEDGE } = require('./knowledge');
+const skills = require('./skills');
 const { perceive, ownedItems, countInventory } = require('./perception');
 const { createDoctor, recordDoctorInput, D1 } = require('./doctor');
 const { createSurvivalBehaviors, enabledDuringSurvey } = require('./behaviors/survival');
@@ -141,14 +145,13 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       for (const alert of doctor.accept(input)) publish(alert);
     } catch { /* diagnostic observer */ }
   }
-  const priorHomeProtection = bot.companionProtectBlock;
+  const priorHooks = { companionProtectBlock: bot.companionProtectBlock };
   installInventoryCompatibility(bot);
   installDigTimeFix(bot);
-  const removeEdgeNudge = installEdgeNudge(bot);
+  const removeAdapters = [installEdgeNudge(bot)];
   if (!bot.pathfinder) bot.loadPlugin(pathfinder);
   installCheapDigging(bot);
-  const removePlacedMemory = installPlacedMemory(bot);
-  const removeEntityGeometry = installEntityGeometry(bot);
+  removeAdapters.push(installPlacedMemory(bot), installEntityGeometry(bot));
   const configuredMovements = configureMovements(bot);
 
   // Stuck bodies, full bags and death loops are recovered for every goal alike.
@@ -168,9 +171,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   let retirementFailed = false;
   let survey = null;
   let goalOwner = null;
-  const priorHomestead = bot.companionHomestead;
-  const priorHomeTarget = bot.companionHomeTarget;
-  const priorFailureLedger = bot.companionFailureLedger;
+  for (const name of ['companionHomestead', 'companionHomeTarget', 'companionFailureLedger']) priorHooks[name] = bot[name];
   const homestead = () => goalOwner?.goal?.name === 'homestead' ? goalOwner.goal : director?.memory.homestead;
   bot.companionHomestead = homestead;
   const atHome = (position, world) => String(world || 'overworld').replace(/^minecraft:/, '') === 'overworld'
@@ -185,7 +186,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   });
   bot.companionFailureLedger = failureLedger;
   const selfStuck = require('./self-stuck').createSelfStuck(bot, { emit: (type, data) => onEvent({ type, at: Date.now(), ...data }) });
-  const priorSelfStuck = bot.companionSelfStuck;
+  priorHooks.companionSelfStuck = bot.companionSelfStuck;
   bot.companionSelfStuck = selfStuck;
   const policy = { risk: 'normal', guard: 'self_first' };
   // The connection owns this evidence even while a cached goal is retired.
@@ -224,7 +225,8 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       const site = homestead()?.shelterSite?.();
       return site ? { ...nightShelter(bot, site), inside: site.inside, entrance: site.house.entrance } : { bed: null, centre: null };
     } });
-  const homeMaintenance = createHomeMaintenance({ bot, home: () => director?.memory.homestead,
+  const backoff = createScheduleBackoff();
+  const homeMaintenance = createHomeMaintenance({ bot, backoff, home: () => director?.memory.homestead,
     activeGoal: () => brain?.status().goal?.name,
     mayRepair: () => !paused && director?.isEnabled() && (!goalOwner || director.ownsGoal()) });
   const homeEscape = require('./behaviors/homeEscape').createHomeEscape({ bot, tracker: selfStuck, home: homestead, adaptation });
@@ -303,6 +305,8 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   });
   brain = createBrain({
     schedule,
+    backoff,
+    opportunity: createOpportunisticHunt({ bot, skills, mobs: FOOD_MOBS, food: KNOWLEDGE.food.match, spare: e => spare(e), backoff }),
     taskAllowed: (state, def) => Boolean(survey) || nightRest.taskAllowed(state, def.name),
     abandonMs: retirementTimeoutMs,
     perceive: () => perceive(bot),
@@ -389,7 +393,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   }
   // Its goals go through useGoal too, so an autonomous ranch also spares its herd.
   const directorBrain = { status: () => brain.status(), setGoal: useGoal, clearGoal: (reason) => brain.clearGoal(reason) };
-  director = createDirector({ brain: directorBrain, perceive: () => perceive(bot), cards, reserveCards, stageOf, schedule, scope: range, onEvent, adaptation,
+  director = createDirector({ backoff, brain: directorBrain, perceive: () => perceive(bot), cards, reserveCards, stageOf, schedule, scope: range, onEvent, adaptation,
     onIdle(state, reason) {
       if (reason === 'no_eligible_card_until_retry' && state.isDay !== false && !state.sheltered) selfStuck.requestProbe();
     },
@@ -654,9 +658,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       bot.removeListener('death', onDeath);
       bot.removeListener('messagestr', onDeathMessage);
       bot.removeListener('respawn', onRespawn);
-      removeEdgeNudge();
-      removePlacedMemory();
-      removeEntityGeometry();
+      for (const remove of removeAdapters) remove();
     }
     // Both calls start synchronously: director cannot choose more work, and
     // brain cannot restart a reflex while an abort or goal cleanup is pending.
@@ -684,22 +686,13 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
         if (priorBodyLife) Object.defineProperty(bot, 'companionBodyLife', priorBodyLife);
         else delete bot.companionBodyLife;
       }
-      if (bot.companionSelfStuck === selfStuck) bot.companionSelfStuck = priorSelfStuck;
-      if (bot.companionHomestead === homestead) {
-        if (priorHomestead === undefined) delete bot.companionHomestead;
-        else bot.companionHomestead = priorHomestead;
-      }
-      if (bot.companionHomeTarget === atHome) {
-        if (priorHomeTarget === undefined) delete bot.companionHomeTarget;
-        else bot.companionHomeTarget = priorHomeTarget;
-      }
-      if (bot.companionFailureLedger === failureLedger) {
-        if (priorFailureLedger === undefined) delete bot.companionFailureLedger;
-        else bot.companionFailureLedger = priorFailureLedger;
-      }
-      if (bot.companionProtectBlock === director.memory.homestead?.memory.protectBlock) {
-        if (priorHomeProtection === undefined) delete bot.companionProtectBlock;
-        else bot.companionProtectBlock = priorHomeProtection;
+      const installed = { companionSelfStuck: selfStuck, companionHomestead: homestead, companionHomeTarget: atHome,
+        companionFailureLedger: failureLedger, companionProtectBlock: director.memory.homestead?.memory.protectBlock };
+      for (const [name, value] of Object.entries(installed)) {
+        if (bot[name] !== value) continue;
+        const prior = priorHooks[name];
+        if (prior !== undefined || name === 'companionSelfStuck') bot[name] = prior;
+        else delete bot[name];
       }
       haltBody(bot);
       uninstallOpenDoorPassage(bot, configuredMovements);

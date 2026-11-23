@@ -18,7 +18,7 @@
 // The only memory kept across runs is the chest contents last seen there,
 // what was left in the furnace and where the mine's front is.
 
-const { waiting, factsOf, failure, isComplete, resultFrom } = require('../action-result');
+const { waiting, factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -33,7 +33,7 @@ const nether = require('../nether');
 const { quartzToolReserve } = require('../quartzTools');
 const { blockTarget } = require('../target-recovery');
 const { createNetherQuartzGoal, QUARTZ_MIN_FOOD, quartzFoodMatch, quartzFoodCount, quartzProtection } = require('./netherQuartz');
-const { createPlannerRunner, runPlanned } = require('./common');
+const { createPlannerRunner, exploreFor, furnaceStock, runPlanned } = require('./common');
 
 const DOWN = [new Vec3(0, -1, 0)];
 // Out on the surface only after dark: string waits for night, not for a cave.
@@ -124,33 +124,16 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
   // who asks only for the rest. Left out of what the bag offers: stored as
   // delivered, it was taken back out and the caller was short again, 150000
   // times over for seven cobblestones.
-  function unreserved(inventory) {
+  function unreserved(inventory, worn = {}) {
     const out = { ...inventory };
-    for (const [name, n] of Object.entries(reserved)) if (out[name]) out[name] = Math.max(0, out[name] - n);
-    return out;
-  }
-
-  function spareInventory(inventory) {
-    const out = { ...inventory };
-    const equipped = equippedInventory();
-    // Reserved and worn overlap: remove their union, not both amounts.
-    // What is on the body is unavailable for depositing or crafting even
-    // when it does not count toward this goal's completion.
-    for (const name of new Set([...Object.keys(reserved), ...Object.keys(equipped)])) {
-      if (out[name]) out[name] = Math.max(0, out[name] - Math.max(reserved[name] || 0, equipped[name] || 0));
+    for (const name of Object.keys(out)) {
+      out[name] = Math.max(0, out[name] - Math.max(reserved[name] || 0, worn[name] || 0));
     }
     return out;
   }
 
-  function plannerInventory(state) {
-    const inventory = spareInventory(state.inventory);
-    // Items left in the furnace still count; otherwise they would be gathered twice.
-    if (memory.furnace.item === 'raw_iron') {
-      inventory.raw_iron = (inventory.raw_iron || 0) + memory.furnace.input;
-      inventory.iron_ingot = (inventory.iron_ingot || 0) + memory.furnace.output;
-    }
-    return inventory;
-  }
+  const spareInventory = inventory => unreserved(inventory, equippedInventory());
+  const plannerInventory = state => furnaceStock(spareInventory(state.inventory), memory.furnace);
 
   // With no table of the caller's at hand, one already standing nearby is used.
   const tableNearby = () => {
@@ -163,22 +146,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     furnace: Boolean(stations.furnace) && nameAt(stations.furnace) === 'furnace',
   });
 
-  async function explore(ctx, why) {
-    memory.exploreStreak += 1;
-    // `searchRadius`: looked for around the chest only, and nothing there
-    // ends the task for the owner to hear what is missing (as the homestead).
-    if (searchRadius) {
-      memory.explore.around = { x: chest.x, z: chest.z, radius: searchRadius };
-      // Legs on the way back from beyond the radius search nothing near the chest.
-      if (Math.hypot(bot.entity.position.x - chest.x, bot.entity.position.z - chest.z) > searchRadius) memory.exploreStreak -= 1;
-      if (memory.exploreStreak > maxSearchStreak) {
-        return failure(`none_near_site:${why} within ${searchRadius} of the chest at ${chest.x},${chest.y},${chest.z}`, { terminal: true }, ctx);
-      }
-    }
-    if (memory.exploreStreak > maxExploreStreak) return { ok: false, reason: `exhausted:${why}` };
-    ctx.record('explore_for', { why, streak: memory.exploreStreak });
-    return skills.explore(bot, ctx, memory.explore);
-  }
+  const explore = (ctx, why) => exploreFor(ctx, why, { bot, skills, memory, anchor: searchRadius && chest, siteName: 'the chest at ',
+    searchRadius, maxSearchStreak, maxExploreStreak });
 
   // `loot`: also put away ore picked up on the way (diamonds, coal, ...).
   async function store(ctx, wants, { loot = false } = {}) {

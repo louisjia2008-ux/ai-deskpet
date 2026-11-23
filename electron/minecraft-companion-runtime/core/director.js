@@ -2,6 +2,7 @@
 // Reassess autonomous cards between steps while the selected card owns the goal.
 
 const { stepTarget } = require('./planner');
+const { createScheduleBackoff } = require('./schedule-backoff');
 const { createAdaptation } = require('./adaptation');
 const { complete, failure, isComplete } = require('./action-result');
 const { schedulingInputs, travelTicks, nightBudget } = require('./scheduling');
@@ -65,20 +66,22 @@ function cardValue(card, memory, { state, home, returnTicks, ticksToDark, dark }
   return { ...parts, demand, remaining, score: Math.max(0, Math.round(demand * Object.values(parts).reduce((a, b) => a + b, 0))) };
 }
 
-function chooseNext(state, memory, cards, { stage = 0, cooldowns = new Map(), now = Date.now(),
+function chooseNext(state, memory, cards, { stage = 0, maxStage = Infinity, reserveCards = [], cooldowns = new Map(), now = Date.now(),
   inputs = schedulingInputs(state, { home: memory.homestead?.memory?.house?.interiorCenter }), ledger,
   targets = new Map(), definitions = new Map(), current = null } = {}) {
-  const scores = [];
+  const entries = new Map();
   const hazards = ledger?.snapshot().filter(entry => entry.purpose === 'target_hazard' && entry.dimension === state.dimension)
     .map(entry => entry.position) ?? [];
   const stock = { ...state.inventory };
   for (const contents of Object.values(memory.autonomyStock || {})) {
     for (const [item, count] of Object.entries(contents)) stock[item] = (stock[item] || 0) + count;
   }
-  let best = null;
-  for (const card of cards) {
+  for (const card of new Set([...cards, ...reserveCards])) {
     const entry = { id: card.id, score: 0 };
-    scores.push(entry);
+    entries.set(card, entry);
+    const pause = memory.stagePauses?.[card.budgetStage ?? card.stage];
+    if (!card.safeReturn && card.stage > maxStage) { entry.skipped = 'range'; continue; }
+    if (!card.safeReturn && card.expedition && pause > now) { entry.skipped = 'stage_paused'; entry.until = pause; continue; }
     if (card.stage > stage) { entry.skipped = 'stage'; continue; }
     const cooldown = cooldowns.get(card.id);
     if (cooldown && cooldown.until > now) { entry.skipped = 'cooldown'; entry.until = cooldown.until; continue; }
@@ -94,11 +97,12 @@ function chooseNext(state, memory, cards, { stage = 0, cooldowns = new Map(), no
       if (entry.score === 0) entry.skipped = 'no_value';
     } catch (error) {
       entry.skipped = `error:${error?.message || error}`;
-      continue;
     }
-    if (entry.score > 0 && (!best || entry.score > best.score)) best = { card, score: entry.score };
   }
-  return { card: best?.card || null, scores };
+  const score = card => entries.get(card)?.score || 0;
+  const best = pool => pool.reduce((leader, card) => score(card) > score(leader) ? card : leader, null);
+  return { card: best(cards), reserve: best(reserveCards), scores: cards.map(card => entries.get(card)),
+    reserveScores: reserveCards.filter(card => !cards.includes(card)).map(card => entries.get(card)) };
 }
 
 function createDirector({
@@ -111,6 +115,7 @@ function createDirector({
   scope = () => Infinity,
   memory = {},
   now = Date.now,
+  backoff = createScheduleBackoff(now),
   onEvent = () => {},
   idleMs = 3000,
   resumeDelayMs = 30000,
@@ -125,7 +130,7 @@ function createDirector({
 } = {}) {
   if (!brain || typeof perceive !== 'function') throw new TypeError('brain and perceive are required');
   for (const card of [...cards, ...reserveCards]) validateCard(card);
-  const cooldowns = new Map(); // card id -> { count, until }
+  const cooldowns = { get: id => ({ until: backoff.blocked(`card:${id}`) }) };
   const definitions = new Map(), targets = new Map();
   let enabled = false;
   let own = null; // { id, goal }: the goal the director handed the brain
@@ -155,36 +160,28 @@ function createDirector({
         memory.wheatFarmDone = true;
         memory.wheatPlots = memory.wheatFarm?.memory.plots;
       }
-      cooldowns.delete(id);
+      backoff.clear(`card:${id}`);
       return;
     }
     if (type === 'goal_yielded') {
-      if (event.reason === 'card_value_changed') return;
-      cooldowns.set(id, { count: event.reason === 'adaptation_exhausted' ? 1 : 0, until: event.until });
+      if (event.reason !== 'card_value_changed' && event.until > now()) {
+        backoff.defer(`card:${id}`, event.until, Number(event.reason === 'adaptation_exhausted'));
+      }
       return;
     }
     if (type !== 'goal_failed') return;
     if (event.result?.wait || ['start', 'interrupted'].includes(event.result?.kind)
       || event.result?.reason === 'home_site_relocated' || event.reasons?.includes('home_site_relocated')) return;
-    const count = (cooldowns.get(id)?.count || 0) + 1;
-    const delay = Math.min(maxCooldownMs, failureCooldownMs * 2 ** (count - 1));
-    cooldowns.set(id, { count, until: now() + delay });
-    emit('autonomy_cooldown', { card: id, count, until: now() + delay, reasons: event.reasons });
+    const { count, until } = backoff.fail(`card:${id}`, failureCooldownMs, maxCooldownMs);
+    emit('autonomy_cooldown', { card: id, count, until, reasons: event.reasons });
   }
 
-  function evaluate(state, at, pool = cards) {
-    const stage = stageOf(state, memory), maxStage = scope(memory), excluded = [];
-    const available = pool.filter(card => {
-      const until = memory.stagePauses?.[card.budgetStage ?? card.stage];
-      if (card.stage > maxStage && !card.safeReturn) excluded.push({ id: card.id, skipped: 'range' });
-      else if (card.expedition && !card.safeReturn && until > at) excluded.push({ id: card.id, skipped: 'stage_paused', until });
-      else return true;
-      return false;
-    });
-    const inputs = schedule(state);
-    const { card, scores } = chooseNext(state, memory, available, { stage, cooldowns, now: at, inputs,
+  function evaluate(state, at, includeReserve = false) {
+    const stage = stageOf(state, memory), inputs = schedule(state);
+    const choice = chooseNext(state, memory, cards, { stage, maxStage: scope(memory), cooldowns, now: at, inputs,
+      reserveCards: includeReserve ? reserveCards : [],
       ledger: adaptation?.failureLedger, targets, definitions, current: own });
-    return { card, scores: [...scores, ...excluded], stage, inputs };
+    return { ...choice, stage, inputs };
   }
 
   function reconsider(current, state, at, boundary) {
@@ -194,9 +191,10 @@ function createDirector({
     const challenger = card?.id !== current.id && card && scores.find(score => score.id === card.id);
     const stalled = at - current.progressAt >= STOP_MS;
     const sheltered = inputs.dark && state.sheltered;
-    const change = !sheltered && boundary && challenger && challenger.score > value * SWITCH_RATIO;
+    const higher = challenger && challenger.score > value * SWITCH_RATIO;
+    const change = !sheltered && boundary && higher;
     const reason = stalled ? 'card_stalled' : change ? 'card_value_changed' : sheltered ? 'sheltered'
-      : !boundary && challenger && challenger.score > value * SWITCH_RATIO ? 'awaiting_step_boundary'
+      : higher ? 'awaiting_step_boundary'
       : challenger ? 'switch_margin' : 'highest_value';
     if (stalled || change || at >= current.nextScoreAt) {
       current.nextScoreAt = at + RESCORE_MS;
@@ -279,9 +277,7 @@ function createDirector({
           if (result.wait.until > at || waits >= waitLimit || waitMs >= waitBudgetMs) {
             return { card, reason: result.wait.reason, waits, waitMs, until: Math.max(at + yieldCooldownMs, result.wait.until || 0) };
           }
-          return reconsider(current, perceive(), at, true);
-        }
-        waits = 0;
+        } else waits = 0;
         return reconsider(current, perceive(), at, true);
       },
     };
@@ -318,45 +314,39 @@ function createDirector({
     tick() {
       if (!enabled) return null;
       if (!playerActive) adaptation?.poll();
+      const at = now();
       const status = brain.status(), active = status.goal;
       if (active) {
         idleSince = null;
-        if (own?.reserveUntil != null && now() >= own.reserveUntil) {
-          void brain.clearGoal('reserve_work_ended').catch((error) =>
-            emit('autonomy_error', { reason: String(error?.message || error) }));
-        } else if (own && own.generation === active.generation && now() >= own.nextScoreAt) {
-          const current = own;
-          const result = reconsider(current, perceive(), now(), status.running !== `goal:${current.goal}`);
-          if (result && own === current) {
-            cooldowns.set(current.id, { count: 0, until: result.until });
-            void brain.clearGoal(result.reason).catch(error => emit('autonomy_error', { reason: String(error) }));
-          }
+        const current = own;
+        if (!current || current.generation !== active.generation) return null;
+        const result = current.reserveUntil != null && at >= current.reserveUntil ? { reason: 'reserve_work_ended' }
+          : at >= current.nextScoreAt ? reconsider(current, perceive(), at, status.running !== `goal:${current.goal}`) : null;
+        if (result && own === current) {
+          if (result.until > at) backoff.defer(`card:${current.id}`, result.until, 0);
+          void brain.clearGoal(result.reason).catch(error => emit('autonomy_error', { reason: String(error?.message || error) }));
         }
         return null;
       }
       // A player goal can also end without an event (stop, clear).
-      if (playerActive) { playerActive = false; pausedUntil = now() + resumeDelayMs; }
+      if (playerActive) { playerActive = false; pausedUntil = at + resumeDelayMs; }
       own = null;
-      if (now() < pausedUntil) return null;
-      if (idleSince === null) idleSince = now();
-      if (now() - idleSince < idleMs) return null;
+      if (at < pausedUntil) return null;
+      idleSince ??= at;
+      if (at - idleSince < idleMs) return null;
       const state = perceive();
       if (!state || state.alive === false) return null;
-      const at = now();
-      const { stage, scores, card: initial, inputs } = evaluate(state, at);
+      const { stage, scores, card: initial, reserve, reserveScores, inputs } = evaluate(state, at, true);
       const retryAt = Math.min(...scores.filter((score) => score.until > at).map((score) => score.until));
       let card = initial;
       let reserveUntil = null;
       if (Number.isFinite(retryAt) && (!card || reserveCards.includes(card))) {
-        if (state.isDay === true && !inputs.dusk) {
-          const reserve = evaluate(state, at, reserveCards);
-          card = reserve.card || card;
-          scores.push(...reserve.scores.filter(score => !scores.some(other => other.id === score.id)));
-        } else card = null;
+        card = state.isDay === true && !inputs.dusk ? reserve || card : null;
+        if (state.isDay === true && !inputs.dusk) scores.push(...reserveScores);
         if (card) reserveUntil = Math.min(retryAt, at + RESERVE_WORK_MS);
       }
       if (!card) {
-        idleSince = now();
+        idleSince = at;
         const until = Number.isFinite(retryAt) ? retryAt : null;
         const reason = until === null ? 'no_current_demand_or_prerequisites' : 'no_eligible_card_until_retry';
         onIdle(state, reason);
@@ -438,7 +428,7 @@ function createDirector({
         current: own?.id || null,
         playerActive,
         pausedUntil: pausedUntil > now() ? pausedUntil : null,
-        cooldowns: [...cooldowns].filter(([, c]) => c.until > now()).map(([id, c]) => ({ id, count: c.count, until: c.until })),
+        cooldowns: backoff.state('card:').map(({ name: id, count, until }) => ({ id, count, until })),
       };
     },
     memory,
