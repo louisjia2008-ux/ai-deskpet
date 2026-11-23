@@ -1399,7 +1399,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (done()) return { ok: true };
     if (doorOpen() === false) await setDoor(ctx, true);
     const feet = () => bot.entity.position.floored(), aisle = e.offset(0, 0, 2);
-    if (insideRoom(feet()) && safeStand(blockAt, feet())) {
+    const origin = feet();
+    if (insideRoom(origin) && safeStand(blockAt, origin) && await waitUntil(() => bot.entity.onGround
+      && feet().equals(origin) && Math.abs(bot.entity.position.y - origin.y) < 0.1,
+    { timeoutMs: 1000, signal: ctx.signal, intervalMs: 25 })) {
       const { cells, next, known } = room();
       if (known && cells.has(posKey(feet())) && !next.has(posKey(feet()))) return failure('interior_cut_off', {}, ctx, bot);
       let step;
