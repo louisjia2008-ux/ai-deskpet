@@ -364,7 +364,7 @@ export class AppController {
   #wechatOwnerTarget: { binding(): Promise<string | null>; stickers(): Promise<boolean>; deliver(input: { binding: string; deliveryId: string; text: string; stickerAsset?: string; voice?: boolean }): Promise<OwnerDeliveryOutcome> } | null = null;
   #restorePrepared = false;
   /** Address each remote-consented research submission was consented for, while it is being bound. */
-  readonly #researchConsent = new Map<string, string>();
+  readonly #researchConsent: Array<{ url: string; operationId: string }> = [];
   readonly #character: CharacterService;
   readonly #vault: SafeStorageVault;
   readonly #qqVault: SafeStorageVault;
@@ -2703,9 +2703,11 @@ export class AppController {
     this.#ipc.register('research:submit', consoleOnly, async ({ expectedBaseUrl, ...input }) => {
       // Remote consent from the console always names its address; the binding is compared when captured.
       if (input.allowRemote && expectedBaseUrl === undefined) throw new Error('research.bindingChanged');
-      if (input.allowRemote) this.#researchConsent.set(input.operationId, expectedBaseUrl!);
+      // Concurrent retries of one operation each hold their own claim on the consented address.
+      const claim = input.allowRemote ? { url: expectedBaseUrl!, operationId: input.operationId } : null;
+      if (claim) this.#researchConsent.push(claim);
       try { return await this.#research.submit(input); }
-      finally { this.#researchConsent.delete(input.operationId); }
+      finally { if (claim) this.#researchConsent.splice(this.#researchConsent.indexOf(claim), 1); }
     });
     this.#ipc.register('research:resume', consoleOnly, input => this.#research.resume(input));
     this.#ipc.register('research:cancel', consoleOnly, ({id}) => this.#research.cancel(id));
@@ -4083,12 +4085,15 @@ export class AppController {
 
   async #researchBinding(input: ResearchTaskInput): Promise<ResearchBinding> {
     const binding = await this.#providers.captureBinding(input.providerId,input.model ?? undefined);
-    const consented = this.#researchConsent.get(input.operationId);
-    if (consented !== undefined && !sameProviderEndpoint(binding.provider, consented)) throw new Error('research.bindingChanged');
+    const consented = this.#researchConsent.filter(claim => claim.operationId === input.operationId).map(claim => claim.url);
+    if (consented.some(url => !sameProviderEndpoint(binding.provider, url))) throw new Error('research.bindingChanged');
     if (!binding.provider.supportsTools) throw new Error('research.toolsUnavailable');
     const destination = resolveContextDestination({providerId:binding.provider.id,kind:binding.provider.kind,baseUrl:binding.provider.baseUrl,
       model:binding.model,localExecutionConfirmed:binding.provider.localExecutionConfirmed === true,serviceExecution:binding.inspection.executionDestination});
     if (destination !== 'local' && !input.allowRemote) throw new Error('research.privacyBlocked');
+    // The fingerprint reads the current configuration; it must still be the consented address too.
+    const current = this.#repository.snapshot().providers.find(item => item.id === input.providerId);
+    if (consented.some(url => !current || !sameProviderEndpoint(current, url))) throw new Error('research.bindingChanged');
     return {fingerprint:this.#researchFingerprint(input),destination:destination === 'local' ? 'local' : 'remote'};
   }
 

@@ -110,7 +110,13 @@ export class EventProactiveService {
   patch(fields: Partial<ProactivePolicyInput>): Promise<ProactivePolicy> {
     const run = this.#patches.then(() => {
       const { revision, ...current } = this.getPolicy(); void revision;
-      return this.configure({ ...current, ...fields });
+      const next = { ...current, ...fields };
+      // Switching on fills in what the system already knows, judged against the policy as saved now.
+      if (proactiveMode(current) === 'off' && proactiveMode(next) !== 'off') {
+        if (!next.eventKinds.length) next.eventKinds = ['task-completed', 'focus-completed', 'explicit-check-in'];
+        if (fields.timezone === undefined && next.timezone === 'UTC') next.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      }
+      return this.configure(next);
     });
     this.#patches = run.catch(() => undefined);
     return run;

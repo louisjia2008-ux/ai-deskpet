@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
 import { proactiveMode } from '../../shared/automation';
 import type { AutomationSnapshot, AutomationUIProps, ProactiveEventKind, ProactiveObservationReason, ProactivePolicy, ProactivePolicyInput } from '../../shared/automation';
@@ -33,7 +33,10 @@ export const EventProactiveSettings = ({ api, locale, refreshKey = 0, onSaved }:
   const zh = locale === 'zh-CN';
   const [snapshot, setSnapshot] = useState<AutomationSnapshot | null>(null);
   const [form, setForm] = useState<ProactivePolicyInput | null>(null);
+  const formRef = useRef(form); formRef.current = form;
+  const loadedRef = useRef<ProactivePolicy | null>(null);
   const [topics, setTopics] = useState('');
+  const topicsRef = useRef(topics); topicsRef.current = topics;
   const [busy, setBusy] = useState(false), [error, setError] = useState(false);
   const [visibleResult, setVisibleResult] = useState<{ id: string; text: string } | null>(null);
   const refresh = useCallback(async (): Promise<void> => { setSnapshot(await api.snapshot()); }, [api]);
@@ -41,7 +44,13 @@ export const EventProactiveSettings = ({ api, locale, refreshKey = 0, onSaved }:
     let disposed = false;
     void api.snapshot().then((loaded) => {
       if (disposed) return;
-      setSnapshot(loaded); setForm(inputFromPolicy(loaded.proactivePolicy)); setTopics(loaded.proactivePolicy.topics.join('\n'));
+      // A reload (after the card above saved) keeps rules the owner is still editing here.
+      const previous = loadedRef.current;
+      const untouched = previous === null || formRef.current === null
+        || (JSON.stringify(formRef.current) === JSON.stringify(inputFromPolicy(previous)) && topicsRef.current === previous.topics.join('\n'));
+      loadedRef.current = loaded.proactivePolicy;
+      setSnapshot(loaded);
+      if (untouched) { setForm(inputFromPolicy(loaded.proactivePolicy)); setTopics(loaded.proactivePolicy.topics.join('\n')); }
     }).catch(() => { if (!disposed) setError(true); });
     return () => { disposed = true; };
   }, [api, refreshKey]);
@@ -63,7 +72,7 @@ export const EventProactiveSettings = ({ api, locale, refreshKey = 0, onSaved }:
       const loaded = snapshot?.proactivePolicy;
       const changed = Object.fromEntries(Object.entries(edited).filter(([key, value]) => !loaded || JSON.stringify(loaded[key as keyof ProactivePolicyInput]) !== JSON.stringify(value)));
       const saved = await api.patchProactive(changed);
-      setForm(inputFromPolicy(saved)); setTopics(saved.topics.join('\n')); onSaved?.();
+      loadedRef.current = saved; setForm(inputFromPolicy(saved)); setTopics(saved.topics.join('\n')); onSaved?.();
     });
   };
   const toggleEvent = (kind: ProactiveEventKind): void => setForm((current) => current === null ? null : {

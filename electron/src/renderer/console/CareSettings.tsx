@@ -52,17 +52,12 @@ export const CareSettings = ({ api, providers, activeProviderId, locale, request
     try {
       if (nextMode === 'auto' && mode !== 'auto') await requestPermission();
       // Only the fields this card changed are sent; the host merges them onto the policy as saved then.
-      const fields: Partial<ProactivePolicyInput> = { enabled: nextMode === 'auto', mode: nextMode };
+      const fields: Partial<ProactivePolicyInput> = patch.mode ? { enabled: nextMode === 'auto', mode: nextMode } : {};
       if (patch.frequency) Object.assign(fields, FREQUENCIES[patch.frequency]);
       if (patch.privacy) fields.privacy = patch.privacy;
       if ('provider' in patch || 'model' in patch || (nextMode === 'auto' && mode !== 'auto')) {
         fields.providerId = chosen?.id ?? policy.providerId;
         fields.model = 'model' in patch ? patch.model ?? null : chosen?.id === policy.providerId ? policy.model : null;
-      }
-      // First switch-on fills what the system knows: the selectable events and this computer's time zone.
-      if (nextMode !== 'off' && mode === 'off') {
-        if (!policy.eventKinds.length) fields.eventKinds = ['task-completed', 'focus-completed', 'explicit-check-in'];
-        if (policy.timezone === 'UTC') fields.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
       }
       setPolicy(await api.patchProactive(fields));
       onSaved?.();

@@ -25,7 +25,8 @@ it('turns everything on in one step, after asking for the permission', async () 
   await waitFor(() => expect(f.patchProactive).toHaveBeenCalledOnce());
   expect(f.requestPermission).toHaveBeenCalledOnce();
   expect(await f.configureProactive.mock.calls[0]![0]).toMatchObject({ enabled: true, mode: 'auto', providerId: 'p1', model: null, quietStart: '23:00', quietEnd: '08:00', dailyLimit: 2 });
-  expect((await f.configureProactive.mock.calls[0]![0]).eventKinds).toContain('explicit-check-in');
+  // The card sends only what it changed; filling default events is the host's job (see the service test).
+  expect(Object.keys(f.patchProactive.mock.calls[0]![0]).sort()).toEqual(['enabled', 'mode', 'model', 'providerId']);
   await waitFor(async () => expect(await mode('主动问候')).toHaveAttribute('aria-checked', 'true'));
   fireEvent.click(screen.getByRole('button', { name: '现在问候一次' }));
   await waitFor(() => expect(f.explicitCheckIn).toHaveBeenCalledOnce());

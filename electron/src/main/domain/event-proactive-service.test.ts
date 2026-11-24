@@ -278,3 +278,13 @@ describe('proactive policy patches', () => {
     expect(service.getPolicy()).toMatchObject({ mode: 'off', quietStart: '21:30', eventKinds: ['focus-completed'] });
   });
 });
+
+describe('proactive defaults on first switch-on', () => {
+  it('fills events and the system time zone only when still unset, judged at save time', async () => {
+    const service = setup().create();
+    await service.patch({ eventKinds: ['focus-completed'] });
+    await service.patch({ mode: 'observe', enabled: false });
+    expect(service.getPolicy().eventKinds).toEqual(['focus-completed']);
+    expect(service.getPolicy().timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  });
+});
