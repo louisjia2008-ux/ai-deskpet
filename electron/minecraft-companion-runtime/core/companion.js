@@ -247,7 +247,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       && !homestead()?.memory.established),
     home: () => {
       const site = homestead()?.shelterSite?.();
-      return site ? { ...nightShelter(bot, site), inside: site.inside, entrance: site.house.entrance } : { bed: null, centre: null };
+      return site ? { ...nightShelter(bot, site), inside: site.inside, covered: site.covered, entrance: site.house.entrance } : { bed: null, centre: null };
     } });
   const backoff = createScheduleBackoff();
   const homeMaintenance = createHomeMaintenance({ bot, backoff, home: () => director?.memory.homestead,
@@ -340,7 +340,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
     schedule,
     backoff,
     opportunity: createOpportunisticHunt({ bot, skills, mobs: FOOD_MOBS, food: KNOWLEDGE.food.match, spare: e => spare(e), backoff }),
-    taskAllowed: (state, def) => Boolean(survey) || nightRest.taskAllowed(state, def.name),
+    taskAllowed: (state, def) => Boolean(survey) || !selfStuck.state() && nightRest.taskAllowed(state, def.name),
     abandonMs: retirementTimeoutMs,
     perceive: () => perceive(bot),
     behaviors,

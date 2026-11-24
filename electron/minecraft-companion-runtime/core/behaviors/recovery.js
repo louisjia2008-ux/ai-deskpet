@@ -241,7 +241,7 @@ function createRecovery({
     const respawn = Boolean(previous && respawnedAt >= previous.at && at - respawnedAt <= t.respawnGraceMs);
     deaths.push({ position, at, dimension, cause, respawn });
     while (deaths.length && at - deaths[0].at > t.deathWindowMs) deaths.shift();
-    bot.companionSheltered = false;
+    bot.companionEndShelter = null;
     const near = deaths.filter((d) => d.dimension === dimension && at - d.at <= t.clusterMs
       && distance(d.position, position) <= t.clusterRadius);
     // The End's island is the fight itself: there is nowhere safer to go and

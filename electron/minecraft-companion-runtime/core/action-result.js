@@ -104,10 +104,11 @@ function failure(reason, facts = {}, ctx, state) {
   }
   if (kind === 'material') {
     const bot = state?.bot ?? state;
+    const bag = facts.carried ?? state?.inventory;
     const missing = Array.isArray(facts.missing) ? Object.fromEntries(facts.missing.flatMap(item =>
       typeof item === 'string' ? [[item, 1]] : item?.name ? [[item.name, item.short ?? 1]] : [])) : facts.missing;
-    facts = { ...facts, need: facts.need ?? missing ?? {}, carried: facts.carried ?? state?.inventory
-      ?? (bot?.inventory ? countInventory(ownedItems(bot)) : {}) };
+    facts = { ...facts, need: facts.need ?? missing ?? {},
+      carried: bag && typeof bag.items !== 'function' ? bag : countInventory(ownedItems(bot)) };
   }
   return { ok: false, kind, reason, facts, attemptId: createAttempt(ctx).attemptId };
 }

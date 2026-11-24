@@ -333,7 +333,6 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
         return leave(ctx);
       }
       // Recovery and survival leave a sheltered bot where it is.
-      bot.companionSheltered = true;
       await sleep(500, ctx.signal);
       return waiting('dimension_action_pending');
     }
@@ -350,14 +349,14 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
       if (!moved.ok && bot.entity.position.floored().distanceTo(stand) > 0.5) continue;
       const dug = await end.digShelter(bot, ctx);
       ctx.record('shelter', { at: at(stand), ok: dug.ok, reason: dug.reason || null });
-      if (dug.ok) { memory.shelter = dug.top; bot.companionSheltered = true; return { ok: true }; }
+      if (dug.ok) { memory.shelter = dug.top; return { ok: true }; }
     }
     await sleep(1000, ctx.signal);
     return waiting('dimension_action_pending');
   }
 
   async function leave(ctx) {
-    bot.companionSheltered = false;
+    bot.companionEndShelter = null;
     const out = await end.leaveShelter(bot, ctx, memory.shelter);
     ctx.record('shelter_left', { ok: out.ok, reason: out.reason || null });
     if (out.ok) memory.shelter = null;
@@ -380,7 +379,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
         return back;
       }
       enterMode();
-      bot.companionSheltered = Boolean(inShelter());
+      bot.companionEndShelter = inShelter;
       const worn = await end.wearArmor(bot);
       if (worn.length) ctx.record('equip', { items: worn });
       if (done()) return { ok: true };
@@ -445,7 +444,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
     },
     dispose() {
       leaveMode();
-      bot.companionSheltered = false;
+      bot.companionEndShelter = null;
       bot.removeListener('entityUpdate', onMeta);
       bot.removeListener('entityGone', onGone);
       bot.removeListener('entityMoved', onMove);

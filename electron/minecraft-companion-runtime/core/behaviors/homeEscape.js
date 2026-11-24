@@ -1,12 +1,12 @@
 'use strict';
 
 const { BAND } = require('../brain');
-const { isComplete } = require('../action-result');
+const { factsOf, isComplete } = require('../action-result');
 const defaultActions = require('../actions');
 const { safeStand, SIDES } = require('../home-topology');
 const { wet } = require('../dry-route');
 const { goals } = require('mineflayer-pathfinder');
-const { abortError } = require('../confirm');
+const { abortError, sleep } = require('../confirm');
 const { boundedWork } = require('../work-budget');
 
 function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultActions, now = Date.now }) {
@@ -38,6 +38,11 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
       record('water_rescue_step', method, step);
     }
     if (dry()) return finish(ctx, 'dry_ground');
+    if (episode.retryAt) {
+      await sleep(Math.max(0, episode.retryAt - now()), ctx.signal);
+      if (dry()) return finish(ctx, 'dry_ground');
+      Object.assign(episode, { retryAt: 0, index: 0, elapsed: 0 });
+    }
     while (episode.index < methods.length) {
       const [method, limit, run] = methods[episode.index];
       const started = now(), elapsed = episode.elapsed;
@@ -68,8 +73,8 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
         return { phase: 'advance', elapsedMs: elapsed + now() - started, next: methods[episode.index]?.[0] };
       }
     }
-    if (!episode.exhausted) record('water_rescue_alert', null, { reason: 'methods_exhausted' });
-    episode.exhausted = true;
+    record('water_rescue_alert', null, { reason: 'methods_exhausted' });
+    episode.retryAt = now() + 3000;
     return { ok: false, reason: 'self_escape_unconfirmed' };
   }
 
@@ -82,7 +87,7 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
       const goal = home();
       const geometry = goal?.trapped?.();
       if (geometry) tracker.force(geometry);
-      if (tracker.state()) return episode?.stuck === tracker.state() && episode.exhausted && waterStuck(state) ? 0 : 1;
+      if (tracker.state()) return 1;
       if (tracker.probe() || goal?.needsCleanup?.() || goal?.memory.breach) return 0.5;
       return 0;
     },
@@ -116,9 +121,10 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
       }
       const before = bot.entity.position.clone();
       const walked = await actions.unstick(bot, rescue);
-      const escaped = () => bot.entity.position.distanceTo(before) >= 2;
-      const climbed = !escaped() && !walked.wait && await actions.surface?.(bot, rescue);
-      return escaped() ? finish(ctx, 'natural_route') : climbed?.wait ? climbed : walked.wait ? walked
+      const escaped = result => bot.entity.position.distanceTo(before) >= 2 && !result?.wait && result?.reason !== 'still_below_surface'
+        && factsOf(result).surfaced !== false;
+      const climbed = !escaped(walked) && !walked.wait && await actions.surface?.(bot, rescue);
+      return escaped(climbed || walked) ? finish(ctx, 'natural_route') : climbed?.wait ? climbed : walked.wait ? walked
         : { ok: false, reason: walked.reason || 'self_escape_unconfirmed' };
     },
   };

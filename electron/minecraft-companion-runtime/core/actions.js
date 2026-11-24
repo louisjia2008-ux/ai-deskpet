@@ -17,7 +17,10 @@ const { fail, complete, createAttempt, departRoute, factsOf, failure, isComplete
 
 const { withWorkTarget } = require('./work-target');
 const digTarget = run => (bot, ctx, block, options) => withWorkTarget(bot, ctx, block?.position, () => run(bot, ctx, block, options));
-
+const nativeDigMs = (bot, block) => {
+  const estimate = Number(bot.digTime?.(block));
+  return Number.isFinite(estimate) && estimate > 0 ? estimate : 0;
+};
 
 function haltBody(bot) {
   try { bot.pathfinder?.setGoal(null); } catch { /* ignore */ }
@@ -619,7 +622,8 @@ async function digBlock(bot, ctx, block, { timeoutMs = 12000, tool: chosen = nul
     permit?.start(face);
     // Skip the native look wait so cancellation can stop the active dig.
     await runCancellable(() => bot.dig(permit ? bot.blockAt(position) : current, permit ? 'ignore' : true, permit ? undefined : face), {
-      signal: ctx.signal, timeoutMs, timeoutCode: 'dig_timeout', cancel: () => bot.stopDigging(),
+      signal: ctx.signal, timeoutMs: typeof timeoutMs === 'function' ? timeoutMs(current) : timeoutMs,
+      timeoutCode: 'dig_timeout', cancel: () => bot.stopDigging(),
     });
   } catch (error) {
     if (isAbort(error)) throw error;
@@ -1018,10 +1022,7 @@ async function unstick(bot, ctx, { landed = () => true } = {}) {
   if (await stepOutOfPool(bot, ctx) && landed()) return { ok: true, moved: 'out_of_pool' };
   if (await drainPocket(bot, ctx)) return { ok: true, moved: 'drained_pocket' };
   const pit = shallowPitTarget(bot);
-  if (pit && ctx.adapt) {
-    const up = await surface(bot, ctx, { targetY: pit });
-    if (up) return up;
-  } else if (pit && await climbPitDirectly(bot, ctx, pit)) return { ok: true, moved: 'pit_pillar' };
+  if (pit) return surface(bot, ctx, { targetY: pit });
   if (await nudge(bot, ctx)) return { ok: true, moved: 'nudged' };
   const start = bot.entity.position.clone();
   const movements = bot.pathfinder.movements;
@@ -1109,7 +1110,8 @@ async function cutClearance(bot, ctx, cells, { open = b => !b || b.boundingBox =
     const block = bot.blockAt(cell);
     if (open(block)) continue;
     if (!block || !mayDig(block)) return false;
-    if (!(await digBlock(bot, ctx, block, { timeoutMs: Math.max(minMs, (Number(bot.digTime?.(block)) || 0) + 3000), face })).ok) return false;
+    const timeoutMs = current => Math.max(minMs, nativeDigMs(bot, current) + 3000);
+    if (!(await digBlock(bot, ctx, block, { timeoutMs, face })).ok) return false;
   }
   return true;
 }
@@ -1485,53 +1487,43 @@ async function digStairsDown(bot, ctx, target, { maxSteps = 16 } = {}) {
   return down;
 }
 
+const pitRetryAt = new WeakMap();
+const RESCUE_RETRY_MS = 3_000;
+
+function pitWalkBudget(bot, start, target) {
+  const nearby = SIDES.map(([x, z]) => bot.blockAt(start.offset(x, 1, z)));
+  const cut = Math.max(0, ...nearby.map(block => block?.diggable ? nativeDigMs(bot, block) : 0));
+  return 12_000 + 2 * cut * Math.min(8, Math.max(1, target - start.y));
+}
+
 /** Climbs back to the surface reference level (or `targetY`) if the bot is below it. */
 async function surface(bot, ctx, { targetY, bunker = false } = {}) {
   ctx = { ...ctx, rescue: 'surface' };
   const explicit = Number.isFinite(targetY);
-  if ((!bunker && !underground(bot)) || (explicit && bot.entity.position.y >= targetY - 0.1)) return null;
   const start = bot.entity.position.floored();
   const rim = shallowPitTarget(bot) || (bunker && explicit && targetY);
-  const reference = Math.max(bot.companionSurfaceY ?? start.y + 4, localSurfaceY(bot));
-  const target = Math.floor(explicit ? targetY : Math.max(start.y + 2, reference));
-  if (!explicit && bot.entity.position.y >= target - 1) return null;
-  const reached = () => explicit ? bot.entity.position.y >= target - 0.1 : bot.entity.onGround !== false && !underground(bot);
-  const climb = (y, options) => climbPath(bot, { ...ctx, nearDestination: true }, y, options);
-  if (rim && ctx.adapt) {
-    const deadline = Date.now() + 30_000;
-    const shaft = { position: start };
-    let nextRim = rim;
-    let result;
-    for (let step = 0; nextRim && step < 8 && Date.now() < deadline; step += 1) {
-      const legTarget = Math.min(target, nextRim);
-      result = await ctx.adapt.run('pit', shaft, async (method) => {
-        if (method === 'pathfinder') {
-          await climb(legTarget, { timeoutMs: Math.max(1, Math.min(12000, deadline - Date.now())), retryNoProgress: false });
-        } else if (method === 'direct_pillar') {
-          await climbPitDirectly(bot, ctx, legTarget);
-        } else {
-          await digStairsUp(bot, ctx, legTarget, { maxSteps: 8, stop: reached });
-        }
-        return reached() || bot.entity.position.y >= legTarget - 0.1
-          ? { ok: true, surfaced: reached() } : failure('still_below_surface', {}, ctx, bot);
-      }, { threshold: 1 });
-      if (reached() || result.wait || (!isComplete(result) && !factsOf(result).adaptation?.switched)) return result;
-      if (factsOf(result).adaptation?.exhausted) return result;
-      nextRim = shallowPitTarget(bot);
-    }
-    if (result && (nextRim || !isComplete(result))) return result;
+  const target = Math.floor(explicit ? targetY : Math.max(start.y + 2, bot.companionSurfaceY ?? start.y + 4, localSurfaceY(bot)));
+  const reached = () => (rim ? dryLanding(bot, true) : bot.entity.onGround !== false)
+    && (explicit ? bot.entity.position.y >= target - 0.1 : !underground(bot));
+  if (reached() || (!bunker && !underground(bot))) return null;
+  const retryAt = pitRetryAt.get(bot);
+  if (rim && retryAt > Date.now()) await sleep(retryAt - Date.now(), ctx.signal);
+
+  const timeoutMs = rim ? pitWalkBudget(bot, start, target) : 30_000;
+  await climbPath(bot, { ...ctx, nearDestination: true }, target, { timeoutMs, arrived: () => true });
+  if (!reached() && rim) await climbPitDirectly(bot, ctx, Math.min(rim, target));
+  if (!reached()) await digStairsUp(bot, ctx, target, { maxSteps: Math.min(24, target - Math.floor(bot.entity.position.y) + 4), stop: reached });
+  if (reached()) {
+    if (pitRetryAt.delete(bot)) ctx.record?.('pit_rescue_escaped', { position: bot.entity.position.floored() });
+    return { ok: true, surfaced: true };
   }
-  await climb(target, { timeoutMs: 30000, arrived: () => true });
-  if (reached()) return { ok: true, surfaced: true };
+  if (!explicit && bot.entity.position.y - start.y >= 2) return { ok: true, surfaced: false };
+  const details = { position: bot.entity.position.floored(), targetY: target, tried: rim ? ['pathfinder', 'direct_pillar', 'side_stairs'] : ['pathfinder', 'side_stairs'] };
   if (rim) {
-    await climbPitDirectly(bot, ctx, Math.min(rim, target));
-    if (reached()) return { ok: true, surfaced: true };
+    pitRetryAt.set(bot, Date.now() + RESCUE_RETRY_MS);
+    ctx.record?.('pit_rescue_alert', { ...details, episode: posKey(start), reason: 'methods_exhausted' });
   }
-  await digStairsUp(bot, ctx, target, { maxSteps: Math.min(24, target - Math.floor(bot.entity.position.y) + 4), stop: reached });
-  if (reached()) return { ok: true, surfaced: true };
-  // A long ascent can take several cancellable steps. Only report a failure
-  // when the body made no meaningful climb and still has no surface exit.
-  return !explicit && bot.entity.position.y - start.y >= 2 ? { ok: true, surfaced: false } : fail('still_below_surface');
+  return fail('still_below_surface', details);
 }
 
 module.exports = {

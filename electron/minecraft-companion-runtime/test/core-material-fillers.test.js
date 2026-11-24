@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { Vec3 } = require('vec3');
 const actions = require('../core/actions');
 const { mineStep } = require('../core/mining');
-const { digIn, shelterSealCount } = require('../core/skills');
+const { bunkerOccupied, digIn, enclose, shelterSealCount } = require('../core/skills');
 const { KNOWLEDGE, countKey } = require('../core/knowledge');
 const { filler, seal } = require('../core/materials');
 const { createCobbleGeneratorGoal } = require('../core/goals/cobbleGenerator');
@@ -156,4 +156,33 @@ test('digging in uses a stable carried red sandstone lid and counts it as reserv
   assert.equal(shelterSealCount({ red_sandstone: 4, red_sand: 4 }), 4);
   assert.equal((await digIn(bot, ctx)).ok, true);
   assert.deepEqual(edits, [[lid, 'red_sandstone']]);
+});
+
+
+test('R4.2 seed 2 seals a two-deep sandstone shaft with two carried blocks', async (t) => {
+  const { bot, put, aim, edits } = fixture(['sandstone']);
+  const top = bot.entity.position.floored(), support = top.plus(east);
+  const stack = bot.inventory.items()[0];
+  stack.count = 2;
+  aim(support, down, 1);
+  const place = bot.placeBlock.bind(bot);
+  bot.placeBlock = async (block, face) => {
+    await place(block, face);
+    stack.count--;
+    aim(top, east, 4);
+  };
+  t.mock.method(actions, 'digBlock', async (_bot, _ctx, block) => {
+    put(block.position, 'air');
+    bot.entity.position.y = block.position.y;
+    return { ok: true };
+  });
+  const room = { top, placed: [] };
+  const result = await enclose(bot, ctx, room);
+  assert.equal(result.ok, true, result.reason);
+  const { bunker } = require('../core/action-result').factsOf(result);
+  assert.equal(bunker.depth, 2);
+  assert.deepEqual(edits, [[support, 'sandstone'], [top, 'sandstone']]);
+  assert.equal(bunkerOccupied(bot, bunker), true);
+  put(top, 'air');
+  assert.equal(bunkerOccupied(bot, bunker), false);
 });

@@ -951,7 +951,7 @@ async function craftShelterSeal(bot, ctx, times) {
 }
 
 /** Top up the night shelter with one short local gathering action. */
-async function prepareShelterSeal(bot, ctx, { want = 2 } = {}) {
+async function prepareShelterSeal(bot, ctx, { want = 2, avoid = () => false } = {}) {
   const countSeals = () => actions.countItems(bot, sealMatch);
   const before = countSeals();
   if (before >= want) return { ok: true, already: true };
@@ -963,7 +963,7 @@ async function prepareShelterSeal(bot, ctx, { want = 2 } = {}) {
   const sand = b => b && Object.hasOwn(SANDSTONE, b.name);
   const nearby = (matching) => (bot.findBlocks?.({ matching, maxDistance: 8, count: 32 }) || [])
     .filter(p => Math.abs(p.y - feet.y) <= 2 && !p.equals(feet.offset(0, -1, 0))
-      && !bot.companionHomeSite?.(p) && !bot.companionNearPlayerBuild?.(p) && !bot.companionPlayerBlock?.(p) && !touchesLiquid(bot, p))
+      && !avoid(p) && !bot.companionHomeSite?.(p) && !bot.companionNearPlayerBuild?.(p) && !bot.companionPlayerBlock?.(p) && !touchesLiquid(bot, p))
     .map(p => bot.blockAt(p)).find(matching);
   const target = nearby(stable) || nearby(sand);
   if (!target) return fail('no_local_seal_material');
@@ -981,26 +981,29 @@ async function prepareShelterSeal(bot, ctx, { want = 2 } = {}) {
 }
 
 /** A spot where a sealed shaft can be dug: solid ground all around, nothing that flows. */
-function bunkerSpot(bot, top) {
+function bunkerSpot(bot, top, depth) {
   if (![0, 1].every(y => naturalCover(bot.blockAt(top.offset(0, y, 0))))) return false;
   for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) {
     if ([-1, 0, 1].some(y => wet(bot.blockAt(top.offset(x, y, z))))) return false;
   }
-  for (let dy = 1; dy <= 3; dy += 1) {
+  for (let dy = 1; dy <= depth; dy += 1) {
     const b = bot.blockAt(top.offset(0, -dy, 0));
     if (!SHAFT_SOLID(b) || !b.diggable) return false;
     for (const [dx, dz] of SIDES4) if (!SHAFT_SOLID(bot.blockAt(top.offset(dx, -dy, dz)))) return false;
   }
-  return SHAFT_SOLID(bot.blockAt(top.offset(0, -4, 0)));
+  return SHAFT_SOLID(bot.blockAt(top.offset(0, -depth - 1, 0)));
 }
 
 const shelterFooting = (at, top, y = top.y) => at && Math.abs(at.y - y) <= 0.1
   && Math.hypot(at.x - top.x - 0.5, at.z - top.z - 0.5) <= 0.2;
 
-function bunkerOccupied(bot, { top }) {
+const coverPosition = ({ top, depth = 3 }) => v(top).offset(0, 2 - depth, 0);
+function bunkerOccupied(bot, bunker, requireCover = true) {
+  const { top, depth = 3 } = bunker;
   const at = bot.entity?.position;
-  return Boolean(shelterFooting(at, top, top.y - 3)
-    && at.y + (bot.entity.height || 1.8) <= top.y - 1);
+  const cover = coverPosition(bunker);
+  return Boolean(shelterFooting(at, top, top.y - depth) && at.y + (bot.entity.height || 1.8) <= cover.y
+    && (!requireCover || shelterSolid(bot.blockAt(cover))));
 }
 
 const shelterSolid = block => stableSolid(block) && !contactBlock(block)
@@ -1022,7 +1025,11 @@ async function enclose(bot, ctx, shelter) {
   const { top, placed } = shelter;
   const inside = () => shelterFooting(bot.entity.position, top);
   const read = p => bot.blockAt(p);
-  if (actions.countItems(bot, n => shelterItem(bot, n)) + placed.length < 5) return fail('no_seal_block');
+  const carried = () => actions.countItems(bot, n => shelterItem(bot, n));
+  if (shelter.short || !placed.length && carried() < 5) {
+    shelter.short = true;
+    return digIn(bot, ctx, { depth: 2, refuge: shelter, avoid: p => bot.companionHomeSite?.(p) });
+  }
   await actions.recentre(bot, ctx, { accept: p => p.equals(top) });
   if (!inside()) return fail('shelter_not_entered');
   const cells = enclosureCells(top);
@@ -1055,8 +1062,25 @@ async function openEnclosure(bot, ctx, shelter) {
   return complete();
 }
 
-async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}) {
-  const hasSeal = () => bot.inventory.items().some((i) => sealMatch(i.name));
+async function supportShortCover(bot, ctx, top, refuge, match) {
+  const side = SIDES4.map(([x, z]) => top.offset(x, 0, z));
+  if (side.some(p => shelterSolid(bot.blockAt(p)))) return complete(false);
+  const support = side.find(p => SHAFT_SOLID(bot.blockAt(p.offset(0, -1, 0))) && naturalCover(bot.blockAt(p))
+    && !bot.companionHomeSite?.(p) && !bot.companionPlayerBlock?.(p));
+  if (!support) return fail('no_support');
+  if (actions.countItems(bot, match) < 2) {
+    await prepareShelterSeal(bot, ctx, { avoid: p => Math.max(Math.abs(top.x - p.x), Math.abs(top.z - p.z)) <= 1 });
+    if (actions.countItems(bot, match) < 2) return fail(actions.countItems(bot, match) ? 'no_support' : 'no_seal_block');
+  }
+  const placed = await placeAt(bot, ctx, support, match, { requireAir: true });
+  if (placed.ok) refuge.placed.push({ position: support, name: bot.blockAt(support).name });
+  return placed;
+}
+
+async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false, depth = 3, refuge } = {}) {
+  const shortShaft = depth === 2, levels = shortShaft ? [1, 2] : [1, 2, 3];
+  const material = shortShaft ? name => shelterItem(bot, name) : 'seal';
+  const hasSeal = () => bot.inventory.items().some(i => shortShaft ? material(i.name) : sealMatch(i.name));
   const count = (name) => actions.countItems(bot, (n) => n === name);
   // With nothing to seal with (just respawned), the shaft itself supplies it:
   // its dirt drops by hand, its stone with a pickaxe.
@@ -1065,22 +1089,23 @@ async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}
   // The carrying reserve counts as a usable lid, even if the shoreline
   // supplies no more sand and the shaft is still only being considered.
   if (prepareSeal && !hasSeal()) await craftShelterSeal(bot, ctx, 1);
-  let top = bot.entity.position.floored();
+  let top = refuge?.top ?? bot.entity.position.floored();
   // Sand for a sandstone lid: what is carried, the shaft's own three, and
   // when one short (an empty bag), a block of ground two steps away.
-  const sandIn = (p, sand) => count(sand) + [1, 2, 3].filter((dy) => bot.blockAt(p.offset(0, -dy, 0))?.name === sand).length;
+  const sandIn = (p, sand) => count(sand) + levels.filter((dy) => bot.blockAt(p.offset(0, -dy, 0))?.name === sand).length;
   const spareSand = (p, sand) => RING2.map(([dx, dz]) => p.offset(dx, -1, dz))
     .find((q) => bot.blockAt(q)?.name === sand && bot.blockAt(q.offset(0, 1, 0))?.boundingBox === 'empty') || null;
-  const shaftYieldsSeal = (p) => [1, 2, 3].some((dy) => yieldsSeal(bot.blockAt(p.offset(0, -dy, 0))))
+  const shaftYieldsSeal = (p) => levels.some((dy) => yieldsSeal(bot.blockAt(p.offset(0, -dy, 0))))
     || Object.keys(SANDSTONE).some((sand) => sandIn(p, sand) >= 4 || (sandIn(p, sand) === 3 && spareSand(p, sand)));
-  if (!bunkerSpot(bot, top) || avoid(top) || (!hasSeal() && !shaftYieldsSeal(top))) {
+  if (!bunkerSpot(bot, top, depth) || avoid(top) || (!hasSeal() && !shaftYieldsSeal(top))) {
+    if (shortShaft) return fail(hasSeal() ? 'no_bunker_spot' : 'no_seal_block');
     // Look for a suitable spot close by and walk there first.
     let best = null;
     for (let dx = -8; dx <= 8; dx += 1) {
       for (let dz = -8; dz <= 8; dz += 1) {
         for (let dy = -2; dy <= 2; dy += 1) {
           const p = top.offset(dx, dy, dz);
-          if (avoid(p) || !bunkerSpot(bot, p) || (!hasSeal() && !shaftYieldsSeal(p))) continue;
+          if (avoid(p) || !bunkerSpot(bot, p, depth) || (!hasSeal() && !shaftYieldsSeal(p))) continue;
           const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy) * 2;
           if (!best || d < best.d) best = { p, d };
         }
@@ -1090,7 +1115,7 @@ async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}
     const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(best.p.x, best.p.y, best.p.z), { timeoutMs: 20000 });
     if (!moved.ok) return moved;
     top = bot.entity.position.floored();
-    if (!bunkerSpot(bot, top)) return fail('bunker_spot_changed');
+    if (!bunkerSpot(bot, top, depth)) return fail('bunker_spot_changed');
   }
   const short = !hasSeal() && Object.keys(SANDSTONE).find((sand) => sandIn(top, sand) === 3 && spareSand(top, sand));
   if (short) {
@@ -1102,11 +1127,19 @@ async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}
       if (!back.ok) return back;
     }
   }
+  if (shortShaft) {
+    const supported = await supportShortCover(bot, ctx, top, refuge, material);
+    if (!supported.ok) return supported;
+    if (!bot.entity.position.floored().equals(top)) {
+      const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(top.x, top.y, top.z), { timeoutMs: 10000 });
+      if (!moved.ok) return moved;
+    }
+  }
   const settle = y => bot.entity.onGround === true && shelterFooting(bot.entity.position, top, y);
   const recenter = overEdge => actions.recentre(bot, ctx, { overEdge, accept: p => p.x === top.x && p.z === top.z });
   await recenter(false);
   if (!settle(top.y)) return fail('shelter_not_entered');
-  for (let dy = 1; dy <= 3; dy += 1) {
+  for (let dy = 1; dy <= depth; dy += 1) {
     const below = bot.blockAt(top.offset(0, -dy, 0));
     const dug = await actions.digBlock(bot, ctx, below);
     if (!dug.ok) return dug;
@@ -1120,10 +1153,9 @@ async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}
   if (!hasSeal()) await craftShelterSeal(bot, ctx, 1);
   if (!hasSeal()) return fail('no_seal_block');
   // Seal the old ground block above the head, resting on the shaft wall beside it.
-  const seal = top.offset(0, -1, 0);
-  const bunker = { top: { x: top.x, y: top.y, z: top.z } };
-  if (!bunkerOccupied(bot, bunker)) return fail('shelter_not_entered');
-  const sealed = await placeAt(bot, ctx, seal, 'seal',
+  const bunker = { top: { ...top }, ...(shortShaft && { depth, cover: coverPosition({ top, depth }), supports: refuge.placed }) };
+  if (!bunkerOccupied(bot, bunker, false)) return fail('shelter_not_entered');
+  const sealed = await placeAt(bot, ctx, coverPosition(bunker), material,
     { faces: [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)] });
   if (!sealed.ok) return sealed;
   return bunkerOccupied(bot, bunker) ? { ok: true, bunker } : fail('shelter_not_entered');
@@ -1152,13 +1184,17 @@ async function tossStacks(bot, ctx, items) {
 
 /** Opens the seal and climbs back up, filling the shaft behind the bot. */
 async function digOut(bot, ctx, bunker) {
-  const top = new Vec3(bunker.top.x, bunker.top.y, bunker.top.z);
-  const seal = bot.blockAt(top.offset(0, -1, 0));
-  if (seal && seal.boundingBox === 'block' && bot.entity.position.y < top.y - 1) {
+  const cover = coverPosition(bunker);
+  const seal = bot.blockAt(cover);
+  if (seal?.boundingBox === 'block' && bot.entity.position.y < cover.y) {
     const dug = await actions.digBlock(bot, ctx, seal);
     if (!dug.ok) return dug;
   }
-  return actions.surface(bot, ctx, { targetY: top.y, bunker: true });
+  const exit = await actions.surface(bot, ctx, { targetY: bunker.top.y, bunker: true });
+  if (bunker.supports?.length && bot.entity.position.y >= bunker.top.y - 0.1) {
+    return openEnclosure(bot, ctx, { placed: bunker.supports });
+  }
+  return exit;
 }
 
 /** Uses the bed: sleeps at night, otherwise sets the respawn point by interacting. */

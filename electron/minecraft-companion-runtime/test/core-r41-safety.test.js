@@ -48,9 +48,9 @@ for (const top of [new Vec3(236, 68, -16), new Vec3(247, 68, -2), new Vec3(-1, 1
   });
 }
 
-test('night verifies a bunker and an interior at the next ten-second check and seeks cover again', async () => {
+test('night verifies the current bunker and interior and seeks cover after losing it', async () => {
   const top = new Vec3(247, 68, -2);
-  const bot = { entity: { position: top.offset(0.5, -3, 0.5) } };
+  const bot = { entity: { position: top.offset(0.5, -3, 0.5) }, blockAt: () => ({ name: 'stone', boundingBox: 'block' }) };
   let ms = 0, inside = false, entries = 0, digs = 0;
   const actions = [], ctx = {
     perceive: () => ({ timeOfDay: 13_000 }),
@@ -64,11 +64,8 @@ test('night verifies a bunker and an interior at the next ten-second check and s
   await rest.run(ctx);
   bot.entity.position.y = top.y;
   ms += 9_999;
-  assert.equal(rest.want(ctx.perceive()), 0.8);
-  assert.equal(bot.companionSheltered, true);
-  ms++;
-  assert.equal(rest.want(ctx.perceive()), 0.8);
   assert.equal(bot.companionSheltered, false);
+  assert.equal(rest.want(ctx.perceive()), 0.8);
   inside = true;
   await rest.run(ctx);
   assert.equal(entries, 1);

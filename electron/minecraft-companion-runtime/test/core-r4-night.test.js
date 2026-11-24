@@ -9,7 +9,7 @@ const { createBrain } = require('../core/brain');
 test('at the same dusk tick a 20-block return fits but a 120-block return does not', async () => {
   const centre = new Vec3(0, 70, 0);
   const bed = new Vec3(1, 70, 0);
-  const bot = { entity: { position: centre.offset(20, 0, 0) } };
+  const bot = { entity: { position: centre.offset(20, 0, 0) }, blockAt: () => ({ name: 'stone', boundingBox: 'block' }) };
   let tick = 11_900;
   const actions = [], events = [];
   const ctx = { perceive: () => ({ timeOfDay: tick, position: bot.entity.position }),
@@ -69,7 +69,7 @@ test('at the same dusk tick a 20-block return fits but a 120-block return does n
 test('covered cave waits overnight in a local bunker and resumes the same task after the dawn exit', async (t) => {
   const centre = new Vec3(0, 70, 0);
   const top = centre.offset(120, -3, 0);
-  const bot = { entity: { position: top } };
+  const bot = { entity: { position: top }, blockAt: () => ({ name: 'stone', boundingBox: 'block' }) };
   let state = { timeOfDay: 11_900, position: top };
   const records = [], shaft = { top };
   const rest = createNightRest({
@@ -110,7 +110,7 @@ test('covered cave waits overnight in a local bunker and resumes the same task a
 
 test('an expired dusk return cancels traveling and the next attempt digs in locally', async (t) => {
   const centre = new Vec3(0, 70, 0);
-  const bot = { entity: { position: centre.offset(20, 0, 0) } };
+  const bot = { entity: { position: centre.offset(20, 0, 0) }, blockAt: () => ({ name: 'stone', boundingBox: 'block' }) };
   const events = [];
   const ctx = { perceive: () => ({ position: bot.entity.position, timeOfDay: 11_900 }),
     record: (_type, event) => events.push(event.action) };
@@ -216,4 +216,31 @@ test('a failed shaft gets one enclosure, confirmed from the body and world, then
   assert.equal(bot.companionSheltered, false);
   assert.deepEqual([attempts, opened], [1, 1]);
   assert.deepEqual(events, ['dig_in', 'enclosed', 'enclosure_opened']);
+});
+
+
+test('R4.2 far mine waits out a jump before committing the enclosure position', async () => {
+  const top = new Vec3(120, 262, 0);
+  const bot = { entity: { position: top.offset(0.5, 0, 0.5), onGround: true },
+    blockAt: () => ({ name: 'stone', boundingBox: 'block' }) };
+  const events = [];
+  const ctx = { perceive: () => ({ timeOfDay: 13000, position: bot.entity.position }),
+    record: (_type, event) => events.push(event.action) };
+  const rest = createNightRest({ bot, home: () => ({ centre: null }), skills: {
+    digIn: async () => ({ ok: false, reason: 'no_bunker_spot' }),
+    async enclose(_bot, _ctx, enclosure) {
+      assert.equal(bot.entity.onGround, true);
+      assert.deepEqual(enclosure.top, top);
+      return { ok: true };
+    },
+  } });
+  await rest.run(ctx);
+  bot.entity.position.y += 0.736;
+  bot.entity.onGround = false;
+  const enclosing = rest.run(ctx);
+  bot.entity.position.y = top.y;
+  bot.entity.onGround = true;
+  assert.equal((await enclosing).ok, true);
+  assert.equal(bot.companionSheltered, true);
+  assert.deepEqual(events, ['dig_in', 'enclosed']);
 });

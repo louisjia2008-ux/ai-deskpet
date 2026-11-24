@@ -62,7 +62,8 @@ test('a death right after respawning does not count towards the task, a third de
 });
 
 test('with no house and no task the bot digs in where it stands at night', async () => {
-  const bot = Object.assign(new EventEmitter(), { entity: { position: new Vec3(5, 70, 5) }, game: { dimension: 'overworld' } });
+  const bot = Object.assign(new EventEmitter(), { entity: { position: new Vec3(5, 70, 5) }, game: { dimension: 'overworld' },
+    blockAt: () => ({ name: 'dirt', boundingBox: 'block' }) });
   const dug = [];
   const rest = createNightRest({ bot, home: () => ({ bed: null, centre: null }),
     actions: { underground: () => false },
@@ -280,7 +281,8 @@ test('surfacing for air three times in a minute swims the bot ashore', async () 
 });
 
 test('a bot dug in only for want of a task digs out when it is given one', async () => {
-  const bot = Object.assign(new EventEmitter(), { entity: { position: new Vec3(5, 70, 5) }, game: { dimension: 'overworld' } });
+  const bot = Object.assign(new EventEmitter(), { entity: { position: new Vec3(5, 70, 5) }, game: { dimension: 'overworld' },
+    blockAt: () => ({ name: 'dirt', boundingBox: 'block' }) });
   let task = null;
   const dug = { in: 0, out: 0 };
   const rest = createNightRest({ bot, home: () => (task ? null : { bed: null, centre: null }),

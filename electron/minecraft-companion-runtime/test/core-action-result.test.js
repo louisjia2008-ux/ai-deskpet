@@ -73,7 +73,9 @@ test('an exhausted dawn exit keeps the night bunker until the bot actually emerg
   // R3.2 seed 2: side_stairs fails, then digOut returns the do_other_work wait.
   // The following log entry wrongly claimed dug_out while the body was at Y60.
   const bunker = { top: { x: 0, y: 63, z: 0 } };
-  const bot = { entity: { position: new Vec3(0.5, 63, 0.5) } };
+  let lid = true;
+  const bot = { entity: { position: new Vec3(0.5, 63, 0.5) },
+    blockAt: () => lid ? { name: 'sandstone', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' } };
   const records = [];
   const outcomes = [failure('still_below_surface'), waiting('adaptation_other_work', 20_000), complete()];
   const rest = createNightRest({ bot, home: () => ({ centre: null }), actions: { underground: () => false }, skills: {
@@ -83,6 +85,8 @@ test('an exhausted dawn exit keeps the night bunker until the bot actually emerg
     },
     digOut: async (_bot, _ctx, shaft) => {
       assert.equal(shaft, bunker);
+      lid = false;
+      assert.equal(bot.companionSheltered, false);
       const outcome = outcomes.shift();
       if (isComplete(outcome)) bot.entity.position.y = bunker.top.y;
       return outcome;
@@ -96,7 +100,7 @@ test('an exhausted dawn exit keeps the night bunker until the bot actually emerg
   assert.deepEqual(await rest.run(ctx), waiting('adaptation_other_work', 20_000));
   assert.equal(bot.entity.position.y, 60);
   assert.equal(rest.taskAllowed(ctx.perceive(), 'homestead'), false);
-  assert.equal(bot.companionSheltered, true);
+  assert.equal(bot.companionSheltered, false);
   assert.equal(records.some(event => event.action === 'dug_out'), false);
   assert.equal(isComplete(await rest.run(ctx)), true);
   assert.equal(rest.taskAllowed(ctx.perceive(), 'homestead'), true);

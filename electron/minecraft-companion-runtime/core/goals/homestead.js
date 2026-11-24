@@ -1843,7 +1843,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const house = memory.house;
       if (!house || !(memory.established || memory.houseBuilt >= house.blocks.length && doorOpen() !== null)) return null;
       const at = bot.entity.position;
-      return { house, inside: at.y >= house.anchor.y - 0.05 && insideRoom(at.floored()) };
+      return { house, inside: at.y >= house.anchor.y - 0.05 && insideRoom(at.floored()),
+        covered: () => doorOpen() === false && house.blocks.every(b =>
+          !['walls', 'roof'].includes(b.phase) || matchesBuilding(b, nameAt(b.position), blockAt(b.position))) };
     },
     shelterDoor: (ctx, open) => {
       if (!memory.house || !insideRoom(bot.entity.position.floored())) return null;

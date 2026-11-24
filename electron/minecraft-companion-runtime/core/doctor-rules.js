@@ -1010,9 +1010,9 @@ function createDoctorRules() {
         D10: event.type === 'home_site_abandon_pending' ? detect('abandon:' + pointText(event.anchor), frame.at,
           'Abandoning house site with ' + event.builtWalls + '/' + event.walls + ' wall blocks in place (' + event.reason + ').', [frame])
           : event.type === 'site_abandoned' ? null : undefined,
-        D12: event.type === 'water_rescue_alert' ? detect(event.episode + ':' + event.reason, frame.at,
-          'Water rescue ' + event.reason + (event.method ? ' at ' + event.method : '') + '.', [frame])
-          : event.type === 'self_stuck_escaped' ? null : undefined,
+        D12: ['water_rescue_alert', 'pit_rescue_alert'].includes(event.type) ? detect(event.episode + ':' + event.reason, frame.at,
+          (event.type === 'water_rescue_alert' ? 'Water' : 'Pit') + ' rescue ' + event.reason + (event.method ? ' at ' + event.method : '') + '.', [frame])
+          : ['self_stuck_escaped', 'pit_rescue_escaped'].includes(event.type) ? null : undefined,
       };
     },
     reset() {
