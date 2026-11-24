@@ -14,25 +14,22 @@
 //   5. otherwise                      -> wait in the alcove, empty the chest
 // Only mob drops gained after the goal started count.
 
+const { findDeviceSite, LIQUID, isAir, isSolid, partMatches, guardDeviceCells, facingOf, standingAt, goToStand } = require('./device-site');
+const { posKey: key } = require('../blacklist');
 const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
-const { createMobFarm } = require('../blueprints/mobFarm');
 const { FACINGS } = require('../blueprints/cobbleGenerator');
+const { createMobFarm } = require('../blueprints/mobFarm');
 const { waitUntil, sleep, abortError } = require('../confirm');
 
-const LIQUID = new Set(['water', 'lava', 'bubble_column']);
-const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
 const DIGGABLE = /^(stone|andesite|diorite|granite|tuff|deepslate|cobbled_deepslate|cobblestone|dirt|grass_block|coarse_dirt|rooted_dirt|podzol|mycelium|clay|calcite|.*_ore)$/;
 const MOB_DROPS = new Set(['rotten_flesh', 'bone', 'arrow', 'gunpowder', 'string', 'spider_eye', 'ender_pearl']);
 // Mobs come one every few tens of seconds; the chest is emptied about as often.
 const COLLECT_WAIT_MS = 20000;
 
-const isAir = (block) => !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
-const isSolid = (block) => Boolean(block) && block.boundingBox === 'block' && !LIQUID.has(block.name) && !GRAVITY.test(block.name);
-const key = (p) => `${p.x},${p.y},${p.z}`;
 const v = (p) => new Vec3(p.x, p.y, p.z);
 
 function evaluateMobFarmSite(blockAt, anchor, facing) {
@@ -52,28 +49,7 @@ function evaluateMobFarmSite(blockAt, anchor, facing) {
 
 /** Nearest spot with solid rock all the way down; the anchor is the ground's top block above the hole. */
 function chooseMobFarmSite(blockAt, around, { radius = 6 } = {}) {
-  const origin = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
-  let best = null;
-  for (let dx = -radius; dx <= radius; dx += 2) {
-    for (let dz = -radius; dz <= radius; dz += 2) {
-      let y = null;
-      for (let top = origin.y + 3; top >= origin.y - 4; top -= 1) {
-        const block = blockAt(origin.x + dx, top, origin.z + dz);
-        if (!block) break;
-        if (isAir(block) || block.boundingBox === 'empty') continue;
-        y = top;
-        break;
-      }
-      if (y === null) continue;
-      for (const facing of Object.keys(FACINGS)) {
-        const farm = evaluateMobFarmSite(blockAt, { x: origin.x + dx, y, z: origin.z + dz }, facing);
-        if (!farm) continue;
-        const score = Math.hypot(dx, dz) + Math.abs(y + 1 - origin.y) * 2;
-        if (!best || score < best.score) best = { farm, score };
-      }
-    }
-  }
-  return best ? best.farm : null;
+  return findDeviceSite(blockAt, around, { radius, step: 2, soft: block => isAir(block) || block.boundingBox === 'empty', evaluate: evaluateMobFarmSite });
 }
 
 function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
@@ -81,27 +57,15 @@ function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
   if (!Number.isSafeInteger(count) || count < 1) throw new TypeError('count must be a positive integer');
   const memory = { farm: anchor ? createMobFarm(anchor, facing) : null, baseline: null, taken: 0, lastCheck: 0, guarded: false };
   const blockAt = (p) => bot.blockAt(v(p));
-  const facingOf = (block) => block?.getProperties?.().facing;
-  const partOk = (part) => {
-    const block = blockAt(part.position);
-    return block?.name === part.block && (!part.facing || facingOf(block) === part.facing);
-  };
+  const partOk = part => partMatches(blockAt, part);
   const drops = () => actions.countItems(bot, (n) => MOB_DROPS.has(n));
   const gained = () => (memory.baseline === null ? 0 : Math.max(0, drops() - memory.baseline));
   const dug = (p) => isAir(blockAt(p)) || LIQUID.has(blockAt(p)?.name);
 
-  function guardFarm() {
-    const movements = bot.pathfinder?.movements;
-    if (memory.guarded || !movements || !memory.farm) return;
-    memory.guarded = true;
-    const f = memory.farm;
-    const noBreak = new Set([...f.solid, ...f.parts.map((p) => p.position)].map(key));
-    // The channels' water carries anything in it into the hole: walk round them.
-    // (A prohibitive cost would make every route to the hole time out.)
-    const noStep = new Set(f.channels.map(key));
-    movements.exclusionAreasBreak.push((block) => (block?.position && noBreak.has(key(block.position)) ? 100 : 0));
-    movements.exclusionAreasStep.push((block) => (block?.position && noStep.has(key(block.position)) ? 20 : 0));
-  }
+  const guardFarm = () => memory.farm && guardDeviceCells(bot, memory, () => {
+    const { channels, solid, parts } = memory.farm;
+    return { step: channels, breaks: [...solid, ...parts.map(p => p.position)] };
+  }, 20);
 
   function inspect() {
     const f = memory.farm;
@@ -124,10 +88,7 @@ function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
   const feet = () => bot.entity.position.floored();
   const below = () => bot.entity.position.y < memory.farm.levels.feet - 1.5;
   const inColumn = (p) => feet().x === p.x && feet().z === p.z;
-  const inStand = () => {
-    const s = memory.farm.cells.stand;
-    return inColumn(s) && Math.abs(bot.entity.position.y - s.y) < 0.5;
-  };
+  const inStand = () => standingAt(bot, memory.farm.cells.stand);
 
   async function dig(ctx, p) {
     const block = blockAt(p);
@@ -200,11 +161,8 @@ function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
 
   async function collect(ctx) {
     const f = memory.farm;
-    if (!inStand()) {
-      const s = f.cells.stand;
-      const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(s.x, s.y, s.z), { timeoutMs: 15000, arrived: inStand });
-      if (!inStand()) return moved.ok ? { ok: false, reason: 'not_in_stand' } : moved;
-    }
+    const stood = await goToStand(bot, ctx, actions, f.cells.stand, 15000);
+    if (!stood.ok) return stood;
     const before = gained();
     const wait = memory.lastCheck + COLLECT_WAIT_MS - Date.now();
     if (wait > 0) await waitUntil(() => gained() > before, { timeoutMs: wait, signal: ctx.signal });
@@ -255,8 +213,7 @@ function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
         const c = f.cells;
         // The alcove is dug from the shaft's bottom; the rest from inside the alcove.
         if ((s.bottom === c.alcoveHead || s.bottom === c.stand) || inStand()) return dig(ctx, s.bottom);
-        const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(c.stand.x, c.stand.y, c.stand.z), { timeoutMs: 15000, arrived: inStand });
-        return inStand() ? { ok: true } : (moved.ok ? { ok: false, reason: 'not_in_stand' } : moved);
+        return goToStand(bot, ctx, actions, c.stand, 15000);
       }
       if (s.nextPart) {
         const part = s.nextPart;

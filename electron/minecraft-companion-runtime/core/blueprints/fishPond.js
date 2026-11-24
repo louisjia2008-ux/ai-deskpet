@@ -9,18 +9,10 @@
 //
 // The bot casts over the pond; the open sky above it keeps the catch rate up.
 
-const { FACINGS } = require('./cobbleGenerator');
+const { blueprintFrame } = require('./cobbleGenerator');
 
 function createFishPond(anchor, facing = 'east') {
-  if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isInteger)) {
-    throw new TypeError('anchor must have integer x, y, z (the ground block under the standing cell)');
-  }
-  const along = FACINGS[facing];
-  if (!along) throw new TypeError(`facing must be one of ${Object.keys(FACINGS).join(', ')}`);
-  const side = { x: -along.z, z: along.x };
-  const at = (a, dy, s = 0) => ({
-    x: anchor.x + along.x * a + side.x * s, y: anchor.y + dy, z: anchor.z + along.z * a + side.z * s,
-  });
+  const { along, side, at } = blueprintFrame(anchor, facing, 'the ground block under the standing cell');
   const pond = [at(1, 0), at(2, 0), at(1, 0, 1), at(2, 0, 1)];
   const water = [at(1, 0), at(2, 0, 1)];
   const rim = [at(0, 0), at(0, 0, 1), at(3, 0), at(3, 0, 1), at(1, 0, -1), at(2, 0, -1), at(1, 0, 2), at(2, 0, 2)];

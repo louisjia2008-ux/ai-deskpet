@@ -1001,6 +1001,16 @@ function bunkerSpot(bot, top) {
   return SHAFT_SOLID(bot.blockAt(top.offset(0, -4, 0)));
 }
 
+function shaftCentered(at, top) {
+  return Math.hypot(at.x - top.x - 0.5, at.z - top.z - 0.5) <= 0.2;
+}
+
+function bunkerOccupied(bot, { top }) {
+  const at = bot.entity?.position;
+  return Boolean(at && shaftCentered(at, top) && Math.abs(at.y - (top.y - 3)) <= 0.1
+    && at.y + (bot.entity.height || 1.8) <= top.y - 1);
+}
+
 async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}) {
   const hasSeal = () => bot.inventory.items().some((i) => sealMatch(i.name));
   const count = (name) => actions.countItems(bot, (n) => n === name);
@@ -1037,7 +1047,6 @@ async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}
     if (!moved.ok) return moved;
     top = bot.entity.position.floored();
     if (!bunkerSpot(bot, top)) return fail('bunker_spot_changed');
-    await actions.recentre(bot, ctx);
   }
   const short = !hasSeal() && Object.keys(SANDSTONE).find((sand) => sandIn(top, sand) === 3 && spareSand(top, sand));
   if (short) {
@@ -1047,24 +1056,34 @@ async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}
     if (!bot.entity.position.floored().equals(top)) {
       const back = await actions.goTo(bot, ctx, new goals.GoalBlock(top.x, top.y, top.z), { timeoutMs: 10000 });
       if (!back.ok) return back;
-      await actions.recentre(bot, ctx);
     }
   }
+  const at = () => bot.entity.position;
+  const settle = y => bot.entity.onGround === true && shaftCentered(at(), top) && Math.abs(at().y - y) <= 0.1;
+  const recenter = overEdge => actions.recentre(bot, ctx, { overEdge, accept: p => p.x === top.x && p.z === top.z });
+  await recenter(false);
+  if (!settle(top.y)) return fail('shelter_not_entered');
   for (let dy = 1; dy <= 3; dy += 1) {
     const below = bot.blockAt(top.offset(0, -dy, 0));
     const dug = await actions.digBlock(bot, ctx, below);
     if (!dug.ok) return dug;
-    await waitUntil(() => bot.entity.position.y <= top.y - dy + 0.1 && bot.entity.onGround, { timeoutMs: 2000, signal: ctx.signal });
+    const entered = () => waitUntil(() => settle(top.y - dy), { timeoutMs: 2000, signal: ctx.signal });
+    if (!await entered()) {
+      await recenter(true);
+      if (!await entered()) return fail('shelter_not_entered');
+    }
   }
   if (!hasSeal()) await waitUntil(() => hasSeal() || Object.keys(SANDSTONE).some((sand) => count(sand) >= 4), { timeoutMs: 2000, signal: ctx.signal });
   if (!hasSeal()) await craftShelterSeal(bot, ctx, 1);
   if (!hasSeal()) return fail('no_seal_block');
   // Seal the old ground block above the head, resting on the shaft wall beside it.
   const seal = top.offset(0, -1, 0);
+  const bunker = { top: { x: top.x, y: top.y, z: top.z } };
+  if (!bunkerOccupied(bot, bunker)) return fail('shelter_not_entered');
   const sealed = await placeAt(bot, ctx, seal, 'seal',
     { faces: [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)] });
   if (!sealed.ok) return sealed;
-  return { ok: true, bunker: { top: { x: top.x, y: top.y, z: top.z } } };
+  return bunkerOccupied(bot, bunker) ? { ok: true, bunker } : fail('shelter_not_entered');
 }
 
 /**
@@ -1144,5 +1163,5 @@ async function useBed(bot, ctx, { position }) {
 
 const skills = { gatherOne, craft, placeAt, clearCoverAt, pourLiquid, scoopLiquid, smelt, huntOne, pickBerries, explore, useChest,
   storeItems, storeInChest, takeItems, fillBucket, useBed, digIn, digOut, prepareShelterSeal, tossStacks };
-module.exports = { isFluidSource, sheepWool, shelterSealCount, inventoryCounts, entityInside, aimAtFace };
+module.exports = { isFluidSource, sheepWool, shelterSealCount, inventoryCounts, entityInside, aimAtFace, bunkerOccupied };
 for (const [name, execute] of Object.entries(skills)) module.exports[name] = settleAction(execute, name === 'digOut' ? 'surface' : undefined);

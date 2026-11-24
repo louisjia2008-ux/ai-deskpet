@@ -20,26 +20,23 @@
 // The villagers still have to sleep in their beds once before they call golems:
 // the farm starts working after its first night.
 
+const { findDeviceSite, LIQUID, isAir, isSolid, guardDeviceCells, standingAt, goToStand } = require('./device-site');
+const { posKey: key } = require('../blacklist');
 const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
-const { createIronFarm } = require('../blueprints/ironFarm');
 const { FACINGS } = require('../blueprints/cobbleGenerator');
+const { createIronFarm } = require('../blueprints/ironFarm');
 const { sleep, waitUntil } = require('../confirm');
 
-const LIQUID = new Set(['water', 'lava', 'bubble_column']);
-const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
 const DIGGABLE = /^(stone|andesite|diorite|granite|tuff|deepslate|cobbled_deepslate|cobblestone|dirt|grass_block|coarse_dirt|rooted_dirt|podzol|mycelium|clay|calcite|.*_ore)$/;
 const DROPS = new Set(['iron_ingot', 'poppy']);
 const VILLAGERS = 3;
 // Golems come about one a minute once the villagers have slept.
 const WAIT_MS = 15000;
 
-const isAir = (block) => !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
-const isSolid = (block) => Boolean(block) && block.boundingBox === 'block' && !LIQUID.has(block.name) && !GRAVITY.test(block.name);
-const key = (p) => `${p.x},${p.y},${p.z}`;
 const v = (p) => new Vec3(p.x, p.y, p.z);
 const droppedName = (entity) => { try { return entity.getDroppedItem?.()?.name || null; } catch { return null; } };
 
@@ -56,28 +53,7 @@ function evaluateIronFarmSite(blockAt, anchor, facing) {
 
 /** Nearest spot with solid rock under it; the anchor is the ground's top block above the corridor. */
 function chooseIronFarmSite(blockAt, around, { radius = 6 } = {}) {
-  const origin = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
-  let best = null;
-  for (let dx = -radius; dx <= radius; dx += 2) {
-    for (let dz = -radius; dz <= radius; dz += 2) {
-      let y = null;
-      for (let top = origin.y + 3; top >= origin.y - 4; top -= 1) {
-        const block = blockAt(origin.x + dx, top, origin.z + dz);
-        if (!block) break;
-        if (isAir(block) || block.boundingBox === 'empty') continue;
-        y = top;
-        break;
-      }
-      if (y === null) continue;
-      for (const facing of Object.keys(FACINGS)) {
-        const farm = evaluateIronFarmSite(blockAt, { x: origin.x + dx, y, z: origin.z + dz }, facing);
-        if (!farm) continue;
-        const score = Math.hypot(dx, dz) + Math.abs(y + 1 - origin.y) * 2;
-        if (!best || score < best.score) best = { farm, score };
-      }
-    }
-  }
-  return best ? best.farm : null;
+  return findDeviceSite(blockAt, around, { radius, step: 2, soft: block => isAir(block) || block.boundingBox === 'empty', evaluate: evaluateIronFarmSite });
 }
 
 function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, villagersBy = 'eggs',
@@ -117,17 +93,10 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
   const railOk = (r) => blockAt(r.position)?.name === r.block || (isEntrance(r.position) && (closed() || memory.closing));
   const powered = () => blockAt(memory.farm.cells.power)?.name === 'redstone_block';
 
-  function guardFarm() {
-    const movements = bot.pathfinder?.movements;
-    if (memory.guarded || !movements || !memory.farm) return;
-    memory.guarded = true;
-    const f = memory.farm;
-    const noBreak = new Set([...f.solid, ...f.parts.map((p) => p.position), f.cells.seal, ...rails().map((r) => r.position)].map(key));
-    // Never into the zombie's cell or a lava cell, and keep out of the shafts.
-    const noStep = new Set([...f.zombie, ...f.lava, ...f.shafts].map(key));
-    movements.exclusionAreasBreak.push((block) => (block?.position && noBreak.has(key(block.position)) ? 100 : 0));
-    movements.exclusionAreasStep.push((block) => (block?.position && noStep.has(key(block.position)) ? 100 : 0));
-  }
+  const guardFarm = () => memory.farm && guardDeviceCells(bot, memory, () => {
+    const { zombie, lava, shafts, solid, parts, cells } = memory.farm;
+    return { step: [...zombie, ...lava, ...shafts], breaks: [...solid, ...parts.map(p => p.position), cells.seal, ...rails().map(r => r.position)] };
+  }, 100);
 
   function inspect() {
     const f = memory.farm;
@@ -144,14 +113,9 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
   }
 
   const feet = () => bot.entity.position.floored();
-  const standingOn = (p) => feet().x === p.x && feet().z === p.z && Math.abs(bot.entity.position.y - p.y) < 0.6;
+  const standingOn = p => standingAt(bot, p, 0.6);
 
-  async function goStand(ctx, p, timeoutMs = 30000) {
-    if (standingOn(p)) return { ok: true };
-    const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(p.x, p.y, p.z), { timeoutMs, arrived: () => standingOn(p) });
-    if (standingOn(p)) return { ok: true };
-    return moved.ok ? { ok: false, reason: 'not_in_stand' } : moved;
-  }
+  const goStand = (ctx, p, timeoutMs = 30000) => goToStand(bot, ctx, actions, p, timeoutMs, 0.6);
 
   // A cart breaks once its damage passes 40; each hit adds ten times its
   // damage and it heals one a tick. Changing items resets the attack charge, so

@@ -10,25 +10,19 @@
 //   4. otherwise                -> stand on the edge, cast and wait for a bite
 // A catch counts once the reeled-in item is in the inventory.
 
+const { findDeviceSite, LIQUID, isAir, isSoft, isSolid, goToStand } = require('./device-site');
 const { Vec3 } = require('vec3');
-const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const { createFishPond } = require('../blueprints/fishPond');
-const { FACINGS } = require('../blueprints/cobbleGenerator');
 const { waitUntil, runCancellable } = require('../confirm');
 
-const LIQUID = new Set(['water', 'lava', 'bubble_column']);
-const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
 // A bite comes 5 to 30 s after the bobber lands (faster with Lure).
 const BITE_TIMEOUT_MS = 45000;
 
 // Pond cells are dug out: only plain soil or stone. Soil picked up late is never a catch.
 const DIGGABLE = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'mud', 'moss_block',
   'stone', 'andesite', 'diorite', 'granite', 'cobblestone', 'clay', 'terracotta', 'deepslate', 'tuff']);
-const isAir = (block) => !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
-const isSoft = (block) => isAir(block) || (block.boundingBox === 'empty' && !LIQUID.has(block.name));
-const isSolid = (block) => Boolean(block) && block.boundingBox === 'block' && !LIQUID.has(block.name) && !GRAVITY.test(block.name);
 const v = (p) => new Vec3(p.x, p.y, p.z);
 
 function evaluatePondSite(blockAt, anchor, facing) {
@@ -42,28 +36,7 @@ function evaluatePondSite(blockAt, anchor, facing) {
 
 /** Nearest flat spot; the anchor is the ground block the bot stands on. */
 function choosePondSite(blockAt, around, { radius = 8 } = {}) {
-  const origin = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
-  let best = null;
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      let y = null;
-      for (let top = origin.y + 3; top >= origin.y - 4; top -= 1) {
-        const block = blockAt(origin.x + dx, top, origin.z + dz);
-        if (!block) break;
-        if (isSoft(block)) continue;
-        y = top;
-        break;
-      }
-      if (y === null) continue;
-      for (const facing of Object.keys(FACINGS)) {
-        const pond = evaluatePondSite(blockAt, { x: origin.x + dx, y, z: origin.z + dz }, facing);
-        if (!pond) continue;
-        const score = Math.hypot(dx, dz) + Math.abs(y + 1 - origin.y) * 2;
-        if (!best || score < best.score) best = { pond, score };
-      }
-    }
-  }
-  return best ? best.pond : null;
+  return findDeviceSite(blockAt, around, { radius, evaluate: evaluatePondSite });
 }
 
 function createFishingGoal({ bot, anchor = null, facing = 'east', count = 5,
@@ -72,11 +45,7 @@ function createFishingGoal({ bot, anchor = null, facing = 'east', count = 5,
   const memory = { pond: anchor ? createFishPond(anchor, facing) : null, catches: 0, casts: 0, caught: {} };
   const blockAt = (p) => bot.blockAt(v(p));
   const isSource = (p) => skills.isFluidSource(blockAt(p), 'water');
-  const inStand = () => {
-    const s = memory.pond.cells.stand;
-    const at = bot.entity.position;
-    return Math.floor(at.x) === s.x && Math.floor(at.z) === s.z && Math.abs(at.y - s.y) < 0.5;
-  };
+
   const inspect = () => {
     const p = memory.pond;
     return {
@@ -86,13 +55,7 @@ function createFishingGoal({ bot, anchor = null, facing = 'east', count = 5,
     };
   };
 
-  async function goStand(ctx) {
-    if (inStand()) return { ok: true };
-    const s = memory.pond.cells.stand;
-    const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(s.x, s.y, s.z), { timeoutMs: 15000, arrived: inStand });
-    if (inStand()) return { ok: true };
-    return moved.ok ? { ok: false, reason: 'not_in_stand' } : moved;
-  }
+  const goStand = ctx => goToStand(bot, ctx, actions, memory.pond.cells.stand, 15000);
 
   async function cast(ctx) {
     const rod = bot.inventory.items().find((item) => item.name === 'fishing_rod');

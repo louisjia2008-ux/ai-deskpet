@@ -100,22 +100,23 @@ function underground(bot) {
 }
 
 // Centre the body before a first diagonal can catch a wall corner.
-async function recentre(bot, ctx, { accept = () => true } = {}) {
+async function recentre(bot, ctx, { accept = () => true, overEdge = false } = {}) {
   if (ctx.signal?.aborted) throw abortError(ctx.signal);
   const feet = bot.entity.position.floored();
   const supported = () => bot.entity.onGround === true
-    && bot.blockAt(feet.offset(0, -1, 0))?.boundingBox === 'block'
+    && (overEdge || bot.blockAt(feet.offset(0, -1, 0))?.boundingBox === 'block')
     && bot.entity.position.floored().equals(feet) && accept(feet, bot.entity.position);
-  // Swimming, ladders and a body already falling are the native planner's.
-  if (!supported()) return;
   const centre = feet.offset(0.5, 0, 0.5);
   const distance = () => Math.hypot(bot.entity.position.x - centre.x, bot.entity.position.z - centre.z);
+  // Swimming, ladders and a body already falling are the native planner's.
+  if (distance() <= 0.15 || !supported()) return;
   const previousSneak = Boolean(bot.controlState?.sneak);
   const previousCompanionSneaking = bot.companionSneaking;
   try {
     bot.setControlState('sprint', false);
-    bot.companionSneaking = true;
-    bot.setControlState('sneak', true);
+    // At a confirmed shaft edge, sneaking would prevent the intended fall.
+    bot.companionSneaking = !overEdge;
+    bot.setControlState('sneak', !overEdge);
     for (let i = 0; i < 30 && distance() > 0.15 && supported(); i += 1) {
       if (ctx.signal?.aborted) throw abortError(ctx.signal);
       await bot.lookAt(centre.offset(0, bot.entity.position.y - centre.y + 1.6, 0), true);

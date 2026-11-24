@@ -1005,6 +1005,9 @@ function createDoctorRules() {
         D7: idleDetection,
         D8: switches.ingest(event, frame),
         D9: frequency.ingest(event, frame),
+        D10: event.type === 'home_site_abandon_pending' ? detect('abandon:' + pointText(event.anchor), frame.at,
+          'Abandoning house site with ' + event.builtWalls + '/' + event.walls + ' wall blocks in place (' + event.reason + ').', [frame])
+          : event.type === 'site_abandoned' ? null : undefined,
       };
     },
     reset() {

@@ -39,7 +39,7 @@
 // in the slit block the villagers' view of the zombie; a bottom slab does not,
 // and keeps even a baby zombie out.
 
-const { FACINGS, DIRECTION_NAMES } = require('./cobbleGenerator');
+const { blueprintFrame, DIRECTION_NAMES } = require('./cobbleGenerator');
 
 // The ground's top layer to the villagers' feet. Villagers notice an iron
 // golem within 16 blocks every way, and one seen lately stops them calling
@@ -49,15 +49,10 @@ const TUNNEL = 10; // tunnel cells from the corridor; the stairs start beyond
 const SHAFTS = [-3, -5]; // lane offsets of the golem shafts beside the tunnel
 
 function createIronFarm(anchor, facing = 'east') {
-  if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isInteger)) {
-    throw new TypeError('anchor must have integer x, y, z (the ground\'s top block above the corridor\'s first cell)');
-  }
-  const along = FACINGS[facing];
-  if (!along) throw new TypeError(`facing must be one of ${Object.keys(FACINGS).join(', ')}`);
-  const lane = { x: -along.z, z: along.x };
+  const { along, side: lane, at: offset } = blueprintFrame(anchor, facing, 'the ground\'s top block above the corridor\'s first cell');
   const g = anchor.y;
   const Y = g - DEPTH;
-  const at = (a, y, l) => ({ x: anchor.x + along.x * a + lane.x * l, y, z: anchor.z + along.z * a + lane.z * l });
+  const at = (a, y, l) => offset(a, y - g, l);
   const name = (d) => DIRECTION_NAMES[`${d.x},${d.z}`];
 
   // Stairs: from the surface down to the tunnel's far end, each step three

@@ -66,7 +66,11 @@ test('with no house and no task the bot digs in where it stands at night', async
   const dug = [];
   const rest = createNightRest({ bot, home: () => ({ bed: null, centre: null }),
     actions: { underground: () => false },
-    skills: { digIn: async () => { dug.push(true); return { ok: true, bunker: { top: { x: 5, y: 70, z: 5 } } }; } } });
+    skills: { digIn: async () => {
+      dug.push(true);
+      bot.entity.position = new Vec3(5.5, 67, 5.5);
+      return { ok: true, bunker: { top: { x: 5, y: 70, z: 5 } } };
+    } } });
   assert.equal(rest.want({ isDay: true }), 0);
   assert.equal(rest.want({ isDay: false }), 0.8);
   const result = await rest.run({ perceive: () => ({ isDay: false }), record: () => {}, signal: new AbortController().signal });
@@ -281,7 +285,11 @@ test('a bot dug in only for want of a task digs out when it is given one', async
   const dug = { in: 0, out: 0 };
   const rest = createNightRest({ bot, home: () => (task ? null : { bed: null, centre: null }),
     actions: { underground: () => false },
-    skills: { digIn: async () => { dug.in += 1; return { ok: true, bunker: { top: { x: 5, y: 70, z: 5 } } }; },
+    skills: { digIn: async () => {
+      dug.in += 1;
+      bot.entity.position = new Vec3(5.5, 67, 5.5);
+      return { ok: true, bunker: { top: { x: 5, y: 70, z: 5 } } };
+    },
       digOut: async () => { dug.out += 1; return { ok: true }; } } });
   const ctx = { perceive: () => ({ isDay: false }), record: () => {}, signal: new AbortController().signal };
   await rest.run(ctx);

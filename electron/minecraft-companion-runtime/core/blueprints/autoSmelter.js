@@ -14,15 +14,10 @@
 // against, so its facing comes from that click. Chests, hoppers and furnaces
 // open when clicked, so parts placed against them are placed sneaking.
 
-const { FACINGS, DIRECTION_NAMES } = require('./cobbleGenerator');
+const { blueprintFrame, DIRECTION_NAMES } = require('./cobbleGenerator');
 
 function createAutoSmelter(anchor, facing = 'east') {
-  if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isInteger)) {
-    throw new TypeError('anchor must have integer x, y, z (the furnace cell, in the ground\'s top layer)');
-  }
-  const along = FACINGS[facing];
-  if (!along) throw new TypeError(`facing must be one of ${Object.keys(FACINGS).join(', ')}`);
-  const at = (a, dy) => ({ x: anchor.x + along.x * a, y: anchor.y + dy, z: anchor.z + along.z * a });
+  const { along, at } = blueprintFrame(anchor, facing, 'the furnace cell, in the ground\'s top layer');
   const forward = DIRECTION_NAMES[`${along.x},${along.z}`];
 
   const cells = {

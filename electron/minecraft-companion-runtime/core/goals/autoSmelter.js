@@ -12,28 +12,23 @@
 //   6. otherwise                -> wait for the furnace, take the output chest's contents
 // The only memory kept across runs is the site and what was taken out.
 
+const { findDeviceSite, isAir, isSoft, partMatches, isSolid, guardDeviceCells, facingOf } = require('./device-site');
+const { posKey: key } = require('../blacklist');
 const { factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const { createAutoSmelter } = require('../blueprints/autoSmelter');
-const { FACINGS } = require('../blueprints/cobbleGenerator');
 const { sleep } = require('../confirm');
 const { deviceTargets } = require('../target-recovery');
 
-const LIQUID = new Set(['water', 'lava', 'bubble_column']);
-const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
 const DIGGABLE = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'stone',
   'andesite', 'diorite', 'granite', 'cobblestone', 'cobbled_deepslate', 'deepslate', 'tuff', 'clay', 'mud',
   'terracotta', 'moss_block', 'netherrack']);
 // One item smelts in 10 s; the hoppers move one item every 0.4 s.
 const SMELT_WAIT_MS = 11000;
 
-const isAir = (block) => !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
-const isSoft = (block) => isAir(block) || (block.boundingBox === 'empty' && !LIQUID.has(block.name));
-const isFloor = (block) => Boolean(block) && block.boundingBox === 'block' && !LIQUID.has(block.name) && !GRAVITY.test(block.name);
-const key = (p) => `${p.x},${p.y},${p.z}`;
 const v = (p) => new Vec3(p.x, p.y, p.z);
 
 function evaluateSmelterSite(blockAt, anchor, facing) {
@@ -43,36 +38,18 @@ function evaluateSmelterSite(blockAt, anchor, facing) {
     const block = at(p);
     if (!block || !DIGGABLE.has(block.name)) return null;
   }
-  for (const p of device.floor) if (!isFloor(at(p))) return null;
+  for (const p of device.floor) if (!isSolid(at(p))) return null;
   for (const p of device.clearAbove) if (!isSoft(at(p))) return null;
   return device;
 }
 
 /** Nearest buildable spot; the anchor (furnace cell) is the top solid block of its column. */
 function chooseSmelterSite(blockAt, around, { radius = 10, avoid = null } = {}) {
-  const origin = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
-  let best = null;
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      let y = null;
-      for (let top = origin.y + 3; top >= origin.y - 4; top -= 1) {
-        const block = blockAt(origin.x + dx, top, origin.z + dz);
-        if (!block) break;
-        if (isSoft(block)) continue;
-        y = top;
-        break;
-      }
-      if (y === null) continue;
-      for (const facing of Object.keys(FACINGS)) {
-        const device = evaluateSmelterSite(blockAt, { x: origin.x + dx, y, z: origin.z + dz }, facing);
-        if (!device || (avoid && [...device.dig, ...device.floor, ...device.clearAbove, ...device.parts.map((p) => p.position)].some(avoid))) continue;
-        // Not right under the bot: it would have to dig the ground it stands on.
-        const score = Math.hypot(dx, dz) + Math.abs(y + 1 - origin.y) * 2 + (Math.hypot(dx, dz) < 3 ? 6 : 0);
-        if (!best || score < best.score) best = { device, score };
-      }
-    }
-  }
-  return best ? best.device : null;
+  return findDeviceSite(blockAt, around, { radius, avoidFeet: true, evaluate(read, anchor, facing) {
+    const device = evaluateSmelterSite(read, anchor, facing);
+    if (!device || (avoid && [...device.dig, ...device.floor, ...device.clearAbove, ...device.parts.map(p => p.position)].some(avoid))) return null;
+    return device;
+  } });
 }
 
 function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'raw_iron', output = 'iron_ingot',
@@ -90,22 +67,12 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
   // Main inventory only: storeItems deposits from there, not from the off-hand.
   const have = (name) => bot.inventory.items().filter((i) => i.name === name).reduce((sum, i) => sum + i.count, 0);
 
-  function guardDevice() {
-    const movements = bot.pathfinder?.movements;
-    if (memory.guarded || !movements || !memory.device) return;
-    memory.guarded = true;
-    const d = memory.device;
-    const noStep = new Set([...d.dig, ...d.parts.map((p) => p.position)].map(key));
-    const noBreak = new Set([...d.parts.map((p) => p.position), ...d.floor].map(key));
-    movements.exclusionAreasStep.push((block) => (block?.position && noStep.has(key(block.position)) ? 1000 : 0));
-    movements.exclusionAreasBreak.push((block) => (block?.position && noBreak.has(key(block.position)) ? 100 : 0));
-  }
+  const guardDevice = () => memory.device && guardDeviceCells(bot, memory, () => {
+    const { dig, parts, floor } = memory.device, cells = parts.map(p => p.position);
+    return { step: [...dig, ...cells], breaks: [...cells, ...floor] };
+  });
 
-  const facingOf = (block) => block?.getProperties?.().facing;
-  const partOk = (part) => {
-    const block = blockAt(part.position);
-    return block?.name === part.block && (!part.facing || facingOf(block) === part.facing);
-  };
+  const partOk = part => partMatches(blockAt, part);
 
   // Feet in the pit, or on ground about to be dug out.
   function overPit() {

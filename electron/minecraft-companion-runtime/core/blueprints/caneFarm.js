@@ -17,18 +17,10 @@
 // points where the player looks. Each part names the cell to stand in (`stand`,
 // three blocks away on the right side) so the look is nearly level.
 
-const { FACINGS, DIRECTION_NAMES } = require('./cobbleGenerator');
+const { blueprintFrame, DIRECTION_NAMES } = require('./cobbleGenerator');
 
 function createCaneFarm(anchor, facing = 'east') {
-  if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isInteger)) {
-    throw new TypeError('anchor must have integer x, y, z (the cane\'s first cell, in the ground\'s top layer)');
-  }
-  const along = FACINGS[facing];
-  if (!along) throw new TypeError(`facing must be one of ${Object.keys(FACINGS).join(', ')}`);
-  const side = { x: -along.z, z: along.x };
-  const at = (a, dy, s = 0) => ({
-    x: anchor.x + along.x * a + side.x * s, y: anchor.y + dy, z: anchor.z + along.z * a + side.z * s,
-  });
+  const { along, at } = blueprintFrame(anchor, facing, 'the cane\'s first cell, in the ground\'s top layer');
   const back = DIRECTION_NAMES[`${-along.x},${-along.z}`]; // from the piston toward the cane
   // Dirt turns into grass next to grass: either is a finished filler block.
   const soil = ['dirt', 'grass_block'];

@@ -23,19 +23,23 @@ const FACINGS = {
 };
 const DIRECTION_NAMES = { '1,0': 'east', '-1,0': 'west', '0,1': 'south', '0,-1': 'north' };
 
-function createCobbleGenerator(anchor, facing = 'east', { collector = false } = {}) {
+function blueprintFrame(anchor, facing, description, left = false) {
   if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isInteger)) {
-    throw new TypeError('anchor must have integer x, y, z (the lava cell)');
+    throw new TypeError(`anchor must have integer x, y, z (${description})`);
   }
   const along = FACINGS[facing];
   if (!along) throw new TypeError(`facing must be one of ${Object.keys(FACINGS).join(', ')}`);
-  // The standing cell is to the right of the direction of travel.
-  const side = { x: -along.z, z: along.x };
-  const at = (a, dy, s = 0) => ({
-    x: anchor.x + along.x * a + side.x * s,
+  const side = left ? { x: along.z, z: -along.x } : { x: -along.z, z: along.x };
+  const at = (distance, dy, offset = 0) => ({
+    x: anchor.x + along.x * distance + side.x * offset,
     y: anchor.y + dy,
-    z: anchor.z + along.z * a + side.z * s,
+    z: anchor.z + along.z * distance + side.z * offset,
   });
+  return { along, side, at };
+}
+
+function createCobbleGenerator(anchor, facing = 'east', { collector = false } = {}) {
+  const { along, side, at } = blueprintFrame(anchor, facing, 'the lava cell');
 
   const cells = {
     lava: at(0, 0),
@@ -84,4 +88,4 @@ function createCobbleGenerator(anchor, facing = 'east', { collector = false } = 
   return { kind: 'cobble_generator', anchor: { ...anchor }, facing, collector, cells, open, parts, seal, clearAbove };
 }
 
-module.exports = { createCobbleGenerator, FACINGS, DIRECTION_NAMES };
+module.exports = { createCobbleGenerator, FACINGS, DIRECTION_NAMES, blueprintFrame };

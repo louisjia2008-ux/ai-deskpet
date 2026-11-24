@@ -12,28 +12,26 @@
 // The only memory kept across runs is the site and the harvest count, which
 // counts only cobblestone seen regenerating in C and arriving in the inventory.
 
+const { findDeviceSite, LIQUID, isAir, isSoft, partMatches, guardDeviceCells, facingOf } = require('./device-site');
+const { posKey: key } = require('../blacklist');
 const { factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
-const { createCobbleGenerator, FACINGS } = require('../blueprints/cobbleGenerator');
+const { createCobbleGenerator } = require('../blueprints/cobbleGenerator');
 const { sleep, waitUntil } = require('../confirm');
 const { deviceTargets, clearTerrain } = require('../target-recovery');
 const { stableSolid } = require('../materials');
 
-const LIQUID = new Set(['water', 'lava', 'bubble_column']);
 const DIGGABLE = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'stone',
   'andesite', 'diorite', 'granite', 'cobblestone', 'cobbled_deepslate', 'deepslate', 'tuff', 'clay', 'mud',
   'terracotta', 'moss_block', 'netherrack']);
 const REGENERATE_MS = 5000;
 
-const isAir = (block) => !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
-const isSoft = (block) => isAir(block) || (block.boundingBox === 'empty' && !LIQUID.has(block.name));
 // Lava burns flammable neighbours away (with fire ticks on), opening the seal.
 const FLAMMABLE = /(_log|_wood|_stem|_hyphae|_leaves|_planks|_wool|_carpet|_slab|_stairs|_fence|bookshelf|hay_block|scaffolding|tnt|bamboo|dried_kelp_block|target|beehive|bee_nest|moss_block|coal_block)$/;
 const isSeal = (block) => stableSolid(block) && !FLAMMABLE.test(block.name);
-const key = (p) => `${p.x},${p.y},${p.z}`;
 
 /**
  * Scores a generator at `anchor` facing `facing`; null when it cannot be built
@@ -64,30 +62,11 @@ function evaluateGeneratorSite(blockAt, anchor, facing, options = {}) {
 
 /** Nearest buildable spot around `around`; `avoid(p)` rules out cells that belong to something else (the house). */
 function chooseGeneratorSite(blockAt, around, { radius = 10, collector = false, avoid = null } = {}) {
-  const origin = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
-  let best = null;
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      // The lava cell is the top solid block of its column.
-      let y = null;
-      for (let top = origin.y + 3; top >= origin.y - 4; top -= 1) {
-        const block = blockAt(origin.x + dx, top, origin.z + dz);
-        if (!block) break;
-        if (isSoft(block)) continue;
-        y = top;
-        break;
-      }
-      if (y === null) continue;
-      for (const facing of Object.keys(FACINGS)) {
-        const site = evaluateGeneratorSite(blockAt, { x: origin.x + dx, y, z: origin.z + dz }, facing, { collector });
-        if (!site || (avoid && footprint(site.device).some(avoid))) continue;
-        // Keep a clear gap from the bot's own feet: it must not stand in a cell to dig.
-        const score = site.fixes * 4 + Math.hypot(dx, dz) + Math.abs(y + 1 - origin.y) * 2 + (Math.hypot(dx, dz) < 3 ? 6 : 0);
-        if (!best || score < best.score) best = { ...site, score };
-      }
-    }
-  }
-  return best ? best.device : null;
+  const site = findDeviceSite(blockAt, around, { radius, avoidFeet: true, cost: value => value.fixes * 4, evaluate(read, anchor, facing) {
+    const value = evaluateGeneratorSite(read, anchor, facing, { collector });
+    return value && !(avoid && footprint(value.device).some(avoid)) ? value : null;
+  } });
+  return site?.device ?? null;
 }
 
 // Every cell the device digs, seals or keeps clear.
@@ -122,37 +101,20 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
 
   // The pathfinder must never walk into the liquid cells or C (lava flows in
   // behind a mined cobblestone), nor break the seal while routing.
-  function guardDevice() {
-    const movements = bot.pathfinder?.movements;
-    if (memory.guarded || !movements || !memory.device) return;
-    memory.guarded = true;
-    const d = memory.device;
-    // Standing on top of L, C, P or W is as bad: digging there drops the bot in.
-    const above = (p) => ({ x: p.x, y: p.y + 1, z: p.z });
-    const noStep = new Set(liquidCells().flatMap((p) => [p, above(p)]).map(key));
-    const noBreak = new Set([...d.seal, d.cells.cobble].map(key));
-    // Until the collector is in, S and the cells under it are holes to dig, not
-    // places to stand: digging S's floor from S drops the bot into a 1x1 shaft.
-    const collectorCells = new Set(d.parts.flatMap((part) => [part.position, above(part.position)]).map(key));
-    movements.exclusionAreasStep.push((block) => {
-      if (!block?.position) return 0;
-      const k = key(block.position);
-      if (noStep.has(k)) return 1000;
-      return collectorCells.has(k) && d.parts.some((part) => !partOk(part)) ? 1000 : 0;
-    });
-    movements.exclusionAreasBreak.push((block) => (block?.position && noBreak.has(key(block.position)) ? 100 : 0));
-  }
+  const guardDevice = () => memory.device && guardDeviceCells(bot, memory, () => {
+    const { seal, cells, parts } = memory.device;
+    const withAbove = p => [p, { ...p, y: p.y + 1 }];
+    const collector = new Set(parts.flatMap(part => withAbove(part.position)).map(key));
+    return { step: liquidCells().flatMap(withAbove), breaks: [...seal, cells.cobble],
+      extra: position => collector.has(key(position)) && parts.some(part => !partOk(part)) };
+  });
 
   const liquidCells = () => {
     const c = memory.device.cells;
     return [c.lava, c.cobble, c.pitTop, c.pitBottom, c.water];
   };
 
-  const facingOf = (block) => block?.getProperties?.().facing;
-  const partOk = (part) => {
-    const block = blockAt(part.position);
-    return block?.name === part.block && (!part.facing || facingOf(block) === part.facing);
-  };
+  const partOk = part => partMatches(blockAt, part);
 
   // In one of L, C, P or W, or standing on one (and about to dig it out), or
   // above a collector part still to be dug out or placed.

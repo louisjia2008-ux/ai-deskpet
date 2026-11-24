@@ -435,7 +435,7 @@ function createDirector({
     },
     ownsGoal: () => own !== null,
     isEnabled: () => enabled,
-    noteDeath(cause, { at = now(), dimension = null, position = null, stage = own?.stage, card = own?.id } = {}) {
+    noteDeath(cause, { at = now(), dimension = null, position = null, night = false, stage = own?.stage, card = own?.id } = {}) {
       const cutoff = at - 24 * 60 * 60_000;
       const deaths = (memory.routeDeaths || []).filter((death) => death.at >= cutoff);
       const latest = deaths.at(-1);
@@ -443,12 +443,13 @@ function createDirector({
         if (cause && cause !== latest.cause) {
           latest.cause = cause;
           emit('autonomy_death_cause', { deathAt: at, cause, card: latest.card });
+          if (!latest.expedition && latest.dimension === 'overworld' && !playerActive) onOverworldDeath(latest, deaths, memory, true);
         }
         return false;
       }
       const definition = cards.find((c) => c.id === card);
       const expedition = Boolean(definition?.expedition && !definition.safeReturn);
-      const death = { at, cause: cause || null, dimension, position, stage: stage ?? null, card: card ?? null, expedition };
+      const death = { at, cause: cause || null, dimension, position, night, stage: stage ?? null, card: card ?? null, expedition };
       deaths.push(death);
       memory.routeDeaths = deaths.slice(-128);
       emit('autonomy_death', death);

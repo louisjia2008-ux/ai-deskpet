@@ -1,7 +1,7 @@
 'use strict';
 
 const RESCUE = new Set(['home_escape', 'unstick', 'surface', 'pit', 'mine_retreat', 'mine_hazard',
-  'breathe', 'unbury', 'leave_lava', 'leave_fire', 'leave_danger', 'leave_breath', 'escape']);
+  'breathe', 'unbury', 'leave_lava', 'leave_fire', 'leave_contact', 'leave_danger', 'leave_breath', 'escape']);
 const isRescueBehavior = name => RESCUE.has(name);
 const FAILURE_WINDOW_MS = 60_000, FAILURE_LIMIT = 20; // Circuit breaker for otherwise unbounded retries.
 
@@ -50,14 +50,14 @@ const reasons = Object.freeze({
     shore_route_unsafe shulker_survived site_changed site_rejected spawner_unreachable spiral_place_failed spiral_step_failed
     station_out_of_reach survey_adjacent_fluid survey_cross_boundary_tree survey_falling_column
     survey_outside_attachment survey_site_changed table_missing target_excluded target_lost target_unreachable timeout
-    target_needs_breath target_near_lava target_near_fire target_causes_suffocation
+    target_needs_breath target_near_lava target_near_fire target_causes_suffocation target_near_contact_hazard contact_hazard
     tower_not_reached tower_short unconfirmed_cave_at_ore undiggable unknown_block unsafe_excavation unsafe_full_floor
     unreachable unsafe_stance unsafe_support_dig villager_in_entrance villager_moved villager_not_aboard walk_blocked
     worksite_unreachable
   `,
   // Body or starting position prevents making the attempt.
   start: `
-    bridge_guard_body bridge_not_grounded bridge_origin_changed cage_climb_short edge_in_flight escape_step_unconfirmed
+    bridge_guard_body bridge_not_grounded bridge_origin_changed cage_climb_short contact_exit_unavailable edge_in_flight escape_step_unconfirmed
     food_retreat health_retreat home_access_repair_unconfirmed home_entry_obstructed
     home_entry_support_missing home_escape_unconfirmed home_exit_blocked home_origin_unrecovered in_lava
     interior_cut_off log_scout_trapped log_scout_water_entered log_water_no_shore

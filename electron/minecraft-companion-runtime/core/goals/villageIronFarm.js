@@ -21,6 +21,7 @@
 // The line starts at the rail on the stairs' top and only ever grows from its
 // end, so each new rail joins the previous one and curves shape themselves.
 
+const { goToStand } = require('./device-site');
 const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
@@ -243,12 +244,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
     return out;
   }
 
-  async function goStand(ctx, p, timeoutMs = 20000) {
-    const there = () => feet().x === p.x && feet().z === p.z && Math.abs(bot.entity.position.y - p.y) < 0.6;
-    if (there()) return { ok: true };
-    const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(p.x, p.y, p.z), { timeoutMs, arrived: there });
-    return there() ? { ok: true } : (moved.ok ? { ok: false, reason: 'not_in_stand' } : moved);
-  }
+  const goStand = (ctx, p, timeoutMs = 20000) => goToStand(bot, ctx, actions, p, timeoutMs, 0.6);
 
   async function layLineRail(ctx, cell) {
     const need = railCell(blockXYZ, cell);

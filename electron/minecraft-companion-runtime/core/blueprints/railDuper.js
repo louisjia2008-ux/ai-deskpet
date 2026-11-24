@@ -28,19 +28,10 @@
 // slime) and places those parts from the top of it. A last cobblestone bridges
 // that stand to the piston's top, so drops landing on the machine can be fetched.
 
-const { FACINGS, DIRECTION_NAMES } = require('./cobbleGenerator');
+const { blueprintFrame, DIRECTION_NAMES } = require('./cobbleGenerator');
 
 function createRailDuper(anchor, facing = 'east') {
-  if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isInteger)) {
-    throw new TypeError('anchor must have integer x, y, z (the ground block under the piston pillar)');
-  }
-  const along = FACINGS[facing];
-  if (!along) throw new TypeError(`facing must be one of ${Object.keys(FACINGS).join(', ')}`);
-  // The back lane is to the left of the push direction.
-  const lane = { x: along.z, z: -along.x };
-  const at = (a, dy, l = 0) => ({
-    x: anchor.x + along.x * a + lane.x * l, y: anchor.y + dy, z: anchor.z + along.z * a + lane.z * l,
-  });
+  const { along, side: lane, at } = blueprintFrame(anchor, facing, 'the ground block under the piston pillar', true);
   const name = (d) => DIRECTION_NAMES[`${d.x},${d.z}`];
   const cells = {
     pillarLow: at(0, 1), pillarHigh: at(0, 2), piston: at(0, 3), pusher: at(1, 3), base: at(2, 3),

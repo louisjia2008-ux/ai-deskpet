@@ -5,7 +5,8 @@ const { posKey } = require('./blacklist');
 
 const SIDES = [[0, -1], [-1, 0], [1, 0], [0, 1]];
 const isBed = (block) => Boolean(block?.name?.endsWith('_bed'));
-const unsafe = (b) => /^(water|lava|bubble_column|fire|soul_fire|powder_snow|cobweb|cactus|magma_block|.*campfire)$/.test(b.name);
+const contactBlock = b => /^(cactus|sweet_berry_bush|magma_block|fire|soul_fire|campfire|soul_campfire|powder_snow)$/.test(b?.name);
+const unsafe = b => contactBlock(b) || /^(water|lava|bubble_column|cobweb)$/.test(b.name);
 const clear = (b) => Boolean(b && b.boundingBox === 'empty' && !unsafe(b));
 const supports = (b) => Boolean(b && b.boundingBox === 'block' && !isBed(b) && !unsafe(b));
 
@@ -68,4 +69,4 @@ function topology(house, read, { occupy = [], remove = [] } = {}) {
   return { known, open, obstruction: obstruction || { part: 'interior', position: disconnected[0] || house.interiorCenter }, cells, reachable: new Set(next.keys()), next, disconnected, connected: known && open && cells.size > 0 && !disconnected.length };
 }
 
-module.exports = { topology, safeStand, supports, clear, isBed, SIDES, homeContains };
+module.exports = { topology, safeStand, supports, clear, isBed, SIDES, homeContains, contactBlock };

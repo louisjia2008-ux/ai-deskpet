@@ -53,7 +53,11 @@ test('at the same dusk tick a 20-block return fits but a 120-block return does n
   const far = createNightRest({
     bot, home: () => ({ bed, centre, inside: false }),
     actions: { underground: () => false, goNear: () => assert.fail('far return would miss dark') },
-    skills: { digIn: async () => ({ ok: true, bunker: { top: bot.entity.position } }) },
+    skills: { digIn: async () => {
+      const top = bot.entity.position.floored();
+      bot.entity.position = top.offset(0.5, -3, 0.5);
+      return { ok: true, bunker: { top } };
+    } },
   });
   assert.equal(far.want(ctx.perceive()), 0.8);
   await far.run(ctx);
@@ -72,7 +76,10 @@ test('covered cave waits overnight in a local bunker and resumes the same task a
     bot, home: () => ({ centre, inside: false }),
     actions: { underground: () => true, goNear: () => assert.fail('dusk cave escape is a new exposed route') },
     skills: {
-      digIn: async () => ({ ok: true, bunker: shaft }),
+      digIn: async () => {
+        bot.entity.position = top.offset(0.5, -3, 0.5);
+        return { ok: true, bunker: shaft };
+      },
       digOut: async (_bot, _ctx, remembered) => {
         assert.equal(remembered, shaft);
         return { ok: true };
@@ -112,7 +119,11 @@ test('an expired dusk return cancels traveling and the next attempt digs in loca
     actions: { goNear: (_bot, travel) => new Promise(resolve => {
       travel.signal.addEventListener('abort', () => resolve({ ok: false, kind: 'interrupted', reason: 'aborted' }));
     }) },
-    skills: { digIn: async () => ({ ok: true, bunker: { top: bot.entity.position } }) },
+    skills: { digIn: async () => {
+      const top = bot.entity.position.floored();
+      bot.entity.position = top.offset(0.5, -3, 0.5);
+      return { ok: true, bunker: { top } };
+    } },
   });
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const returning = rest.run(ctx);

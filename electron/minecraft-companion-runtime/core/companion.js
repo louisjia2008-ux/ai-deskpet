@@ -11,7 +11,7 @@ const { createOpportunisticHunt, FOOD_MOBS } = require('./work-budget');
 const { createScheduleBackoff } = require('./schedule-backoff');
 const { KNOWLEDGE } = require('./knowledge');
 const skills = require('./skills');
-const { perceive, ownedItems, countInventory } = require('./perception');
+const { perceive, ownedItems, countInventory, HOSTILE_NAMES } = require('./perception');
 const { createDoctor, recordDoctorInput, D1 } = require('./doctor');
 const { createSurvivalBehaviors, enabledDuringSurvey } = require('./behaviors/survival');
 const { createRecovery } = require('./behaviors/recovery');
@@ -20,7 +20,7 @@ const { createEndHazards } = require('./behaviors/endHazards');
 const { createHomeMaintenance } = require('./behaviors/homeMaintenance');
 const { createGatherLogsGoal } = require('./goals/gatherBlocks');
 const { createHomesteadGoal } = require('./goals/homestead');
-const { homeContains } = require('./home-topology');
+const { contactBlock, homeContains } = require('./home-topology');
 const { createFarmGoal } = require('./goals/farm');
 const { createRanchGoal } = require('./goals/ranch');
 const { installDigTimeFix } = require('./digTime');
@@ -60,6 +60,20 @@ const { applyWalkOnlyMovements } = require('./nether');
 // the owner keeps hunting close by too: chasing food 145 blocks off left the
 // owner it had just been asked to guard to the zombies.
 const FEEDING_GOALS = new Set(['farm', 'harvest_wheat', 'stock_food', 'follow_owner']);
+const DEADLY_MOBS = [...HOSTILE_NAMES, 'enderman', 'piglin', 'zombified_piglin'].map(name => name.replaceAll('_', ' '));
+
+function deathAtHome(house, death) {
+  const { anchor, size } = house;
+  const { cause, position: p } = death;
+  if (!cause || !p || death.expedition || death.dimension !== 'overworld') return false;
+  const distance = Math.hypot(p.x - anchor.x, p.z - anchor.z);
+  if (/^(drowned|tried to swim in lava)\b/i.test(cause)) return distance <= 16;
+  if (/^(hit the ground too hard|fell (from|off|out of))\b/i.test(cause)) {
+    return homeContains(house, p) && p.x >= anchor.x && p.x < anchor.x + size && p.z >= anchor.z && p.z < anchor.z + size;
+  }
+  const attacker = /^was (?:slain|shot|blown up|fireballed|killed|stung) by (.+?)(?: using .*)?$/i.exec(cause)?.[1].toLowerCase();
+  return death.night === true && distance <= 32 && DEADLY_MOBS.includes(attacker);
+}
 
 // Never build scaffolding, pillar up or parkour on the surface: the bot must not leave
 // self-placed obstacles behind, and a target that needs such moves is skipped.
@@ -90,7 +104,7 @@ function configureMovements(bot) {
   // slept outside after that). Paths walk around or through, never dig them.
   const KEEP = /(_fence|_fence_gate|_bed|_door|^chest|^trapped_chest|^furnace|^crafting_table|^hopper|^barrel)$/;
   for (const block of Object.values(bot.registry.blocksByName)) {
-    if (KEEP.test(block.name)) movements.blocksCantBreak.add(block.id);
+    if (KEEP.test(block.name) || contactBlock(block)) movements.blocksCantBreak.add(block.id);
     if (block.name.endsWith('_bed')) movements.blocksToAvoid.add(block.id);
   }
   // Water is allowed but costly: banning it left the bot unable to reach
@@ -102,7 +116,7 @@ function configureMovements(bot) {
   movements.exclusionAreasStep.push((block) => {
     if (!block?.position) return 0;
     const below = bot.blockAt(block.position.offset(0, -1, 0));
-    if (block.name?.endsWith('_bed') || below?.name.endsWith('_bed')) return 1000;
+    if (block.name?.endsWith('_bed') || below?.name.endsWith('_bed') || contactBlock(block) || contactBlock(below)) return 1000;
     return below && leaves.has(below.type) ? 25 : 0;
   });
   const farmland = bot.registry.blocksByName.farmland;
@@ -111,6 +125,12 @@ function configureMovements(bot) {
   const neighbors = movements.getNeighbors;
   movements.getNeighbors = function (node) {
     return neighbors.call(this, node).filter(move => bot.blockAt(move.offset(0, -1, 0))?.name !== 'farmland');
+  };
+  const withoutFarmland = movements.getNeighbors;
+  movements.getNeighbors = function (node) {
+    return withoutFarmland.call(this, node).filter(move => ![move, move.offset(0, 1, 0), move.offset(0, -1, 0)]
+      .some(p => contactBlock(bot.blockAt(p)))
+      && !bot.companionFailureLedger?.contactMargin(move, dimension(bot), bot.companionContactEscape));
   };
   trackReturnPositions(bot, movements);
   installOpenDoorPassage(bot, movements);
@@ -183,6 +203,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   const adaptation = autonomy ? require('./adaptation').createAdaptation({ store: adaptationStore, onEvent, atHome, playerProtected }) : null;
   const failureLedger = adaptation?.failureLedger || require('./failure-ledger').createFailureLedger({
     protectedTarget: (position, world) => atHome(position, world) || playerProtected(position, world),
+    emit(type, fields) { try { onEvent({ type, at: Date.now(), ...fields }); } catch { /* observers do not own the body */ } },
   });
   bot.companionFailureLedger = failureLedger;
   const selfStuck = require('./self-stuck').createSelfStuck(bot, { emit: (type, data) => onEvent({ type, at: Date.now(), ...data }) });
@@ -397,7 +418,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
     onIdle(state, reason) {
       if (reason === 'no_eligible_card_until_retry' && state.isDay !== false && !state.sheltered) selfStuck.requestProbe();
     },
-    onOverworldDeath(death, deaths, memory) {
+    onOverworldDeath(death, deaths, memory, causeUpdated) {
       if (!memory.cautiousAfterDeath) {
         setRisk('cautious');
         memory.cautiousAfterDeath = true;
@@ -409,14 +430,15 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       const downMine = death.position && mine && death.position.y < mine.surfaceY - 1
         && (Math.hypot(death.position.x - mine.front.x, death.position.z - mine.front.z) < 32
           || require('./mining').knownOpen(mine, death.position));
-      if (death.position && (death.card === 'diamond_tools' || downMine)) {
+      if (!causeUpdated && death.position && (death.card === 'diamond_tools' || downMine)) {
         adaptation?.teach('mine_danger', death.position, 'overworld', 'death_in_mine', 64);
         if (downMine) adaptation?.teach('mine_danger', mine.entrance, 'overworld', 'death_in_mine', 64);
         if (death.card === 'diamond_tools' && anchor) adaptation?.promote('diamond', { position: anchor }, 'different_region', 'death_in_mine');
       }
-      if (!anchor || !death.position || goal.memory.established || goal.memory.pinned) return;
-      const near = (d) => d.position && Math.hypot(d.position.x - anchor.x, d.position.z - anchor.z) <= 40;
-      if (near(death) && deaths.filter((d) => !d.expedition && d.dimension === 'overworld' && death.at - d.at < 60 * 60_000 && near(d)).length >= 2) {
+      const house = goal?.memory.house;
+      if (!house || goal.memory.established || goal.memory.pinned) return;
+      const related = d => death.at - d.at < 60 * 60_000 && deathAtHome(house, d);
+      if (related(death) && deaths.filter(related).length >= 2) {
         goal.memory.relocate = true;
       }
     } });
@@ -506,7 +528,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       routeDeathAt = Date.now();
       const cause = recovery.lastDeathCause();
       const position = bot.entity?.position?.floored();
-      if (director.noteDeath(cause, { at: routeDeathAt, dimension: dimension(bot), position })) {
+      if (director.noteDeath(cause, { at: routeDeathAt, dimension: dimension(bot), position, night: isDaylight(bot.time?.timeOfDay) === false })) {
         brain.failGoal('death_loop: autonomy stage paused').catch(() => {});
       }
     }
@@ -834,4 +856,4 @@ function validateTaskArgs(args) {
   }
 }
 
-module.exports = { createCompanion, configureMovements, nightShelter };
+module.exports = { createCompanion, configureMovements, deathAtHome, nightShelter };

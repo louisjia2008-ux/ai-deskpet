@@ -20,7 +20,8 @@ const policies = {
   hunt: [MINUTE, 1], hunt_far: [5 * MINUTE, 1], berry: [MINUTE, 1],
   guard_hunt: [30_000, 1],
   berry_materials: [2 * MINUTE, 1], ranch_fence: [15_000, 1], ranch_lure: [20_000, 1],
-  target_hazard: [10 * MINUTE, 1], director_step: [10 * MINUTE, 3], director_start: [10 * MINUTE, 1], mine_entrance: [10 * MINUTE, 1], route_water: [2 * MINUTE, 2],
+  target_hazard: [10 * MINUTE, 1], contact_hazard: [10 * MINUTE, 1],
+  director_step: [10 * MINUTE, 3], director_start: [10 * MINUTE, 1], mine_entrance: [10 * MINUTE, 1], route_water: [2 * MINUTE, 2],
   lava_pool_candidate: [10 * MINUTE, 3, false, 30 * MINUTE],
   // R6 callers retain their existing per-purpose duration while using the same ledger.
   legacy_30000: [30_000, 1], legacy_60000: [MINUTE, 1], legacy_120000: [2 * MINUTE, 1],
@@ -61,10 +62,10 @@ const covers = (entry, p, radius = entry.radius) => {
 
 function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyLessons = [], legacyStates = [], protectedTarget = () => false,
   onChange = () => {}, emit = () => {} } = {}) {
-  const entries = new Map();
+  const entries = new Map(), contacts = new Set();
   const interruptions = new Map();
   const staged = new Map(), transfers = new WeakMap();
-  const protectedCell = fields => fields.position && protectedTarget(fields.position, fields.dimension);
+  const protectedCell = fields => fields.purpose !== 'contact_hazard' && fields.position && protectedTarget(fields.position, fields.dimension);
   const policy = fields => policies[fields.purpose];
   const active = entry => entry.until > now() && !protectedCell(entry);
 
@@ -72,6 +73,8 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
     const previous = entries.get(key);
     entries.delete(key);
     if (value) entries.set(key, value);
+    if (value?.purpose === 'contact_hazard') contacts.add(key);
+    else contacts.delete(key);
     if (entries.size > MAX) entries.delete([...entries.values()].find(e => !active(e))?.key ?? entries.keys().next().value);
     if (policies[previous?.purpose]?.[2] || policies[value?.purpose]?.[2]) onChange();
   }
@@ -211,11 +214,12 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
       const found = read(fields, spec);
       if (found?.attemptId && found.attemptId === result.attemptId) return null;
       const region = regionPurposes.has(fields.purpose);
-      if (found?.failures >= limit && (!region || window)) return null;
+      const singleContact = fields.purpose === 'contact_hazard';
+      if (found?.failures >= limit && (!region || window) && !singleContact) return null;
       const recoveryPending = Boolean(ladder && found?.failures === limit - 1);
       const failureAt = now();
       const recent = window && [...(found?.recent || []).filter(at => at > failureAt - window), failureAt];
-      const failures = recent ? recent.length : region ? 1 : (found?.failures || 0) + (recoveryPending ? 0 : 1);
+      const failures = recent ? recent.length : (region || singleContact) ? 1 : (found?.failures || 0) + (recoveryPending ? 0 : 1);
       const sameReasonFailures = found?.reason === result.reason ? Math.min(limit, found.sameReasonFailures + (recoveryPending ? 0 : 1)) : 1;
       const until = failureAt + (window && failures < limit ? window : confirmation ? MINUTE : ttl);
       const state = { ...fields, reason: result.reason, attemptId: result.attemptId, failures, sameReasonFailures,
@@ -300,10 +304,19 @@ function createFailureLedger({ now = Date.now, load, legacyTargets = [], legacyL
     }
     return { record, skip, clearOnSuccess, regionHard, clearWhere, run, avoid, recovering, capture, handoff, excluded: skip };
   }
+  function contactMargin(p, dimension, escaping) {
+    for (const key of contacts) {
+      const entry = entries.get(key), q = entry?.position;
+      if (!entry || !active(entry)) contacts.delete(key);
+      else if (entry.dimension === dimension && !escaping?.equals(q)
+        && Math.abs(p.y - q.y) <= 1 && Math.abs(p.x - q.x) + Math.abs(p.z - q.z) <= 1) return true;
+    }
+    return false;
+  }
   const snapshot = persistent => [...entries.values()].filter(e => active(e) && (!persistent || (policy(e)[2] && !CELL_CONFIRMATIONS.has(e.reason))));
   const persisted = () => ({ entries: snapshot(true), staged: [...staged.values()].filter(e => e.until > now())
     .slice(-REGION_MAX).map(e => ({ ...e, items: e.items.filter(item => !item.revoked && !protectedCell(item)) })) });
-  return { ...scope(), scope, snapshot, persisted, pruneProtected, stage, finish, revoke, workInterrupted };
+  return { ...scope(), scope, snapshot, persisted, pruneProtected, stage, finish, revoke, workInterrupted, contactMargin };
 }
 
 function migrationReason(raw, purpose) {

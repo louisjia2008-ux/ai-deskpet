@@ -839,6 +839,14 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const p = ctx.adapt.plan('home_site', { position: memory.searchOrigin || anchor });
       outcome = ctx.adapt.outcome(p, failure('site_rejected', { originalReason: reason }, ctx, bot));
     }
+    const walls = memory.house.blocks.filter(b => b.phase === 'walls');
+    const builtWalls = walls.filter(b => {
+      const block = blockAt(b.position);
+      return block && matchesBuilding(b, block.name, block);
+    }).length;
+    if (walls.length && builtWalls * 2 >= walls.length) {
+      ctx.record('home_site_abandon_pending', { anchor, reason, builtWalls, walls: walls.length });
+    }
     ctx.record('site_abandoned', { anchor, reason, built: memory.houseBuilt || 0 });
     // Autonomous goals use the expiring, world-persistent rejected_site lesson.
     if (!ctx.adapt) memory.abandonedSites = [...(memory.abandonedSites || []), anchor].slice(-16);
@@ -1795,7 +1803,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     shelterSite: () => {
       const house = memory.house;
       if (!house || !(memory.established || memory.houseBuilt >= house.blocks.length && doorOpen() !== null)) return null;
-      return { house, inside: insideRoom(bot.entity.position.floored()) };
+      const at = bot.entity.position;
+      return { house, inside: at.y >= house.anchor.y - 0.05 && insideRoom(at.floored()) };
     },
     shelterDoor: (ctx, open) => {
       if (!memory.house || !insideRoom(bot.entity.position.floored())) return null;

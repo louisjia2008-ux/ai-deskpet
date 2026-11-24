@@ -16,26 +16,21 @@
 // cells: { stand, button, buttonAim?, drop }, noStep }. A floor button is aimed
 // at just above its cell's floor; a wall button at `buttonAim`.
 
+const { findDeviceSite, LIQUID, isAir, isSoft, partMatches, guardDeviceCells, facingOf, goToStand } = require('./device-site');
 const { Vec3 } = require('vec3');
-const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
-const { FACINGS } = require('../blueprints/cobbleGenerator');
 const { sleep, waitUntil } = require('../confirm');
 
-const LIQUID = new Set(['water', 'lava', 'bubble_column']);
 // A stone button stays pressed 20 ticks; the sticky piston then pulls the slime back.
 const CYCLE_MS = 1600;
 // Hollow cells are dug out: only plain soil or stone.
 const DIGGABLE = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'mud', 'moss_block',
   'stone', 'andesite', 'diorite', 'granite', 'cobblestone', 'clay', 'terracotta', 'deepslate', 'tuff']);
 
-const isAir = (block) => !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
-const isSoft = (block) => isAir(block) || (block.boundingBox === 'empty' && !LIQUID.has(block.name));
 const isFloor = (block) => Boolean(block) && block.boundingBox === 'block' && !LIQUID.has(block.name)
   && !/^(sand|red_sand|gravel|.*_concrete_powder)$/.test(block.name);
 const droppedName = (entity) => { try { return entity.getDroppedItem?.()?.name || null; } catch { return null; } };
-const key = (p) => `${p.x},${p.y},${p.z}`;
 const v = (p) => new Vec3(p.x, p.y, p.z);
 
 function evaluateDeviceSite(create, blockAt, anchor, facing) {
@@ -49,29 +44,7 @@ function evaluateDeviceSite(create, blockAt, anchor, facing) {
 
 /** Nearest flat spot for `create(anchor, facing)`; the anchor is a ground block. */
 function chooseDeviceSite(create, blockAt, around, { radius = 8 } = {}) {
-  const origin = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
-  let best = null;
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      let y = null;
-      for (let top = origin.y + 3; top >= origin.y - 4; top -= 1) {
-        const block = blockAt(origin.x + dx, top, origin.z + dz);
-        if (!block) break;
-        if (isSoft(block)) continue;
-        y = top;
-        break;
-      }
-      if (y === null) continue;
-      for (const facing of Object.keys(FACINGS)) {
-        const device = evaluateDeviceSite(create, blockAt, { x: origin.x + dx, y, z: origin.z + dz }, facing);
-        if (!device) continue;
-        // Not right where the bot stands: it would be in the way of its own parts.
-        const score = Math.hypot(dx, dz) + Math.abs(y + 1 - origin.y) * 2 + (Math.hypot(dx, dz) < 3 ? 6 : 0);
-        if (!best || score < best.score) best = { device, score };
-      }
-    }
-  }
-  return best ? best.device : null;
+  return findDeviceSite(blockAt, around, { radius, avoidFeet: true, evaluate: evaluateDeviceSite.bind(null, create) });
 }
 
 function createDuperGoal({ bot, name, create, product, seedKey, pickup = (n) => n === product, anchor = null,
@@ -79,11 +52,7 @@ function createDuperGoal({ bot, name, create, product, seedKey, pickup = (n) => 
   if (!Number.isSafeInteger(count) || count < 1) throw new TypeError('count must be a positive integer');
   const memory = { device: anchor ? create(anchor, facing) : null, baseline: null, presses: 0, misses: new Map() };
   const blockAt = (p) => bot.blockAt(v(p));
-  const facingOf = (block) => block?.getProperties?.().facing;
-  const partOk = (part) => {
-    const block = blockAt(part.position);
-    return block?.name === part.block && (!part.facing || facingOf(block) === part.facing);
-  };
+  const partOk = part => partMatches(blockAt, part);
   const owned = () => actions.countItems(bot, (n) => n === product);
   // The seed item leaves the inventory when it is placed; it is not a gain.
   const gained = () => {
@@ -93,21 +62,10 @@ function createDuperGoal({ bot, name, create, product, seedKey, pickup = (n) => 
   };
   // Never dig a part, and keep off the cells the blueprint marks (a fan has no
   // collision but the carpet above it blocks the head, so a path there stalls).
-  function guardDevice() {
-    const movements = bot.pathfinder?.movements;
-    if (memory.guarded || !movements || !memory.device) return;
-    memory.guarded = true;
-    const d = memory.device;
-    const noBreak = new Set(d.parts.map((p) => key(p.position)));
-    const noStep = new Set((d.noStep || []).map(key));
-    movements.exclusionAreasBreak.push((block) => (block?.position && noBreak.has(key(block.position)) ? 100 : 0));
-    movements.exclusionAreasStep.push((block) => (block?.position && noStep.has(key(block.position)) ? 100 : 0));
-  }
-  const inStand = () => {
-    const s = memory.device.cells.stand;
-    const at = bot.entity.position;
-    return Math.floor(at.x) === s.x && Math.floor(at.z) === s.z && Math.abs(at.y - s.y) < 0.5;
-  };
+  const guardDevice = () => memory.device && guardDeviceCells(bot, memory, () => {
+    return { step: memory.device.noStep || [], breaks: memory.device.parts.map(p => p.position) };
+  });
+
   const inspect = () => {
     const d = memory.device;
     const hollowCells = d.hollow || [];
@@ -145,11 +103,8 @@ function createDuperGoal({ bot, name, create, product, seedKey, pickup = (n) => 
 
   async function press(ctx) {
     const d = memory.device;
-    if (!inStand()) {
-      const s = d.cells.stand;
-      const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(s.x, s.y, s.z), { timeoutMs: 15000, arrived: inStand });
-      if (!inStand()) return moved.ok ? { ok: false, reason: 'not_in_stand' } : moved;
-    }
+    const stood = await goToStand(bot, ctx, actions, d.cells.stand, 15000);
+    if (!stood.ok) return stood;
     const before = gained();
     const button = blockAt(d.cells.button);
     try {

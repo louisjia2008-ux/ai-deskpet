@@ -17,18 +17,10 @@
 // The bot presses the button from B, beside the fan on the carpet's side,
 // close enough to pick the carpets up.
 
-const { FACINGS, DIRECTION_NAMES } = require('./cobbleGenerator');
+const { blueprintFrame, DIRECTION_NAMES } = require('./cobbleGenerator');
 
 function createCarpetDuper(anchor, facing = 'east') {
-  if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isInteger)) {
-    throw new TypeError('anchor must have integer x, y, z (the ground block under the piston)');
-  }
-  const along = FACINGS[facing];
-  if (!along) throw new TypeError(`facing must be one of ${Object.keys(FACINGS).join(', ')}`);
-  const side = { x: -along.z, z: along.x };
-  const at = (a, dy, s = 0) => ({
-    x: anchor.x + along.x * a + side.x * s, y: anchor.y + dy, z: anchor.z + along.z * a + side.z * s,
-  });
+  const { side, at } = blueprintFrame(anchor, facing, 'the ground block under the piston');
   const sideName = DIRECTION_NAMES[`${side.x},${side.z}`];
   const cells = {
     piston: at(0, 1), slimeLow: at(1, 1), slimeHigh: at(1, 2), fan: at(1, 1, 1), carpet: at(1, 2, 1),

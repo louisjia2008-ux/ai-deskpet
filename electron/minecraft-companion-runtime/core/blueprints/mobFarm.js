@@ -23,22 +23,17 @@
 // The 1-wide channels and the 2-high ceiling keep spiders and endermen out.
 // Mobs never spawn within 24 blocks of a player, so the bot is ~29 blocks below.
 
-const { FACINGS, DIRECTION_NAMES } = require('./cobbleGenerator');
+const { blueprintFrame, FACINGS, DIRECTION_NAMES } = require('./cobbleGenerator');
 
 const ARM = 8; // channel cells from the hole to the water source
 const ROOM_DEPTH = 9; // the ground's top layer to the mobs' feet
 const SHAFT = 30; // the mobs' feet to the hopper
 
 function createMobFarm(anchor, facing = 'east') {
-  if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isInteger)) {
-    throw new TypeError('anchor must have integer x, y, z (the ground\'s top block above the drop hole)');
-  }
-  const d = FACINGS[facing];
-  if (!d) throw new TypeError(`facing must be one of ${Object.keys(FACINGS).join(', ')}`);
+  const { along: d, side: p } = blueprintFrame(anchor, facing, 'the ground\'s top block above the drop hole');
   const g = anchor.y;
   const L = g - ROOM_DEPTH;
   const B = L - SHAFT;
-  const p = { x: -d.z, z: d.x };
   const cell = (x, y, z) => ({ x: anchor.x + x, y, z: anchor.z + z });
   const key = (c) => `${c.x},${c.y},${c.z}`;
 

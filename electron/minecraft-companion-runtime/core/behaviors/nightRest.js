@@ -56,14 +56,23 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
   if (!bot || typeof home !== 'function') throw new TypeError('bot and home are required');
   const { complete, factsOf, failure, isComplete, waiting } = require('../action-result');
   const { BAND } = require('../brain');
-  const { shelterSealCount } = require('../skills');
+  const { bunkerOccupied, shelterSealCount } = require('../skills');
   const { boundedWork } = require('../work-budget');
   let shelter = null, missedReturn = false, bedRefusedUntil = 0;
+  let checkShelterAt = 0, lostShelter = false;
   const reset = () => {
     shelter = null;
+    lostShelter = false;
     missedReturn = false;
     bedRefusedUntil = 0;
     bot.companionSheltered = false;
+  };
+  const verify = (state) => {
+    if (!shelter || now() < checkShelterAt || !late(timing(state, home()))) return;
+    checkShelterAt = now() + 10_000;
+    if (shelter === HOME_SHELTER ? home()?.inside === true : bunkerOccupied(bot, shelter)) return;
+    reset();
+    lostShelter = true;
   };
   const late = (budget, goal = activeGoal()) => (budget.dusk || budget.maxOutingDistance === 0)
     && !allowedAtNight(bot, goal, bot.companionNightHunt, now());
@@ -83,12 +92,13 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
       prepareSeal: prepareSeals(),
     });
     const bunker = isComplete(dug) && factsOf(dug).bunker;
-    if (bunker) {
+    if (bunker && bunkerOccupied(bot, bunker)) {
       shelter = bunker;
+      checkShelterAt = now() + 10_000;
       bot.companionSheltered = true;
       ctx.record('night_rest', { action: 'dug_in', top: bunker.top });
     }
-    return dug;
+    return bunker && !shelter ? failure('shelter_not_entered', {}, ctx, bot) : dug;
   }
 
   async function goHome(ctx, spot, budget) {
@@ -113,9 +123,11 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
     name: 'night_rest',
     band: BAND.MAINTENANCE,
     taskAllowed(state, goal) {
+      verify(state);
       return !overworld(bot.game?.dimension) || (!shelter && !late(timing(state, home()), goal));
     },
     want(state) {
+      verify(state);
       if (!overworld(bot.game?.dimension)) return 0;
       if (shelter) return 0.8;
       const spot = home(), budget = timing(state, spot);
@@ -125,7 +137,13 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
       return 0;
     },
     async run(ctx) {
-      const state = ctx.perceive(), spot = home(), budget = timing(state, spot);
+      const state = ctx.perceive();
+      verify(state);
+      if (lostShelter) {
+        ctx.record?.('night_rest', { action: 'shelter_lost' });
+        lostShelter = false;
+      }
+      const spot = home(), budget = timing(state, spot);
       const hold = spot && late(budget), bunker = shelter === HOME_SHELTER ? null : shelter;
       if (!hold && shelter) {
         if (bunker) ctx.record('night_rest', { action: 'dig_out' });
@@ -146,7 +164,7 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
       }
       if (!hold) return complete(false);
       if (!spot.centre || !spot.inside && actions.underground?.(bot)) return digIn(ctx, budget);
-      if (spot.inside === false) {
+      if (spot.inside !== true) {
         const latestReturn = budget.dark ? NEAR_DOOR_TICKS : budget.ticksToDark - SHELTER_TICKS;
         return !missedReturn && budget.returnTicks <= latestReturn ? goHome(ctx, spot, budget) : digIn(ctx, budget);
       }
@@ -154,8 +172,9 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
       if (shelterDoor && !shelter) {
         // The server may close the door just before we are preempted.
         shelter = HOME_SHELTER;
+        checkShelterAt = now() + 10_000;
         const shut = await shelterDoor(ctx, false);
-        if (shut == null || isComplete(shut)) bot.companionSheltered = true;
+        if ((shut == null || isComplete(shut)) && home()?.inside === true) bot.companionSheltered = true;
         else if (!ctx.signal?.aborted) shelter = null;
         if (shut != null) return shut;
       }

@@ -3,7 +3,7 @@
 // goal while one of them wants the body and the goal re-plans afterwards.
 // Kept deliberately simple; hardening them is the next milestone.
 
-const { complete, waiting, factsOf, isComplete } = require('../action-result');
+const { complete, failure, waiting, factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
@@ -17,6 +17,9 @@ const { isHostile } = require('../perception');
 const { createStance } = require('../stance');
 const { goals } = require('mineflayer-pathfinder');
 const { isSurveySurvivalItem } = require('../survey-plan-actions');
+const { contactBlock, safeStand } = require('../home-topology');
+const { applyWalkOnlyMovements } = require('../nether');
+const { ledgerTarget } = require('../failure-ledger');
 
 const SURVEY_REFLEXES = new Set(['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer']);
 const enabledDuringSurvey = ({ name }) => SURVEY_REFLEXES.has(name);
@@ -86,6 +89,21 @@ function fireBodyCells(bot, at = bot.entity?.position) {
   return cells;
 }
 const fireContacts = (bot, at) => fireBodyCells(bot, at).filter((p) => FIRE.has(bot.blockAt(p)?.name));
+const freeOfContact = (bot, at) => ![at.floored().offset(0, -1, 0), ...fireBodyCells(bot, at)]
+  .some(p => contactBlock(bot.blockAt(p)));
+
+function nearbyContact(bot) {
+  const at = bot.entity.position, feet = at.floored();
+  let source = null, nearest = Infinity;
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 2; dy++) {
+    const p = feet.offset(dx, dy, dz), b = bot.blockAt(p);
+    if (!contactBlock(b)) continue;
+    const gap = Math.hypot(Math.max(0, p.x - at.x, at.x - p.x - 1), Math.max(0, p.z - at.z, at.z - p.z - 1),
+      Math.max(0, p.y - at.y - 1.8, at.y - p.y - 1));
+    if (gap <= 1 && gap < nearest) { source = { p, name: b.name }; nearest = gap; }
+  }
+  return source;
+}
 
 // Only one same-height, straight neighbour edge (or the current cell centre).
 // Every swept body voxel is loaded and open; only the fire already touching
@@ -973,6 +991,61 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     },
   };
 
+  let health = bot.health, hurtContact = null;
+  const nearHostile = () => Object.values(bot.entities || {}).some(e => (isHostile(e) || e?.name === 'enderman' && !calm(e))
+    && e.position?.distanceTo(bot.entity.position) <= 4);
+  const onHealth = () => {
+    const damage = health - bot.health;
+    health = bot.health;
+    if (!(damage > 0) || surveyArea() || !bot.entity?.position || !bot.blockAt || bot.entity.isInLava
+      || nearHostile()) return;
+    const source = nearbyContact(bot);
+    if (!source) return;
+    if (!fireContacts(bot).length) hurtContact = { ...source, at: Date.now() };
+    const spec = ledgerTarget(bot, 'contact_hazard', source.p);
+    bot.companionFailureLedger?.record(failure('contact_hazard', { block: source.name, damage }), spec);
+  };
+  const clearContact = () => { hurtContact = null; };
+  bot.on?.('health', onHealth);
+  bot.on?.('death', clearContact);
+  const leaveContact = {
+    name: 'leave_contact',
+    band: BAND.ESCAPE,
+    want: state => hurtContact && Date.now() - hurtContact.at <= 1_000 && bot.health > 0 && !bot.entity.isInLava
+      && !fireContacts(bot).length && !threats(state).some(h => h.distance <= 4) ? 1 : 0,
+    async run(ctx) {
+      if (!hurtContact) return complete(false);
+      const { p: source, name } = hurtContact;
+      clearContact();
+      const here = bot.entity.position, feet = here.floored();
+      const candidates = [feet, ...SIDES.flatMap(side => [0, -1, 1].map(dy => feet.plus(side).offset(0, dy, 0)))];
+      const centre = p => p.offset(0.5, 0, 0.5);
+      const separation = p => Math.hypot(p.x - source.x - 0.5, p.z - source.z - 0.5);
+      const target = candidates.filter(p => separation(centre(p)) > separation(here) && safeStand(q => bot.blockAt(q), p)
+        && freeOfContact(bot, centre(p))).sort((a, b) => here.distanceTo(centre(a)) - here.distanceTo(centre(b)))[0];
+      ctx.record?.('contact_escape', { source: name, position: source, target: target ?? null });
+      if (!target) return failure('contact_exit_unavailable', {}, ctx);
+      if (target.equals(feet)) await actions.recentre(bot, ctx);
+      else {
+        const restore = applyWalkOnlyMovements(bot);
+        bot.companionContactEscape = source;
+        try {
+          const moved = await actions.goTo(bot, { ...ctx, dryRoute: true }, new goals.GoalBlock(target.x, target.y, target.z),
+            { timeoutMs: 2_000, retryNoProgress: false });
+          if (!moved.ok) return moved;
+        } finally {
+          delete bot.companionContactEscape;
+          restore();
+        }
+      }
+      return freeOfContact(bot, bot.entity.position) ? complete() : failure('contact_exit_unavailable', {}, ctx);
+    },
+    dispose() {
+      bot.removeListener?.('health', onHealth);
+      bot.removeListener?.('death', clearContact);
+    },
+  };
+
   /** The nearest column (within three) whose water ends in open air, reachable at body height. */
   const WET = /^(water|bubble_column|seagrass|tall_seagrass|kelp|kelp_plant)$/;
   function airColumn() {
@@ -1394,7 +1467,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   };
   deflect.dispose = disposeNether;
 
-  return [quench, leaveLava, leaveFire, unbury, heal, escape, breathe, deflect, block, surveyArcher, hide, defend, cover, avoid, eat, provision, recover, recoverDrops];
+  return [quench, leaveLava, leaveFire, leaveContact, unbury, heal, escape, breathe, deflect, block, surveyArcher, hide, defend, cover, avoid, eat, provision, recover, recoverDrops];
 }
 
 module.exports = { createSurvivalBehaviors, enabledDuringSurvey };

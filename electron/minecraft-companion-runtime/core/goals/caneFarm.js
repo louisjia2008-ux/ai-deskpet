@@ -14,17 +14,16 @@
 //                                 the piston to fire and pick up the drop
 // Only cane gained after the column was cut while the bot waited counts.
 
+const { findDeviceSite, LIQUID, isAir, isSoft, isSolid, partMatches, guardDeviceCells, facingOf, partAccepts, goToStand } = require('./device-site');
+const { posKey: key } = require('../blacklist');
 const { Vec3 } = require('vec3');
 const { factsOf, isComplete } = require('../action-result');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const { createCaneFarm } = require('../blueprints/caneFarm');
-const { FACINGS } = require('../blueprints/cobbleGenerator');
 const { waitUntil } = require('../confirm');
 
-const LIQUID = new Set(['water', 'lava', 'bubble_column']);
-const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
 // The cane grows on dirt-like ground; everything dug must be plain soil or stone.
 const CANE_SOIL = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'mud', 'moss_block']);
 const DIGGABLE = new Set([...CANE_SOIL, 'stone', 'andesite', 'diorite', 'granite', 'cobblestone', 'clay', 'terracotta']);
@@ -32,10 +31,6 @@ const DIGGABLE = new Set([...CANE_SOIL, 'stone', 'andesite', 'diorite', 'granite
 // 68 s (16 steps per block); each wait ends at the next step or the timeout.
 const HARVEST_WAIT_MS = 60000;
 
-const isAir = (block) => !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
-const isSoft = (block) => isAir(block) || (block.boundingBox === 'empty' && !LIQUID.has(block.name));
-const isSolid = (block) => Boolean(block) && block.boundingBox === 'block' && !LIQUID.has(block.name) && !GRAVITY.test(block.name);
-const key = (p) => `${p.x},${p.y},${p.z}`;
 const v = (p) => new Vec3(p.x, p.y, p.z);
 
 function evaluateCaneSite(blockAt, anchor, facing) {
@@ -50,28 +45,7 @@ function evaluateCaneSite(blockAt, anchor, facing) {
 
 /** Nearest buildable spot; the anchor (the cane's first cell) is the top solid block of its column. */
 function chooseCaneSite(blockAt, around, { radius = 10 } = {}) {
-  const origin = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
-  let best = null;
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      let y = null;
-      for (let top = origin.y + 3; top >= origin.y - 4; top -= 1) {
-        const block = blockAt(origin.x + dx, top, origin.z + dz);
-        if (!block) break;
-        if (isSoft(block)) continue;
-        y = top;
-        break;
-      }
-      if (y === null) continue;
-      for (const facing of Object.keys(FACINGS)) {
-        const farm = evaluateCaneSite(blockAt, { x: origin.x + dx, y, z: origin.z + dz }, facing);
-        if (!farm) continue;
-        const score = Math.hypot(dx, dz) + Math.abs(y + 1 - origin.y) * 2 + (Math.hypot(dx, dz) < 3 ? 6 : 0);
-        if (!best || score < best.score) best = { farm, score };
-      }
-    }
-  }
-  return best ? best.farm : null;
+  return findDeviceSite(blockAt, around, { radius, avoidFeet: true, evaluate: evaluateCaneSite });
 }
 
 function createCaneFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
@@ -79,25 +53,12 @@ function createCaneFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
   if (!Number.isSafeInteger(count) || count < 1) throw new TypeError('count must be a positive integer');
   const memory = { farm: anchor ? createCaneFarm(anchor, facing) : null, harvested: 0, harvests: 0, growth: 0, guarded: false };
   const blockAt = (p) => bot.blockAt(v(p));
-  const facingOf = (block) => block?.getProperties?.().facing;
-  const nameOk = (part, name) => name === part.block || Boolean(part.accept?.includes(name));
-  const partOk = (part) => {
-    const block = blockAt(part.position);
-    return nameOk(part, block?.name) && (!part.facing || facingOf(block) === part.facing);
-  };
+  const partOk = part => partMatches(blockAt, part);
 
-  function guardFarm() {
-    const movements = bot.pathfinder?.movements;
-    if (memory.guarded || !movements || !memory.farm) return;
-    memory.guarded = true;
-    const f = memory.farm;
-    const c = f.cells;
-    // Never walk into the cane column or onto the water's cover, never break the device.
-    const noStep = new Set([c.cane1, c.cane2, c.cover, { ...c.cover, y: c.cover.y + 1 }].map(key));
-    const noBreak = new Set([...f.parts.map((p) => p.position), ...f.solid].map(key));
-    movements.exclusionAreasStep.push((block) => (block?.position && noStep.has(key(block.position)) ? 1000 : 0));
-    movements.exclusionAreasBreak.push((block) => (block?.position && noBreak.has(key(block.position)) ? 100 : 0));
-  }
+  const guardFarm = () => memory.farm && guardDeviceCells(bot, memory, () => {
+    const { cells: c, parts, solid } = memory.farm;
+    return { step: [c.cane1, c.cane2, c.cover, { ...c.cover, y: c.cover.y + 1 }], breaks: [...parts.map(p => p.position), ...solid] };
+  });
 
   // Feet in or right above a cell still to be dug.
   function overDig() {
@@ -148,7 +109,7 @@ function createCaneFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
       if (LIQUID.has(block.name)) return false; // water poured in the wrong cell is scooped up, not dug
       // Before the water is in, the cover cell's grass is ground to dig, not the finished cover.
       const part = partAt.get(key(p));
-      return !part || !water || !nameOk(part, block.name);
+      return !part || !water || !partAccepts(part, block.name);
     });
     const nextPart = f.parts.find((p) => !partOk(p)) || null;
     // A pour that missed the floor leaves its source in the cover cell or on the ground beside the hole.
@@ -167,22 +128,13 @@ function createCaneFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
     return { toDig, water, stray, nextPart, built: f.parts.filter(partOk).length };
   }
 
-  async function goToStand(ctx) {
-    const s = memory.farm.cells.stand;
-    const inStand = () => {
-      const at = bot.entity.position;
-      return Math.floor(at.x) === s.x && Math.floor(at.z) === s.z && Math.abs(at.y - s.y) < 0.5;
-    };
-    if (inStand()) return { ok: true };
-    const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(s.x, s.y, s.z), { timeoutMs: 30000, arrived: inStand });
-    return inStand() ? { ok: true } : (moved.ok ? { ok: false, reason: 'not_in_stand' } : moved);
-  }
+  const goStand = ctx => goToStand(bot, ctx, actions, memory.farm.cells.stand, 30000);
 
   // Waits in S for the next change of the cane: a growth step (the top block's
   // age, or a new block) or the piston cutting it. Growth counts as progress, so
   // a farm growing at normal speed (minutes per block) is not given up on.
   async function waitForHarvest(ctx) {
-    const moved = await goToStand(ctx);
+    const moved = await goStand(ctx);
     if (!moved.ok) return moved;
     const c = memory.farm.cells;
     const cane = (n) => n === 'sugar_cane';

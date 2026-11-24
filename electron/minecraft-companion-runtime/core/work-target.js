@@ -7,6 +7,7 @@ const hazardReasons = {
   breathe: 'target_needs_breath',
   leave_lava: 'target_near_lava',
   leave_fire: 'target_near_fire',
+  leave_contact: 'target_near_contact_hazard',
   unbury: 'target_causes_suffocation',
 };
 const hazardTarget = (bot, position, entity) => ({
