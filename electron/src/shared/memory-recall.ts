@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 export const memoryRecallInputs = {
-  'memory-recall:search': z.object({ operationId: z.string().uuid(), sessionId: z.string().uuid(), query: z.string().trim().min(1).max(3200) }).strict(),
+  /** Without a conversation, only general (not conversation-specific) memories are searched. */
+  'memory-recall:search': z.object({ operationId: z.string().uuid(), sessionId: z.string().uuid().optional(), query: z.string().trim().min(1).max(3200) }).strict(),
   'memory-recall:cancel': z.object({ operationId: z.string().uuid() }).strict(),
 };
 export type MemoryRecallSearchInput = z.infer<typeof memoryRecallInputs['memory-recall:search']>;

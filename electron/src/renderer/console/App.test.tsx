@@ -198,7 +198,7 @@ describe('memory search conversation bridge', () => {
 
   it('fills the same conversation with the exact question while preserving memory privacy and manual sending', async () => {
     const f = withRecall(); await openChat(); await searchMemory();
-    expect(screen.getByText('Conversation: Existing chat')).toBeTruthy();
+    expect(screen.getByText(/specific to “Existing chat”/u)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Continue with this question' }));
     expect(screen.getByRole('textbox', { name: 'Message your companion…' })).toHaveValue('Which walking route suits me?');
     expect(f.api.chat.send).not.toHaveBeenCalled();
@@ -221,25 +221,22 @@ describe('memory search conversation bridge', () => {
     expect(f.api.chat.send).not.toHaveBeenCalled();
   });
 
-  it.each(['archived', 'channel', 'analysis'] as const)('does not offer recall in a selected %s session', async kind => {
+  it.each(['archived', 'channel', 'analysis'] as const)('searches only general memories from a selected %s session', async kind => {
     const f = withRecall();
     vi.mocked(f.api.chat.listSessions).mockResolvedValue([{ id: sessionId, title: 'Unsuitable session', kind: 'normal', createdAt: timestamp, updatedAt: timestamp,
       ...(kind === 'archived' ? { archivedAt: timestamp } : kind === 'channel' ? { channelBindingId: crypto.randomUUID() } : { analysisSource: 'rea-static' }) }]);
     await openChat();
-    fireEvent.click(within(screen.getByRole('navigation')).getByRole('button', { name: 'Memory' }));
-    expect(screen.queryByRole('textbox', { name: 'What you remember' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Start memory search' })).toBeEnabled();
-    expect(f.api.memoryRecall!.search).not.toHaveBeenCalled();
+    if (kind === 'channel') { fireEvent.click(await screen.findByRole('button', { name: /Channels/u })); fireEvent.click(await screen.findByRole('button', { name: 'Unsuitable session' })); }
+    await searchMemory();
+    expect(f.api.memoryRecall!.search.mock.calls[0]![0]).not.toHaveProperty('sessionId');
+    expect(screen.queryByRole('button', { name: 'Continue with this question' })).toBeNull();
   });
 
-  it('catches a failed memory-session creation and lets the user retry', async () => {
+  it('searches without creating a conversation when none exists', async () => {
     const f = withRecall(); vi.mocked(f.api.chat.listSessions).mockResolvedValue([]);
-    vi.mocked(f.api.chat.createSession).mockRejectedValue(new Error('synthetic failure'));
-    await openChat(); fireEvent.click(within(screen.getByRole('navigation')).getByRole('button', { name: 'Memory' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start memory search' }));
-    await screen.findByRole('alert');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Start memory search' })).toBeEnabled());
-    expect(f.api.chat.createSession).toHaveBeenCalledOnce();
+    await openChat(); await searchMemory();
+    expect(f.api.chat.createSession).not.toHaveBeenCalled();
+    expect(f.api.memoryRecall!.search.mock.calls[0]![0]).not.toHaveProperty('sessionId');
   });
 
   it('keeps the search-to-chat action disabled while a conversation is running', async () => {

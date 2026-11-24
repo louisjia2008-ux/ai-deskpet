@@ -5,7 +5,8 @@ import type { ResolvedLocale } from '../../shared';
 
 interface Props {
   api: MemoryRecallAPI;
-  sessionId: string;
+  /** Absent: search general memories only. Present: also this conversation's own memories. */
+  sessionId?: string | undefined;
   sessionTitle?: string;
   memoryVersion?: string;
   locale: ResolvedLocale;
@@ -41,11 +42,11 @@ export function MemoryRecallPanel({ api, sessionId, sessionTitle, memoryVersion,
   }, [api, sessionId, memoryVersion]);
   const search = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
-    if (operation.current || !sessionId || !query.trim()) return;
+    if (operation.current || !query.trim()) return;
     const operationId = crypto.randomUUID(); operation.current = operationId; cancelRequested.current = false;
     setBusy(true); setCancelling(false); setResult(null); setError('');
     try {
-      const next = await api.search({ operationId, sessionId, query: query.trim() });
+      const next = await api.search({ operationId, ...(sessionId ? { sessionId } : {}), query: query.trim() });
       if (operation.current === operationId) {
         if (!cancelRequested.current) setResult(next);
         else setError(zh ? '已取消本次检索。' : 'Search cancelled.');
@@ -68,13 +69,12 @@ export function MemoryRecallPanel({ api, sessionId, sessionTitle, memoryVersion,
   };
   return <section className="panel stack-form" aria-label={zh ? '按大意找回记忆' : 'Find memories by meaning'}>
     <h3>{zh ? '按大意找回记忆' : 'Find memories by meaning'}</h3>
-    {sessionTitle && <p>{zh ? `当前对话：${sessionTitle}` : `Conversation: ${sessionTitle}`}</p>}
-    <p>{zh ? '用自己的话描述要找的内容，也可以换一种语言。本机模型只检索这段对话可用的已确认记忆。' : 'Describe what you remember, including in another language. A local model searches only confirmed memories available to this conversation.'}</p>
-    <p className="muted">{zh ? '点击后才准备语义检索，不调用云端模型。普通聊天使用已准备好的结果或关键词与表达偏好，不会为了检索等待模型加载。' : 'Semantic preparation starts only when you ask, using no cloud model. Ordinary chat uses ready results or keywords and communication preferences without waiting for a model to load.'}</p>
+    <p>{sessionId && sessionTitle
+      ? (zh ? `用自己的话描述要找的内容。会在本机查找通用记忆，以及「${sessionTitle}」这段对话专属的记忆。` : `Describe what you remember. Searches general memories and those specific to “${sessionTitle}”, on this device.`)
+      : (zh ? '用自己的话描述要找的内容，也可以换一种语言。只在本机查找，不会发给云端。' : 'Describe what you remember, in any language. The search runs only on this device.')}</p>
     <form className="stack-form" onSubmit={event => void search(event)}>
       <label>{zh ? '记得的大意' : 'What you remember'}<textarea value={query} disabled={busy} maxLength={3200} onChange={event => setQuery(event.target.value)} /></label>
-      {!sessionId && <p>{zh ? '先选择一段对话，确定要检索的记忆范围。' : 'Choose a conversation first to set the memory scope.'}</p>}
-      <div className="button-row"><button type="submit" disabled={busy || !sessionId || !query.trim()}>{zh ? '在本机查找' : 'Search on this device'}</button>
+      <div className="button-row"><button type="submit" disabled={busy || !query.trim()}>{zh ? '在本机查找' : 'Search on this device'}</button>
         {busy && <button type="button" className="secondary" disabled={cancelling} onClick={() => void cancel()}>{cancelling ? (zh ? '正在取消…' : 'Cancelling…') : (zh ? '取消检索' : 'Cancel search')}</button>}</div>
     </form>
     {busy && <p role="status">{cancelling
@@ -87,7 +87,7 @@ export function MemoryRecallPanel({ api, sessionId, sessionTitle, memoryVersion,
         : result.mode === 'partial' ? (zh ? `已按大意检索 ${result.consideredCount} / ${result.eligibleCount} 条记忆，其余仍按关键词查找。` : `Searched ${result.consideredCount} of ${result.eligibleCount} memories by meaning; remaining memories use keywords.`)
           : (zh ? `已在本机按大意检索 ${result.consideredCount} 条记忆。` : `Searched ${result.consideredCount} memories by meaning on this device.`)}</p>
       {!result.matches.length && <p>{zh ? '没有找到足够相关的记忆。可以换个描述再试。' : 'No sufficiently relevant memory was found. Try another description.'}</p>}
-      {onUseQuery && result.matches.length > 0 && <div>
+      {onUseQuery && sessionId && result.matches.length > 0 && <div>
         <button type="button" className="secondary" disabled={continuationDisabled} onClick={() => onUseQuery(result.query)}>{zh ? '用这个问题继续聊天' : 'Continue with this question'}</button>
         <p className="muted">{continuationDisabled ? (zh ? '当前对话忙碌，请完成后再继续。' : 'Wait for the current conversation to finish.')
           : (zh ? '把问题放回这段对话的输入框，由你点击发送。记忆仍按所选服务的权限使用。' : 'Place the question in this conversation’s composer for you to send. Memories still follow the selected provider’s permissions.')}</p>

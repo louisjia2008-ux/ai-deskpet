@@ -43,6 +43,18 @@ const fixture = async (gate?: ReturnType<typeof deferred>) => {
 };
 
 describe('desktop local memory recall service', () => {
+  it('searches only general memories when no conversation is given, and creates nothing', async () => {
+    const f = await fixture();
+    const own = memory('SESSION_ONLY_VALUE', { scope: { kind: 'session', sessionId: f.session.id } });
+    await f.repo.transaction(state => { state.memories.push(own); });
+    const before = f.repo.snapshot();
+    const { sessionId: _unused, ...withoutSession } = f.input(); void _unused;
+    const result = await f.service.search(withoutSession);
+    expect(result.matches.map(match => match.id)).toEqual([f.note.id]);
+    expect(f.embed.mock.calls.flat(2).join(' ')).not.toContain('SESSION_ONLY_VALUE');
+    expect(f.repo.snapshot()).toEqual(before);
+  });
+
   it('uses only local, confirmed, in-scope, unsuppressed memories and returns host-built results', async () => {
     const f = await fixture();
     const own = memory('Only this session.', { scope: { kind: 'session', sessionId: f.session.id } });

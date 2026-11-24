@@ -33,12 +33,15 @@ export class MemoryRecallService {
     if (this.#stopped || !this.available()) throw new Error('memory.recallUnavailable');
     const state = this.repository.snapshot();
     if (profileId !== undefined && state.profileId !== profileId) throw new Error('memory.recallInvalidated');
-    const session = state.chatSessions.find(item => item.id === input.sessionId);
-    if (!session || session.deletedAt || session.archivedAt || session.channelBindingId || session.analysisSource) {
-      throw new Error('chat.sessionUnavailable');
+    if (input.sessionId !== undefined) {
+      const session = state.chatSessions.find(item => item.id === input.sessionId);
+      if (!session || session.deletedAt || session.archivedAt || session.channelBindingId || session.analysisSource) {
+        throw new Error('chat.sessionUnavailable');
+      }
     }
+    // No conversation: the empty scope admits only general memories, never another chat's own.
     return { profileId: state.profileId, input: {
-      sessionId: input.sessionId, destination: 'local', query: input.query,
+      sessionId: input.sessionId ?? '', destination: 'local', query: input.query,
       memories: state.memories.filter(memory => !this.repository.isMemoryRecallSuppressed(memory.id)), signal,
     } };
   }
@@ -49,7 +52,7 @@ export class MemoryRecallService {
       if (!parsed.success) throw new Error('memory.recallInvalidInput');
       const input = parsed.data, controller = new AbortController();
       const initial = this.#snapshot(input, controller.signal);
-      const digest = recallTextDigest(JSON.stringify([initial.profileId, input.sessionId, input.query]));
+      const digest = recallTextDigest(JSON.stringify([initial.profileId, input.sessionId ?? '', input.query]));
       const previous = this.#operations.get(input.operationId);
       if (previous) {
         if (previous.digest !== digest) throw new Error('memory.recallOperationConflict');
