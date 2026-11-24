@@ -18,12 +18,12 @@ export const ActivityPage = ({ t, locale }: { t(key: string): string; locale: Re
   // Once older events are open, coming back to the window keeps the reader's place.
   const olderOpen = useRef(false);
   const load = useCallback(async (beforeId?: string) => {
-    if (beforeId) olderOpen.current = true;
     const current = ++revision.current.value;
     setBusy(true); setFailed(false);
     try {
       const page = await window.deskpet.tasks.listRunEvents({ limit: PAGE_SIZE, ...(beforeId ? { beforeId } : {}) });
       if (current !== revision.current.value) return;
+      if (beforeId) olderOpen.current = true;
       setItems(items => beforeId ? [...page, ...items] : page);
       setMore(page.length === PAGE_SIZE);
     } catch { if (current === revision.current.value) setFailed(true); }

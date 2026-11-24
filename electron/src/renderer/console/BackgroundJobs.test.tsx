@@ -164,3 +164,14 @@ describe('background text job UI', () => {
   });
 
 });
+
+it('withdraws remote consent when the model changes on the same cloud service', async () => {
+  const cloudOnly: ProviderConfig = { ...provider, id: '6a0f4b7e-2c1d-4f3a-8b9e-0d1c2b3a4f5e', kind: 'openai', name: 'Synthetic cloud only', baseUrl: 'https://api.openai.com/v1', localExecutionConfirmed: undefined, secretState: 'configured' };
+  const f = fixture(); render(<BackgroundJobs providers={[cloudOnly]} locale="en" />); fill();
+  fireEvent.click(screen.getByRole('checkbox'));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Model' }), { target: { value: 'another-model' } });
+  expect(screen.getByRole('checkbox')).not.toBeChecked();
+  fireEvent.click(screen.getByRole('button', { name: 'Run in background' }));
+  await waitFor(() => expect(f.submit).toHaveBeenCalledOnce());
+  expect(f.submit.mock.calls[0]![0].privacy).toBe('local-only');
+});

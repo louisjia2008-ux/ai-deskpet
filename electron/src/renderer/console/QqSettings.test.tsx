@@ -146,3 +146,14 @@ it('sends a single official image to the displayed private binding without recon
   expect(f.sendPrivateImageTest).toHaveBeenCalledExactlyOnceWith(privateBindingId);
   expect(f.configure).not.toHaveBeenCalled();
 });
+
+it('keeps emergency stop available when the stop could not be saved', async () => {
+  const f = setup({ enabled: true, connection: 'online' }); await screen.findByLabelText('QQ AppID');
+  // The running channel was revoked in memory, so later reads say stopped, but the saved stop failed.
+  f.stop.mockImplementationOnce(async () => { f.getState.mockResolvedValue(status({ enabled: true, stopped: true, connection: 'disabled' })); throw new Error('qq.persistFailed'); });
+  fireEvent.click(screen.getByRole('button', { name: 'Emergency stop QQ' }));
+  expect(await screen.findByRole('alert')).toBeVisible();
+  await new Promise(resolve => setTimeout(resolve, 3_200));
+  expect(screen.getByRole('button', { name: 'Emergency stop QQ' })).toBeEnabled();
+  expect(screen.getByRole('alert')).toBeVisible();
+}, 10_000);

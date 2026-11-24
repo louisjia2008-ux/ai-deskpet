@@ -55,7 +55,11 @@ export const BackgroundJobs = ({ providers, locale, openJobId = null }: { provid
   const [model, setModel] = useState(() => enabled[0]?.model ?? '');
   const [instruction, setInstruction] = useState('');
   const [material, setMaterial] = useState('');
-  const [cloudAllowed, setCloudAllowed] = useState(false);
+  // Consent covers exactly one service, endpoint and model; changing any of them withdraws it.
+  const [consentFor, setConsentFor] = useState<string | null>(null);
+  const bindingKey = `${provider?.id ?? ''}|${provider?.baseUrl ?? ''}|${model.trim()}`;
+  const cloudAllowed = consentFor === bindingKey;
+  const setCloudAllowed = (allowed: boolean): void => setConsentFor(allowed ? bindingKey : null);
   // Asked only for cloud services, or after DeskPet refused to run local-only input on this one.
   const [remoteAsked, setRemoteAsked] = useState(false);
   const [jobs, setJobs] = useState<BackgroundJob[]>([]);

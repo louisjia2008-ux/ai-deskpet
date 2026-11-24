@@ -61,7 +61,7 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
   const text = copy[locale], enabled = providers.filter(provider => provider.enabled);
   const [goal, setGoal] = useState(''), [material, setMaterial] = useState('');
   const [providerId, setProviderId] = useState(enabled[0]?.id ?? ''), [model, setModel] = useState('');
-  const [allowRemote, setAllowRemote] = useState(false), [maxMinutes, setMaxMinutes] = useState(10), [maxToolCalls, setMaxToolCalls] = useState(20);
+  const [consentFor, setConsentFor] = useState<string | null>(null), [maxMinutes, setMaxMinutes] = useState(10), [maxToolCalls, setMaxToolCalls] = useState(20);
   const [tasks, setTasks] = useState<ResearchTask[]>([]), [loadError, setLoadError] = useState(false);
   // DeskPet asks about sending to a remote model only for cloud services, or after it refused a local-only run.
   const [remoteAsked, setRemoteAsked] = useState(false);
@@ -71,6 +71,10 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
   const continuations = useRef(new Map<string, { id: string; operationId: string }>());
   const mounted = useRef(true), readSequence = useRef(0);
   const provider = enabled.find(item => item.id === providerId);
+  // Consent covers exactly one service, endpoint and model; changing any of them withdraws it.
+  const bindingKey = `${provider?.id ?? ''}|${provider?.baseUrl ?? ''}|${model.trim()}`;
+  const allowRemote = consentFor === bindingKey;
+  const setAllowRemote = (allowed: boolean): void => setConsentFor(allowed ? bindingKey : null);
   const refresh = useCallback(async (): Promise<void> => {
     const sequence = ++readSequence.current;
     try { const saved = await api.list(); if (mounted.current && sequence === readSequence.current) { setTasks(saved); setLoadError(false); } }

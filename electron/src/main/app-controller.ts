@@ -2527,7 +2527,10 @@ export class AppController {
       let registered = false;
       try { this.#registerHotkey(accelerator); registered = this.#hotkeyRegistered; } catch { registered = false; }
       if (!registered) { this.#registerHotkey(previous); this.#emitApp(); throw new Error('app.hotkeyUnavailable'); }
-      await this.#settings.update({ hotkey: accelerator }); this.#emitApp(); return this.#appState();
+      // If saving fails, the running shortcut goes back to the saved one so they never disagree.
+      try { await this.#settings.update({ hotkey: accelerator }); }
+      catch (cause) { this.#registerHotkey(previous); this.#emitApp(); throw cause; }
+      this.#emitApp(); return this.#appState();
     });
     this.#ipc.register('app:set-auto-launch', consoleOnly, async ({ enabled }) => { this.#autoLaunch.setEnabled(enabled); await this.#settings.update({ autoLaunch: enabled }); this.#emitApp(); return this.#appState(); });
     this.#ipc.register('app:open-login-settings', consoleOnly, async () => {

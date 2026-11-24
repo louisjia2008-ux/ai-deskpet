@@ -142,12 +142,16 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
   // One reader keeps the status current while this page is open. The form is filled from the first
   // successful read (even after a failed first try) and is never overwritten by later polls.
   const formReady = useRef(false);
+  const acting = useRef(false);
+  // A stop whose saved state was not confirmed keeps the stop button, so it can be pressed again.
+  const [stopUnconfirmed, setStopUnconfirmed] = useState(false);
   useEffect(() => {
     const read = (): void => {
       const id = request.current;
+      if (acting.current) return; // an action is running; its own result is the newer state
       void window.deskpet.qq.getState().then(value => {
-        if (id !== request.current) return; // an action finished meanwhile; its result is newer
-        setState(value); setError(false);
+        if (id !== request.current || acting.current) return; // an action started meanwhile; its result is newer
+        setState(value);
         if (!formReady.current) {
           formReady.current = true;
           setAppId(value.appId); setTransport(value.transport); setOnebotUrl(value.onebotUrl || DEFAULT_ONEBOT_URL); setProviderId(value.providerId ?? ''); setModel(value.model ?? '');
@@ -166,8 +170,8 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
     return () => window.clearInterval(timer);
   }, [groupPairing]);
 
-  const perform = async (operation: () => Promise<QqChannelStatus>): Promise<void> => {
-    const id = ++request.current; setBusy(true); setError(false);
+  const perform = async (operation: () => Promise<QqChannelStatus>): Promise<boolean> => {
+    const id = ++request.current; setBusy(true); setError(false); acting.current = true;
     try {
       const value = await operation();
       if (id === request.current) {
@@ -178,8 +182,9 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
           setDaily(value.dailyRequestLimit); setWeb(value.webCallLimit);
         }
       }
-    } catch { if (id === request.current) setError(true); }
-    finally { if (id === request.current) setBusy(false); }
+      return true;
+    } catch { if (id === request.current) setError(true); return false; }
+    finally { acting.current = false; if (id === request.current) setBusy(false); }
   };
   const save = (event: FormEvent): void => {
     event.preventDefault();
@@ -208,8 +213,8 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
     <details className="settings-more"><summary>{locale === 'zh-CN' ? '定时任务规则与限额' : 'Scheduled task rules and limits'}</summary><p className="qq-warning">{copy.pending}</p><p>{copy.cronLimits}</p></details>
     {error && <p role="alert">{copy.failure} <button type="button" className="secondary" disabled={busy} onClick={() => void perform(() => window.deskpet.qq.getState())}>{copy.refresh}</button></p>}
     {/* The emergency stop only exists while QQ is actually running. */}
-    {(state ? !state.stopped && (state.enabled || state.connection !== 'disabled') : error) && <div className="qq-actions">
-      <button type="button" className="danger" onClick={() => { setPairing(null); void perform(() => window.deskpet.qq.stop()); }}>{copy.stop}</button>
+    {(stopUnconfirmed || (state ? !state.stopped && (state.enabled || state.connection !== 'disabled') : error)) && <div className="qq-actions">
+      <button type="button" className="danger" onClick={() => { setPairing(null); void perform(() => window.deskpet.qq.stop()).then(ok => setStopUnconfirmed(!ok)); }}>{copy.stop}</button>
     </div>}
     {!state ? <p role="status">{copy.loading}</p> : <>
       <dl className="qq-status"><dt>{copy.status}</dt><dd>{state.stopped ? copy.stopped : copy[state.connection]}</dd>
