@@ -156,4 +156,5 @@ it('keeps emergency stop available when the stop could not be saved', async () =
   await new Promise(resolve => setTimeout(resolve, 3_200));
   expect(screen.getByRole('button', { name: 'Emergency stop QQ' })).toBeEnabled();
   expect(screen.getByRole('alert')).toBeVisible();
+  window.sessionStorage.clear();
 }, 10_000);

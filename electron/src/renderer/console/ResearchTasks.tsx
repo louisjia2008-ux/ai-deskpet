@@ -96,7 +96,8 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault(); if (submitting.current) return;
     const input = submission.current ?? { operationId: crypto.randomUUID(), goal: goal.trim(), material,
-      providerId, model: model.trim() || null, allowRemote, maxMinutes, maxToolCalls };
+      // Remote consent was given for one model, so a consented task pins it instead of following a default that could change.
+      providerId, model: model.trim() || (allowRemote ? provider?.model ?? null : null), allowRemote, maxMinutes, maxToolCalls };
     if (!input.goal || !input.providerId) return;
     submission.current = input; submitting.current = true; setBusy(true); setSubmissionError(null); setActionError('');
     try {

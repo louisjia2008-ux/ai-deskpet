@@ -221,7 +221,7 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
     {error && <p role="alert">{copy.failure} <button type="button" className="secondary" disabled={busy} onClick={() => void perform(() => window.deskpet.qq.getState())}>{copy.refresh}</button></p>}
     {/* The emergency stop only exists while QQ is actually running. */}
     {(stopUnconfirmed || (state ? !state.stopped && (state.enabled || state.connection !== 'disabled') : error)) && <div className="qq-actions">
-      <button type="button" className="danger" onClick={() => { setPairing(null); void perform(() => window.deskpet.qq.stop()).then(ok => setStopUnconfirmed(!ok)); }}>{copy.stop}</button>
+      <button type="button" className="danger" onClick={() => { setPairing(null); setStopUnconfirmed(true); void perform(() => window.deskpet.qq.stop()).then(ok => { if (ok) setStopUnconfirmed(false); }); }}>{copy.stop}</button>
     </div>}
     {!state ? <p role="status">{copy.loading}</p> : <>
       <dl className="qq-status"><dt>{copy.status}</dt><dd>{state.stopped ? copy.stopped : copy[state.connection]}</dd>
