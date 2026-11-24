@@ -398,6 +398,21 @@ const momentsDiagnosticsRuntime = {
   mainSHA256: '223e58c28f2f14e3ea9b25b9fe5e5df1c8db89a5d30518394cdb5920a9880a0c',
   asarSHA256: '763b6fbe2b7621f709ccc5e603973cc8994e7eb4726130eb396c383a47d5b37d',
 };
+const momentsVisibilityRuntime = {
+  sourceSHA256: '47c02aa7f1619d93ad3a11ebf6b96f282a506a04abadfb70a344ca4b0780e7c4',
+  mainSHA256: '1caf10117592ebeb55d3f319cb33a299dafdd206d01478b184e3d2dca1f3db7f',
+  asarSHA256: 'e53d6959fc11ba3f139ca9f8603d35ebe3a46abcbeaab4c48d0ec94bdf1133ac',
+};
+const groupDigestDeliveryRuntime = {
+  sourceSHA256: '63f268a6d9786bea1b06af1122f670c58ce4ad44b3e22d398383b7090f7c1a0d',
+  mainSHA256: 'd6309b98a3b4f9f83156740b327ad8c472018df6799b8c62d874bad3415b14ce',
+  asarSHA256: '7e999c254ead6e0e5b3b0b5185fddf6814107f0599f83cf58e455834fc6ebd12',
+};
+const wechatOwnerTextRuntime = {
+  sourceSHA256: 'd950ea99fadb7087f3ccc8936ee0040dcb751b837bf4dacc2f905e5af020db41',
+  mainSHA256: '4690dcbba940376f435e9b6a767bcb2f13a112e0aadae5ba682ef0b7239d1361',
+  asarSHA256: 'd9ee99ffc91e705b3a1112ffb78c1e70652f15f20ebf7efd76248d5553a04fc3',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -515,6 +530,12 @@ const reviewedRuntimeManifest = [
   { runtime: modelFollowMomentsRuntime, previous: sameSelfDoctorV3Runtime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   // Moments step diagnostics and reply-control cleanup over the model-follow build, diary still on (2026-11-21).
   { runtime: momentsDiagnosticsRuntime, previous: modelFollowMomentsRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Moments composer visibility OCR fix over the diagnostics build, diary still on (2026-11-23).
+  { runtime: momentsVisibilityRuntime, previous: momentsDiagnosticsRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Group digest readiness and delivery diagnostics over the Moments visibility build, diary still on (2026-11-23).
+  { runtime: groupDigestDeliveryRuntime, previous: momentsVisibilityRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Owner chat text limit, details detection and send diagnostics over the group digest build, diary still on (2026-11-24).
+  { runtime: wechatOwnerTextRuntime, previous: groupDigestDeliveryRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
