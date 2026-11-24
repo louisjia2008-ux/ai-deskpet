@@ -53,9 +53,10 @@ def row(conversation=CONTACT, *, sender=CONTACT, local=11, server="0", created=1
 def poll(request, rows=(), *, baseline_at=10,
          shards=((SHARD, GENERATION),), initial=None, has_more=False):
     if request.get("baseline"):
+        conversations = (request["friend_id"],) if request["op"] == "friend_poll" else (request["owner_id"], *request["group_ids"])
         positions = {f"{shard}/{chat}": {"generation": generation,
                                        "local_id": (initial or {}).get(chat, baseline_at)}
-                     for shard, generation in shards for chat in (request["owner_id"], *request["group_ids"])}
+                     for shard, generation in shards for chat in conversations}
     else:
         positions = {key: value.copy() for key, value in request["cursors"].items()}
     for message in rows:
@@ -142,13 +143,57 @@ class DbIntakeTest(unittest.TestCase):
         self.assertTrue(self.state.mark_sent(group.id))
         self.assertFalse(intake.event_authorized(group))
 
+    def test_owner_plain_text_limit_counts_unicode_characters_and_keeps_full_text(self):
+        self.state.register_transcript_scopes({OWNER: ("private", "Owner")})
+        intake, _ = self.baseline()
+        messages = ["长" * 500, "长" * 501, "长" * 724, "🟢" * 1_000, "🟢" * 1_001]
+        request = intake.request()
+        intake.apply(request, poll(request, [row(local=index, created=index, body=text)
+                                            for index, text in enumerate(messages, start=11)]))
+
+        pending = self.state.pending(OWNER)
+        self.assertEqual([event.observation["text"] for event in pending], messages[:-1])
+        self.assertTrue(all(intake.event_authorized(event) for event in pending))
+        self.assertEqual([entry["text"] for entry in self.state.transcript_batch()["entries"]], messages[:-1])
+        self.assertEqual(self.state.skipped_since(0), [("text", 15)])
+        self.assertEqual(intake.request()["cursors"][f"{SHARD}/{CONTACT}"]["local_id"], 15)
+
+    def test_unavailable_or_malformed_owner_plain_text_is_still_skipped(self):
+        intake, _ = self.baseline()
+        request = intake.request()
+        intake.apply(request, poll(request, [
+            row(local=11, created=11, body="长" * 724, body_available=False),
+            row(local=12, created=12, body=" " * 724),
+            row(local=13, created=13, body="长" * 723 + "\x00"),
+            row(local=14, created=14, body="长" * 723 + "\ud800"),
+        ]))
+        self.assertEqual(self.state.pending(OWNER), ())
+        self.assertEqual(self.state.skipped_since(0), [("text", index) for index in (14, 13, 12, 11)])
+
+    def test_group_and_friend_text_keep_the_previous_limit(self):
+        friend = DbScope("e" * 64, "friend", "f" * 64)
+        intake, _ = self.baseline(self.room, friend)
+        request = intake.request_friend(friend.binding)
+        intake.apply(request, poll(request))
+
+        cases = ((self.room, "member", intake.request(), (ACCOUNT,)),
+                 (friend, friend.conversation_id, intake.request_friend(friend.binding), ()))
+        for scope, sender, request, mentions in cases:
+            with self.subTest(scope=scope.target):
+                rows = [row(scope.conversation_id, sender=sender, local=index, body="🟢" * length, mentions=mentions)
+                        for index, length in ((11, 500), (12, 501))]
+                intake.apply(request, poll(request, rows))
+                event, = self.state.pending(scope.binding)
+                self.assertEqual(event.observation["text"], rows[0]["body"])
+                self.assertTrue(intake.event_authorized(event))
+
     def test_ignored_owner_messages_end_moment_adjacency_without_entering_the_reply_queue(self):
         intake, _ = self.baseline(self.room)
         draft_id = "e" * 64
         cases = [
             ("owner unsupported sticker", {"message_type": 47}, 1, "later"),
             ("owner voice with input off", {"message_type": 34}, 1, "later"),
-            ("oversize owner text", {"body": "长" * 501}, 1, "later"),
+            ("oversize owner text", {"body": "长" * 1_001}, 1, "later"),
             ("unknown private sender", {"sender": "", "message_type": 3}, 1, "later"),
             ("owner unsupported sticker in preview's second", {"message_type": 47}, 0, "later"),
             ("owner unsupported sticker before preview", {"message_type": 47}, -1, "next"),

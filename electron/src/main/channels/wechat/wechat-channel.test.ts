@@ -6,6 +6,25 @@ import { WeChatChannel } from './wechat-channel';
 
 type Control = { run(args: string[], input: object, outputLimit: number, timeout: number): Promise<unknown>; requireConfigured(): Promise<unknown> };
 
+it('keeps verified preflight reasons while preserving the owner delivery status contract', async () => {
+  const bridge = new WeChatChannel('/not-used', '/not-used', null, 'darwin');
+  const run = vi.spyOn(bridge as unknown as Control, 'run');
+  const input = { binding: 'a'.repeat(64), deliveryId: 'b'.repeat(64), text: 'Synthetic digest', digestKind: 'groups' as const };
+  run.mockResolvedValueOnce({ status: 'retry', reason: 'send_draft_mismatch' });
+  await expect(bridge.deliverOwnerOutcome(input)).resolves.toEqual({ status: 'retry', reason: 'send_draft_mismatch' });
+  const owner = { binding: input.binding, deliveryId: input.deliveryId, text: 'Synthetic check-in' };
+  run.mockResolvedValueOnce({ status: 'retry', reason: 'drawer_state_unknown' });
+  await expect(bridge.deliverOwnerOutcome(owner)).resolves.toEqual({ status: 'retry', reason: 'drawer_state_unknown' });
+  run.mockResolvedValueOnce({ status: 'uncertain', reason: 'drawer_state_unknown' });
+  await expect(bridge.deliverOwnerOutcome(owner)).resolves.toEqual({ status: 'uncertain' });
+  run.mockResolvedValueOnce({ status: 'busy', reason: 'send_window_busy' });
+  await expect(bridge.deliverOwner(input)).resolves.toBe('retry');
+  run.mockResolvedValueOnce({ status: 'retry' });
+  await expect(bridge.deliverOwnerOutcome(input)).resolves.toEqual({ status: 'retry' });
+  run.mockResolvedValueOnce({ status: 'retry', reason: 'unrecognized reason' });
+  await expect(bridge.deliverOwnerOutcome(input)).rejects.toThrow();
+});
+
 it.each([
   ['busy', 'busy'],
   ['paused', 'paused'],

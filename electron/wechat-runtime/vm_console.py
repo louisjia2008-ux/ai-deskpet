@@ -119,6 +119,7 @@ class SendWindowChanged(TestError):
 
 SEND_REASONS = frozenset({
     "send_window_missing", "send_window_identity", "send_window_geometry", "send_capture_failed", "send_window_changed",
+    "send_window_busy", "send_listener_paused",
     "send_ocr_failed", "send_target_unbound", "send_target_ambiguous", "title_mismatch", "drawer_state_unknown",
     "drawer_not_open", "drawer_not_closed", "send_owner_profile_unverified", "send_owner_binding_mismatch",
     "send_group_binding_mismatch", "send_friend_binding_mismatch", "send_draft_occupied", "send_draft_mismatch", "send_quote_menu_missing",

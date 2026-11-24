@@ -7,6 +7,11 @@ import './attention-center.css';
 import { ModelBindingIssues } from './ModelBindingIssues';
 
 type Locale = 'en' | 'zh-CN';
+const sendDiagnostics = {
+  en: describeWeChatSendDiagnostics('en'),
+  'zh-CN': describeWeChatSendDiagnostics('zh-CN'),
+};
+const isWeChatSendDiagnostic = (code: string | null): boolean => code !== null && Object.hasOwn(sendDiagnostics.en, code);
 const copy = {
   en: {
     title: 'Background status', intro: 'Features that run while you are not watching. A failure here would otherwise go unnoticed.',
@@ -43,7 +48,7 @@ const copy = {
       telegram: 'Remote chat over Telegram.',
     } satisfies Record<HealthFeature, string>,
     code: {
-      ...describeWeChatSendDiagnostics('en'),
+      ...sendDiagnostics.en,
       'knowledge.indexStale': 'The index has not been updated for more than 24 hours.',
       'knowledge.embeddingModelMissing': 'The selected embedding model is missing from local Ollama.',
       'asr.settings': 'Speech input settings could not be loaded.', 'asr.permission': 'Microphone permission was denied. Allow it in macOS Privacy & Security.',
@@ -148,7 +153,7 @@ const copy = {
       telegram: '通过 Telegram 远程聊天。',
     } satisfies Record<HealthFeature, string>,
     code: {
-      ...describeWeChatSendDiagnostics('zh-CN'),
+      ...sendDiagnostics['zh-CN'],
       'knowledge.indexStale': '索引超过 24 小时未更新。',
       'knowledge.embeddingModelMissing': '本机 Ollama 缺少选用的嵌入模型。',
       'asr.settings': '语音输入设置读取失败。', 'asr.permission': '麦克风权限被拒绝，请在系统隐私与安全性中允许。',
@@ -224,6 +229,8 @@ const transient = { en: 'This usually recovers by itself. If it keeps happening,
   'zh-CN': '通常会自己恢复。一直出现的话，检查网络，或在设置里换一个模型。' };
 const wechatWindow = { en: 'Press “Open settings”, then “Restore WeChat window”. If that does not help, open the virtual machine and check that WeChat is logged in and no dialog covers it.',
   'zh-CN': '点「去设置」，再点「恢复微信窗口」。还不行就打开虚拟机，看看微信是否还登录着、有没有弹窗挡住。' };
+const wechatDrawer = { en: 'In WeChat settings, select “Restore WeChat window”. Open the virtual machine and check the chat details panel in the bound owner chat if the error returns.',
+  'zh-CN': '在微信通道设置里点「恢复微信窗口」。如果再次报错，打开虚拟机，检查已绑定主人私聊的聊天详情面板。' };
 /** What the owner can do about each problem, beside why it happened. */
 const fixes: Record<Locale, { code: Record<string, string>; feature: Partial<Record<HealthFeature, string>>; other: string }> = {
   en: {
@@ -231,6 +238,7 @@ const fixes: Record<Locale, { code: Record<string, string>; feature: Partial<Rec
       'wechat.dropped': 'Nothing to fix. This is a record from the last 24 hours: she skipped a message she could not answer. If you want, check WeChat on your phone for a message that got no reply and answer it yourself. Press “Got it” to clear this; a new skipped message brings it back.',
       'wechat.uncertain': checkWeChat.en, 'wechat.friend_send_uncertain': checkWeChat.en, 'wechat.digest_delivery_uncertain': checkWeChat.en,
       'wechat.cronDeliveryUncertain': checkWeChat.en, 'proactive.deliveryUncertain': checkWeChat.en,
+      'wechat.drawer_state_unknown': wechatDrawer.en, 'wechat.drawer_not_open': wechatDrawer.en, 'wechat.drawer_not_closed': wechatDrawer.en,
       'wechat.momentUncertain': 'Check Moments on your phone. Do not post it again if it is already there. Then press “Got it”.',
       'wechat.momentRestricted': 'Handle the notice in WeChat on your phone, then say 「再发一次」 in the owner chat.',
       'wechat.momentPublishUnconfirmed': 'Check Moments on your phone. Do not post it again if it is already there. Then press “Got it”.',
@@ -262,6 +270,7 @@ const fixes: Record<Locale, { code: Record<string, string>; feature: Partial<Rec
       'wechat.dropped': '不用修。这是最近 24 小时的记录：有条消息她没回成，跳过了。想知道是哪条，可以去手机微信看看谁的消息没人回，需要的话自己回一句。点「知道了」就能消掉提醒，之后再有漏回会重新提醒。',
       'wechat.uncertain': checkWeChat['zh-CN'], 'wechat.friend_send_uncertain': checkWeChat['zh-CN'], 'wechat.digest_delivery_uncertain': checkWeChat['zh-CN'],
       'wechat.cronDeliveryUncertain': checkWeChat['zh-CN'], 'proactive.deliveryUncertain': checkWeChat['zh-CN'],
+      'wechat.drawer_state_unknown': wechatDrawer['zh-CN'], 'wechat.drawer_not_open': wechatDrawer['zh-CN'], 'wechat.drawer_not_closed': wechatDrawer['zh-CN'],
       'wechat.momentUncertain': '去手机上看一下朋友圈，已经发了就不要再发。看完点「知道了」。',
       'wechat.momentRestricted': '在手机微信里处理提示，然后在主人私聊回复「再发一次」。',
       'wechat.momentPublishUnconfirmed': '去手机上看一下朋友圈，已经发了就不要再发。看完点「知道了」。',
@@ -381,7 +390,7 @@ export const HealthPanel = ({ api, locale, onOpen, onIssues, children }: {
       {item.sinceLaunch && <><br />{text.sinceLaunch}</>}
     </p>}
     {item.state !== 'ok' && <div className="attention-actions">
-      <button type="button" className={item.state === 'failing' ? undefined : 'secondary'} onClick={() => onOpen(item.feature)}>{text.open}</button>
+      <button type="button" className={item.state === 'failing' ? undefined : 'secondary'} onClick={() => onOpen(item.feature === 'proactive' && isWeChatSendDiagnostic(item.errorCode) ? 'wechat' : item.feature)}>{text.open}</button>
       {item.state === 'failing' && !item.acknowledged && item.fingerprint && api.acknowledgeHealth
         && <button type="button" className="secondary" disabled={busy} onClick={() => void acknowledge(item)}>{text.acknowledge}</button>}
     </div>}

@@ -101,6 +101,40 @@ it('fails after three additional retries and records only numeric progress', asy
   expect(f.deliverOwner).toHaveBeenCalledTimes(5);
 });
 
+it('preserves the pre-send failure reason across restarts along with multipart progress', async () => {
+  const f = await fixture();
+  f.deliverOwner.mockResolvedValue({ status: 'retry', reason: 'drawer_state_unknown' }).mockResolvedValueOnce('sent');
+  f.current.now = dayAt(16, '21:30');
+  await f.scheduler.tick();
+  for (let retry = 1; retry <= 3; retry++) {
+    f.current.now += 5 * 60_000;
+    await f.reopen().tick();
+  }
+  expect(await f.reopen().health()).toMatchObject({ errorCode: 'wechat.drawer_state_unknown', deliveryProgress: { sent: 1, total: 2 } });
+  expect(new Set(f.deliverOwner.mock.calls.slice(1).map(([part]) => part.deliveryId)).size).toBe(1);
+});
+
+it('waits for listener readiness without doing work or using a delivery retry', async () => {
+  const f = await fixture();
+  f.current.now = dayAt(16, '21:30');
+  f.current.ready = false;
+  await f.scheduler.tick();
+  expect(f.generate).not.toHaveBeenCalled();
+
+  f.current.ready = true;
+  f.deliverOwner.mockResolvedValueOnce('retry');
+  await f.scheduler.tick();
+  f.current.ready = false;
+  f.current.now += 6 * 60_000;
+  await f.scheduler.tick();
+  expect(f.deliverOwner).toHaveBeenCalledOnce();
+
+  f.current.ready = true;
+  await f.scheduler.tick();
+  expect(f.deliverOwner).toHaveBeenCalledTimes(3);
+  expect(await f.scheduler.health()).toMatchObject({ state: 'ok' });
+});
+
 it.each(['ready', 'available'] as const)('expires a retry at the next slot even when %s is false', async key => {
   const f = await fixture();
   f.deliverOwner.mockResolvedValueOnce('sent').mockResolvedValueOnce('retry');

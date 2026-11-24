@@ -97,6 +97,27 @@ it('replays safely after an acknowledgement failure and keeps archived or delete
   expect(chat.listMessages(privateId)).toHaveLength(3);
 });
 
+it('reopens a full owner message and retains the shorter transcript bounds for other roles and scopes', async () => {
+  const text = '😀'.repeat(1_000);
+  const f = await fixture([{ ...incoming, text }, { ...outgoing, text: '🙂'.repeat(500) }]);
+  await f.sync.sync();
+  const chat = new ChatService(await f.reopen());
+  expect(chat.listMessages(wechatSessionId(privateBinding))).toEqual([
+    expect.objectContaining({ role: 'user', content: text }),
+    expect.objectContaining({ role: 'assistant', content: '🙂'.repeat(500) }),
+  ]);
+  expect(f.source.acknowledgeTranscript).toHaveBeenCalledTimes(1);
+
+  for (const entry of [
+    { ...incoming, text: '字'.repeat(1_001) }, { ...incoming, text: text + '😀' }, { ...incoming, text: '\ud800' },
+    ...[outgoing, groupIncoming, friendIncoming].map(entry => ({ ...entry, text: '字'.repeat(501) })),
+  ]) {
+    f.source.readTranscript.mockResolvedValueOnce({ version: 1, entries: [entry], more: false });
+    await expect(f.sync.sync()).rejects.toThrow();
+  }
+  expect(f.source.acknowledgeTranscript).toHaveBeenCalledTimes(1);
+});
+
 it('marks both sides of a friend transcript, preserves the marker on restart, and rejects scope substitution', async () => {
   const f = await fixture([incoming, friendIncoming, friendOutgoing]);
   await f.sync.sync();

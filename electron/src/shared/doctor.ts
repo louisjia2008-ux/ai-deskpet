@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ModelBindingIssue } from './model-bindings';
-import { describeWeChatSendDiagnostics } from './wechat-send-diagnostics';
+import { describeWeChatSendDiagnostics, wechatSendReasonSchema } from './wechat-send-diagnostics';
 import { isWeChatMomentStage, WECHAT_MOMENT_STAGE_LABELS } from './wechat-moment-stages';
 
 /** One problem the doctor noticed. Codes, counts and times only: never message content, names or who sent anything. */
@@ -42,16 +42,23 @@ export const DOCTOR_SELF_TEST_STAGES = ['lock', 'open', 'title', 'paste', 'click
 export const DOCTOR_SELF_TEST_STAGE_LABELS: Record<typeof DOCTOR_SELF_TEST_STAGES[number], string> = {
   lock: '桌面锁', open: '打开会话', title: '目标标题', paste: '粘贴', click: '点击发送', ocrReceipt: '界面回执', dbReceipt: '数据库回执',
 };
-export const doctorSelfTestResultSchema = z.strictObject({
+const doctorSelfTestFields = z.strictObject({
   status: z.enum(['passed', 'failed', 'uncertain', 'busy', 'paused', 'skipped']),
   code: z.enum(['self_test_target', 'self_test_db_unavailable', 'self_test_db_unconfirmed', 'self_test_conflict',
     'self_test_settings_changed', 'self_test_send', 'self_test_payload']).nullable(),
   stages: z.strictObject({ lock: z.boolean(), open: z.boolean(), title: z.boolean(), paste: z.boolean(), click: z.boolean(), ocrReceipt: z.boolean(), dbReceipt: z.boolean() }),
   durationMs: z.number().int().nonnegative(),
-}).refine(result => result.status !== 'passed' || ['lock', 'open', 'title', 'paste', 'click', 'dbReceipt'].every(stage => result.stages[stage as keyof typeof result.stages]),
-  { message: 'A passed self-test requires the complete send chain and a database receipt.' });
+});
+const hasRequiredSendStages = (result: z.infer<typeof doctorSelfTestFields>): boolean =>
+  result.status !== 'passed' || ['lock', 'open', 'title', 'paste', 'click', 'dbReceipt'].every(stage => result.stages[stage as keyof typeof result.stages]);
+const requiredSendStagesMessage = 'A passed self-test requires the complete send chain and a database receipt.';
+export const doctorSelfTestResultSchema = doctorSelfTestFields.extend({ preflightReason: wechatSendReasonSchema.optional() })
+  .refine(hasRequiredSendStages, { message: requiredSendStagesMessage })
+  .refine(result => result.preflightReason === undefined || (result.status === 'failed' && !result.stages.click),
+    { message: 'A preflight reason requires a failure before clicking send.' });
 export type DoctorSelfTestResult = z.infer<typeof doctorSelfTestResultSchema>;
-export const doctorSelfTestRecordSchema = doctorSelfTestResultSchema.safeExtend({ at: z.iso.datetime(), source: z.enum(['auto', 'manual']) });
+export const doctorSelfTestRecordSchema = doctorSelfTestFields.extend({ at: z.iso.datetime(), source: z.enum(['auto', 'manual']) })
+  .refine(hasRequiredSendStages, { message: requiredSendStagesMessage });
 export type DoctorSelfTestRecord = z.infer<typeof doctorSelfTestRecordSchema>;
 export const doctorSelfTestDaySchema = z.strictObject({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u), at: z.iso.datetime(), status: z.enum(['passed', 'failed', 'uncertain']) });
 export type DoctorSelfTestDay = z.infer<typeof doctorSelfTestDaySchema>;
@@ -142,6 +149,7 @@ export interface DoctorStatus {
   /** Newest first. */
   cases: DoctorCase[];
   selfTests: DoctorSelfTestRecord[];
+  latestSelfTestPreflightReason?: DoctorSelfTestResult['preflightReason'];
   selfTestPassRate: number | null;
   manualSelfTestsToday: number;
   vm: z.infer<typeof doctorVmStateSchema>;

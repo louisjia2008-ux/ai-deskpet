@@ -7,6 +7,8 @@ export const wechatSendDiagnostics = {
   send_window_geometry: ['The WeChat window was hidden or its size or position changed.', '微信窗口不可见，或位置和尺寸已变化。'],
   send_capture_failed: ['The WeChat window could not be captured.', '无法读取微信窗口截图。'],
   send_window_changed: ['WeChat lost focus or its window changed during a check.', '核对时微信失去焦点或窗口发生变化。'],
+  send_window_busy: ['Another operation was using the WeChat window.', '微信窗口正在处理其他操作。'],
+  send_listener_paused: ['The WeChat listener was paused before the send.', '发送前微信监听已暂停。'],
   send_ocr_failed: ['WeChat window text could not be recognized reliably.', '无法可靠识别微信窗口文字。'],
   send_target_unbound: ['No verified chat is bound to this send.', '这次发送没有可核验的已绑定会话。'],
   send_target_ambiguous: ['The bound chat could not be identified uniquely.', '找不到唯一匹配的已绑定会话。'],
@@ -32,8 +34,8 @@ export const wechatSendDiagnostics = {
   send_check_failed: ['A preflight safety check prevented the WeChat action.', '微信发送前的安全核对没有通过。'],
 } as const;
 
-type SendReason = keyof typeof wechatSendDiagnostics;
-export const wechatSendReasonSchema = z.enum(Object.keys(wechatSendDiagnostics) as SendReason[]);
+export type WeChatSendReason = keyof typeof wechatSendDiagnostics;
+export const wechatSendReasonSchema = z.enum(Object.keys(wechatSendDiagnostics) as WeChatSendReason[]);
 
 export function describeWeChatSendDiagnostics(locale: 'en' | 'zh-CN'): Record<string, string> {
   const label = locale === 'en' ? 0 : 1;

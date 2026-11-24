@@ -42,6 +42,7 @@ export class DoctorService {
   #state = initial();
   #uncleanExitOf: string | null = null;
   #lastCheckAt: string | null = null;
+  #latestSelfTestPreflightReason: DoctorSelfTestResult['preflightReason'];
   #queue: Promise<unknown> = Promise.resolve();
   #timers: NodeJS.Timeout[] = [];
   #ready = false;
@@ -93,7 +94,8 @@ export class DoctorService {
     const cases = [...this.#state.cases].sort((a, b) => b.openedAt.localeCompare(a.openedAt));
     return { enabled: this.#state.enabled, autoRepair: this.#state.autoRepair, repairs: structuredClone(this.#state.repairs).reverse(), lastCheckAt: this.#lastCheckAt, open: cases.filter(entry => entry.resolvedAt === null).length,
       alertsToday: this.#state.alerts.day === this.#day() ? this.#state.alerts.count : 0, dailyLimit: DOCTOR_DAILY_LIMIT, cases,
-      selfTests: structuredClone(this.#state.selfTests), selfTestPassRate: selfTestPassRate(this.#state.selfTests, this.#now(), this.deps.timeZone, this.#state.selfTestDays),
+      selfTests: structuredClone(this.#state.selfTests), latestSelfTestPreflightReason: this.#latestSelfTestPreflightReason,
+      selfTestPassRate: selfTestPassRate(this.#state.selfTests, this.#now(), this.deps.timeZone, this.#state.selfTestDays),
       manualSelfTestsToday: this.#state.selfTestSchedule.manualDay === this.#day() ? this.#state.selfTestSchedule.manualCount : 0,
       vm: structuredClone(this.#state.vm), diagnosis: this.#state.diagnosis ? { ...this.#state.diagnosis } : null,
       runbooks: Object.fromEntries(cases.map(entry => [entry.code, structuredClone(doctorRunbook(entry.code))])), providerTests: structuredClone(this.#state.providerTests) };
@@ -202,10 +204,13 @@ export class DoctorService {
     try { result = doctorSelfTestResultSchema.parse(await this.deps.wechatSelfTest({ id, text: `【医生】每日发送自检 ${marker}，不用回复。#${id.slice(0, 8)}` })); }
     catch { result = { status: 'uncertain', code: 'self_test_db_unconfirmed', durationMs: Date.now() - started,
       stages: { lock: false, open: false, title: false, paste: false, click: false, ocrReceipt: false, dbReceipt: false } }; }
-    const record = { ...result, ...pending };
+    // The precise reason is session diagnostics. Keep the on-disk record readable by the previous app.
+    const { preflightReason, ...recordedResult } = result;
+    const record = { ...recordedResult, ...pending };
     this.#state = { ...this.#state, selfTestSchedule: applySelfTest(schedule, record, this.#now(), this.deps.timeZone), selfTests: [...this.#state.selfTests, record].slice(-14),
       selfTestDays: selfTestDays(this.#state.selfTestDays, [record], this.deps.timeZone) };
     await this.#store.save(this.#state);
+    this.#latestSelfTestPreflightReason = preflightReason;
     this.deps.changed();
   }
 

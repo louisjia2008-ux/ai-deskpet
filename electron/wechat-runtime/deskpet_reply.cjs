@@ -11,11 +11,13 @@ const defaultModel = 'qwen3.5:0.8b';
 const modelName = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
 const replyTimeoutMs = 55_000;
 const maximumInputLength = 500;
+const maximumOwnerInputLength = 1_000;
 const publicHistoryEntries = 6;
 const ownerHistoryEntries = 16;
 const maximumHistoryCharacters = 6_000;
 const maximumRequestBytes = 131_072;
 const maximumIdentityFrameLength = 12_000;
+const maximumChatInputLength = 32_000;
 const moods = ['happy', 'affection', 'shy', 'sad', 'curious', 'surprised', 'pout', 'angry', 'tired'];
 const { companionName, plainReply, stripCompanionMention } = require('./reply_policy.cjs');
 const env = Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
@@ -24,8 +26,8 @@ function output(payload) {
   process.stdout.write(JSON.stringify(payload) + '\n');
 }
 
-function validMessageText(text) {
-  return typeof text === 'string' && Boolean(text.trim()) && [...text].length <= maximumInputLength;
+function validMessageText(text, limit = maximumInputLength) {
+  return typeof text === 'string' && Boolean(text.trim()) && [...text].length <= limit;
 }
 
 function validPromptText(text) {
@@ -39,9 +41,11 @@ function requestFromLine(line) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
       || Object.keys(value).some(key => !['id', 'target', 'text', 'history', 'model', 'split', 'stickers', 'context', 'quote', 'dailyDigests'].includes(key))
       || typeof value.id !== 'string' || !/^[\w.:/-]{1,128}$/u.test(value.id)
-      || !['private', 'group', 'friend'].includes(value.target) || !validMessageText(value.text)) throw new Error('request.invalid');
+      || !['private', 'group', 'friend'].includes(value.target)) throw new Error('request.invalid');
 
+  const owner = value.target === 'private';
   const quote = value.quote;
+  if (!validMessageText(value.text, owner && quote === undefined ? maximumOwnerInputLength : maximumInputLength)) throw new Error('request.invalid');
   if (quote !== undefined && (typeof quote !== 'string' || !quote.startsWith('引用：') || quote.length <= 3
       || quote.length > 203 || quote.trim() !== quote || /[\p{C}\p{Zl}\p{Zp}]/u.test(quote))) throw new Error('request.invalid');
   const dailyDigests = value.dailyDigests;
@@ -51,9 +55,10 @@ function requestFromLine(line) {
       || dailyDigests.items.some(item => !validMessageText(item) || item !== item.trim() || /[\p{C}\p{Zl}\p{Zp}]/u.test(item))
       || dailyDigests.items.reduce((bytes, item) => bytes + Buffer.byteLength(item), 0) > 6_000)) throw new Error('request.invalidContext');
   const history = Object.hasOwn(value, 'history') ? value.history : [];
-  if (!Array.isArray(history) || history.length > (value.target === 'private' ? ownerHistoryEntries : publicHistoryEntries) || history.some(entry =>
+  if (!Array.isArray(history) || history.length > (owner ? ownerHistoryEntries : publicHistoryEntries) || history.some(entry =>
     !entry || typeof entry !== 'object' || Array.isArray(entry) || Object.keys(entry).length !== 2
-    || !['user', 'assistant'].includes(entry.role) || !validMessageText(entry.text)
+    || !['user', 'assistant'].includes(entry.role)
+    || !validMessageText(entry.text, owner && entry.role === 'user' ? maximumOwnerInputLength : maximumInputLength)
   ) || history.reduce((characters, entry) => characters + [...entry.text].length, 0) > maximumHistoryCharacters) {
     throw new Error('request.invalidHistory');
   }
@@ -207,7 +212,11 @@ function groundedChat(incoming) {
   return null;
 }
 
-function replyPrompt(input, incoming) {
+function replyRetryInstruction(name) {
+  return `\n请用一句话回答：从${name}的身份对发消息的人说话，可用“你”，不称呼对方为${name}。不补充事实，不复述原句，省略动作。`;
+}
+
+function formatReplyPrompt(input, incoming) {
   const route = input.target === 'group' ? '群聊' : input.target === 'friend' ? '好友私聊' : '私聊';
   const greeting = /打(?:个)?招呼|(?:向|给).{0,10}问好|回.{0,10}你好/u.test(incoming);
   const name = companionName(input.context?.name);
@@ -230,6 +239,27 @@ function replyPrompt(input, incoming) {
     `以下是同一${route}的聊天数据。历史仅供理解最新来信：${JSON.stringify({ history: turns, latest: { speaker: '对方', text: incoming, ...(input.quote ? { quote: input.quote } : {}) } })}`,
     ...(greeting ? [input.target === 'group' ? '请直接向群里的大家问好。' : '请直接向发消息的人问好。'] : []),
   ].join('\n');
+}
+
+function replyPrompt(input, incoming) {
+  let prompt = formatReplyPrompt(input, incoming);
+  if (input.target !== 'private') return prompt;
+
+  // The isolated worker submits through chat:send, which counts UTF-16 units.
+  const limit = maximumChatInputLength - replyRetryInstruction(companionName(input.context?.name)).length;
+  let history = input.history;
+  let memories = input.context?.memories ?? [];
+  while (prompt.length > limit && (history.length || memories.length)) {
+    if (history.length) {
+      const paired = history[0].role === 'user' && history[1]?.role === 'assistant';
+      history = history.slice(paired ? 2 : 1);
+    } else {
+      memories = memories.slice(0, -1);
+    }
+    prompt = formatReplyPrompt({ ...input, history, context: { ...input.context, memories } }, incoming);
+  }
+  if (prompt.length > limit) throw new Error('request.invalidContext');
+  return prompt;
 }
 
 async function generate(page, providerId, input) {
@@ -261,8 +291,7 @@ async function generate(page, providerId, input) {
   assertCurrentDay();
   if (first) return first;
   const retry = parse(await deskPetText(page, providerId, input.model,
-    `${prompt}\n请用一句话回答：从${name}的身份对发消息的人说话，可用“你”，不称呼对方为${name}。不补充事实，不复述原句，省略动作。`,
-    title, expiresAt, workerIdentity));
+    prompt + replyRetryInstruction(name), title, expiresAt, workerIdentity));
   assertCurrentDay();
   if (retry) return retry;
   if (grounded) return { reply: grounded.fallback, sticker: false };

@@ -19,7 +19,7 @@ import time
 from unicodedata import normalize
 
 import vm_console as ui
-from wechat_db_intake import valid_article
+from wechat_db_intake import OWNER_PLAIN_TEXT_LIMIT, valid_article
 from wechat_messages import MessageSnapshot, key, new_messages, select_quote
 from wechat_reply_settings import CLOUD_GROUP_ID, FRIEND_ID, SHA256
 from wechat_rich_message import forward_owner_command, valid_quote_excerpt, valid_rich
@@ -27,7 +27,7 @@ from wechat_service import prepare_runtime
 from wechat_state import HISTORY_TURNS, OWNER_HISTORY_CHARACTERS, OWNER_HISTORY_TURNS
 
 
-CLOUD_REQUEST_LIMIT = 32_768
+CLOUD_REQUEST_LIMIT = 65_536
 CLOUD_RESPONSE_LIMIT = 4_096
 LOCAL_CONTEXT_RESPONSE_LIMIT = 131_072
 IDENTITY_FRAME_LENGTH = 12_000
@@ -38,6 +38,7 @@ CHARACTER_MOODS = frozenset(("happy", "affection", "shy", "sad", "curious", "sur
 PRIVATE_REPLY_TIMEOUT = 335
 # A group turn may search the web; DeskPet allows it 120 s.
 GROUP_REPLY_TIMEOUT = 150
+STANDARD_INPUT_LIMIT = 500
 ASSISTANT_REPLY_LIMIT = 500
 ARTICLE_ACTIONS = {"收藏", "收藏这篇", "先放着", "收藏列表", "我的收藏", "继续聊"}
 ARTICLE_COLLECTION_COMMAND = re.compile(r"(?:打开收藏\s+[a-fA-F0-9]{8,12}|(?:收藏列表|我的收藏)\s+[0-9]{1,3})\Z")
@@ -165,15 +166,18 @@ def cloud_request_from_bytes(raw):
             or any(type(request[name]) is not bool for name in ("split", "stickers"))):
         raise ValueError("Invalid cloud reply authority.")
 
-    def valid_text(value):
-        return (isinstance(value, str) and 0 < len(value) <= 500 and bool(value.strip())
+    def valid_text(value, limit):
+        return (isinstance(value, str) and 0 < len(value) <= limit and bool(value.strip())
                 and not any(0xD800 <= ord(character) <= 0xDFFF for character in value))
 
     history = request["history"]
     turns = OWNER_HISTORY_TURNS if target == "private" else HISTORY_TURNS
-    if (not valid_text(request["text"]) or not isinstance(history, list) or len(history) > turns * 2
+    owner_reply = target == "private" and fields in (required, local, local_result)
+    current_limit = OWNER_PLAIN_TEXT_LIMIT if owner_reply and "quote" not in request else STANDARD_INPUT_LIMIT
+    if (not valid_text(request["text"], current_limit) or not isinstance(history, list) or len(history) > turns * 2
             or len(history) % 2 or any(not isinstance(entry, dict) or set(entry) != {"role", "text"}
-            or entry["role"] != ("assistant" if index % 2 else "user") or not valid_text(entry["text"])
+            or entry["role"] != ("assistant" if index % 2 else "user")
+            or not valid_text(entry["text"], OWNER_PLAIN_TEXT_LIMIT if owner_reply and index % 2 == 0 else STANDARD_INPUT_LIMIT)
             for index, entry in enumerate(history))
             or sum(len(entry["text"]) for entry in history) > OWNER_HISTORY_CHARACTERS):
         raise ValueError("Invalid cloud reply context.")
@@ -276,6 +280,8 @@ def ephemeral_owner_reply(text):
 
 
 def owner_command_candidate(text):
+    if len(text) > STANDARD_INPUT_LIMIT:
+        return False
     stripped = text.strip()
     if stripped in INBOX_ACTIONS or INBOX_ARGUMENT_COMMAND.fullmatch(stripped) or ephemeral_owner_reply(stripped):
         return True
@@ -332,6 +338,8 @@ def owner_command_plan(runtime, request):
 
 
 def read_tool_candidate(text, account, target):
+    if len(text) > STANDARD_INPUT_LIMIT:
+        return False
     match = re.fullmatch(r"(?:@([^\s]+)[\s\u2005]+)?/(search|read|calc|time)(?:\s+.*)?", text.strip(), re.IGNORECASE)
     return bool(match and (match.group(1) is None or (target == "group" and match.group(1) == account)))
 

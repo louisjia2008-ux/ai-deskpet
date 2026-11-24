@@ -33,6 +33,7 @@ _MAX_SERVER_ID = 2**64 - 1
 _MAX_QUEUE = 6
 _MAX_CONTROLS = 32
 _TEXT_TYPE = 1
+OWNER_PLAIN_TEXT_LIMIT = 1_000
 _VOICE_TYPE = 34
 _ARTICLE_TYPE = 49
 _ARTICLE_SUBTYPE = 5
@@ -499,7 +500,9 @@ class DbIntake:
                 text = rich_display_text(rich)
         else:
             return None
-        if (not 0 < len(text) <= 500 or not text.strip()
+        owner_plain_text = scope.target == "private" and row["type"] == _TEXT_TYPE and article is None
+        length_limit = OWNER_PLAIN_TEXT_LIMIT if owner_plain_text else 500
+        if (not 0 < len(text) <= length_limit or not text.strip()
                 or any(unicodedata.category(char) == "Cs" or char == "\x00" for char in text)):
             return None
         database = {key: row[key] for key in ("conversation_id", "sender_id", "server_id", "database", "local_id",

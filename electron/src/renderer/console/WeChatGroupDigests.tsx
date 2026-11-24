@@ -20,7 +20,8 @@ const copy = {
     loading: 'Loading group digests…', resultsError: 'Could not read the daily digests.',
     empty: 'Daily group digests will appear here after the first run.',
     expand: 'Show details', sent: 'Sent to owner’s private chat', uncertain: 'Delivery could not be confirmed',
-    pending: 'Waiting for delivery confirmation', failed: 'Some groups could not be summarized or private delivery was incomplete.',
+    pending: 'Waiting for delivery confirmation', retrying: 'Waiting to retry private delivery',
+    failed: 'Some groups could not be summarized or private delivery was incomplete.',
     interrupted: 'The run stopped early. Results generated so far are shown here.',
   },
   'zh-CN': {
@@ -37,7 +38,7 @@ const copy = {
     loading: '正在读取群聊精华…', resultsError: '未能读取每日精华。',
     empty: '首次生成后，群聊精华会显示在这里。',
     expand: '查看详细版', sent: '已发到主人私聊', uncertain: '未能确认是否送达',
-    pending: '等待确认私聊送达', failed: '部分群未能生成精华，或私聊发送未完成。',
+    pending: '等待确认私聊送达', retrying: '等待重试私聊发送', failed: '部分群未能生成精华，或私聊发送未完成。',
     interrupted: '处理已中断，已生成的结果仍可查看。',
   },
 };
@@ -178,9 +179,16 @@ export function WeChatGroupDigestResults({ api, locale }: {
     return () => { active = false; };
   }, [api, revision]);
 
-  const delivery = (value: string) => value === 'succeeded' ? t.sent
-    : value === 'uncertain' ? t.uncertain : value === 'delivering' ? t.pending
-      : value === 'interrupted' ? t.interrupted : t.failed;
+  const delivery = (value: string) => {
+    switch (value) {
+      case 'succeeded': return t.sent;
+      case 'uncertain': return t.uncertain;
+      case 'delivering': return t.pending;
+      case 'retrying': return t.retrying;
+      case 'interrupted': return t.interrupted;
+      default: return t.failed;
+    }
+  };
   return <section role="tabpanel" aria-label={t.title}>
     <div className="button-row">
       <button type="button" className="secondary" disabled={results === null && !error}

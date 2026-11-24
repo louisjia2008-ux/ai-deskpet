@@ -223,6 +223,36 @@ def line(text, x=30, y=30):
     return {"text": text, "x": x, "y": y, "width": 60, "height": 22}
 
 
+class VisibilityTest(unittest.TestCase):
+    def test_only_the_composer_can_confirm_the_approved_scope(self):
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "composer.png"
+            frame = Image.new("RGB", (430, 200), "#aeaeae")
+            ImageDraw.Draw(frame).rectangle((35, 20, 394, 179), fill="#fafafa")
+            frame.save(path)
+            visible = line("Visible To", x=89, y=110)
+            feed = line("All", x=395, y=113)
+            public = line("All", x=310, y=107)
+            private = line("Private", x=309, y=107)
+            for choice, labels, expected in (
+                ("all", [public, feed], True),
+                ("private", [private, feed], True),
+                ("all", [private, feed], False),
+                ("all", [feed], False),
+                ("all", [public, private, feed], False),
+            ):
+                with self.subTest(choice=choice, labels=labels):
+                    self.assertEqual(
+                        moments.visibility_matches({}, path, (0, 0, *frame.size), [visible, *labels], choice), expected)
+
+            unreadable = line("A|I", x=310, y=107)
+            for rescanned, expected in ((["All"], True), (["Private"], False), (["Not All"], False),
+                                        (["All", "Private"], False), ([], False)):
+                with self.subTest(rescanned=rescanned), patch.object(ui, "recognize", return_value=[line(t) for t in rescanned]):
+                    self.assertEqual(moments.visibility_matches({"ocr": "fake-ocr"}, path, (0, 0, *frame.size),
+                                                               [visible, unreadable, feed], "all"), expected)
+
+
 class FakeComposer:
     """Only this fixture receives guest commands. It models focus, overlays, and receipts."""
 
@@ -302,6 +332,8 @@ class FakeComposer:
         draw = ImageDraw.Draw(frame)
         left, top, width, height = self.active.geometry
         draw.rectangle((left, top, left + width - 1, top + height - 1), fill="white")
+        if self.active == self.moments:
+            draw.rectangle((left + width - 35, top, left + width - 1, top + height - 1), fill="#aeaeae")
         font_path = Path("/System/Library/Fonts/Hiragino Sans GB.ttc")
         font = ImageFont.truetype(str(font_path), size=18) if font_path.exists() else ImageFont.load_default()
         draw.text((left + 19, top + 25), self.warning if warning else "Moment composer", fill="black", font=font)
@@ -338,7 +370,7 @@ class FakeComposer:
                     "window_named": self.window_named, "wait_window": self.wait_window,
                     "require_label": self.require_label, "click_line": self.click_line,
                     "composer_text": lambda *_: "" if self.stage == "text_verify" else payload["text"],
-                    "lines_in": lambda *_: [line("Private", x=210)],
+                    "lines_in": lambda *_: [line("Visible To", x=220, y=470), line("Private", x=410, y=470)],
                     "find_label": lambda *_args, **_kwargs: None,
                     "confirmed": lambda *_: self.stage != "confirm" and self.restriction != "after_click",
                 }),

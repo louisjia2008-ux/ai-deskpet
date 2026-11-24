@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import type { AttentionAPI } from '../../shared/attention';
 import { DOCTOR_REPAIR_ACTIONS, DOCTOR_SELF_TEST_STAGES, DOCTOR_SELF_TEST_STAGE_LABELS, describeDoctorCase, type DoctorCase, type DoctorStatus } from '../../shared/doctor';
+import { wechatSendDiagnostics } from '../../shared/wechat-send-diagnostics';
 import './attention-center.css';
 import { ModelBindingIssues } from './ModelBindingIssues';
 
@@ -111,6 +112,9 @@ export const DoctorPanel = ({ api, locale }: { api: AttentionAPI; locale: string
         <p>{lang === 'zh-CN' ? '14 天通过率：' : '14-day pass rate: '}{status.selfTestPassRate === null ? '—' : `${Math.round(status.selfTestPassRate * 100)}%`}</p>
         <p className="attention-note">{lang === 'zh-CN' ? `按有结果的每日自动自检统计；今天手动 ${status.manualSelfTestsToday}/5 次。` : `Completed automatic test days; manual tests today ${status.manualSelfTestsToday}/5.`}</p>
         {latest && <><p>{time(latest.at)} · {latest.status} · <code>{latest.code}</code>{' · '}{latest.durationMs} ms</p>
+          {status.latestSelfTestPreflightReason && <p className="attention-note">
+            {wechatSendDiagnostics[status.latestSelfTestPreflightReason][lang === 'en' ? 0 : 1]} <code>wechat.{status.latestSelfTestPreflightReason}</code>
+          </p>}
           <ul>{DOCTOR_SELF_TEST_STAGES.map(stage => <li key={stage}>{lang === 'zh-CN' ? DOCTOR_SELF_TEST_STAGE_LABELS[stage] : stage}：{latest.stages[stage] ? '✓' : '—'}</li>)}</ul></>}
       </article>
       {status.vm.latest && <article className="attention-card"><h2>{lang === 'zh-CN' ? '微信虚拟机' : 'WeChat VM'}</h2>

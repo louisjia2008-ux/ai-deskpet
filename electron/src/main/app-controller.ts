@@ -95,7 +95,7 @@ import { AutoLaunchService } from './auto-launch';
 import { ProfileBackupService, refreshPendingRestoreProof } from './profile-backup';
 import { runtimeIdentity } from './runtime-identity';
 import { isIsolatedProfile, wechatWorkerSwitch } from './profile-location';
-import { WeChatChannel } from './channels/wechat/wechat-channel';
+import { WeChatChannel, type OwnerDeliveryOutcome } from './channels/wechat/wechat-channel';
 import { AppHeartbeat } from './channels/wechat/app-heartbeat';
 import { WeChatCloud, wechatModelBindingId } from './channels/wechat/wechat-cloud';
 import type { WeChatAssistantReply, WeChatCloudRequest, WeChatReplyCompletion } from './channels/wechat/wechat-cloud';
@@ -105,6 +105,7 @@ import { withWeChatQuote, publicPersona, type WeChatDailyDigests } from './chann
 import { earliestWeChatDigestExpiry } from './domain/context-provenance';
 import { momentText, WECHAT_MOMENT_TEXT_LIMIT, WeChatMoments } from './channels/wechat/wechat-moments';
 import type { WeChatAssistant, WeChatChannelState, WeChatCloudRoute, WeChatGroupRule, WeChatPinnedCloudRoute } from '../shared/wechat-channel';
+import type { WeChatSendReason } from '../shared/wechat-send-diagnostics';
 import type { HealthSnapshot } from '../shared/attention';
 import { WeChatOwnerCommands } from './channels/wechat/wechat-owner-commands';
 import { WeChatArticles, type WeChatArticleGuard } from './channels/wechat/wechat-articles';
@@ -360,7 +361,7 @@ export class AppController {
   #wechatCronFailureAt: string | null = null;
   /** Listener transcript IDs already recorded in the assistant conversation. */
   readonly #wechatHandled = new Set<string>();
-  #wechatOwnerTarget: { binding(): Promise<string | null>; stickers(): Promise<boolean>; deliver(input: { binding: string; deliveryId: string; text: string; stickerAsset?: string; voice?: boolean }): Promise<'sent' | 'retry' | 'uncertain'> } | null = null;
+  #wechatOwnerTarget: { binding(): Promise<string | null>; stickers(): Promise<boolean>; deliver(input: { binding: string; deliveryId: string; text: string; stickerAsset?: string; voice?: boolean }): Promise<OwnerDeliveryOutcome> } | null = null;
   #restorePrepared = false;
   readonly #character: CharacterService;
   readonly #vault: SafeStorageVault;
@@ -732,6 +733,7 @@ export class AppController {
         const trigger = this.#repository.snapshot().automationTriggers.find(item => item.id === message.automationTriggerId);
         if (trigger?.kind === 'proactive' && preferences.destination !== 'desktop') {
           const voiceToken = preferences.wechatVoice ? this.#speechGate.reserve() : null;
+          let preflightReason: WeChatSendReason | undefined;
           try {
             if (preferences.wechatVoice && !voiceToken) throw new Error('proactive.speechBusy');
             if (message.contextTrace?.privacy !== 'cloud-allowed') throw new Error('proactive.privateResult');
@@ -743,11 +745,12 @@ export class AppController {
             this.#automaticTasks.assertJob(job, 'publish');
             const outcome = await this.#wechatOwnerTarget.deliver({ binding, deliveryId: wechatAssistantDeliveryId(trigger.id),
               text: wechatAssistantText(message.content, this.#resolvedLocale()), ...(preferences.wechatVoice ? { voice: true } : {}) });
-            if (outcome !== 'sent') throw new Error(outcome === 'uncertain' ? 'proactive.deliveryUncertain' : 'proactive.deliveryFailed');
+            if (outcome.status === 'retry') preflightReason = outcome.reason;
+            if (outcome.status !== 'sent') throw new Error(outcome.status === 'uncertain' ? 'proactive.deliveryUncertain' : 'proactive.deliveryFailed');
             this.#proactiveError = null;
           } catch (error) {
             deliveryFailed = true;
-            this.#proactiveError = backgroundFailureCode(error, 'proactive.deliveryFailed', [
+            this.#proactiveError = preflightReason ? `wechat.${preflightReason}` : backgroundFailureCode(error, 'proactive.deliveryFailed', [
               'proactive.speechBusy', 'proactive.privateResult', 'proactive.wechatUnbound', 'proactive.contextStale', 'proactive.deliveryUncertain',
             ]);
             this.#proactiveFailureAt = new Date().toISOString();
@@ -1684,7 +1687,7 @@ export class AppController {
     this.#wechatOwnerTarget = {
       binding: async () => (await wechat.cloudBindings()).private ?? null,
       stickers: async () => (await wechat.getState()).reply.stickers,
-      deliver: input => wechat.deliverOwner(input),
+      deliver: input => wechat.deliverOwnerOutcome(input),
     };
     const ownerBinding = async (): Promise<string> => {
       const binding = (await wechat.cloudBindings()).private;
@@ -1841,6 +1844,10 @@ export class AppController {
     this.#wechatGroupDigest = new WeChatDigestScheduler(join(this.#managedRoot, 'wechat-group-digest.enc.json'), this.#vault, {
       feature: 'wechat-group-digest',
       available: () => wechatActive() && !configuringGroupDigests,
+      ready: async () => {
+        const state = await wechat.getState();
+        return state.configured && !state.paused && !state.stale && (state.state === 'running' || state.state === 'degraded');
+      },
       quiet: now => isProactiveQuiet(this.#proactive.getPolicy(), now),
       ownerBinding: ownerBindingOrNull,
       spec: async () => {
@@ -1858,7 +1865,7 @@ export class AppController {
           complete: (group, prompt, data, run) => completeDigest(run.binding, group.cloud, settings.provider, 'group-digest')(prompt, data, run),
         }, context);
       },
-      deliverOwner: input => wechat.deliverOwner({ ...input, digestKind: 'groups' }),
+      deliverOwner: input => wechat.deliverOwnerOutcome({ ...input, digestKind: 'groups' }),
     });
     this.#ipc.register('wechat-digests:get-groups', consoleOnly, async () => {
       if (!wechatActive()) return { settings: defaultWeChatDigestGroupSettings(), groups: [], providers: [], available: false };
@@ -3450,17 +3457,19 @@ export class AppController {
     }
     this.#noteWeChatHandled(deliveryId);
     // The same delivery ID makes a retry of an attempted send report its first outcome.
+    let preflightReason: WeChatSendReason | undefined;
     for (let attempt = 0; attempt < 4 && !this.#closing; attempt++) {
       await assertCurrent();
-      const result = await target.deliver({ binding, deliveryId, text, ...(stickerAsset ? { stickerAsset } : {}) }).catch(() => 'retry' as const);
-      if (result !== 'retry') {
-        this.#wechatCronError = result === 'sent' ? null : 'wechat.cronDeliveryUncertain';
-        if (result === 'sent') this.#wechatCronSuccessAt = new Date().toISOString(); else this.#wechatCronFailureAt = new Date().toISOString();
+      const outcome = await target.deliver({ binding, deliveryId, text, ...(stickerAsset ? { stickerAsset } : {}) }).catch(() => null);
+      if (outcome && outcome.status !== 'retry') {
+        this.#wechatCronError = outcome.status === 'sent' ? null : 'wechat.cronDeliveryUncertain';
+        if (outcome.status === 'sent') this.#wechatCronSuccessAt = new Date().toISOString(); else this.#wechatCronFailureAt = new Date().toISOString();
         return;
       }
+      preflightReason = outcome?.reason;
       await new Promise(resolve => setTimeout(resolve, 30_000));
     }
-    this.#wechatCronError = 'wechat.cronDeliveryFailed';
+    this.#wechatCronError = preflightReason ? `wechat.${preflightReason}` : 'wechat.cronDeliveryFailed';
     this.#wechatCronFailureAt = new Date().toISOString();
   }
 

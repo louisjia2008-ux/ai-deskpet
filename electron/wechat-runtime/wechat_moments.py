@@ -368,6 +368,46 @@ def require_label(settings, path, region, kind, **options):
     return line
 
 
+def visibility_matches(settings, path, region, lines, choice):
+    anchors = [line for line in lines if label_matches(line["text"], LABELS["visible"])]
+    if len(anchors) != 1:
+        return False
+    visible = anchors[0]
+    start = visible["x"] + visible["width"]
+    scan_y = visible["y"] + visible["height"] + 3
+    left, top, width, height = region
+    with Image.open(path, formats=("PNG",)) as frame:
+        end = min(left + width, frame.width)
+        if not (max(0, left) <= start < end and max(0, top) <= scan_y < min(top + height, frame.height)):
+            return False
+        # The inline composer overlays a dimmed feed within the same X11 window.
+        # Follow the blank strip just below the label to the edge of the composer.
+        strip = frame.crop((start, scan_y, end, scan_y + 1)).convert("RGB")
+    background = strip.getpixel((0, 0))
+    boundary = next((start + x for x in range(1, strip.width) if strip.getpixel((x, 0)) != background), None)
+    if boundary is None:
+        return False
+    shown = [line for line in lines if abs(line["y"] - visible["y"]) < 12
+             and start < line["x"] and line["x"] + line["width"] <= boundary]
+    if len(shown) != 1:
+        return False
+    candidate = shown[0]
+    observed = key(candidate["text"])
+    if observed in (*LABELS["all"], *LABELS["private"]):
+        return observed in LABELS[choice]
+    # Vision can read the small "All" as "A|I" at desktop scale. Read the
+    # same control at a larger size and still require the exact approved label.
+    x, y = candidate["x"], candidate["y"]
+    box = (max(start, x - 5), max(top, y - 5), min(boundary, x + candidate["width"] + 5),
+           min(top + height, y + candidate["height"] + 5))
+    enlarged = path.with_name("visibility.png")
+    with Image.open(path, formats=("PNG",)) as frame:
+        crop = frame.crop(box)
+        crop.resize((crop.width * 3, crop.height * 3), Image.Resampling.LANCZOS).save(enlarged)
+    rescanned = ui.recognize(settings["ocr"], enlarged)
+    return len(rescanned) == 1 and key(rescanned[0]["text"]) in LABELS[choice]
+
+
 def composer_text(x, y):
     ui.guest(f"xdotool mousemove {x} {y} click 1")
     ui.clear_clipboard()
@@ -442,11 +482,11 @@ def publish(settings, path, request, guest_paths, *, before_post, diagnostics):
     click_line(require_label(settings, path, region, choice, seconds=3))
     click_line(require_label(settings, path, region, "ok", seconds=2))
     time.sleep(0.8)
-    visible = require_label(settings, path, region, "visible", seconds=3)
-    shown = [line for line in lines_in(settings, path, region)
-             if abs(line["y"] - visible["y"]) < 12 and line["x"] > visible["x"] + visible["width"]]
-    if len(shown) != 1 or not label_matches(shown[0]["text"], LABELS[choice]):
-        raise ui.TestError("朋友圈可见范围与设置不一致。")
+    deadline = time.monotonic() + 3
+    while not visibility_matches(settings, path, region, lines_in(settings, path, region), choice):
+        if time.monotonic() >= deadline:
+            raise ui.TestError("朋友圈可见范围与设置不一致。")
+        time.sleep(0.4)
     diagnostics.stage = "text_verify"
     if composer_text(x, y) != request["text"]:
         raise ui.TestError("朋友圈草稿文字在发布前发生了变化。")
