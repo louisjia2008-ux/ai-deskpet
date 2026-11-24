@@ -70,4 +70,20 @@ async function runCancellable(start, { signal, timeoutMs, cancel = () => {}, tim
   }
 }
 
-module.exports = { sleep, waitUntil, runCancellable, abortError };
+// Share one native route deadline across its initial approach and every leg.
+async function withRouteDeadline(ctx, timeoutMs, halt, timedOut, run) {
+  if (ctx.signal?.aborted) throw abortError(ctx.signal);
+  const deadline = Date.now() + timeoutMs, expiry = new AbortController();
+  const signal = ctx.signal ? AbortSignal.any([ctx.signal, expiry.signal]) : expiry.signal;
+  const timer = setTimeout(() => { expiry.abort('path_timeout'); halt(); }, timeoutMs);
+  const remaining = () => Math.max(0, deadline - Date.now());
+  try {
+    return await run({ ...ctx, signal }, remaining);
+  } catch (error) {
+    if (ctx.signal?.aborted) throw abortError(ctx.signal);
+    if (expiry.signal.aborted || !remaining()) return timedOut();
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+
+module.exports = { sleep, waitUntil, runCancellable, abortError, withRouteDeadline };

@@ -18,7 +18,7 @@ async function boundedWork(bot, ctx, { timeoutMs, check, allow = ctx.workArea, l
   const controller = new AbortController();
   const signal = ctx.signal ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
   const cancel = () => controller.abort('work_budget');
-  const timer = setTimeout(cancel, timeoutMs);
+  const timer = Number.isFinite(timeoutMs) ? setTimeout(cancel, timeoutMs) : null;
   const sample = () => { if (!check()) cancel(); };
   bot.on?.('physicsTick', sample);
   try {

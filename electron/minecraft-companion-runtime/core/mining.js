@@ -22,7 +22,7 @@ const defaultSkills = require('./skills');
 const { posKey } = require('./blacklist');
 const { ledgerFor, ledgerTarget, recordTarget } = require('./failure-ledger');
 const { failure, isComplete, resultFrom } = require('./action-result');
-const { abortError } = require('./confirm');
+const { abortError, withRouteDeadline } = require('./confirm');
 const { blockTarget, watchDestination } = require('./target-recovery');
 const { pickItem, stableSolid } = require('./materials');
 
@@ -354,7 +354,10 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
   };
   const [dx, dz] = DIRS[dir];
   const next = add(mine.front, dx, descend ? -1 : 0, dz);
-  if (ctx.workArea && !ctx.workArea(next)) return fail('search_area_exhausted');
+  if (ctx.workArea && !ctx.workArea(next)) {
+    mine.retiring = true;
+    return fail('search_area_exhausted');
+  }
   if (posKey(next) in mine.cells || mine.tried[attempt]) return blocked('visited');
   const step = inspectStep((x, yy, z) => bot.blockAt(new Vec3(x, yy, z)), mine.front, dir,
     { descend, surfaceY: mine.surfaceY - 1, known: (c) => knownOpen(mine, c) });
@@ -515,23 +518,19 @@ function cardinalRejoin(bot, from, target) {
 }
 
 async function rejoinTunnel(bot, ctx, mine, target, actions) {
-  if (ctx.signal?.aborted) throw abortError(ctx.signal);
-  const deadline = Date.now() + REJOIN_MS, expiry = new AbortController();
-  const signal = ctx.signal ? AbortSignal.any([ctx.signal, expiry.signal]) : expiry.signal;
-  const scoped = { ...ctx, signal };
-  const timer = setTimeout(() => { expiry.abort('path_timeout'); (actions.haltBody || defaultActions.haltBody)(bot); }, REJOIN_MS);
-  const remaining = () => Math.max(0, deadline - Date.now());
-  const check = () => {
-    if (ctx.signal?.aborted) throw abortError(ctx.signal);
-    return !expiry.signal.aborted && remaining() > 0;
-  };
-  const go = async p => {
-    if (!check()) return fail('path_timeout');
-    const result = await actions.goTo(bot, scoped, new goals.GoalBlock(p.x, p.y, p.z),
-      { timeoutMs: remaining(), retryNoProgress: false, arrived: at => near(at.floored(), p, 0.5) });
-    return check() ? result : fail('path_timeout');
-  };
-  try {
+  const timeout = () => fail('path_timeout');
+  return withRouteDeadline(ctx, REJOIN_MS, () => (actions.haltBody || defaultActions.haltBody)(bot),
+    timeout, async (scoped, remaining) => {
+    const check = () => {
+      if (ctx.signal?.aborted) throw abortError(ctx.signal);
+      return !scoped.signal.aborted && remaining() > 0;
+    };
+    const go = async p => {
+      if (!check()) return fail('path_timeout');
+      const result = await actions.goTo(bot, scoped, new goals.GoalBlock(p.x, p.y, p.z),
+        { timeoutMs: remaining(), retryNoProgress: false, arrived: at => near(at.floored(), p, 0.5) });
+      return check() ? result : fail('path_timeout');
+    };
     const first = await go(target);
     if (first.ok) return first;
     if (first.reason !== 'no_progress') return first;
@@ -560,13 +559,7 @@ async function rejoinTunnel(bot, ctx, mine, target, actions) {
     } finally {
       for (const k of Object.keys(restricted)) if (profile[k] === restricted[k]) profile[k] = saved[k];
     }
-  } catch (error) {
-    if (ctx.signal?.aborted) throw abortError(ctx.signal);
-    if (expiry.signal.aborted || remaining() <= 0) return fail('path_timeout');
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+  });
 }
 
 /** The tunnel cell the bot stands in (or right next to), as a key into mine.cells. */

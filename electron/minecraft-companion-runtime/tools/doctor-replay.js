@@ -49,6 +49,7 @@ async function replay(input, { stationaryOnly = false, measureRequiredMaterials 
   const sequenceLines = new Map();
   let lines = 0;
   let accepted = 0;
+  let skippedNonJson = 0;
   let acceptMs = 0;
   let acceptMaxMs = 0;
 
@@ -65,7 +66,8 @@ async function replay(input, { stationaryOnly = false, measureRequiredMaterials 
     try {
       row = JSON.parse(line);
     } catch {
-      throw new Error(`Invalid JSON on line ${lines}`);
+      skippedNonJson += 1;
+      continue;
     }
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
       throw new Error(`Expected a JSON object on line ${lines}`);
@@ -118,7 +120,7 @@ async function replay(input, { stationaryOnly = false, measureRequiredMaterials 
     alerts, recordedAlerts, alertEvidenceLines, incidents, autonomyChoices,
     alertCount: alerts.length, incidentCount: incidents.length,
     stationarySegments, longestStationarySegment, missingSamples,
-    stats: { lines, accepted, acceptMs, acceptMaxMs, elapsedMs: performance.now() - started },
+    stats: { lines, accepted, skippedNonJson, acceptMs, acceptMaxMs, elapsedMs: performance.now() - started },
   };
 }
 
@@ -138,8 +140,8 @@ async function main(args) {
   });
   if (values['stationary-stdin']) {
     if (positionals.length) throw new Error('--stationary-stdin takes JSONL on standard input');
-    const { stationarySegments, longestStationarySegment, missingSamples } = await replay(process.stdin, { stationaryOnly: true });
-    console.log(JSON.stringify({ stationarySegments, longestStationarySegment, missingSamples }));
+    const { stationarySegments, longestStationarySegment, missingSamples, stats } = await replay(process.stdin, { stationaryOnly: true });
+    console.log(JSON.stringify({ stationarySegments, longestStationarySegment, missingSamples, skippedNonJson: stats.skippedNonJson }));
     return;
   }
   if (positionals.length !== 1) throw new Error('Usage: node tools/doctor-replay.js [--json] [--measure-required-materials] <core.jsonl | ->');
@@ -151,6 +153,7 @@ async function main(args) {
     return;
   }
   console.log(`${result.incidentCount} incidents, ${result.alertCount} alerts`);
+  if (result.stats.skippedNonJson) console.log(`${result.stats.skippedNonJson} non-JSON lines skipped`);
   const evidenceLines = new Map(result.alerts.map((alert, index) => [alert, result.alertEvidenceLines[index]]));
   for (const incident of result.incidents) {
     console.log(`${incident.incidentId} ${incident.severity}`);

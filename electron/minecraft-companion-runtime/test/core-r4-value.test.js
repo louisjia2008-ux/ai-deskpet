@@ -2,12 +2,13 @@
 
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
+const { EventEmitter } = require('node:events');
 const { chooseNext, createDirector } = require('../core/director');
 const { stepRetryAt } = require('../core/planner');
 const { createDefaultCards } = require('../core/goals/registry');
 const { complete, failure } = require('../core/action-result');
 
-function fixture(cards, state) {
+function fixture(cards, state, bot) {
   let at = 0, goal, governor, generation = 0, director;
   const events = [];
   const brain = {
@@ -23,7 +24,7 @@ function fixture(cards, state) {
       director.handleEvent({ type: 'goal_cleared', goal: previous.name, generation: previous.generation, reason });
     },
   };
-  director = createDirector({ brain, cards, stageOf: () => 1, now: () => at, idleMs: 0,
+  director = createDirector({ brain, bot, cards, stageOf: () => 1, now: () => at, idleMs: 0,
     perceive: () => state, onEvent: event => events.push(event) });
   director.enable();
   function yieldGoal(fields) {
@@ -32,7 +33,11 @@ function fixture(cards, state) {
     director.handleEvent({ ...fields, type: 'goal_yielded', goal: previous.name, generation: previous.generation });
   }
   return { director, events, at: next => { at = next; }, yieldGoal, step: (step, result) => governor.stepOutcome(step, result, () => {}),
-    planning: () => governor.planning(), boundary: result => governor.outcome(result, 1_000) };
+    planning: () => governor.planning(), boundary: result => governor.outcome(result, 1_000),
+    async run(work) {
+      const ctx = { perceive: () => state };
+      return await governor.before(ctx) || governor.run(ctx, work);
+    } };
 }
 
 const card = (id, options = {}) => ({
@@ -166,4 +171,68 @@ test('the eighth start failure excludes its planner source for ten minutes', () 
   assert.equal(stepRetryAt(nextStand, run.planning()), 0);
   run.at(600_000);
   assert.equal(stepRetryAt(station, run.planning()), 0);
+});
+
+
+test('a stalled card waits sixty seconds and resumes its existing physical work clock', () => {
+  let remaining = 6;
+  const run = fixture([card('iron_tools', { work: () => ({ remaining, readiness: 0.3 }) })], day);
+  assert.equal(run.director.tick(), 'iron_tools');
+  run.at(840_000);
+  run.director.tick({ holdBody: true });
+  assert.equal(run.events.at(-1).reason, 'card_stalled');
+  run.at(899_999);
+  assert.equal(run.director.tick(), null);
+  run.at(900_000);
+  assert.equal(run.director.tick(), 'iron_tools');
+  assert.equal(run.events.at(-1).sinceProgressMs, 900_000);
+  remaining--;
+  run.at(960_000);
+  assert.equal(run.boundary(complete(false)), null);
+  assert.equal(run.events.at(-1).sinceProgressMs, 0);
+});
+
+test('the periodic stall check sees work that the server confirmed during a step', () => {
+  let remaining = 6;
+  const run = fixture([card('iron_tools', { work: () => ({ remaining, readiness: 0.3 }) })], day);
+  run.director.tick();
+  run.at(840_000);
+  remaining--;
+  run.director.tick();
+  assert.equal(run.director.status().current, 'iron_tools');
+  assert.equal(run.events.at(-1).sinceProgressMs, 0);
+});
+
+test('an overdue value handoff cannot immediately reselect the same stale card', () => {
+  let challenger = 0;
+  const run = fixture([card('iron_tools', { work: () => ({ remaining: 6, readiness: 0.3 }) }),
+    card('cobble_generator', { demand: () => challenger })], day);
+  assert.equal(run.director.tick(), 'iron_tools');
+  run.at(666_805);
+  challenger = 3;
+  const change = run.boundary(complete(false));
+  assert.equal(change.reason, 'card_value_changed');
+  run.yieldGoal(change);
+  challenger = 0;
+  run.at(670_075);
+  assert.equal(run.director.tick(), null);
+  run.at(726_805);
+  assert.equal(run.director.tick(), 'iron_tools');
+  assert.equal(run.events.at(-1).sinceProgressMs, 726_805);
+});
+
+test('direct body movements in a bounded card also stop before 96 blocks from home', async () => {
+  const state = { ...day, position: { x: 0, y: 64, z: 0 } };
+  const bot = Object.assign(new EventEmitter(), { entity: { position: { ...state.position } } });
+  const run = fixture([card('iron_tools', { bounded: true })], state, bot);
+  assert.equal(run.director.tick(), 'iron_tools');
+  const result = await run.run(ctx => {
+    bot.entity.position.x = 95.5;
+    bot.emit('physicsTick');
+    assert.equal(ctx.signal.aborted, true);
+    return complete(false);
+  });
+  assert.equal(result.kind, 'material');
+  assert.equal(result.reason, 'search_area_exhausted');
+  assert.equal(bot.listenerCount('physicsTick'), 0);
 });

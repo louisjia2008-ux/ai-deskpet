@@ -5,7 +5,7 @@
 
 const { Vec3 } = require('vec3');
 const { stepRetryAt } = require('../planner');
-const { familyOf } = require('../knowledge');
+const { countKey, familyOf } = require('../knowledge');
 const { naturalCover } = require('../natural-cover');
 const { createAttempt, failure, isComplete, resultFrom, waiting, factsOf } = require('../action-result');
 
@@ -39,6 +39,37 @@ function rememberShortfall(memory, kb, result) {
     const family = familyOf(name, kb);
     if (family) memory.shortfall[family] = { extra: short, until: Date.now() + 120000 };
   }
+}
+
+async function surfaceFirst(bot, ctx, actions) {
+  const result = await actions.surface?.(bot, ctx);
+  if (result?.progress === false) return null;
+  if (result) ctx.record('surface', { ok: isComplete(result), reason: result.wait?.reason ?? result.reason });
+  return result;
+}
+
+async function gatherInLoadedRange(bot, ctx, skills, options) {
+  const result = await skills.gatherOne(bot, ctx, options);
+  return result.reason === 'no_target_in_range' ? skills.gatherOne(bot, ctx, { ...options, radius: 128 }) : result;
+}
+
+function shortfallRequirements(memory, inventory, kb) {
+  const needs = [];
+  for (const [key, entry] of Object.entries(memory.shortfall)) {
+    if (entry.until < Date.now()) delete memory.shortfall[key];
+    else needs.push({ key, count: countKey(key, inventory, kb) + entry.extra });
+  }
+  return needs;
+}
+
+async function recoverToward(bot, ctx, actions, memory, point) {
+  memory.recovery = false;
+  ctx.record('recovery', { at: bot.entity.position.floored() });
+  const restored = await actions.unstick(bot, ctx);
+  if (restored?.wait) { memory.recovery = true; return restored; }
+  const target = point && new Vec3(point.x, point.y, point.z);
+  return target && bot.entity.position.distanceTo(target) > 16
+    ? actions.goNear(bot, ctx, target, 3, { timeoutMs: 120000 }) : { ok: true };
 }
 
 async function placeStation(bot, ctx, { skills, station = 'crafting_table', avoid, from = 2, to = 4, columns = ring }) {
@@ -139,4 +170,5 @@ function furnaceStock(inventory, furnace) {
   return inventory;
 }
 
-module.exports = { createPlannerRunner, exploreFor, furnaceStock, rememberShortfall, placeStation, runPlanned, DOWN };
+module.exports = { createPlannerRunner, exploreFor, furnaceStock, gatherInLoadedRange, rememberShortfall,
+  placeStation, recoverToward, runPlanned, shortfallRequirements, surfaceFirst, DOWN };

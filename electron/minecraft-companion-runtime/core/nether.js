@@ -314,35 +314,32 @@ function scaffoldCount(bot) {
   return bot.inventory.items().filter((i) => SCAFFOLD.includes(i.name)).reduce((n, i) => n + i.count, 0);
 }
 
-function applyNetherMovements(bot) {
+function applyRealmMovements(bot, flag, settings, protectedBlocks, stepCost) {
   const m = bot.pathfinder?.movements;
-  if (!m || m.companionNether) return () => {};
-  const saved = { maxDropDown: m.maxDropDown, digCost: m.digCost, cantBreak: new Set(m.blocksCantBreak), steps: m.exclusionAreasStep.length,
-    scaffold: m.scafoldingBlocks, sprint: m.sprintSetting ?? m.allowSprinting };
-  m.companionNether = true;
-  m.maxDropDown = 3;
-  // Netherrack breaks in an instant, so plain paths tunnel straight through
-  // hills: one long walk wore out an iron pickaxe. Walk around when there is a way.
-  m.digCost = 6;
-  m.scafoldingBlocks = netherScaffolding(bot);
-  for (const name of NEVER_BREAK) {
+  if (!m || m[flag]) return () => {};
+  const changes = { maxDropDown: 3, allowSprinting: false, ...settings };
+  const saved = Object.fromEntries(Object.keys(changes).map(key => [key, m[key]]));
+  saved.allowSprinting = m.sprintSetting ?? saved.allowSprinting;
+  const steps = m.exclusionAreasStep.length;
+  const cantBreak = new Set(m.blocksCantBreak);
+  Object.assign(m, changes, { [flag]: true });
+  for (const name of protectedBlocks) {
     const id = bot.registry.blocksByName[name]?.id;
     if (Number.isInteger(id)) m.blocksCantBreak.add(id);
   }
-  // Fortress bridges hang 30 blocks over lava: no sprinting (a sprint overshoots
-  // a turn and walks off the side). A cost on cells beside a drop was tried and
-  // dropped: it sent walks the long way round, or tunnelling through hills.
-  m.allowSprinting = false;
-  m.exclusionAreasStep.push((block) => (block?.position ? lavaRisk(bot, block.position) : 0));
+  m.exclusionAreasStep.push(stepCost);
   return () => {
-    m.maxDropDown = saved.maxDropDown;
-    m.digCost = saved.digCost;
-    m.scafoldingBlocks = saved.scaffold;
-    m.allowSprinting = saved.sprint;
-    m.blocksCantBreak = saved.cantBreak;
-    m.exclusionAreasStep.length = saved.steps;
-    m.companionNether = false;
+    m.exclusionAreasStep.length = steps;
+    m.blocksCantBreak = cantBreak;
+    Object.assign(m, saved, { [flag]: false });
   };
+}
+
+function applyNetherMovements(bot) {
+  if (!bot.pathfinder?.movements || bot.pathfinder.movements.companionNether) return () => {};
+  // Prefer walking around hills and take fortress turns without sprinting.
+  return applyRealmMovements(bot, 'companionNether', { digCost: 6, scafoldingBlocks: netherScaffolding(bot) }, NEVER_BREAK,
+    block => block?.position ? lavaRisk(bot, block.position) : 0);
 }
 
 /** Quartz walks own their excavation: native paths may only use existing ground. */
@@ -432,5 +429,5 @@ module.exports = {
   SCAFFOLD,
   netherScaffolding, scaffoldCount, withLavaMarginsLifted,
   dimension, inNether, findPortal, portalFrame, portalSiteOk, findPortalSite, buildPortalStep, ignite, travel, leavePortal,
-  applyNetherMovements, applyWalkOnlyMovements, lavaRisk, lavaNear, NEVER_BREAK,
+  applyRealmMovements, applyNetherMovements, applyWalkOnlyMovements, lavaRisk, lavaNear, NEVER_BREAK,
 };

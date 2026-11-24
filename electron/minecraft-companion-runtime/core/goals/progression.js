@@ -65,7 +65,7 @@ function createProgression({ bot, kb, homeOf, avoidFor }) {
   const noDebuff = () => Object.values(bot.entity?.effects || {}).every((effect) =>
     bot.registry.effects?.[effect.id]?.type === 'good');
   const fit = (s) => s.isDay === true && s.health >= 18 && s.food >= 18 && noDebuff() && upgrades(bot).length === 0;
-  const ready = (s, m, supplies) => !m.homePending && inOverworld() && holds(s, [...IRON, ...DIAMOND, ...supplies]) && fit(s);
+  const ready = (s, m, supplies) => !m.homePending && inOverworld() && holds(s, [...IRON, ...DIAMOND, ...supplies]);
   const chestKey = (p) => `${p.x},${p.y},${p.z}`;
   const chests = (m) => [homeOf(m).chest, ...(m.extraChests || [])];
   const atChest = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
@@ -207,7 +207,7 @@ function createProgression({ bot, kb, homeOf, avoidFor }) {
     card('nether_return', 0, () => here() === 'the_nether', () => createNetherExpeditionGoal({ bot, blazeRods: 0, witherSkulls: 0, trades: 0 }),
       { expedition: true, safeReturn: true }),
     card('ender_pearls', 4, (s, m) => inOverworld() && range(m) >= 5 && !m.homePending && s.isDay === false
-      && s.health >= 18 && s.food >= 16 && holds(s, IRON) && blaze(s, m) >= 14 && pearls(s, m) < 14,
+      && holds(s, IRON) && blaze(s, m) >= 14 && pearls(s, m) < 14,
       (m) => createHuntPearlsGoal({ bot, count: Math.max(1, 14 - (chestCounts(m).ender_pearl || 0)) }),
       { expedition: true, budgetStage: 4 }),
     card('end_supplies', 5, (s, m) => inOverworld() && range(m) >= 5 && !milestones(m).dragon

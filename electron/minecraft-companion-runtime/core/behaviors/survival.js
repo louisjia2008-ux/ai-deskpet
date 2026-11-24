@@ -9,7 +9,7 @@ const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
 const { BAND } = require('../brain');
 const { DANGER } = require('../scheduling');
-const { createForaging, FOOD_MOBS } = require('../work-budget');
+const { boundedWork, createForaging, FOOD_MOBS } = require('../work-budget');
 const { nightBudget } = require('./nightRest');
 const { sleep, waitUntil, abortError } = require('../confirm');
 const { isFireResistancePotion, hasEffect } = require('../netherStructures');
@@ -675,20 +675,12 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       bot.entity.velocity.y = Math.max(bot.entity.velocity.y, 0.42);
     }
   };
-  async function swimTo(ctx, point, until, maxTicks = 150) {
-    try {
-      for (let i = 0; i < maxTicks * t.swimScale && !until(); i += 1) {
-        await quenchInPassing();
-        await hitInPassing();
-        await bot.lookAt(point, true);
-        for (const control of ['jump', 'forward', 'sprint']) bot.setControlState(control, true);
-        hopOffFloor();
-        await sleep(100, ctx.signal);
-      }
-    } finally {
-      for (const control of ['jump', 'forward', 'sprint']) bot.setControlState(control, false);
-    }
-  }
+  const moveBody = actions.moveBodyToward || defaultActions.moveBodyToward;
+  const swimTo = (ctx, point, until, maxTicks = 150) => moveBody(bot, ctx, async () => {
+    await quenchInPassing();
+    await hitInPassing();
+    return point;
+  }, maxTicks * t.swimScale, until, { sprint: true, tickMs: 100, exactAim: true, afterControls: hopOffFloor });
   // A dig under way when the bot dies never settles (mineflayer drops its
   // listeners on death): leave_lava then held the body for the last hour of a
   // run, respawned in the overworld. Bounded, and given up on abort.
@@ -737,13 +729,8 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       await digRoof(ctx);
       try { await bot.equip(block, 'hand'); } catch { return; }
       try {
-        await bot.look(bot.entity.yaw, -Math.PI / 2, true);
-        bot.setControlState('jump', true);
-        await waitUntil(() => bot.entity.position.y >= floor.position.y + 2, { timeoutMs: 2500, signal: ctx.signal });
-        await bot.placeBlock(floor, new Vec3(0, 1, 0));
-      } catch { /* checked by the next round's floor */ } finally {
-        bot.setControlState('jump', false);
-      }
+        await defaultActions.jumpPlace(bot, ctx, floor, floor.position.offset(0, 1, 0), { waitMs: 2500, rise: 1, keepJump: true });
+      } catch { /* checked by the next round's floor */ }
       await waitUntil(() => bot.entity.onGround, { timeoutMs: 1500, signal: ctx.signal }).catch(() => {});
     }
   }
@@ -1059,35 +1046,29 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     },
     async run(ctx) {
       bot.pathfinder?.setGoal(null);
+      const trapped = bot.companionSelfStuck?.state();
+      if (trapped && !airColumn() && actions.digWaterExit) {
+        const dry = await boundedWork(bot, ctx, { timeoutMs: 5000, check: () => true, limitResult: () => false },
+          body => actions.digWaterExit(bot, body));
+        if (dry) return { ok: true };
+      }
       bot.setControlState('jump', true);
       try {
-        // Under a ceiling no swim reaches air: take the water away instead.
-        if (!airColumn() && typeof actions.drainPocket === 'function' && await actions.drainPocket(bot, ctx)) return { ok: true, drained: true };
-        for (let i = 0; i < 40 && bot.oxygenLevel < 20 && bot.entity.isInWater; i += 1) {
-          // Under a ledge (the shore's rock reaching out over the water): swim
-          // sideways to open air. Rising alone pinned the head under the lip
-          // until the bot drowned, a third of a block from open water.
-          const air = airColumn();
-          if (air && (air.x !== Math.floor(bot.entity.position.x) || air.z !== Math.floor(bot.entity.position.z))) {
-            await bot.lookAt(new Vec3(air.x + 0.5, bot.entity.position.y + 1.6, air.z + 0.5), true);
-            bot.setControlState('forward', true);
-          } else {
-            bot.setControlState('forward', false);
+        // Walling off flow cannot drain a source that already fills the body.
+        if (!airColumn() && (!trapped || bot.inventory.items().some(i => i.name === 'bucket'))
+          && actions.drainPocket && await actions.drainPocket(bot, ctx)) return { ok: true, drained: true };
+        await moveBody(bot, ctx, async () => {
+          const air = airColumn(), here = bot.entity.position;
+          if (air) {
+            if (air.x !== Math.floor(here.x) || air.z !== Math.floor(here.z)) return new Vec3(air.x + 0.5, here.y + 1.6, air.z + 0.5);
+            return null;
           }
-          // Swimming up into a ceiling with no air beside it (a flooded pit or
-          // tunnel): dig it open. Floating in water a block takes 25 times as
-          // long as on the ground: give it the time.
-          const above = bot.blockAt(bot.entity.position.offset(0, 2, 0).floored());
-          if (!air && above && above.boundingBox === 'block' && bot.canDigBlock(above)) {
-            // Bare-handed (every pickaxe worn out) cobblestone takes ten
-            // seconds: a four-second limit never broke the lid of a flooded
-            // hole, and the bot surfaced under it for hours.
-            const digMs = typeof bot.digTime === 'function' ? bot.digTime(above) : 0;
-            await actions.digBlock(bot, ctx, above, { timeoutMs: Math.max(15000, digMs + 1500) });
-            bot.setControlState('jump', true);
+          const roof = bot.blockAt(here.offset(0, 2, 0).floored());
+          if (roof && roof.boundingBox === 'block' && bot.canDigBlock(roof)) {
+            await actions.digBlock(bot, ctx, roof, { timeoutMs: Math.max(15000, (bot.digTime?.(roof) || 0) + 1500) });
           }
-          await sleep(100, ctx.signal);
-        }
+          return null;
+        }, 40, () => !(bot.oxygenLevel < 20 && bot.entity.isInWater), { tickMs: 100, exactAim: true });
       } finally {
         bot.setControlState('jump', false);
         bot.setControlState('forward', false);
@@ -1108,7 +1089,8 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
 
   // Buried (sand fell in on it on the climb out of a pit): eyes inside a full
   // block cost a heart every half second. Nothing else noticed: the bot ate,
-  // then hiddenFor to heal in there, and suffocated. Dig the head free first.
+  // then hid to heal in there, and suffocated.
+  const falling = b => /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/.test(b?.name);
   const eyeBlock = () => (bot.entity?.position ? bot.blockAt(bot.entity.position.offset(0, 1.62, 0).floored()) : null);
   const unbury = {
     name: 'unbury',
@@ -1121,7 +1103,20 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       // More sand can follow the first block down.
       for (let i = 0; i < 6 && fullCube(eyeBlock()); i += 1) {
         const block = eyeBlock();
-        ctx.record('unbury', { block: block.name });
+        if (falling(block)) {
+          const read = p => bot.blockAt(p), column = bot.entity.position.floored();
+          for (const side of SIDES) {
+            const target = column.plus(side), centre = target.offset(0.5, 0, 0.5);
+            if (!safeStand(read, target) || falling(read(target.offset(0, 2, 0)))) continue;
+            const arrived = () => bot.entity.position.floored().equals(target) && freeOfContact(bot, bot.entity.position)
+              && Math.hypot(bot.entity.position.x - centre.x, bot.entity.position.z - centre.z) <= 0.2
+              && safeStand(read, target) && !fullCube(eyeBlock());
+            const ok = await actions.moveBodyToward(bot, ctx, centre.offset(0, 1.62, 0), 12, arrived, { jump: false });
+            ctx.record('unbury', { block: block.name, action: 'sideways', column, target, ok });
+            if (ok) return { ok: true };
+          }
+        }
+        ctx.record('unbury', { block: block.name, action: 'dig' });
         if (typeof bot.canDigBlock === 'function' && !bot.canDigBlock(block)) return { ok: false, reason: 'cannot_dig' };
         const dug = await actions.digBlock(bot, ctx, block, { timeoutMs: 15000 });
         if (!dug.ok) return dug;

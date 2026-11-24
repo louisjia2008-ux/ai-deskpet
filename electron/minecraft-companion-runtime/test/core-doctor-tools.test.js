@@ -62,6 +62,10 @@ test('doctor replay matches live emissions and ignores the harness snapshots on 
   assert.deepEqual(result.alertEvidenceLines, [[1, 11], [1, 22]]);
 });
 
-test('doctor replay reports a broken JSONL record with the source line number', async () => {
-  await assert.rejects(replay(Readable.from(['{}\n', '{\n'])), /Invalid JSON on line 2/);
+test('doctor skips interleaved Node warnings while preserving physical source lines', async () => {
+  const row = index => JSON.stringify({ experiment: 'sample', observation: observation(index) }) + '\n';
+  const result = await replay(Readable.from([row(0), '(node) MaxListenersExceededWarning\n',
+    ...Array.from({ length: 10 }, (_, index) => row(index + 1))]), { stationaryOnly: true });
+  assert.equal(result.stats.skippedNonJson, 1);
+  assert.deepEqual(result.alertEvidenceLines, [[1, 7], [1, 12]]);
 });

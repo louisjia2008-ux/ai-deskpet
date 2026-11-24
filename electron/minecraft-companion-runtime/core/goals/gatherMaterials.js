@@ -33,7 +33,8 @@ const nether = require('../nether');
 const { quartzToolReserve } = require('../quartzTools');
 const { blockTarget } = require('../target-recovery');
 const { createNetherQuartzGoal, QUARTZ_MIN_FOOD, quartzFoodMatch, quartzFoodCount, quartzProtection } = require('./netherQuartz');
-const { createPlannerRunner, exploreFor, furnaceStock, rememberShortfall, runPlanned } = require('./common');
+const { createPlannerRunner, exploreFor, furnaceStock, gatherInLoadedRange, recoverToward, rememberShortfall,
+  runPlanned, shortfallRequirements, surfaceFirst } = require('./common');
 
 const DOWN = [new Vec3(0, -1, 0)];
 // Out on the surface only after dark: string waits for night, not for a cave.
@@ -336,15 +337,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
   // Everything but mining happens up top: out of the mine along its own tunnel, a leg at a time.
   async function climbOut(ctx) {
     const leg = await mining.leaveMine(bot, ctx, memory, actions);
-    if (leg) return leg;
-    return surfaceFirst(ctx);
-  }
-
-  async function surfaceFirst(ctx) {
-    if (typeof actions.surface !== 'function' || surfaceRetryAt > Date.now()) return null;
-    const result = await actions.surface(bot, ctx);
-    if (result?.progress === false) return null;
-    if (result) ctx.record('surface', { ok: isComplete(result), reason: result.wait?.reason ?? result.reason });
+    if (leg || surfaceRetryAt > Date.now()) return leg || null;
+    const result = await surfaceFirst(bot, ctx, actions);
     if (result?.kind && !['start', 'interrupted'].includes(result.kind)) surfaceRetryAt = Date.now() + 60000;
     return result;
   }
@@ -400,10 +394,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         // Elsewhere only ore in the open (surface, cave mouths): never a
         // pathfinder tunnel straight down to buried ore.
         const exclude = deep && step.key !== 'raw_iron' ? (p) => !mining.exposed(bot, p) : undefined;
-        let result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch, exclude });
-        if (result.reason === 'no_target_in_range') {
-          result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch, exclude, radius: 128 });
-        }
+        const result = await gatherInLoadedRange(bot, ctx, skills, { blocks: step.blocks, dropMatch, exclude });
         if (result.reason === 'no_target_in_range') return deep ? mine(ctx, step, dropMatch) : explore(ctx, step.key);
         // Gravel gives flint one time in ten: the gravel is the progress.
         if (step.rare && result.reason === 'drops_not_collected') return { ok: true, drop: 'missed' };
@@ -578,11 +569,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     // owed(). Ask the planner for that same bag amount plus the remaining
     // debt, so one sword cannot satisfy both credits when two are requested.
     // Keep it visible as a tool for planning other materials.
-    const reqs = debts.map((r) => ({ ...r, count: r.count + (carry(r.key) ? countKey(r.key, inventory, kb) : 0) }));
-    for (const [key, entry] of Object.entries(memory.shortfall)) {
-      if (entry.until < Date.now()) { delete memory.shortfall[key]; continue; }
-      reqs.unshift({ key, count: countKey(key, inventory, kb) + entry.extra });
-    }
+    const reqs = shortfallRequirements(memory, inventory, kb).reverse().concat(debts.map(r =>
+      ({ ...r, count: r.count + (carry(r.key) ? countKey(r.key, inventory, kb) : 0) })));
     let step = plan(ctx, { requirements: reqs, inventory, stations: placedStations() });
     // About to go (back) down a mine from up top: take its supplies along.
     // Down there, running out of stone pickaxes sends the bot to the depot,
@@ -664,17 +652,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         ctx.record('unstick', { at: bot.entity.position.floored() });
         return actions.unstick(bot, ctx);
       }
-      if (memory.recovery) {
-        memory.recovery = false;
-        ctx.record('recovery', { at: bot.entity.position.floored() });
-        const restored = await actions.unstick(bot, ctx);
-        if (restored?.wait) { memory.recovery = true; return restored; }
-        // The chest is home: everything else is decided from there.
-        if (bot.entity.position.distanceTo(new Vec3(chest.x, chest.y, chest.z)) > 16) {
-          return actions.goNear(bot, ctx, new Vec3(chest.x, chest.y, chest.z), 3, { timeoutMs: 120000 });
-        }
-        return { ok: true };
-      }
+      if (memory.recovery) return recoverToward(bot, ctx, actions, memory, chest);
       const result = await runOnce(ctx);
       if (result.wait) return result;
       if (isComplete(result)) {

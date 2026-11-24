@@ -19,8 +19,8 @@ function pocket({ shaft = false, protect = () => false } = {}) {
   const put = (p, name) => terrain.set(p.toString(), name);
   const read = p => {
     const position = p.floored(), { x, y, z } = position;
-    const name = terrain.get(position.toString()) || (x === 34 && z === -4 && [59, 60].includes(y) ? 'water'
-      : (shaft ? x === 34 && z === -4 && y >= 62 : x === 36 && [59,60,61].includes(y)) ? 'air'
+    const name = terrain.get(position.toString()) || (x === 34 && z === -4 && y >= 59 && y <= (shaft ? 61 : 60) ? 'water'
+      : (shaft ? x === 34 && z === -4 && y >= 63 : x === 36 && [59,60,61].includes(y)) ? 'air'
       : y < feet.y ? 'gravel' : 'stone');
     return { name, position, diggable: name !== 'air', boundingBox: ['water', 'air'].includes(name) ? 'empty' : 'block' };
   };
@@ -29,7 +29,11 @@ function pocket({ shaft = false, protect = () => false } = {}) {
   const items = [{ name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 8 }];
   const bot = { entity: { position: feet.offset(0.5, 0.2, 0.5), isInWater: true, onGround: false },
     blockAt: read, companionPlayerBlock: protect, inventory: { items: () => items }, canDigBlock: () => true,
-    async dig(block) { put(block.position, 'air'); dug.push(block.position.toString()); },
+    async dig(block) {
+      if (shaft) assert.equal(this.entity.onGround, true, 'stone is cut with confirmed footing');
+      put(block.position, 'air');
+      dug.push(block.position.toString());
+    },
     async equip() {}, async lookAt(target) { look = target; },
     setControlState(key, on) {
       if (key === 'forward' && on && !shaft) {
@@ -44,7 +48,8 @@ function pocket({ shaft = false, protect = () => false } = {}) {
       const p = ref.position.plus(face);
       put(p, 'cobblestone');
       placed.push(p.toString());
-      Object.assign(this.entity, { position: p.offset(0.5, 1, 0.5), onGround: true, isInWater: read(p.offset(0, 1, 0)).name === 'water' });
+      Object.assign(this.entity, { position: p.offset(0.5, 1, 0.5), onGround: !shaft, isInWater: read(p.offset(0, 1, 0)).name === 'water' });
+      if (shaft) setTimeout(() => { this.entity.onGround = true; }, 60);
     },
   };
   return { bot, feet, dug, placed };
@@ -61,12 +66,12 @@ test('seed 1 water pocket can dig through gravel or rock to verified dry ground'
   assert.deepEqual(protectedPocket.dug, []);
 });
 
-test('pillaring cuts the overhead stone and refills every gained floor', async () => {
+test('pillaring settles on a placed floor before cutting submerged stone', async () => {
   const { bot, feet, dug, placed } = pocket({ shaft: true });
   assert.equal(await actions.digWaterExit(bot, {}, { pillar: true }), true);
-  assert.deepEqual(dug, [feet.offset(0, 2, 0).toString()]);
-  assert.deepEqual(placed, [0, 1, 2].map(y => feet.offset(0, y, 0).toString()));
-  assert.ok(bot.entity.position.floored().equals(feet.offset(0, 3, 0)));
+  assert.deepEqual(dug, [feet.offset(0, 3, 0).toString()]);
+  assert.deepEqual(placed, [0, 1, 2, 3].map(y => feet.offset(0, y, 0).toString()));
+  assert.ok(bot.entity.position.floored().equals(feet.offset(0, 4, 0)));
 });
 
 const turn = () => new Promise(resolve => setImmediate(resolve));
@@ -87,6 +92,9 @@ test('only critical air interrupts water rescue, then the same method resumes', 
     },
   } });
   const breathe = createSurvivalBehaviors({ bot }).find(b => b.name === 'breathe');
+  bot.entity.isInWater = false;
+  assert.equal(escape.rescue({ inWater: false }), true, 'feet are still in the flooded cell');
+  bot.entity.isInWater = true;
   const perceive = () => ({ alive: true, inWater: bot.entity.isInWater, oxygen, health: 12, food: 16 });
   const brain = createBrain({ behaviors: [escape, { ...breathe, async run() { oxygen = 20; return { ok: true }; } }],
     perceive, now: () => now, onEvent: e => trace.push(e) });

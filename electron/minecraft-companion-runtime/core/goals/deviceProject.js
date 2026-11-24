@@ -44,8 +44,7 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
     memory.mineDir = (mine.dir + 1) % 4;
     if (memory.gather?.memory) Object.assign(memory.gather.memory, { mine: null, mineDir: memory.mineDir });
   };
-  bot.on?.('death', onDeath);
-  let observing = true;
+  let observing = false;
 
   const lacking = (state) => device.needs()
     .map((r) => ({ key: r.key, count: r.count - countKey(r.key, state.inventory, kb) }))

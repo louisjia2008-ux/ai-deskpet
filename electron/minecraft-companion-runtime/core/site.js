@@ -116,7 +116,8 @@ function chooseSite(blockAt, around, { radius = 32, step = 3, maxWork = 12, avoi
       const half = variant === 'starter' ? Math.floor(SIZE / 2) : 2;
       const corner = { x: center.x + dx - half, z: center.z + dz - half };
       const site = evaluateSite(blockAt, corner, center, { variant, protectedCell, ground });
-      const reason = !site ? 'terrain' : avoid(site.anchor) ? 'restricted' : site.fills + site.digs > maxWork ? 'earthwork'
+      const blocked = site && avoid(site.anchor);
+      const reason = !site ? 'terrain' : blocked ? typeof blocked === 'string' ? blocked : 'restricted' : site.fills + site.digs > maxWork ? 'earthwork'
         : best && site.cost >= best.cost ? 'higher_cost' : null;
       if (reason) { review?.(site || { anchor: corner, variant }, reason); continue; }
       const route = access(createStarterHouse(site.anchor, site));

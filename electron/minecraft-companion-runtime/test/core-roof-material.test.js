@@ -237,7 +237,11 @@ test('wood maintenance closes one panel at a time and keeps a persisted cap on i
   assert.equal(home.wantsRoofWood(fixture.state), false);
   fixture.state.isDay = true;
   fixture.state.inventory.oak_planks = 2;
-  assert.equal(home.wantsRoofWood(fixture.state), false);
+  fixture.state.inventory.sandstone = 72;
+  assert.equal(home.wantsRoofWood(fixture.state), false, 'masonry does not supply the plank-only upgrade');
+  fixture.state.inventory.birch_planks = 10;
+  assert.equal(home.wantsRoofWood(fixture.state), true, 'multiple carried plank species can supply the upgrade');
+  fixture.state.inventory.birch_planks = 0;
   fixture.state.inventory.oak_planks = 20;
   assert.equal((await home.roofWoodGoal().run({ ...fixture.ctx, signal: controller.signal })).ok, false);
   assert.equal(fixture.bot.blockAt(touched).name, 'air');
@@ -420,4 +424,19 @@ test('R4.1 seed 2 uses its first carried sandstone roof block before gathering w
   assert.equal(fixture.events.find(e => e.type === 'build' && e.what === 'roof')?.material, 'sandstone');
   assert.ok(fixture.roof.some(p => fixture.bot.blockAt(p).name === 'sandstone'));
   assert.ok(!fixture.events.some(e => e.type === 'home_material_acquisition' && e.purpose === 'roof' && e.key === 'log'));
+});
+
+test('R4.1 seed 1 can select lighting and a guest bed with 12 health', () => {
+  const fixture = site({ materials: { iron_pickaxe: 1, iron_sword: 1, shield: 1 } });
+  const home = fixture.newHome();
+  const furniture = home.memory.house.furniture;
+  home.memory.established = true;
+  fixture.setBlock(furniture.torches[0], 'air');
+  for (const p of [furniture.guestBed.position, furniture.guestBed.head]) fixture.setBlock(p, 'air');
+  const state = { ...fixture.state, health: 12, food: 11 };
+  const memory = { homestead: home, wheatFarmDone: true };
+  const { cards } = createProgression({ bot: fixture.bot, kb: KNOWLEDGE });
+  for (const id of ['home_lighting', 'guest_bed']) {
+    assert.equal(cards.find(card => card.id === id).requires(state, memory), true);
+  }
 });

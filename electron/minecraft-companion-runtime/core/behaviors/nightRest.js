@@ -64,6 +64,7 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
   let checkShelterAt = 0, lostShelter = false;
   const reset = () => {
     shelter = null;
+    if (!enclosure?.placed.length) enclosure = null;
     lostShelter = false;
     missedReturn = missedDig = warned = false;
     returnUntil = null;
@@ -112,20 +113,19 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
     ctx.record('night_rest', { action, ...evidence });
   }
 
-  function shelterLocally(ctx, budget) {
+  async function shelterLocally(ctx, budget) {
     if (!missedDig) return digIn(ctx, budget);
     if (warned) return wait(ctx);
     enclosure ||= { top: bot.entity.position.floored(), placed: [] };
-    return (skills.enclose?.(bot, ctx, enclosure) ?? Promise.resolve(null)).then(result => {
-      if (isComplete(result) && enclosureOccupied(bot, enclosure)) {
-        holdShelter(ctx, enclosure, 'enclosed', { position: enclosure.top, placed: enclosure.placed.map(b => b.position) });
-        return result;
-      }
-      if (ctx.signal?.aborted || result?.wait || result?.kind === 'interrupted') return result;
-      warned = true;
-      ctx.record('night_rest', { action: 'shelter_exhausted', result, position: enclosure.top });
-      return wait(ctx);
-    });
+    const result = await skills.enclose?.(bot, ctx, enclosure);
+    if (isComplete(result) && enclosureOccupied(bot, enclosure)) {
+      holdShelter(ctx, enclosure, 'enclosed', { position: enclosure.top, placed: enclosure.placed.map(b => b.position) });
+      return result;
+    }
+    if (ctx.signal?.aborted || result?.wait || result?.kind === 'interrupted') return result;
+    warned = true;
+    ctx.record('night_rest', { action: 'shelter_exhausted', result, position: enclosure.top });
+    return wait(ctx);
   }
 
   function undergroundExit(spot) {
@@ -242,9 +242,7 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
       return wait(ctx);
     },
   };
-  const onDeath = () => { enclosure = null; reset(); };
-  bot.on?.('death', onDeath);
-  behavior.dispose = () => bot.removeListener?.('death', onDeath);
+  behavior.onDeath = behavior.dispose = () => { enclosure = null; reset(); };
   return behavior;
 }
 

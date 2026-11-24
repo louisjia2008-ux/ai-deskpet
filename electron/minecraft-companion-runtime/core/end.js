@@ -9,7 +9,7 @@ const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('./actions');
 const { waitUntil, sleep, abortError } = require('./confirm');
-const { dimension } = require('./nether');
+const { dimension, applyRealmMovements } = require('./nether');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const inEnd = (bot) => dimension(bot) === 'the_end';
@@ -210,29 +210,9 @@ function deepDrop(bot, x, y, z, depth = 4) {
  * a void column costs extra, no sprinting, and drops stay short.
  */
 function applyEndMovements(bot) {
-  const m = bot.pathfinder?.movements;
-  if (!m || m.companionEnd) return () => {};
-  const saved = {
-    maxDropDown: m.maxDropDown, towers: m.allow1by1towers, scaffold: m.scafoldingBlocks, placeCost: m.placeCost,
-    steps: m.exclusionAreasStep.length, cantBreak: new Set(m.blocksCantBreak), sprint: m.sprintSetting ?? m.allowSprinting,
-    parkour: m.allowParkour,
-  };
-  m.companionEnd = true;
-  m.maxDropDown = 3;
-  // No 1x1 towers: one dragon hit or slip up there is a fall to death.
-  m.allow1by1towers = false;
-  // A sprint carries the body past a ledge it meant to stop at.
-  m.allowSprinting = false;
-  // A parkour jump that comes up short over the void is the end of the bot.
-  m.allowParkour = false;
-  m.placeCost = 3;
-  // No pathfinder bridging either: when its placement is not confirmed it
-  // still walks on, into the void. Gaps are crossed with bridgeToward.
-  m.scafoldingBlocks = [];
-  for (const name of ['end_portal_frame', 'end_gateway', 'end_portal', 'obsidian', 'chest', 'ender_chest', 'brewing_stand']) {
-    const id = bot.registry.blocksByName[name]?.id;
-    if (Number.isInteger(id)) m.blocksCantBreak.add(id);
-  }
+  // Bridge explicitly. Native placements and parkour are unsafe over the void.
+  const settings = { allow1by1towers: false, allowParkour: false, placeCost: 3, scafoldingBlocks: [] };
+  const protectedBlocks = ['end_portal_frame', 'end_gateway', 'end_portal', 'obsidian', 'chest', 'ender_chest', 'brewing_stand'];
   const cache = new Map();
   let cacheAt = 0;
   const voidAt = (x, y, z) => {
@@ -242,25 +222,13 @@ function applyEndMovements(bot) {
     if (!cache.has(key)) cache.set(key, overVoid(bot, x, y, z));
     return cache.get(key);
   };
-  m.exclusionAreasStep.push((block) => {
+  return applyRealmMovements(bot, 'companionEnd', settings, protectedBlocks, (block) => {
     const p = block?.position;
     if (!p) return 0;
-    let cost = 0;
-    if (voidAt(p.x, p.y, p.z)) cost += 6;
+    let cost = voidAt(p.x, p.y, p.z) ? 6 : 0;
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (voidAt(p.x + dx, p.y, p.z + dz)) cost += 3;
     return cost;
   });
-  return () => {
-    m.maxDropDown = saved.maxDropDown;
-    m.allow1by1towers = saved.towers;
-    m.scafoldingBlocks = saved.scaffold;
-    m.placeCost = saved.placeCost;
-    m.allowSprinting = saved.sprint;
-    m.allowParkour = saved.parkour;
-    m.exclusionAreasStep.length = saved.steps;
-    m.blocksCantBreak = saved.cantBreak;
-    m.companionEnd = false;
-  };
 }
 
 // ---- bridging --------------------------------------------------------------
@@ -538,15 +506,9 @@ async function pillarUp(bot, ctx, y, { maxSteps = 32, stop = () => false, dig = 
     }
     try {
       await bot.equip(item, 'hand');
-      await bot.look(bot.entity.yaw, -Math.PI / 2, true);
-      bot.setControlState('jump', true);
-      await waitUntil(() => bot.entity.position.y > feet.y + 1.05, { timeoutMs: 800, signal: ctx.signal });
-      bot.setControlState('jump', false);
-      await bot.placeBlock(below, new Vec3(0, 1, 0)).then(() => { placed += 1; }).catch(() => {});
+      if (await actions.jumpPlace(bot, ctx, below, feet)) placed++;
     } catch (error) {
       if (error?.code === 'aborted') throw error;
-    } finally {
-      bot.setControlState('jump', false);
     }
     await waitUntil(() => bot.entity.onGround, { timeoutMs: 1500, signal: ctx.signal });
     misses = bot.entity.position.y < feet.y + 0.5 ? misses + 1 : 0;

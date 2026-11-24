@@ -18,7 +18,8 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
     ['pillar_up', 22_000, c => actions.digWaterExit?.(bot, c, { pillar: true })],
   ];
   let episode;
-  const waterStuck = state => Boolean(tracker.state() && (state.inWater || bot.entity.isInWater));
+  const waterStuck = (state = {}) => Boolean(tracker.state() && (state.inWater || bot.entity.isInWater
+    || wet(bot.blockAt(bot.entity.position.floored()))));
   function finish(ctx, method) {
     tracker.release();
     episode = null;
@@ -94,7 +95,7 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
       const rescue = { ...ctx, rescue: 'home_escape', adapt: ctx.adapt ?? adaptation?.scope(() => !ctx.signal?.aborted) };
       tracker.takeProbe();
       const stuck = tracker.state();
-      if (stuck && (bot.entity.isInWater || stuck.reason === 'route_origin_water' || episode?.stuck === stuck)) return waterEscape(rescue, stuck);
+      if (stuck && (waterStuck() || stuck.reason === 'route_origin_water' || episode?.stuck === stuck)) return waterEscape(rescue, stuck);
       if (!tracker.state() && goal?.needsCleanup?.()) return goal.clearScaffold(rescue);
       if (!tracker.state() && goal?.memory.breach) return goal.repairHomeBreach(rescue);
       if (goal?.nearForSelfRecovery?.()) {

@@ -318,11 +318,20 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   }
   const useGoal = (goal, metadata) => {
     assertActive();
+    const previous = goalOwner;
     const owner = { goal, taskId: metadata?.taskId ?? goal.metadata?.taskId ?? goal.taskId };
     goalOwner = owner;
     usedGoals.add(goal);
     spare = goal.spares || (() => false);
-    try { return brain.setGoal(goal, metadata); } catch (error) { retireGoal(owner); throw error; }
+    try {
+      const generation = brain.setGoal(goal, metadata);
+      if (previous?.goal !== goal) retireGoal(previous);
+      return generation;
+    } catch (error) {
+      retireGoal(owner);
+      goalOwner = previous;
+      throw error;
+    }
   };
   const schedule = (state, details) => schedulingInputs(state, {
     home: homestead()?.memory.house?.interiorCenter, ...details,
@@ -419,7 +428,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   }
   // Its goals go through useGoal too, so an autonomous ranch also spares its herd.
   const directorBrain = { status: () => brain.status(), setGoal: useGoal, clearGoal: (reason) => brain.clearGoal(reason) };
-  director = createDirector({ backoff, brain: directorBrain, perceive: () => perceive(bot), cards, reserveCards, stageOf, schedule, scope: range, onEvent, adaptation,
+  director = createDirector({ bot, backoff, brain: directorBrain, perceive: () => perceive(bot), cards, reserveCards, stageOf, schedule, scope: range, onEvent, adaptation,
     onIdle(state, reason) {
       if (reason === 'no_eligible_card_until_retry' && state.isDay !== false && !state.sheltered) selfStuck.requestProbe();
     },
@@ -504,8 +513,10 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
         rememberHome();
       }
       selfStuck.moved();
-      if (!survey && !paused && !dispatching && !retiring && !retirementFailed && !brain.status().blocked
-        && !selfStuck.state() && !selfStuck.probe() && !director.memory.homestead?.needsCleanup?.()) director.tick();
+      if (!survey && !paused && !dispatching && !retiring && !retirementFailed && !brain.status().blocked) {
+        const holdBody = selfStuck.state() || selfStuck.probe() || director.memory.homestead?.needsCleanup?.();
+        director.tick({ holdBody: Boolean(holdBody) });
+      }
     } catch (error) { onEvent({ type: 'autonomy_error', at: Date.now(), reason: String(error?.message || error) }); }
     brain.tick().catch(() => {});
     try { observeDoctor(); } catch { /* diagnostic observer */ }
@@ -528,6 +539,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
   const onDeath = () => {
     if (disposed) return;
     selfStuck.release();
+    nightRest.onDeath();
     // Survival's death listener has already checked which life just ended.
     if (autonomy && director.isEnabled()) {
       routeDeathAt = Date.now();

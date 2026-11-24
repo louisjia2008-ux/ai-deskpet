@@ -234,9 +234,12 @@ function createBrain({
         if (controller.signal.aborted || !isCurrent()) return failure('aborted', {}, ctx);
         const early = autonomous?.before && await autonomous.before(ctx);
         if (controller.signal.aborted || !isCurrent()) return failure('aborted', {}, ctx);
-        if (!early && (autonomous || behavior.def?.name === 'homestead')) await opportunity?.(ctx, behavior.def.name);
-        if (controller.signal.aborted || !isCurrent()) return failure('aborted', {}, ctx);
-        const raw = early || await behavior.run(ctx);
+        const work = async scoped => {
+          if (autonomous || behavior.def?.name === 'homestead') await opportunity?.(scoped, behavior.def.name);
+          if (scoped.signal?.aborted || !isCurrent()) return failure('aborted', {}, scoped);
+          return behavior.run(scoped);
+        };
+        const raw = early || await (autonomous?.run ? autonomous.run(ctx, work) : work(ctx));
         return resultFrom(raw, ctx, safePerceive());
       })
       .catch(failed)

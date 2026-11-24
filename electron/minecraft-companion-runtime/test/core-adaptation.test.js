@@ -530,3 +530,30 @@ test('seed 2 relocation exhausts its 200-block radial and 600-block total budget
   assert.ok(legs.every(leg => leg.legs <= 8 && leg.total <= 600.01 && Math.hypot(leg.position.x - origin.x, leg.position.z - origin.z) <= 200));
   assert.ok(events.some(event => event.type === 'home_relocation_budget'));
 });
+
+test('relocation relaxes earthwork after the outward budget and returns to the scored candidate', async () => {
+  const adaptation = createAdaptation();
+  const origin = new Vec3(24.5, 64, 10.5), events = [], position = origin.clone();
+  const bot = { entity: { position }, blockAt: p => p.y < 64 + Math.abs(p.x % 2)
+    ? { name: 'dirt', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' } };
+  let target;
+  const goal = createHomesteadGoal({ bot, origin, autonomous: true, actions: {
+    async goTo(_bot, _ctx, end) { position.set(end.x, position.y, end.z); return { ok: true }; },
+    async goNear(_bot, _ctx, point) { target = point.clone(); position.set(point.x, point.y, point.z); return { ok: true }; },
+  } });
+  adaptation.promote('home_site', { position: origin }, 'relocate', 'fixture');
+  const ctx = { adapt: adaptation.scope(() => true), record: (type, data) => events.push({ type, ...data }),
+    perceive: () => ({ position: position.clone(), inventory: { oak_planks: 400 }, isDay: true, inWater: false }) };
+  assert.equal((await goal.run(ctx)).ok, true);
+  assert.equal(goal.memory.house, null);
+  assert.ok(events.find(event => event.type === 'home_relocation_leg').candidates.some(([, , reason]) => reason === 'earthwork'));
+  const route = goal.memory.homesteadRoute;
+  assert.ok(route.best);
+  const { anchor } = route.best;
+  route.distance = 594;
+  position.x += 25;
+  assert.equal((await goal.run(ctx)).ok, true);
+  assert.ok(target.equals(new Vec3(anchor.x, anchor.y, anchor.z)));
+  assert.ok(goal.memory.house);
+  assert.ok(events.find(event => event.type === 'home_relocation_budget'));
+});
