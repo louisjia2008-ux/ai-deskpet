@@ -48,6 +48,8 @@ it('cancels an in-flight result when disabled and does not submit late recognise
 });
 it('supports toggle mode, explicit auto-send and the 60-second cap without retaining audio after unmount', async () => {
   const f = fixture('toggle', true); await waitFor(() => expect(f.api.status).toHaveBeenCalled());
+  // The label follows the loaded mode, so wait until toggle mode is shown.
+  await screen.findByRole('button', { name: '说话' });
   vi.useFakeTimers();
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: '说话' })); await vi.advanceTimersByTimeAsync(0); });
   expect(screen.getByRole('button', { name: /结束录音/u })).toBeTruthy(); f.feed();
