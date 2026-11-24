@@ -155,6 +155,9 @@ const MainConsoleApp = (): JSX.Element => {
     return () => media.removeEventListener('change', change);
   }, []);
   const [error, setError] = useState(false);
+  // A restore prepared before this window opened keeps its cancel/restart decision available.
+  const [restorePending, setRestorePending] = useState(false);
+  useEffect(() => { if (snapshot === null && (error || snapshotError)) void window.deskpet.backup.getState?.().then(state => setRestorePending(state.restorePrepared)).catch(() => undefined); }, [snapshot, error, snapshotError]);
   // WeChat-only pages (digests, follow-ups) appear once the WeChat channel is set up.
   const [wechatConfigured, setWechatConfigured] = useState(false);
   useEffect(() => {
@@ -194,6 +197,15 @@ const MainConsoleApp = (): JSX.Element => {
     setView(target.kind === 'background-job' ? 'jobs' : target.kind === 'delegation' ? 'chat' : 'memory');
   };
 
+  if (snapshot === null && restorePending) {
+    // The console was reopened while a restore waits; its page data is locked, but the decision is still here.
+    const zhRestore = locale === 'zh-CN';
+    return <main className="loading-state" role="alertdialog" aria-label={zhRestore ? '备份恢复已准备好' : 'Backup restore is ready'}>
+      <p>{zhRestore ? '备份恢复已准备好。重启后生效；取消则保持当前数据。' : 'A backup restore is ready. It applies on restart; cancelling keeps your current data.'}</p>
+      <div className="button-row"><button type="button" className="secondary" autoFocus onClick={() => void window.deskpet.backup.cancelRestore()}>{zhRestore ? '取消恢复' : 'Cancel restore'}</button>
+        <button type="button" onClick={() => void window.deskpet.backup.restart()}>{zhRestore ? '重启并恢复' : 'Restart and restore'}</button></div>
+    </main>;
+  }
   if (snapshot === null) {
     return <main className="loading-state" aria-live="polite">{error || snapshotError ? <>{t('common.error')} <button type="button" onClick={() => { setError(false); void refresh(); }}>{t('common.retry')}</button></> : t('common.loading')}</main>;
   }
@@ -300,7 +312,8 @@ const MainConsoleApp = (): JSX.Element => {
         {group && <header className="page-header"><h1>{[...primary, ...secondary].find(item => item.group === GROUPS[group])?.label}</h1></header>}
         {tabs && <div className="memory-tabs page-tabs" role="tablist">{tabs.map(tab => <button key={tab.id} type="button" role="tab" aria-selected={view === tab.id} onClick={() => go(tab.id)}>{tab.label}</button>)}</div>}
         {view === 'artifacts' && <ArtifactsPanel api={window.deskpet.chatWork} locale={locale} navigationBusy={conversationBusy} onOpenSession={selectChat} onContinue={continueArtifact} />}
-        {view === 'media' && <MediaLibraryPage api={window.deskpet.media} wechat={window.deskpet.wechat} providers={snapshot.providers} locale={locale} sessionId={activeSessionId} onAttached={() => setView(current => current === 'media' ? 'chat' : current)} createSession={conversationBusy ? undefined : async () => { const session = await window.deskpet.chat.createSession({ title: zh ? '图片对话' : 'Image conversation', kind: 'normal' }); setSelectedChat(session.id); await refresh(); return session.id; }} />}
+        {view === 'media' && <MediaLibraryPage api={window.deskpet.media} wechat={window.deskpet.wechat} providers={snapshot.providers} locale={locale} sessionId={activeSessionId} onAttached={() => setView(current => current === 'media' ? 'chat' : current)} createSession={conversationBusy ? undefined : async () => { const session = await window.deskpet.chat.createSession({ title: zh ? '图片对话' : 'Image conversation', kind: 'normal' }); setSelectedChat(session.id); await refresh(); return session.id; }}
+          discardSession={async id => { await window.deskpet.chat.removeSession(id); setSelectedChat(''); await refresh(); }} />}
         {view === 'conversations' && <ConversationManager t={t} locale={locale} busy={conversationBusy} onSelect={selectChat} onAction={conversations.act} />}
         {view === 'companion' && <CompanionPage initialTab={companionTab} snapshot={snapshot} name={name} t={t} refresh={refresh} />}
         {view === 'minecraft' && <MinecraftPage locale={locale} t={t} onDedicatedSettings={openDedicatedSettings} />}

@@ -678,6 +678,8 @@ export interface DeskPetApi {
     restart(): Promise<void>;
     /** Sets a prepared restore aside (nothing has moved yet) and reopens DeskPet with the current data. */
     cancelRestore(): Promise<void>;
+    /** Readable during maintenance, so a reopened window can still offer cancel or restart. */
+    getState(): Promise<{ restorePrepared: boolean }>;
   };
   recovery: {
     getState(): Promise<StartupRecoveryState | null>;

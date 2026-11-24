@@ -71,7 +71,7 @@ const api = (locale: ResolvedLocale): DeskPetApi => ({
     getState: vi.fn(async () => appState(locale)), setLocale: vi.fn(), setTheme: vi.fn(), setHotkey: vi.fn(), setAutoLaunch: vi.fn(),
     showConsole: vi.fn(), setOverlayVisible: vi.fn(), getDiagnostics: vi.fn(), openLoginSettings: vi.fn(), onChanged: on,
   },
-  backup: { create: vi.fn(), restore: vi.fn(), restart: vi.fn(), cancelRestore: vi.fn() },
+  backup: { create: vi.fn(), restore: vi.fn(), restart: vi.fn(), cancelRestore: vi.fn(), getState: vi.fn(async () => ({ restorePrepared: false })) },
   recovery: { getState: vi.fn(async () => null), restoreSnapshot: vi.fn(), restoreBackup: vi.fn() },
   character: {
     modelLoadFailed: vi.fn(), tap: vi.fn(),
@@ -812,4 +812,15 @@ describe('console layout', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Check-ins' }));
     expect(screen.getAllByText('Advanced: check-in rules and records')).toHaveLength(1);
   });
+});
+
+it('offers cancel or restart when reopened while a prepared restore locks the page', async () => {
+  const f = chatFixture();
+  vi.mocked(f.api.app.getState).mockRejectedValue(new Error('backup.error.busy'));
+  f.api.backup.getState = vi.fn(async () => ({ restorePrepared: true }));
+  render(<ConsoleApp />);
+  const cancel = await screen.findByRole('button', { name: 'Cancel restore' });
+  expect(screen.getByRole('button', { name: 'Restart and restore' })).toBeVisible();
+  fireEvent.click(cancel);
+  expect(f.api.backup.cancelRestore).toHaveBeenCalledOnce();
 });

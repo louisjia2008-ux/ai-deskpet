@@ -137,7 +137,9 @@ export const ProviderSettings = ({ providers, activeId, t, refresh }: { provider
   // service, after the key is typed for a cloud one. A custom address keeps the manual button, so a key
   // is never sent to an address that is still being typed.
   const formOpen = adding || editing !== null || providers.length === 0;
-  const autoDiscover = formOpen && credentialReady && baseUrl === providerDefinitions.find(item => item.kind === kind)?.defaultBaseUrl;
+  const officialAddress = baseUrl === providerDefinitions.find(item => item.kind === kind)?.defaultBaseUrl && !/example\.invalid/iu.test(baseUrl);
+  const autoDiscover = formOpen && credentialReady && officialAddress;
+  const lookupHost = ((): string => { try { return new URL(baseUrl).host; } catch { return ''; } })();
   const discoverRef = useRef(discover); discoverRef.current = discover;
   useEffect(() => {
     if (!autoDiscover) return;
@@ -216,7 +218,8 @@ export const ProviderSettings = ({ providers, activeId, t, refresh }: { provider
         }}>{providerDefinitions.map((item) => <option key={item.kind} value={item.kind}>{item.label}</option>)}</select></label></fieldset>
         <fieldset className="provider-step"><legend>2 · {t('provider.apiKey')}</legend>
           {needsKey ? <><label>{t('provider.apiKey')}<input type="password" autoComplete="off" disabled={busy} value={apiKey} placeholder={keepsKey ? t('provider.keepKey') : ''} onChange={(event) => changeKey(event.target.value)} /></label>
-            {endpointChanged && <small>{text('provider.endpointKeyChanged')}</small>}{!credentialReady && <small>{text('provider.keyNeeded')}</small>}</> : <><p>{locale === 'zh-CN' ? '本机服务的 API Key 可选；如果服务启用了身份验证，请在高级连接设置中填写。' : 'Local API keys are optional. If this service requires authentication, enter its key in advanced connection settings.'}</p>
+            {endpointChanged && <small>{text('provider.endpointKeyChanged')}</small>}{!credentialReady && <small>{text('provider.keyNeeded')}</small>}
+            {officialAddress && lookupHost && <small>{locale === 'zh-CN' ? `填好后会自动连接 ${lookupHost} 读取模型。用自建地址的话，先在「高级连接设置」里改地址。` : `Once entered, models are looked up at ${lookupHost}. For your own gateway, change the address under Advanced connection settings first.`}</small>}</> : <><p>{locale === 'zh-CN' ? '本机服务的 API Key 可选；如果服务启用了身份验证，请在高级连接设置中填写。' : 'Local API keys are optional. If this service requires authentication, enter its key in advanced connection settings.'}</p>
             {changedSavedCredential && <small>{text('provider.endpointKeyChanged')}</small>}</>}
         </fieldset>
         <fieldset className="provider-step"><legend>3 · {t('provider.model')}</legend>

@@ -6,7 +6,7 @@ import type { WeChatChannelAPI, WeChatChannelState } from '../../shared/wechat-c
 import { localMediaUrl } from './ChatImages';
 import './media-library.css';
 
-interface Props { api: MediaAPI | undefined; wechat?: Pick<WeChatChannelAPI, 'getState'>; providers: ProviderConfig[]; locale: string; sessionId: string; onAttached(): void; createSession?: (() => Promise<string>) | undefined }
+interface Props { api: MediaAPI | undefined; wechat?: Pick<WeChatChannelAPI, 'getState'>; providers: ProviderConfig[]; locale: string; sessionId: string; onAttached(): void; createSession?: (() => Promise<string>) | undefined; discardSession?: ((id: string) => Promise<void>) | undefined }
 interface EditDraft { id: string; title: string; tags: string; enabled: boolean; allowQq: boolean; allowWechat: boolean; allowWechatGroups: string[] }
 interface BatchDraft { enabled: boolean; allowQq: boolean; allowWechat: boolean; groups: string[]; tags: string }
 const emptyBatch = (): BatchDraft => ({ enabled: false, allowQq: false, allowWechat: false, groups: [], tags: '' });
@@ -31,7 +31,7 @@ const errorText = (value: unknown): string => {
   return code && copy[code] ? copy[code] : '操作未完成，请刷新核对已保存状态后重试。';
 };
 
-export const MediaLibraryPage = ({ api, wechat, providers, locale, sessionId, onAttached, createSession }: Props): JSX.Element => {
+export const MediaLibraryPage = ({ api, wechat, providers, locale, sessionId, onAttached, createSession, discardSession }: Props): JSX.Element => {
   const [snapshot, setSnapshot] = useState<MediaSnapshot | null>(null), [settings, setSettings] = useState<MediaSettings | null>(null);
   const [search, setSearch] = useState(''), [trash, setTrash] = useState(false), [editor, setEditor] = useState<EditDraft | null>(null);
   const [prompt, setPrompt] = useState(''), [busy, setBusy] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -152,7 +152,7 @@ export const MediaLibraryPage = ({ api, wechat, providers, locale, sessionId, on
             const created = !sessionId, target = sessionId || await createSession!();
             // A chat made just for this image is removed again if the image could not be put in.
             try { await api.attach({ sessionId: target, assetId: asset.id }); }
-            catch (cause) { if (created) await window.deskpet.chat.removeSession(target).catch(() => undefined); throw cause; }
+            catch (cause) { if (created) await (discardSession ?? (id => window.deskpet.chat.removeSession(id)))(target).catch(() => undefined); throw cause; }
             onAttached();
           })}>{sessionId ? '放入当前对话' : '放入新对话'}</button>
           <button type="button" className="secondary" disabled={busy !== null} onClick={() => edit(asset)}>编辑图片信息</button>

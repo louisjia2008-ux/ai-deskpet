@@ -2578,6 +2578,7 @@ export class AppController {
       if (!this.#profileMaintenance || !this.#restorePrepared) throw new Error('backup.error.pending');
       setTimeout(() => { app.relaunch(); app.quit(); }, 250);
     });
+    this.#ipc.register('backup:get-state', consoleOnly, () => ({ restorePrepared: this.#restorePrepared }));
     this.#ipc.register('backup:cancel-restore', consoleOnly, async () => {
       if (!this.#profileMaintenance || !this.#restorePrepared) throw new Error('backup.error.pending');
       // Only a restore still in its "prepared" phase can be set aside; nothing has moved then.
