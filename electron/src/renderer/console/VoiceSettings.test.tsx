@@ -15,13 +15,15 @@ it('turns voice on, chooses the folder through the host, says what is missing an
   };
   Object.assign(window, { deskpet: { character: api } });
   render(<VoiceSettings locale="zh-CN" />);
-  expect(await screen.findByText('已关闭。')).toBeVisible();
-  expect(screen.getByRole('button', { name: '试听' })).toBeDisabled();
-  fireEvent.click(screen.getByRole('checkbox', { name: '朗读她的回复' }));
+  // Off: only the switch is offered; setup details wait behind a fold.
+  const toggle = await screen.findByRole('checkbox', { name: '朗读她的回复' });
+  expect(screen.queryByRole('button', { name: '试听' })).toBeNull();
+  fireEvent.click(toggle);
   expect(await screen.findByText('文件夹还没准备好。 请选择语音文件夹。')).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: '选择文件夹' }));
   expect(await screen.findByText('准备好了，下次回复时加载模型。')).toBeVisible();
-  expect(screen.getByDisplayValue('/voice')).toBeVisible();
+  // Ready: the folder moves into the fold.
+  expect(screen.getByDisplayValue('/voice')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '试听' }));
   await waitFor(() => expect(api.testVoice).toHaveBeenCalledOnce());
 });

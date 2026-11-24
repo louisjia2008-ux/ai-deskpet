@@ -3,8 +3,8 @@ import type { JSX } from 'react';
 import { ConfirmButton } from './ConfirmButton';
 import type { CompanionPreferences, DiaryEntry } from '../../shared/companion-journal';
 
-/** One part per place it is shown: check-in delivery under check-ins, the diary on its own tab, the voice preference beside voice settings. */
-export const CompanionJournalSettings = ({ zh, part }: { zh: boolean; part: 'delivery' | 'diary' | 'voice' }): JSX.Element | null => {
+/** One part per place it is shown: check-in delivery (with the WeChat voice-note preference) under check-ins, the diary on its own tab. */
+export const CompanionJournalSettings = ({ zh, part }: { zh: boolean; part: 'delivery' | 'diary' }): JSX.Element | null => {
   const api = window.deskpet.journal;
   const [preferences, setPreferences] = useState<CompanionPreferences | null>(null), [entries, setEntries] = useState<DiaryEntry[]>([]);
   const [selected, setSelected] = useState<DiaryEntry | null>(null), [text, setText] = useState('');
@@ -14,9 +14,9 @@ export const CompanionJournalSettings = ({ zh, part }: { zh: boolean; part: 'del
   const configure = (patch: Partial<CompanionPreferences>): void => { if (preferences) void act(async () => setPreferences(await api!.configure({ ...preferences, ...patch }))); };
   if (!api) return null;
   return <section className="panel persona-settings" aria-label={part === 'diary' ? (zh ? '日记' : 'Diary') : zh ? '主动消息投递' : 'Check-in delivery'}>
-    {preferences && (part === 'voice' ? <label className="check-row"><input type="checkbox" disabled={busy} checked={preferences.wechatVoice} onChange={e => configure({ wechatVoice: e.target.checked })} />{zh ? '微信主动消息优先发语音（失败且尚未发送时退回文字）' : 'Prefer voice for WeChat check-ins (fall back to text only before any send attempt)'}</label>
-      : part === 'delivery' ? <label>{zh ? '主动消息发到哪里' : 'Where to send check-ins'}<select disabled={busy} value={preferences.destination} onChange={e => configure({ destination: e.target.value as CompanionPreferences['destination'] })}>
+    {preferences && (part === 'delivery' ? <><label>{zh ? '主动消息发到哪里' : 'Where to send check-ins'}<select disabled={busy} value={preferences.destination} onChange={e => configure({ destination: e.target.value as CompanionPreferences['destination'] })}>
         <option value="desktop">{zh ? '桌面' : 'Desktop'}</option><option value="wechat">{zh ? '已绑定的微信私聊' : 'Bound WeChat private chat'}</option><option value="both">{zh ? '桌面和微信' : 'Desktop and WeChat'}</option></select></label>
+        {preferences.destination !== 'desktop' && <label className="check-row"><input type="checkbox" disabled={busy} checked={preferences.wechatVoice} onChange={e => configure({ wechatVoice: e.target.checked })} />{zh ? '发到微信时优先用语音条（确认还没发出时才改发文字）' : 'Prefer a voice note in WeChat (text only if the voice was certainly not sent)'}</label>}</>
       : <><label className="check-row"><input type="checkbox" disabled={busy} checked={preferences.diaryEnabled} onChange={e => configure({ diaryEnabled: e.target.checked })} />{zh ? '每晚写日记' : 'Write a nightly diary'}</label>
         <p>{zh ? '只把允许云端处理的主人私聊和记忆交给当前云端模型。日记加密保存在本机。编辑后的日记只用于本地模型。' : 'Uses only cloud-allowed owner chats and memories with the current cloud model. Diaries are encrypted locally. Edited diaries are used only by local models.'}</p>
         <ul>{entries.map(entry => <li key={entry.date}><button type="button" disabled={busy} onClick={() => { setSelected(entry); setText(entry.text); }}>{entry.date}</button></li>)}</ul>

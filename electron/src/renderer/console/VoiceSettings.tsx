@@ -3,7 +3,6 @@ import type { JSX } from 'react';
 import type { VoiceProblem, VoiceStatus } from '../../shared/voice';
 import './persona-settings.css';
 import { SpeechInputSettings } from './SpeechInputSettings';
-import { CompanionJournalSettings } from './CompanionJournalSettings';
 
 const copy = {
   en: {
@@ -47,21 +46,28 @@ export const VoiceSettings = ({ locale }: { locale: 'en' | 'zh-CN' }): JSX.Eleme
     return () => window.clearInterval(timer);
   }, [api, settling]);
   const usable = status !== null && status.enabled && status.problem === null;
-  return <><section className="panel persona-settings" aria-label={t.title}>
-    <header><div><h2>{t.title}</h2><p>{t.intro}</p></div></header>
-    <label className="check-row"><input type="checkbox" checked={status?.enabled ?? false} disabled={busy || status === null}
-      onChange={(event) => void act(() => api.setVoiceEnabled(event.target.checked))} />{t.enable}</label>
+  const zh = locale === 'zh-CN';
+  const ready = status !== null && status.problem === null;
+  // Once the folder works, its path and the environment list are reference material, not something to act on.
+  const setup = <>
     <div className="persona-row">
       <label>{t.folder}<input type="text" readOnly value={status?.runtimeDir ?? ''} placeholder={t.none} /></label>
       <div className="persona-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void act(() => api.chooseVoiceFolder())}>{t.choose}</button></div>
     </div>
     <small>{t.help}</small>
-    {status && <p role="status">{t.state[status.state]}{status.state === 'missing' && status.problem ? ` ${t.problem[status.problem]}` : ''}</p>}
-    <p className="muted">{t.memory}</p>
-    <div className="persona-actions">
-      <button type="button" disabled={busy || !usable || status?.state === 'speaking'} onClick={() => void act(() => api.testVoice())}>{t.test}</button>
-      {status?.state === 'speaking' && <button type="button" className="secondary" onClick={() => void act(() => api.stopVoice())}>{t.stop}</button>}
-      {failed && <span role="alert">{t.failed}</span>}
-    </div>
-  </section><SpeechInputSettings zh={locale === 'zh-CN'} /><CompanionJournalSettings zh={locale === 'zh-CN'} part="voice" /></>;
+  </>;
+  return <><section className="panel persona-settings" aria-label={t.title}>
+    <header><div><h2>{t.title}</h2><p>{t.intro}</p></div></header>
+    <label className="check-row"><input type="checkbox" checked={status?.enabled ?? false} disabled={busy || status === null}
+      onChange={(event) => void act(() => api.setVoiceEnabled(event.target.checked))} />{t.enable}</label>
+    {status && status.enabled && <p role="status">{status.problem ? `${t.state.missing} ${t.problem[status.problem]}` : t.state[status.state]}</p>}
+    {status && status.enabled && !ready && setup}
+    {status?.enabled && ready && <p className="muted">{t.memory}</p>}
+    {status?.enabled && <div className="persona-actions">
+      <button type="button" disabled={busy || !usable || status.state === 'speaking'} onClick={() => void act(() => api.testVoice())}>{t.test}</button>
+      {status.state === 'speaking' && <button type="button" className="secondary" onClick={() => void act(() => api.stopVoice())}>{t.stop}</button>}
+    </div>}
+    {failed && <p role="alert">{t.failed}</p>}
+    {(ready || !status?.enabled) && <details className="settings-more"><summary>{zh ? '语音文件夹与运行环境' : 'Voice folder and environment'}</summary>{setup}</details>}
+  </section><SpeechInputSettings zh={zh} /></>;
 };
