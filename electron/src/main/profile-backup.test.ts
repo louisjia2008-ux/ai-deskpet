@@ -11,7 +11,7 @@ import { ConversationImportService } from './domain/conversation-import-service'
 import { memoryAllowedForContext } from './domain/chat-context-policy';
 import { decryptJson, encryptJson } from './persistence/encryption';
 import { MemoryService } from './domain/memory-service';
-import { ProfileBackupService, applyPendingProfileRestore, collectProfileFiles, decryptBackup, encryptBackup } from './profile-backup';
+import { ProfileBackupService, QQ_REVOKE_MARKER, abandonPendingRestore, applyPendingProfileRestore, collectProfileFiles, decryptBackup, encryptBackup } from './profile-backup';
 import { SafeStorageVault } from './security';
 import { CRAWL4AI_SECRET_ID } from './plugins/credentials';
 import { QQ_APP_SECRET_ID } from './channels/qq/qq-credentials';
@@ -173,7 +173,10 @@ describe('encrypted full profile backup', () => {
     const service = new ProfileBackupService(destination, vault, '0.1.0');
     await expect(service.prepareRestore(f.backup, password)).resolves.toMatchObject({ sessions: 0, messages: 0 });
     expect(await readFile(join(destination, 'profile.enc.json'))).toEqual(originalDestination);
+    expect(await readFile(join(destination, QQ_REVOKE_MARKER)).catch(() => null)).toBeNull();
     expect(await applyPendingProfileRestore(destination)).toBe('restored');
+    // Applying leaves the marker that makes the next start revoke the live QQ binding before connecting.
+    expect((await readFile(join(destination, QQ_REVOKE_MARKER))).toString()).toBe('1');
     const restoredVault = new SafeStorageVault(join(destination, 'vault'), adapter('new'), 'darwin');
     const restored = new DomainRepository(join(destination, 'profile.enc.json'), restoredVault); await restored.initialize();
     expect(restored.snapshot().relationship.nickname).toBe('Kitty');
@@ -204,6 +207,17 @@ describe('encrypted full profile backup', () => {
     await restored.initialize();
     expect(restored.snapshot().chatMessages).toHaveLength(1);
     expect(restored.snapshot()).toMatchObject({autoMemory:{enabled:false},memorySleep:{settings:{enabled:false},lastDay:null}});
+  });
+
+  it('sets a prepared restore aside without touching current data or QQ', async () => {
+    const f = await fixture();
+    await f.service.create(f.backup, password);
+    const before = await readFile(join(f.source, 'profile.enc.json'));
+    await f.service.prepareRestore(f.backup, password);
+    expect(await abandonPendingRestore(f.source)).toBe(true);
+    expect(await applyPendingProfileRestore(f.source)).toBe('none');
+    expect(await readFile(join(f.source, 'profile.enc.json'))).toEqual(before);
+    expect(await readFile(join(f.source, QQ_REVOKE_MARKER)).catch(() => null)).toBeNull();
   });
 
   it('rejects wrong passwords and modified authentication tags without changing live data', async () => {

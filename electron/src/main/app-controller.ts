@@ -51,7 +51,7 @@ import { ConsolidationService } from './domain/consolidation-service';
 import { createHash, randomUUID } from 'node:crypto';
 import type { TelegramDelivery, TelegramReply, TelegramRunInput } from '../shared/telegram-channel';
 import { existsSync } from 'node:fs';
-import { mkdir, open, realpath, statfs } from 'node:fs/promises';
+import { mkdir, open, realpath, rm, stat, statfs } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { app, dialog, globalShortcut, nativeImage, nativeTheme, net, Notification, powerMonitor, safeStorage, screen, session, shell } from 'electron';
@@ -92,7 +92,7 @@ import type { MinecraftCompanionConfig, MinecraftCompanionTask } from '../shared
 import type { MinecraftDedicatedSnapshot, MinecraftSurveyPlanStatus } from '../shared/minecraft-dedicated';
 import { AppSettingsService } from './app-settings';
 import { AutoLaunchService } from './auto-launch';
-import { abandonPendingRestore, ProfileBackupService, refreshPendingRestoreProof } from './profile-backup';
+import { abandonPendingRestore, ProfileBackupService, QQ_REVOKE_MARKER, refreshPendingRestoreProof } from './profile-backup';
 import { runtimeIdentity } from './runtime-identity';
 import { isIsolatedProfile, wechatWorkerSwitch } from './profile-location';
 import { WeChatChannel, type OwnerDeliveryOutcome } from './channels/wechat/wechat-channel';
@@ -363,6 +363,7 @@ export class AppController {
   readonly #wechatHandled = new Set<string>();
   #wechatOwnerTarget: { binding(): Promise<string | null>; stickers(): Promise<boolean>; deliver(input: { binding: string; deliveryId: string; text: string; stickerAsset?: string; voice?: boolean }): Promise<OwnerDeliveryOutcome> } | null = null;
   #restorePrepared = false;
+  #qqRevokePending = false;
   readonly #character: CharacterService;
   readonly #vault: SafeStorageVault;
   readonly #qqVault: SafeStorageVault;
@@ -1085,6 +1086,13 @@ export class AppController {
     // Discard process-local Cron grants before the QQ gateway can drain its outbox.
     await this.#onQqStopped();
     await this.#qq.initialize({ deferConnection: true });
+    // A restore applied at this start must not inherit the live QQ binding. Revoke before any connection;
+    // if that cannot be saved, QQ stays offline and the marker remains for the next start.
+    this.#qqRevokePending = await stat(join(this.#dataRoot, QQ_REVOKE_MARKER)).then(() => true, () => false);
+    if (this.#qqRevokePending) {
+      try { await this.#qq.invalidateForRestore(); await rm(join(this.#dataRoot, QQ_REVOKE_MARKER), { force: true }); this.#qqRevokePending = false; }
+      catch { globalThis.console.error('Could not revoke the QQ binding after a restore; QQ stays offline.'); }
+    }
     await this.#telegram.initialize({ deferConnection: true });
     await this.#modelBindings.migrate().catch(() => globalThis.console.error('Could not complete model selection migration.'));
     await this.#usage.importReceipts();
@@ -1093,7 +1101,7 @@ export class AppController {
     for (const task of this.#repository.snapshot().researchTasks) this.#researchStatuses.set(task.id,task.status);
     await this.#research.initialize();
     await this.#persistentSchedules.tick({ startup: true, suspended: this.#suspended });
-    await this.#qq.startConnection();
+    if (!this.#qqRevokePending) await this.#qq.startConnection();
     await this.#telegram.startConnection();
     // An unreadable character must not stop the app; chat falls back to the default voice.
     await this.#persona.initialize().catch(() => undefined);
@@ -2562,9 +2570,9 @@ export class AppController {
       return this.#backup.prepareRestore(path, password);
     }, true));
     // Quitting with a prepared restore (by this button or any other way) applies it on the next launch;
-    // shutdown releases the live QQ binding first, so the restored profile never inherits it.
+    // that start revokes the live QQ binding before QQ may connect (see QQ_REVOKE_MARKER).
     this.#ipc.register('backup:restart', consoleOnly, () => {
-      if (!this.#profileMaintenance) throw new Error('backup.error.pending');
+      if (!this.#profileMaintenance || !this.#restorePrepared) throw new Error('backup.error.pending');
       setTimeout(() => { app.relaunch(); app.quit(); }, 250);
     });
     this.#ipc.register('backup:cancel-restore', consoleOnly, async () => {
@@ -5317,7 +5325,6 @@ export class AppController {
     const playwrightStop = this.#playwrightMcp.stop().then(()=>null,error=>error);
     this.#knowledge.dispose();
     this.#telegram.dispose();
-    if (this.#restorePrepared) await this.#qq.invalidateForRestore().catch(() => undefined);
     this.#qq.dispose();
     if (this.#chatCronTimer!==null) clearInterval(this.#chatCronTimer);
     await this.#chatCron.shutdown();

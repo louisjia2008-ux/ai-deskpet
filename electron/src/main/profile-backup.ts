@@ -340,6 +340,10 @@ export const abandonPendingRestore = async (root: string): Promise<boolean> => {
 
 // Applied before services load. Keep a complete pre-restore snapshot and a
 // durable journal; interruption on any individual rename rolls back next boot.
+/** Written when a restore was applied; the next start revokes the live QQ binding before QQ may connect. */
+export const QQ_REVOKE_MARKER = 'qq-revoke-after-restore';
+const markQqRevoke = (root: string): Promise<void> => atomicWriteFile(join(root, QQ_REVOKE_MARKER), '1');
+
 export const applyPendingProfileRestore = async (root: string): Promise<'none' | 'restored' | 'rolled-back'> => {
   const path = join(root, 'restore-pending.json');
   if (!(await exists(path))) return 'none';
@@ -358,7 +362,7 @@ export const applyPendingProfileRestore = async (root: string): Promise<'none' |
     }
     await rm(path);
   };
-  if (journal.phase === 'complete') { await rm(path); return 'restored'; }
+  if (journal.phase === 'complete') { await markQqRevoke(root); await rm(path); return 'restored'; }
   // Old journals have no proof that rollback preserves automatic/usage authority.
   // Preserve all files and stop rather than apply an unverifiable old state.
   const proof = journal.automaticProtectionProof;
@@ -385,6 +389,8 @@ export const applyPendingProfileRestore = async (root: string): Promise<'none' |
       if (await exists(join(incoming, name))) await rename(join(incoming, name), join(root, name));
     }
     await atomicWriteFile(path, JSON.stringify({ ...journal, phase: 'complete' }));
+    // The marker is durable before the journal disappears, so a crash here still revokes QQ next start.
+    await markQqRevoke(root);
     await rm(path);
     return 'restored';
   } catch (error) { await rollback(); throw error; }

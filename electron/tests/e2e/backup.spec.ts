@@ -54,11 +54,12 @@ test('backs up Kitty and profile data through settings, rejects a wrong password
     await expect(page!.getByText('Encrypted backup saved', { exact: true })).toBeVisible();
     expect((await readFile(archive)).subarray(0, 17).toString()).toBe('DESKPET-BACKUP-1\n');
     await page!.evaluate(() => window.deskpet.relationship.setNickname('Changed after backup'));
-    await page!.getByLabel('Backup password', { exact: true }).fill('wrong-fixture-password');
+    await page!.getByText('Restore from a backup', { exact: true }).click();
+    await page!.getByLabel('This backup’s password', { exact: true }).fill('wrong-fixture-password');
     await page!.getByRole('button', { name: 'Restore backup', exact: true }).click();
     await expect(page!.getByRole('alert')).toContainText('Incorrect password');
     expect((await page!.evaluate(() => window.deskpet.relationship.get())).nickname).toBe('Changed after backup');
-    await page!.getByLabel('Backup password', { exact: true }).fill('fixture-backup-password');
+    await page!.getByLabel('This backup’s password', { exact: true }).fill('fixture-backup-password');
     await page!.getByRole('button', { name: 'Restore backup', exact: true }).click();
     await expect(page!.getByRole('alertdialog')).toBeVisible();
     await page!.screenshot({ path: testInfo.outputPath('restore-ready.png') });
