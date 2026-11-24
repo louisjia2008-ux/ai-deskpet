@@ -1,12 +1,14 @@
 """Real binding, ledger, reply-text and cloud-authority paths; only physical UI is stubbed."""
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack, nullcontext, redirect_stdout
 import fcntl
 from hashlib import sha256
+from io import BytesIO, StringIO
 import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -48,12 +50,15 @@ class OwnerDeliveryTest(unittest.TestCase):
         path.write_text(json.dumps(value))
         path.chmod(0o600)
 
-    def run_delivery(self, request=None, *, revoke=False, uncertain=False, enroll=True, real_lock=False):
+    def run_delivery(self, request=None, *, revoke=False, uncertain=False, enroll=True, real_lock=False,
+                     preflight_error=None, report_preflight=None):
         if enroll:
             with WeChatState(self.db) as state:
                 self.intake(state).enroll()
 
         def send(*args, before_send, receipt, **kwargs):
+            if preflight_error is not None:
+                raise preflight_error
             if revoke:
                 self.write('owner.json', {**self.owner, 'fingerprint': 'a' * 64})
             if before_send():
@@ -69,7 +74,8 @@ class OwnerDeliveryTest(unittest.TestCase):
             stack.enter_context(patch.object(listener, 'owner_fingerprint', return_value=self.owner['fingerprint']))
             stack.enter_context(patch.object(delivery.ui, 'run_test', side_effect=send))
             stack.enter_context(patch.object(delivery.ui, 'run_sticker', side_effect=send))
-            return delivery.owner_deliver(self.settings, self.root, self.db, request or self.request)
+            return delivery.owner_deliver(self.settings, self.root, self.db, request or self.request,
+                                          report_preflight=report_preflight)
 
     def test_owner_delivery_waits_for_a_real_lock_and_times_out_before_a_send(self):
         lock_path = self.root / 'desktop.lock'
@@ -149,6 +155,34 @@ class OwnerDeliveryTest(unittest.TestCase):
         self.assertEqual(self.run_delivery(), 'uncertain')
         self.assertEqual(len(self.sent), 1)
 
+    def test_safe_retry_keeps_the_allowlisted_preflight_reason_without_reserving_a_send(self):
+        reasons = []
+        request = {**self.request, 'digestKind': 'groups'}
+        failure = delivery.ui.TestError('private fixture detail', code='drawer_state_unknown')
+        self.assertEqual(self.run_delivery(request, preflight_error=failure, report_preflight=reasons.append), 'retry')
+        self.assertEqual(reasons, ['drawer_state_unknown'])
+        self.assertEqual(self.sent, [])
+        with WeChatState(self.db) as state:
+            self.assertEqual(state.db.execute('SELECT count(*) FROM wechat_owner_deliveries').fetchone()[0], 0)
+
+    def test_owner_delivery_control_reports_reasons_for_ordinary_sends_only_before_click(self):
+        def result(status):
+            def deliver(_settings, _runtime, _path, request, *, report_preflight):
+                self.assertNotIn('digestKind', request)
+                report_preflight('drawer_state_unknown')
+                return status
+
+            stdin = SimpleNamespace(buffer=BytesIO(json.dumps(self.request).encode()))
+            stdout = StringIO()
+            with (patch.object(delivery.sys, 'stdin', stdin),
+                  patch.object(delivery, 'owner_deliver', side_effect=deliver), redirect_stdout(stdout)):
+                delivery.owner_delivery_control(self.settings, self.root, self.db)
+            return json.loads(stdout.getvalue())
+
+        self.assertEqual(result('retry'), {'status': 'retry', 'reason': 'drawer_state_unknown'})
+        self.assertEqual(result('uncertain'), {'status': 'uncertain'})
+        self.assertEqual(result('sent'), {'status': 'sent'})
+
     def test_sticker_uses_real_private_spool_and_separate_once_only_ledger(self):
         image = b'\x89PNG\r\n\x1a\nfixture'
         digest = sha256(image).hexdigest()
@@ -181,6 +215,49 @@ class OwnerDeliveryTest(unittest.TestCase):
                 self.assertIsNotNone(listener.authorize_cloud_request(state, self.settings, self.root, {**request, 'text': asked}))
                 self.assertIsNone(listener.authorize_cloud_request(state, self.settings, self.root, {**request, 'text': model_text + 'extra'}))
                 self.assertIsNone(listener.authorize_cloud_request(state, self.settings, self.root, {**request, 'binding': '0' * 64}))
+
+    def test_long_owner_text_survives_intake_cloud_authority_transcript_and_next_turn(self):
+        original = '𠀀' * 499 + '\n' + '𠀀' * 500
+        followup = '请接着说'
+        sender = 'fixture_owner'
+        shard = 'message_0.db'
+        with WeChatState(self.db) as state:
+            intake = self.intake(state)
+            intake.enroll()
+            state.register_transcript_scopes({self.binding: ('private', 'Owner')})
+
+            def poll(local_id, rows):
+                intake.apply(intake.request(), {'ok': True, 'account_id': 'fixture_bot', 'rows': rows,
+                    'cursors': {f'{shard}/{sender}': {'generation': 'a' * 32, 'local_id': local_id}}, 'has_more': False})
+
+            def admit(text, local_id):
+                poll(local_id, [{'conversation_id': sender, 'sender_id': sender, 'database': shard,
+                    'local_id': local_id, 'server_id': str(local_id), 'created_at': local_id, 'type': 1,
+                    'body': text, 'native_mention_self': False, 'mention_ids': []}])
+                return state.pending(self.binding)[0]
+
+            def authorize(event, text, history):
+                request = {'target': 'private', 'groupId': None, 'binding': self.binding,
+                    'eventId': event.id, 'text': text, 'history': history, 'split': False, 'stickers': True}
+                wire = (json.dumps(request, ensure_ascii=False) + '\n').encode('utf-8')
+                checked = listener.cloud_request_from_bytes(wire)
+                return listener.authorize_cloud_request(state, self.settings, self.root, checked)
+
+            poll(10, [])
+            first = admit(original, 11)
+            route = read_cloud_route(self.root, 'private', None)
+            self.assertIsNotNone(route)
+            self.assertEqual(authorize(first, original, []), route)
+            self.assertIsNone(authorize(first, original[:-1], []))
+            self.assertEqual(state.transcript_batch()['entries'][0]['text'], original)
+            self.assertTrue(state.prepare(first.id, '已读完整消息'))
+            self.assertTrue(state.mark_attempted(first.id))
+            self.assertTrue(state.mark_sent(first.id))
+
+            second = admit(followup, 12)
+            history = state.history(self.binding, for_cloud=True, owner=True)
+            self.assertEqual(history, [{'role': 'user', 'text': original}, {'role': 'assistant', 'text': '已读完整消息'}])
+            self.assertEqual(authorize(second, followup, history), route)
 
     def test_following_cloud_routes_keep_bound_fingerprints_for_all_scopes(self):
         pin = 'd' * 64

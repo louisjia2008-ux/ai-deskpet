@@ -104,6 +104,17 @@ class SelfTest(unittest.TestCase):
         self.assertEqual((result['status'], result['code']), ('failed', 'self_test_target'))
         self.send.assert_not_called()
 
+    def test_owner_drawer_failure_exposes_only_the_allowlisted_reason(self):
+        self.owner_check.side_effect = probe.ui.DiagnosticTestError('hidden fixture text', code='drawer_state_unknown')
+        result = self.run_probe()
+        self.assertEqual(result['preflightReason'], 'drawer_state_unknown')
+        self.assertEqual((result['status'], result['code']), ('failed', 'self_test_send'))
+        self.assertNotIn('hidden fixture text', json.dumps(result))
+        self.send.assert_not_called()
+
+        self.owner_check.side_effect = probe.ui.DiagnosticTestError('fixture', code='unknown_reason')
+        self.assertNotIn('preflightReason', self.run_probe())
+
     def test_lock_paused_and_real_message_yield(self):
         self.lock.side_effect = probe.ui.OperationBusy('fixture')
         self.assertEqual(self.run_probe()['status'], 'busy')

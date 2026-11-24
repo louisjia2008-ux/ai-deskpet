@@ -181,6 +181,41 @@ it('projects exact owner identity and recent context with sixteen owner messages
   expect(f.inputs).toHaveLength(3);
 });
 
+it('passes full owner plain text and user history through the cloud socket within their code-point budgets', async () => {
+  const ownerCommand = vi.fn<NonNullable<Controls['ownerCommand']>>(async () => '收到。');
+  const f = await fixture({ ownerCommand }, true);
+  await f.bridge.configure({ private: f.route, groups: { [groupId]: f.route } });
+  await f.bridge.configureFriend({ friendId, route: f.route });
+  const text = '😀'.repeat(1_000);
+  const history = Array.from({ length: 4 }, () => [
+    { role: 'user' as const, text }, { role: 'assistant' as const, text: '🙂'.repeat(500) },
+  ]).flat();
+  const dailyDigests = { items: Array.from({ length: 12 }, () => '"'.repeat(500)), expiresAt: Math.floor(Date.now() / 1_000) + 60 };
+  const owner = request({ text, history, dailyDigests });
+  expect(Buffer.byteLength(JSON.stringify(owner) + '\n')).toBeGreaterThan(32_768);
+  expect(await send(f.socket, owner)).toHaveProperty('reply');
+  const modelInput = JSON.parse(f.inputs[0]!.messages.at(-1)!.content);
+  expect(modelInput).toMatchObject({ latest: { role: 'user', text }, history, dailyDigests: dailyDigests.items });
+  expect(await send(f.socket, request({ text: '关于这句话', history, quote: '引用：之前的话' }))).toHaveProperty('reply');
+  expect(JSON.parse(f.inputs[1]!.messages.at(-1)!.content)).toMatchObject({ history });
+
+  const tooLong = '字'.repeat(1_001);
+  for (const packet of [
+    { ...owner, text: tooLong }, { ...owner, text: text + '😀' }, { ...owner, text: '\ud800' },
+    request({ text, history: [{ role: 'user', text: tooLong }] }),
+    request({ text, history: [{ role: 'assistant', text: '🙂'.repeat(501) }] }),
+    { ...owner, history: [...history, { role: 'user', text: '字' }] },
+    request({ text, history: [], quote: '引用：之前的话' }),
+    request({ text, history: [], ownerCommand: true }),
+    request({ text, history: [], target: 'group', groupId, binding: groupBinding }),
+    request({ text, history: [], target: 'friend', friendId, binding: friendBinding, stickers: false }),
+  ]) {
+    expect(await send(f.socket, packet)).toEqual(failure);
+  }
+  expect(f.inputs).toHaveLength(2);
+  expect(ownerCommand).not.toHaveBeenCalled();
+});
+
 it('accepts local reply observations only with a live listener binding and local route, with no cloud request', async () => {
   const completed = vi.fn<NonNullable<Controls['completed']>>();
   const f = await fixture({ completed });
@@ -194,9 +229,13 @@ it('accepts local reply observations only with a live listener binding and local
   expect(await send(f.socket, { ...packet, localResult: { reply: '[mood:happy] 加油', mood: 'happy' } })).toEqual({ accepted: false });
   expect(await send(f.socket, packet)).toEqual({ accepted: true });
   expect(completed).toHaveBeenCalledExactlyOnceWith(packet, { ...packet.localResult, route: null, localModel: packet.localModel, destination: 'local' });
+  const longText = '😀'.repeat(1_000);
+  const longLocal = { ...packet, text: longText, history: [{ role: 'user', text: longText }] };
+  expect(await send(f.socket, longLocal)).toEqual({ accepted: true });
+  expect(completed).toHaveBeenLastCalledWith(longLocal, { ...packet.localResult, route: null, localModel: packet.localModel, destination: 'local' });
   await f.bridge.configure({ private: f.route, groups: {} });
   expect(await send(f.socket, packet)).toEqual(failure);
-  expect(completed).toHaveBeenCalledTimes(1);
+  expect(completed).toHaveBeenCalledTimes(2);
   expect(f.inputs).toEqual([]);
 });
 

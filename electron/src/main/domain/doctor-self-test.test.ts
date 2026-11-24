@@ -97,7 +97,7 @@ describe('doctor send integration', () => {
   it('persists attempts, caps manual tests, never tests on checkup and closes an already reported case on pass', async () => {
     root = await mkdtemp(join(tmpdir(), 'doctor-self-test-'));
     let now = at('06:59');
-    const test = vi.fn(async () => result('failed')), sendQq = vi.fn(async () => true);
+    const test = vi.fn(async (): Promise<DoctorSelfTestResult> => ({ ...result('failed'), preflightReason: 'drawer_state_unknown' })), sendQq = vi.fn(async () => true);
     const doctor = new DoctorService({ path: join(root, 'doctor.json'), timeZone: TZ, now: () => now,
       inputs: async () => ({ health: { checkedAt: now.toISOString(), items: [], issues: 0 }, wechat: { configured: true } as WeChatChannelState }),
       available: () => true, diskFree: async () => null, notifyDesktop: () => true, sendQq, changed: () => undefined, wechatSelfTest: test });
@@ -105,6 +105,9 @@ describe('doctor send integration', () => {
     await doctor.check(); expect(test).not.toHaveBeenCalled();
     now = at('09:00'); await doctor.check();
     expect(doctor.status().open).toBe(0);
+    expect(doctor.status().latestSelfTestPreflightReason).toBe('drawer_state_unknown');
+    const failed = JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).data.selfTests[0];
+    expect(failed).not.toHaveProperty('preflightReason');
     now = at('09:29'); await doctor.check(); expect(test).toHaveBeenCalledTimes(1);
     now = at('09:30'); await doctor.check(); await doctor.check();
     expect(doctor.status().cases[0]).toMatchObject({ code: 'wechat.selfTestFailed', reported: 'qq' });
@@ -112,6 +115,7 @@ describe('doctor send integration', () => {
     test.mockImplementation(async () => result('passed'));
     const before = sendQq.mock.calls.length;
     await doctor.testWeChatNow(); expect(sendQq.mock.calls.length).toBe(before);
+    expect(doctor.status().latestSelfTestPreflightReason).toBeUndefined();
     await doctor.check();
     expect(doctor.status().open).toBe(0);
     expect(sendQq).toHaveBeenCalledTimes(before + 1);

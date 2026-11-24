@@ -13,6 +13,7 @@ import { WECHAT_MOMENT_STAGES, isWeChatMomentStage } from '../../../shared/wecha
 import type { WeChatDigestKind } from './wechat-context';
 import { wechatFollowupEvidenceReadSchema } from './wechat-followup-evidence';
 import { appOutageSchema, doctorSelfTestResultSchema, doctorVmHealthSchema, type AppOutage, type DoctorSelfTestResult, type DoctorVmHealth } from '../../../shared/doctor';
+import { wechatSendReasonSchema, type WeChatSendReason } from '../../../shared/wechat-send-diagnostics';
 
 const unavailable: WeChatChannelState = {
   configured: false, groupName: null, state: 'stopped', stale: false, paused: false,
@@ -36,6 +37,13 @@ const replyFriendSchema = z.strictObject({ id: wechatFriendIdSchema, title: z.st
 const friendRosterEntrySchema = replyFriendSchema.extend({ id: wechatFriendRosterIdSchema });
 const momentFailureImage = /^\d{8}T\d{12}Z-([a-z_]+)\.png$/u;
 const momentFailureMaxAgeMs = 7 * 24 * 60 * 60_000;
+
+interface OwnerDeliveryInput {
+  binding: string; deliveryId: string; text: string; stickerAsset?: string; voice?: boolean; recordTranscript?: false; digestKind?: WeChatDigestKind;
+}
+export type OwnerDeliveryOutcome =
+  | { status: 'sent' | 'uncertain' }
+  | { status: 'retry'; reason?: WeChatSendReason };
 
 export class WeChatChannel implements Omit<WeChatChannelAPI, 'getCloud' | 'configureCloud' | 'configureFriendCloud' | 'configureAssistant' | 'configureGroupRule'> {
   constructor(private readonly root: string, private readonly script: string,
@@ -180,18 +188,25 @@ export class WeChatChannel implements Omit<WeChatChannelAPI, 'getCloud' | 'confi
     return result.routeFingerprint;
   }
 
-  async deliverOwner(input: { binding: string; deliveryId: string; text: string; stickerAsset?: string; voice?: boolean; recordTranscript?: false; digestKind?: WeChatDigestKind }): Promise<'sent' | 'retry' | 'uncertain'> {
+  async deliverOwner(input: OwnerDeliveryInput): Promise<OwnerDeliveryOutcome['status']> {
+    return (await this.deliverOwnerOutcome(input)).status;
+  }
+
+  async deliverOwnerOutcome(input: OwnerDeliveryInput): Promise<OwnerDeliveryOutcome> {
     const text = cleanReplyText(input.text);
-    if (!text.trim()) return 'uncertain';
+    if (!text.trim()) return { status: 'uncertain' };
     // Allow for each 30-second lock wait, including voice fallback and the separate sticker action.
     const timeout = input.voice && input.stickerAsset ? 290_000 : input.voice || input.stickerAsset ? 260_000 : 150_000;
-    const result = z.strictObject({ status: z.enum(['sent', 'paused', 'busy', 'retry', 'uncertain', 'binding_invalid', 'conflict', 'invalid_payload']) })
+    const result = z.strictObject({ status: z.enum(['sent', 'paused', 'busy', 'retry', 'uncertain', 'binding_invalid', 'conflict', 'invalid_payload']),
+      reason: wechatSendReasonSchema.optional() })
       .parse(await this.run(['owner-deliver'], { id: input.deliveryId, binding: input.binding, text,
         ...(input.stickerAsset ? { stickerAsset: input.stickerAsset } : {}), ...(input.voice ? { voice: true } : {}),
         ...(input.recordTranscript === false ? { recordTranscript: false } : {}),
         ...(input.digestKind ? { digestKind: input.digestKind } : {}) }, 16_384, timeout));
-    if (result.status === 'sent') return 'sent';
-    return ['paused', 'busy', 'retry'].includes(result.status) ? 'retry' : 'uncertain';
+    if (result.status === 'sent') return { status: 'sent' };
+    if (['paused', 'busy', 'retry'].includes(result.status))
+      return { status: 'retry', ...(result.reason ? { reason: result.reason } : {}) };
+    return { status: 'uncertain' };
   }
 
   async selfTest(input: { id: string; text: string }): Promise<DoctorSelfTestResult> {

@@ -77,3 +77,17 @@ it('shows generated summaries and details even when private delivery is uncertai
   fireEvent.click(screen.getByText('查看详细版'));
   expect(screen.getByText('合成细节').closest('details')).toHaveAttribute('open');
 });
+
+it('shows a queued delivery retry separately from a final failure', async () => {
+  const result = { at: Date.UTC(2026, 0, 1), entries: [{ title: '合成群一', summary: '合成摘要', detail: '合成细节' }] };
+  const groupResults = vi.fn<WeChatDigestsAPI['groupResults']>()
+    .mockResolvedValueOnce([{ ...result, delivery: 'retrying' }])
+    .mockResolvedValueOnce([{ ...result, delivery: 'failed' }]);
+  render(<WeChatGroupDigestResults api={{ groupResults }} locale="zh-CN" />);
+
+  expect(await screen.findByText('等待重试私聊发送')).toBeVisible();
+  expect(screen.getByText('合成摘要')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+  expect(await screen.findByText('部分群未能生成精华，或私聊发送未完成。')).toBeVisible();
+  expect(screen.queryByText('等待重试私聊发送')).not.toBeInTheDocument();
+});

@@ -193,6 +193,8 @@ def self_test(settings, runtime, state_path, request):
                     result.update(status="failed", code="self_test_target")
                 elif getattr(error, "code", None) == "self_test_db_unavailable":
                     result.update(status="failed", code="self_test_db_unavailable")
+                if result["status"] == "failed" and not attempted and not stages["click"] and getattr(error, "code", None) in ui.SEND_REASONS:
+                    result["preflightReason"] = ui.send_reason(error)
             finally:
                 result["durationMs"] = max(0, int((time.monotonic() - started) * 1000))
                 if attempted:

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { HealthItem } from '../../../shared/attention';
 import { providerFailureCode } from '../../../shared/provider-errors';
+import { wechatSendReasonSchema, type WeChatSendReason } from '../../../shared/wechat-send-diagnostics';
 import { nextCronOccurrence } from '../../domain/cron-expression';
 import { EncryptedJsonStore } from '../../persistence/encrypted-json-store';
 import type { VaultKeyProvider } from '../../persistence/encrypted-json-store';
@@ -14,6 +15,8 @@ export interface WeChatDigestContext {
   signal: AbortSignal;
   assertCurrent(): Promise<void>;
 }
+type DeliveryStatus = 'sent' | 'retry' | 'uncertain' | 'skipped';
+type DeliveryOutcome = DeliveryStatus | { status: DeliveryStatus; reason?: WeChatSendReason };
 export interface WeChatDigestHost {
   feature: HealthItem['feature'];
   spec(): Promise<WeChatDigestSpec | null>;
@@ -22,7 +25,7 @@ export interface WeChatDigestHost {
   quiet(now: number): boolean;
   ownerBinding(): Promise<string | null>;
   generate(context: WeChatDigestContext): Promise<WeChatDigestOutput>;
-  deliverOwner(input: { binding: string; deliveryId: string; text: string }, context: WeChatDigestContext, metadata?: string): Promise<'sent' | 'retry' | 'uncertain' | 'skipped'>;
+  deliverOwner(input: { binding: string; deliveryId: string; text: string }, context: WeChatDigestContext, metadata?: string): Promise<DeliveryOutcome>;
   now?(): number;
 }
 
@@ -65,6 +68,7 @@ const runSchema = z.strictObject({
   delivered: z.boolean().default(false),
   issue: issueSchema.nullable(), failures: z.number().int().min(0).max(32), entries: entriesSchema,
   providerError: providerErrorSchema.optional(),
+  deliveryReason: wechatSendReasonSchema.optional(),
   deliveryProgress: z.strictObject({ sent: z.number().int().min(0).max(32), total: z.number().int().min(0).max(32) }).optional(),
   pending: z.strictObject({
     revision: z.string().max(256), schedule: z.string().max(256), output: outputSchema,
@@ -99,6 +103,7 @@ function following(spec: WeChatDigestSpec, time: number): number {
 function settled(run: Run, outcome: Run['outcome'], issue: Issue | null, time: number, failures = issue ? 1 : 0): void {
   Object.assign(run, { outcome, issue, failures, finishedAt: Math.max(run.at, time) });
   delete run.pending;
+  if (issue !== 'delivery_failed') delete run.deliveryReason;
 }
 
 function deliveryFailed(run: Run, time: number): void {
@@ -297,11 +302,14 @@ export class WeChatDigestScheduler {
       pending.retryAt = 0;
       const { index } = pending;
       const deliveryId = createHash('sha256').update(JSON.stringify([this.host.feature, run.binding, run.dueAt, index])).digest('hex');
-      let delivery: 'sent' | 'retry' | 'uncertain' | 'skipped';
+      let result: DeliveryOutcome;
       try {
-        delivery = await this.host.deliverOwner({ binding: run.binding, deliveryId, text: output.messages[index]! }, context, output.metadata?.[index]);
-      } catch { delivery = 'uncertain'; }
+        result = await this.host.deliverOwner({ binding: run.binding, deliveryId, text: output.messages[index]! }, context, output.metadata?.[index]);
+      } catch { result = 'uncertain'; }
+      const { status: delivery, reason } = typeof result === 'string' ? { status: result, reason: undefined } : result;
+      delete run.deliveryReason;
       if (delivery === 'retry') {
+        if (reason) run.deliveryReason = reason;
         if (pending.attempts >= MAX_RETRIES || expired()) {
           deliveryFailed(run, this.#now());
         } else {
@@ -356,8 +364,10 @@ export class WeChatDigestScheduler {
     const fail = completed.filter(run => run.issue !== null);
     const last = completed.at(-1);
     const issue = failure?.issue ?? last?.issue ?? null;
+    const deliveryReason = !failure && issue === 'delivery_failed' && last?.deliveryReason;
     return { feature: this.host.feature, state: issue ? 'failing' : !spec ? 'off' : last ? 'ok' : 'waiting',
-      errorCode: (!failure && last?.providerError) || code(issue), lastFailureAt: iso(failure?.at ?? fail.at(-1)?.finishedAt ?? undefined),
+      errorCode: deliveryReason ? `wechat.${deliveryReason}` : (!failure && last?.providerError) || code(issue),
+      lastFailureAt: iso(failure?.at ?? fail.at(-1)?.finishedAt ?? undefined),
       lastSuccessAt: iso(completed.filter(run => run.outcome === 'succeeded').at(-1)?.finishedAt ?? undefined),
       failures: fail.filter(run => run.at > now - 7 * DAY).reduce((sum, run) => sum + run.failures, failure ? 1 : 0),
       sinceLaunch: false, ...(issue === 'delivery_failed' && last?.deliveryProgress ? { deliveryProgress: last.deliveryProgress } : {}) };

@@ -11,6 +11,9 @@ const statusCode = z.string().regex(/^[a-z0-9_.-]{1,64}$/u).nullable();
 const count = z.number().int().min(0).max(1_000_000);
 export const WECHAT_REPLY_GROUP_LIMIT = 12;
 export const WECHAT_REPLY_FRIEND_LIMIT = 20;
+export const WECHAT_OWNER_PLAIN_TEXT_LIMIT = 1_000;
+export const isWeChatOwnerTextWithinLimit = (text: string): boolean =>
+  !/\p{Cs}/u.test(text) && [...text].length <= WECHAT_OWNER_PLAIN_TEXT_LIMIT;
 export const WECHAT_FRIEND_REPLY_RATE = { perFriendMinute: 4, perFriendDay: 60, allFriendsHour: 120 } as const;
 export const wechatGroupIdSchema = z.string().regex(/^(?:legacy|[a-f0-9]{32})$/u);
 export const wechatFriendIdSchema = z.string().regex(/^[a-f0-9]{32}$/u);

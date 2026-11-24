@@ -37,7 +37,7 @@ from wechat_group_policy import (
     parse_fingerprints, parse_group_title, parse_policy, read_group_policy, read_group_registry,
     write_group_policy, write_group_registry,
 )
-from wechat_messages import MessageSnapshot, VisibleMessage, bubble_boxes, key, native_group_mention, new_messages, select_quote, share_vertical_shift
+from wechat_messages import COLORS, MessageSnapshot, VisibleMessage, bubble_boxes, key, native_group_mention, new_messages, select_quote, share_vertical_shift
 from wechat_moments import prune_failure_screenshots
 from wechat_replies import (
     CLOUD_REQUEST_LIMIT, DeskPet, ReplyRejected, ReplyYielded, article_reply_plan, clean_prepared_reply, cloud_reply_plan, cloud_request_from_bytes, local_reply_context, log,
@@ -413,7 +413,7 @@ def private_visual_digests(path, messages):
 
 
 def owner_drawer_state(settings, path):
-    """Read the native details drawer's vertical divider in the fixed WeChat window."""
+    """Read the native details drawer at its fixed boundary in the WeChat window."""
     x, y, width, height = settings["window"]
     edge = x + width - 252
     rows = range(y + 115, y + height - 170)
@@ -426,12 +426,22 @@ def owner_drawer_state(settings, path):
                       for row in rows)
         background = sum(pixels[edge + 1, row] == (250, 250, 250) for row in rows)
         continuous = sum(pixels[edge - 1, row] == pixels[edge, row] == pixels[edge + 1, row] for row in rows)
-    # Wide green bubbles darken the divider but are clipped immediately
-    # to its right. Require both the divider and the flat drawer interior.
-    if divider * 2 >= len(rows) and background * 10 >= len(rows) * 9 and continuous * 4 <= len(rows):
-        return True
-    if divider * 50 <= len(rows) and continuous * 3 >= len(rows) * 2:
-        return False
+        # Wide green bubbles darken an open divider but are clipped to its right.
+        # Require both the divider and the flat drawer interior to confirm it is open.
+        if divider * 2 >= len(rows) and background * 10 >= len(rows) * 9 and continuous * 4 <= len(rows):
+            return True
+        if divider * 50 > len(rows):
+            return None
+        if continuous * 3 >= len(rows) * 2:
+            return False
+        # Text in a tall chat bubble can break the three-column continuity
+        # check. The native fill can only cross an unobstructed drawer boundary.
+        span = range(edge - 8, edge + 9)
+        if 0 <= span.start and span.stop <= image.width:
+            crossing = sum(pixels[edge, row] in COLORS and all(pixels[column, row] == pixels[edge, row] for column in span)
+                           for row in rows)
+            if crossing * 4 >= len(rows):
+                return False
     return None
 
 

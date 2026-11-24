@@ -10,6 +10,7 @@ import { providerDefinitions, type ProviderConfig } from '../../../shared';
 import { CHARACTER_MOODS, type CharacterMood } from '../../../shared/character-reactions';
 import { cleanReplyText, QqStickerReplyFilter } from '../../../shared/qq-sticker-reply';
 import { WECHAT_REPLY_FRIEND_LIMIT, WECHAT_REPLY_GROUP_LIMIT, wechatAssistantSchema, wechatCloudSettingsSchema, wechatCloudStateSchema, wechatFriendCloudUpdateSchema, wechatFriendIdSchema, wechatGroupIdSchema, wechatGroupRulesSchema, wechatGroupRuleUpdateSchema, wechatPinnedCloudRouteSchema } from '../../../shared/wechat-channel';
+import { isWeChatOwnerTextWithinLimit, WECHAT_OWNER_PLAIN_TEXT_LIMIT } from '../../../shared/wechat-channel';
 import type { WeChatAssistant, WeChatCloudRoute, WeChatCloudSettings, WeChatCloudState, WeChatFriendCloudUpdate, WeChatGroupRule, WeChatGroupRuleUpdate, WeChatPinnedCloudRoute } from '../../../shared/wechat-channel';
 import { defaultGroupRule, groupRulesPrompt } from './wechat-group-rules';
 import { resolveContextDestination } from '../../domain/chat-context-policy';
@@ -46,14 +47,15 @@ const localResultSchema = z.strictObject({
     && !/[\p{Cc}\p{Zl}\p{Zp}]|https?:\/\//iu.test(value)),
   mood: z.enum(CHARACTER_MOODS).nullable(),
 });
+const requestTextSchema = z.string().min(1).max(WECHAT_OWNER_PLAIN_TEXT_LIMIT * 2);
 const requestSchema = z.strictObject({
   target: z.enum(['private', 'group', 'friend']),
   groupId: scopeSchema.nullable(),
   friendId: wechatFriendIdSchema.optional(),
   binding: hashSchema,
   eventId: hashSchema,
-  text: z.string().min(1).max(1000),
-  history: z.array(z.strictObject({ role: z.enum(['user', 'assistant']), text: z.string().min(1).max(1000) })).max(16),
+  text: requestTextSchema,
+  history: z.array(z.strictObject({ role: z.enum(['user', 'assistant']), text: requestTextSchema })).max(16),
   split: z.boolean(),
   stickers: z.boolean(),
   contextOnly: z.literal(true).optional(),
@@ -72,6 +74,15 @@ const requestSchema = z.strictObject({
   speaker: z.enum(['owner', 'member']).optional(),
   ownerName: z.string().min(1).max(80).refine(value => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)).optional(),
 }).refine(value => value.target === 'group' ? value.groupId !== null && value.groupId !== 'private' : value.groupId === null)
+  .refine(value => {
+    const ownerConversation = value.target === 'private'
+      && !(value.ownerCommand || value.readTool || value.stickerSelection || value.article || value.rich);
+    const currentFits = ownerConversation && !value.quote
+      ? isWeChatOwnerTextWithinLimit(value.text) : value.text.length <= 1_000;
+    return currentFits && value.history.every(item => {
+      return ownerConversation && item.role === 'user' ? isWeChatOwnerTextWithinLimit(item.text) : item.text.length <= 1_000;
+    });
+  })
   .refine(value => (value.target === 'private' || value.history.length <= 6)
     && value.history.reduce((length, item) => length + [...item.text].length, 0) <= 6_000)
   .refine(value => (value.target === 'friend') === (value.friendId !== undefined))
@@ -102,7 +113,8 @@ export interface WeChatReplyCompletion {
 export interface WeChatAssistantReply { reply: string; sticker: boolean; stickerAsset?: string; knowledgePolicyToken?: string; privateContext?: true; assertCurrent?(): void }
 type Settings = z.infer<typeof settingsSchema>;
 type Provider = Pick<ProviderService, 'list' | 'captureBinding' | 'credentialReference'>;
-const maxFrame = 32_768;
+const maxPrivateFileBytes = 32_768;
+const maxRequestFrameBytes = 65_536;
 const empty = (): Settings => ({ private: null, groups: {}, destinations: {} });
 const defaultAssistant = (): WeChatAssistant => ({ enabled: true, memories: 'all', moments: false });
 const unavailable = (): WeChatCloudState => ({ available: false, assistant: defaultAssistant(), groupRules: {}, providers: [], settings: emptyPublic() });
@@ -317,7 +329,7 @@ export class WeChatCloud {
     try {
       const info = await file.stat();
       if (!info.isFile() || info.uid !== process.getuid?.() || info.nlink !== 1
-        || (info.mode & 0o777) !== 0o600 || info.size > maxFrame) throw Error('wechat.unavailable');
+        || (info.mode & 0o777) !== 0o600 || info.size > maxPrivateFileBytes) throw Error('wechat.unavailable');
       return await file.readFile({ encoding: 'utf8' });
     } finally {
       await file.close();
@@ -514,7 +526,7 @@ export class WeChatCloud {
     socket.setTimeout(assistantBudgetMs + 30_000, () => socket.destroy());
     let payload = Buffer.alloc(0);
     socket.on('data', (chunk: Buffer) => {
-      if (payload.length + chunk.length > maxFrame) { socket.destroy(); return; }
+      if (payload.length + chunk.length > maxRequestFrameBytes) { socket.destroy(); return; }
       payload = Buffer.concat([payload, chunk]);
     });
     socket.once('end', () => {

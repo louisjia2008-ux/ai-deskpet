@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ChatMessage } from '../../../shared';
+import { isWeChatOwnerTextWithinLimit, WECHAT_OWNER_PLAIN_TEXT_LIMIT } from '../../../shared/wechat-channel';
 import type { DomainRepository } from '../../domain/repository';
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -11,13 +12,15 @@ const sender = z.string().min(1).max(160).refine(value => value.trim().length > 
 const itemSchema = z.object({
   id: digest, binding: digest, scope: z.enum(['private', 'group', 'friend']), title,
   role: z.enum(['user', 'assistant']),
-  text: z.string().min(1).max(1_000).refine(value => value.trim().length > 0 && [...value].length <= 500),
+  text: z.string().min(1).max(WECHAT_OWNER_PLAIN_TEXT_LIMIT * 2).refine(value => value.trim().length > 0),
   at: z.number().min(0).max(253_402_300_799).nullable(),
   sender: sender.nullable().optional(),
   wechatDigest: z.literal(true).optional(),
   wechatFriend: z.literal(true).optional(),
 }).strict().refine(value => (!value.wechatDigest || (value.role === 'assistant' && value.scope === 'private' && value.at !== null))
-  && (value.scope === 'friend') === (value.wechatFriend === true));
+  && (value.scope === 'friend') === (value.wechatFriend === true))
+  .refine(value => value.scope === 'private' && value.role === 'user'
+    ? isWeChatOwnerTextWithinLimit(value.text) : [...value.text].length <= 500);
 const pageSchema = z.object({
   version: z.literal(1), entries: z.array(itemSchema).max(50), more: z.boolean(),
 }).strict().refine(value => !value.more || value.entries.length > 0);

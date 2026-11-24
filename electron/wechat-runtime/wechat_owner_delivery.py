@@ -105,7 +105,8 @@ def receipt_for_pin(pin):
 
     return database_receipt({"account_id": pin.account_id, "conversation_id": pin.conversation_id})
 
-def _deliver_text(settings, runtime, state_path, request, *, allow_send=None, desktop_operation=None, window_failure="retry"):
+def _deliver_text(settings, runtime, state_path, request, *, allow_send=None, desktop_operation=None,
+                  window_failure="retry", report_preflight=None):
     from wechat_listener import owner_record, private_binding_key, verify_owner
 
     def binding_matches():
@@ -114,6 +115,10 @@ def _deliver_text(settings, runtime, state_path, request, *, allow_send=None, de
             return hmac.compare_digest(current, request["binding"])
         except (OSError, KeyError, ValueError, ui.TestError):
             return False
+
+    def report(reason):
+        if report_preflight is not None and not attempted:
+            report_preflight(reason)
 
     if not binding_matches():
         return "binding_invalid"
@@ -131,6 +136,7 @@ def _deliver_text(settings, runtime, state_path, request, *, allow_send=None, de
             if previous is not None:
                 return previous
             if is_paused(runtime):
+                report("send_listener_paused")
                 return "paused"
             if allow_send is not None and not allow_send():
                 return "retry"
@@ -140,7 +146,8 @@ def _deliver_text(settings, runtime, state_path, request, *, allow_send=None, de
             path = Path(tmp) / "screen.png"
             try:
                 ui.open_target(settings, path, "private")
-            except (ui.TestError, OSError, ValueError, subprocess.SubprocessError):
+            except (ui.TestError, OSError, ValueError, subprocess.SubprocessError) as error:
+                report(ui.send_reason(error))
                 return window_failure
             verify_owner(settings, path, runtime)
 
@@ -166,21 +173,26 @@ def _deliver_text(settings, runtime, state_path, request, *, allow_send=None, de
                 ui.run_test("send", "private", text, settings, path, before_send=before_send,
                             database_receipt=receipt_for_pin(pin) if pin is not None else None,
                             receipt=lambda: ledger.finish(delivery_id, "sent", record_delivery))
-            except (ui.TestError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
-                pass
+            except (ui.TestError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as error:
+                report(ui.send_reason(error))
             if attempted:
                 if ledger.previous(delivery_id, binding, digest) == "sent":
                     return "sent"
                 ledger.finish(delivery_id, "uncertain")
                 return "uncertain"
-            return "paused" if is_paused(runtime) else "retry" if binding_matches() else "binding_invalid"
+            if is_paused(runtime):
+                report("send_listener_paused")
+                return "paused"
+            return "retry" if binding_matches() else "binding_invalid"
     except ui.OperationBusy:
+        report("send_window_busy")
         return "busy"
-    except (ui.TestError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+    except (ui.TestError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as error:
+        report(ui.send_reason(error))
         return "uncertain" if attempted else "retry"
 
 
-def _try_owner_voice(settings, runtime, state_path, request):
+def _try_owner_voice(settings, runtime, state_path, request, *, report_preflight=None):
     from wechat_listener import owner_record, private_binding_key, verify_owner
     from wechat_voice_send import record_voice
     from wechat_voice_synthesis import synthesize_wav, VoiceSynthesisError
@@ -194,6 +206,8 @@ def _try_owner_voice(settings, runtime, state_path, request):
             if previous is not None:
                 return previous
             if is_paused(runtime):
+                if report_preflight is not None:
+                    report_preflight('send_listener_paused')
                 return 'paused'
             if not hmac.compare_digest(private_binding_key(settings, owner_record(settings, runtime)), request['binding']):
                 return 'binding_invalid'
@@ -224,6 +238,8 @@ def _try_owner_voice(settings, runtime, state_path, request):
                     ledger.finish(request['id'], 'uncertain')
                     return 'uncertain'
     except ui.OperationBusy:
+        if report_preflight is not None and not attempted:
+            report_preflight('send_window_busy')
         return 'busy'
     except (ui.TestError, OSError, ValueError, KeyError, VoiceSynthesisError, sqlite3.Error, subprocess.SubprocessError):
         if attempted:
@@ -231,12 +247,12 @@ def _try_owner_voice(settings, runtime, state_path, request):
     return None  # only a proven pre-send failure may fall back to text
 
 
-def owner_deliver(settings, runtime, state_path, request):
+def owner_deliver(settings, runtime, state_path, request, *, report_preflight=None):
     if request.get('voice') is True:
-        voice_status = _try_owner_voice(settings, runtime, state_path, request)
+        voice_status = _try_owner_voice(settings, runtime, state_path, request, report_preflight=report_preflight)
         if voice_status is not None:
             return voice_status
-    status = _deliver_text(settings, runtime, state_path, request)
+    status = _deliver_text(settings, runtime, state_path, request, report_preflight=report_preflight)
     if status != "sent" or "stickerAsset" not in request:
         return status
     from wechat_listener import verify_owner
@@ -294,10 +310,14 @@ def owner_delivery_control(settings, runtime, state_path):
             raise ValueError("Invalid owner delivery size.")
         request = parse_delivery(raw)
     except ValueError:
-        status = "invalid_payload"
+        result = {"status": "invalid_payload"}
     else:
-        status = owner_deliver(settings, runtime, state_path, request)
-    print(json.dumps({"status": status}))
+        result = {}
+        result["status"] = owner_deliver(settings, runtime, state_path, request,
+                                        report_preflight=lambda reason: result.update(reason=reason))
+        if result["status"] not in ("retry", "paused", "busy"):
+            result.pop("reason", None)
+    print(json.dumps(result))
 
 
 def deliver_watchdog_notice(settings, runtime, state_path, delivery_id, text, allow_send):

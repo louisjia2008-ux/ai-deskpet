@@ -60,6 +60,17 @@ describe('background status page', () => {
     expect(within(card).queryByRole('button', { name: '知道了' })).toBeNull();
   });
 
+  it('shows WeChat recovery and opens WeChat settings when proactive delivery fails its preflight', async () => {
+    const f = fixture([entry('proactive', 'failing', { errorCode: 'wechat.drawer_state_unknown' })]);
+    render(<HealthPanel api={f.api} locale="zh-CN" onOpen={f.onOpen} />);
+    const card = await screen.findByRole('article');
+    expect(within(card).getByRole('heading')).toHaveTextContent('主动消息');
+    expect(within(card).getByRole('status')).toHaveTextContent('无法确认聊天详情面板的状态。');
+    expect(within(card).getByText(/检查已绑定主人私聊的聊天详情面板/)).toBeVisible();
+    fireEvent.click(within(card).getByRole('button', { name: '去设置' }));
+    expect(f.onOpen).toHaveBeenCalledWith('wechat');
+  });
+
   it('says so when everything that is on works, and shows an unknown code as is', async () => {
     const f = fixture([entry('schedules', 'ok', { lastSuccessAt: '2026-11-14T07:00:00.000Z' })]);
     const { unmount } = render(<HealthPanel api={f.api} locale="en" onOpen={f.onOpen} />);
