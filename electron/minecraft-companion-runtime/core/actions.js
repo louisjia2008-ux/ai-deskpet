@@ -10,6 +10,7 @@ const { posKey } = require('./blacklist');
 const { homeContains, safeStand, SIDES: CARDINAL } = require('./home-topology');
 const { pickItem, isSealSoil, isSealRock } = require('./materials');
 const shore = require('./shore-route');
+const { wet: wetBlock } = require('./dry-route');
 const { meleeGeometry, meleeSight, MeleeFollowGoal, entitySizeEvidence } = require('./entityGeometry');
 const { surveyDigPermit, withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight } = require('./survey-plan-actions');
 const { complete, createAttempt, departRoute, factsOf, failure, isComplete, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waterRouteFailure } = require('./action-result');
@@ -1124,19 +1125,10 @@ async function swimAshore(bot, ctx, { maxTicks = 1200 } = {}) {
     : new Vec3(start.x + Math.cos(heading) * leg, start.y, start.z + Math.sin(heading) * leg);
   ctx.record('swim_ashore', { to: shore ? shore.position : target.floored(), home: !shore,
     distance: Math.round(Math.hypot(target.x - start.x, target.z - start.z)) });
-  try {
-    for (let i = 0; i < maxTicks; i += 1) {
-      const here = bot.entity.position;
-      if (Math.hypot(here.x - target.x, here.z - target.z) < 1.2 || (bot.entity.onGround && !wet(here.floored()))) break;
-      await bot.lookAt(target.offset(0, 0.6, 0), true);
-      bot.setControlState('forward', true);
-      bot.setControlState('jump', true);
-      await sleep(50, ctx.signal);
-    }
-  } finally {
-    bot.setControlState('forward', false);
-    bot.setControlState('jump', false);
-  }
+  await moveBodyToward(bot, ctx, target.offset(0, 0.6, 0), maxTicks, () => {
+    const here = bot.entity.position;
+    return Math.hypot(here.x - target.x, here.z - target.z) < 1.2 || (bot.entity.onGround && !wet(here.floored()));
+  });
   // Out, or beside the shore with a step left for the planner; out at sea, a good stretch nearer home.
   const end = bot.entity.position;
   if (!shore) return Math.hypot(end.x - start.x, end.z - start.z) > 16;
@@ -1165,27 +1157,12 @@ async function stepOutOfPool(bot, ctx, { maxTicks = 200 } = {}) {
     }
   }
   ledges.sort((a, b) => a.d - b.d);
-  const swimTo = async (target, done) => {
-    try {
-      for (let i = 0; i < maxTicks && !done(); i += 1) {
-        // Eyes level or up: looking down at the water swims the bot under.
-        const p = bot.entity.position;
-        await bot.lookAt(new Vec3(target.x, Math.max(target.y, p.y + 1.62), target.z), true);
-        bot.setControlState('forward', true);
-        bot.setControlState('jump', true);
-        await sleep(50, ctx.signal);
-      }
-    } finally {
-      bot.setControlState('forward', false);
-      bot.setControlState('jump', false);
-    }
-  };
   for (const { ledge, from } of ledges.slice(0, 4)) {
     const cells = [ledge.offset(0, 1, 0), ledge.offset(0, 2, 0)];
     if (cells.some((c) => { const b = bot.blockAt(c); return FLUID.test(b?.name || '') || (b?.boundingBox !== 'empty' && b?.diggable === false); })) continue;
     // Swim up against the ledge, then cut the rim above it away.
     const beside = from.offset(0.5, 0.5, 0.5);
-    await swimTo(beside, () => Math.hypot(bot.entity.position.x - beside.x, bot.entity.position.z - beside.z) < 0.8);
+    await moveBodyToward(bot, ctx, beside, maxTicks, () => Math.hypot(bot.entity.position.x - beside.x, bot.entity.position.z - beside.z) < 0.8);
     let open = true;
     for (const c of cells) {
       const b = bot.blockAt(c);
@@ -1196,10 +1173,88 @@ async function stepOutOfPool(bot, ctx, { maxTicks = 200 } = {}) {
     if (!open) continue;
     const step = ledge.offset(0.5, 1, 0.5);
     ctx.record('step_out_of_pool', { ledge: `${ledge.x},${ledge.y},${ledge.z}` });
-    await swimTo(step, () => bot.entity.onGround && !wet(bot.entity.position.floored()));
+    await moveBodyToward(bot, ctx, step, maxTicks, () => bot.entity.onGround && !wet(bot.entity.position.floored()));
     if (!wet(bot.entity.position.floored()) && bot.entity.position.y >= ledge.y + 0.9) return true;
   }
   return false;
+}
+
+async function moveBodyToward(bot, ctx, target, ticks, arrived, { jump = true } = {}) {
+  try {
+    for (let i = 0; i < ticks && !arrived(); i++) {
+      const { x, y, z } = bot.entity.position;
+      await bot.lookAt(new Vec3(target.x, Math.max(target.y, y + 1.62), target.z), true);
+      bot.setControlState('forward', Math.hypot(x - target.x, z - target.z) > 0.18);
+      bot.setControlState('jump', jump);
+      await sleep(50, ctx.signal);
+    }
+  } finally {
+    bot.setControlState('forward', false);
+    bot.setControlState('jump', false);
+  }
+  return arrived();
+}
+
+const RESCUE_ROCK = /^(sand|red_sand|gravel|.*_concrete_powder)$/;
+const protectedRescueCell = (bot, b) => !b || bot.companionProtectBlock?.(b)
+  || bot.companionHomeSite?.(b.position) || bot.companionPlayerBlock?.(b.position);
+
+async function digWaterExit(bot, ctx, { pillar = false } = {}) {
+  const feet = bot.entity.position.floored(), read = p => bot.blockAt(p);
+  const cuttable = b => b && !protectedRescueCell(bot, b) && b.diggable !== false
+    && (isSealRock(b.name) || isSealSoil(b.name) || RESCUE_ROCK.test(b.name))
+    && !/lava/.test(read(b.position.offset(0, 1, 0))?.name || '');
+  const open = b => b?.boundingBox === 'empty' && !/lava|fire/.test(b.name);
+  const paths = [];
+  for (let n = 1; n <= 4; n++) {
+    if (!pillar) for (const [dx, dz] of SIDES) {
+      const end = feet.offset(dx * n, 0, dz * n);
+      if (safeStand(read, end)) paths.push({ steps: Array.from({ length: n }, (_, i) => feet.offset(dx * (i + 1), 0, dz * (i + 1))) });
+    }
+    const end = feet.offset(0, n, 0), refill = end.offset(0, -1, 0);
+    if ([end, end.offset(0, 1, 0)].every(p => open(read(p)) && !wetBlock(read(p)))
+      && (!pillar || isSealRock(read(refill)?.name || ''))
+      && pickItem('filler', bot.inventory.items()) && !protectedRescueCell(bot, read(refill))) {
+      paths.push({ steps: Array.from({ length: n }, (_, i) => feet.offset(0, i + 1, 0)), refill });
+    }
+  }
+  const cells = p => [p, p.offset(0, 1, 0)];
+  const path = paths.find(({ steps }) => steps.every(p => cells(p).every(q => open(read(q)) || cuttable(read(q)))));
+  if (!path) return false;
+  for (const p of path.steps) {
+    const vertical = Boolean(path.refill);
+    const targets = cells(p).filter(q => !vertical || q.y > bot.entity.position.y + 1);
+    for (const q of targets) {
+      const block = read(q);
+      if (!open(block) && (!cuttable(block) || !(await digBlock(bot, ctx, block)).ok)) return false;
+    }
+    const target = p.offset(0.5, vertical ? 1.8 : 0.5, 0.5);
+    const at = () => bot.entity.position;
+    if (!vertical) {
+      if (!await moveBodyToward(bot, ctx, target, 55, () => Math.hypot(at().x - target.x, at().z - target.z) < 0.2)) return false;
+      continue;
+    }
+    const floor = p.offset(0, -1, 0);
+    const reference = [floor.offset(0, -1, 0), ...SIDES.map(([x, z]) => floor.offset(x, 0, z))]
+      .map(read).find(solidGround);
+    const item = pickItem('filler', bot.inventory.items());
+    if (!item || !reference || protectedRescueCell(bot, read(floor))) return false;
+    await bot.equip(item, 'hand');
+    bot.setControlState('jump', true);
+    try {
+      if (!await waitUntil(() => at().y >= p.y + 0.02, { timeoutMs: 2500, signal: ctx.signal })) return false;
+      await runCancellable(() => bot.placeBlock(reference, floor.minus(reference.position)), {
+        signal: ctx.signal, timeoutMs: 1500, timeoutCode: 'place_timeout',
+      });
+    } catch (error) {
+      if (isAbort(error)) throw error;
+    } finally {
+      bot.setControlState('jump', false);
+    }
+    if (!solidGround(read(floor))) return false;
+  }
+  return waitUntil(() => bot.entity.onGround && !bot.entity.isInWater && safeStand(read, bot.entity.position.floored()),
+    { timeoutMs: 1500, signal: ctx.signal });
 }
 
 const WOODEN_DOOR = /^(?!iron_).*_door$/;
@@ -1500,7 +1555,7 @@ module.exports = {
   openSurveyChest, openSurveyDoor: settleAction(openSurveyDoor), closeSurveyDoor: settleAction(closeSurveyDoor), isSurveyNight,
   drainPocket,
   recentre, surface: settleAction(surface, 'surface'), underground, openSky, localSurfaceY, isHomeTarget, routeOrigin, originFailure,
-  unstick: settleAction(unstick, 'unstick'), nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, gatherClimbBlocks,
+  unstick: settleAction(unstick, 'unstick'), nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, moveBodyToward, digWaterExit, gatherClimbBlocks,
   digStairsUp, digStairsDown, goTo: settleAction(goTo), goNear: settleAction(goNear), goToDig: settleAction(digTarget(goToDig)), withinReach,
   digBlock: settleAction(digTarget(digBlock)), collectDrops: settleAction(collectDrops), countItems, eat: settleAction(eat), pickFood,
   attack: settleAction((bot, ctx, id, options) => {

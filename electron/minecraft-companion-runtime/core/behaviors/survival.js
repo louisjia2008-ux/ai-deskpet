@@ -1052,8 +1052,11 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     // first bubble lost, though: eating in water costs a little air, and
     // breathe cutting every meal short kept a hurt bot from ever eating
     // (340 times over, half an hour in a flooded cave).
-    want: (state) => (state.inWater && Number.isFinite(state.oxygen)
-      && (state.oxygen < t.oxygen || (state.oxygen < DANGER.woundedAir && state.health < t.recoverHealth)) ? 1 : 0),
+    want(state) {
+      if (!state.inWater || !Number.isFinite(state.oxygen)) return 0;
+      if (bot.companionSelfStuck?.state()) return state.oxygen <= 4 ? 2 : 0;
+      return state.oxygen < t.oxygen || (state.oxygen < DANGER.woundedAir && state.health < t.recoverHealth) ? 1 : 0;
+    },
     async run(ctx) {
       bot.pathfinder?.setGoal(null);
       bot.setControlState('jump', true);
@@ -1095,7 +1098,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       const time = Date.now();
       breaths = breaths.filter((at) => time - at < 60000);
       breaths.push(time);
-      if (breaths.length >= 3 && bot.entity.isInWater && typeof actions.swimAshore === 'function') {
+      if (!bot.companionSelfStuck?.state() && breaths.length >= 3 && bot.entity.isInWater && typeof actions.swimAshore === 'function') {
         ctx.record('breathe', { action: 'swim_ashore', surfaced: breaths.length });
         await actions.swimAshore(bot, ctx);
       }

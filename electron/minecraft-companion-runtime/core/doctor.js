@@ -104,8 +104,8 @@ function createDoctor({ onStationarySegment, stationaryOnly = false } = {}) {
     if (event.type === 'behavior_started') behavior = text(event.behavior);
     if (['behavior_finished', 'behavior_abandoned'].includes(event.type) && event.behavior === behavior) behavior = null;
     if (event.type === 'doctor_observation' && Object.hasOwn(event.engine || {}, 'running')) behavior = text(event.engine.running);
-    if (['night', 'night_rest'].includes(event.type) && ['dug_in', 'dug_out', 'shelter_lost'].includes(event.action)) {
-      nightSheltered = event.action === 'dug_in';
+    if (['night', 'night_rest'].includes(event.type) && ['dug_in', 'enclosed', 'dug_out', 'enclosure_opened', 'shelter_lost'].includes(event.action)) {
+      nightSheltered = ['dug_in', 'enclosed'].includes(event.action);
     }
   }
 

@@ -788,7 +788,7 @@ function distanceAtDusk() {
         outboundTarget = position && distance(home, position) >= settings.nightDistance
           ? { ...mark(frame), position } : null;
       }
-      if (isNightEvent(event) && ['dug_in', 'sleep'].includes(event.action)) protection = homeward = outboundTarget = null;
+      if (isNightEvent(event) && ['dug_in', 'enclosed', 'sleep'].includes(event.action)) protection = homeward = outboundTarget = null;
       if (event.type === 'home_route_leg' || event.type === 'home_route_arrived') {
         const destination = point(event.destination);
         const pos = point(event.position);
@@ -803,7 +803,7 @@ function distanceAtDusk() {
           }
         }
       }
-      if ((isNightEvent(event) && ['dig_in', 'dug_in', 'sleep'].includes(event.action))
+      if ((isNightEvent(event) && ['dig_in', 'dug_in', 'enclosed', 'sleep'].includes(event.action))
         || (event.type === 'behavior_started' && event.behavior === 'night_rest')) {
         if (!recent(shelterStarted, at, settings.nightMs)) shelterStarted = mark(frame);
       }
@@ -1005,9 +1005,14 @@ function createDoctorRules() {
         D7: idleDetection,
         D8: switches.ingest(event, frame),
         D9: frequency.ingest(event, frame),
+        D11: event.type === 'night_rest' && event.action === 'shelter_exhausted'
+          ? detect('shelter:' + frame.evidence, frame.at, '无可用掩体，原地防守', [frame]) : undefined,
         D10: event.type === 'home_site_abandon_pending' ? detect('abandon:' + pointText(event.anchor), frame.at,
           'Abandoning house site with ' + event.builtWalls + '/' + event.walls + ' wall blocks in place (' + event.reason + ').', [frame])
           : event.type === 'site_abandoned' ? null : undefined,
+        D12: event.type === 'water_rescue_alert' ? detect(event.episode + ':' + event.reason, frame.at,
+          'Water rescue ' + event.reason + (event.method ? ' at ' + event.method : '') + '.', [frame])
+          : event.type === 'self_stuck_escaped' ? null : undefined,
       };
     },
     reset() {

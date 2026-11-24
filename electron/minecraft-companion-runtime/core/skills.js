@@ -13,8 +13,10 @@ const { countInventory, ownedItems } = require('./perception');
 const { withCursorConfirmation } = require('./inventory');
 const { isLog, isSurfaceLog } = require('./goals/gatherBlocks');
 const { isAir, naturalCover, plantPartner, isWaterlogged } = require('./natural-cover');
+const { wet } = require('./dry-route');
+const { contactBlock } = require('./home-topology');
 const { blockTarget, watchDestination } = require('./target-recovery');
-const { accepts, pickItem, seal: sealMatch, isSealSoil, isSealRock, SANDSTONE } = require('./materials');
+const { accepts, pickItem, stableSolid, seal: sealMatch, isSealSoil, isSealRock, SANDSTONE } = require('./materials');
 const { complete, factsOf, failure, isComplete, resultFrom, settleAction, waiting, waterRouteFailure, waterRouteTarget } = require('./action-result');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
@@ -988,7 +990,10 @@ async function prepareShelterSeal(bot, ctx, { want = 2 } = {}) {
 
 /** A spot where a sealed shaft can be dug: solid ground all around, nothing that flows. */
 function bunkerSpot(bot, top) {
-  if (bot.blockAt(top)?.boundingBox !== 'empty' || bot.blockAt(top.offset(0, 1, 0))?.boundingBox !== 'empty') return false;
+  if (![0, 1].every(y => naturalCover(bot.blockAt(top.offset(0, y, 0))))) return false;
+  for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) {
+    if ([-1, 0, 1].some(y => wet(bot.blockAt(top.offset(x, y, z))))) return false;
+  }
   for (let dy = 1; dy <= 3; dy += 1) {
     const b = bot.blockAt(top.offset(0, -dy, 0));
     if (!SHAFT_SOLID(b) || !b.diggable) return false;
@@ -1005,6 +1010,58 @@ function bunkerOccupied(bot, { top }) {
   const at = bot.entity?.position;
   return Boolean(at && shaftCentered(at, top) && Math.abs(at.y - (top.y - 3)) <= 0.1
     && at.y + (bot.entity.height || 1.8) <= top.y - 1);
+}
+
+const shelterSolid = block => stableSolid(block) && !contactBlock(block)
+  && (!block.shapes || block.shapes.some(shape => shape.join() === '0,0,0,1,1,1'));
+const shelterItem = (bot, name) => accepts('roof', name) || sealMatch(name)
+  || shelterSolid(bot.registry?.blocksByName?.[name]);
+
+function enclosureCells(top) {
+  return [...[0, 1].flatMap(y => SIDES4.map(([x, z]) => top.offset(x, y, z))), top.offset(0, 2, 0)];
+}
+
+function enclosureOccupied(bot, { top }) {
+  const at = bot.entity?.position;
+  return at && shaftCentered(at, top) && Math.abs(at.y - top.y) <= 0.1
+    && enclosureCells(top).every(p => shelterSolid(bot.blockAt(p)));
+}
+
+async function enclose(bot, ctx, shelter) {
+  const { top, placed } = shelter;
+  const inside = () => shaftCentered(bot.entity.position, top) && Math.abs(bot.entity.position.y - top.y) <= 0.1;
+  const read = p => bot.blockAt(p);
+  if (actions.countItems(bot, n => shelterItem(bot, n)) + placed.length < 5) return fail('no_seal_block');
+  await actions.recentre(bot, ctx, { accept: p => p.equals(top) });
+  if (!inside()) return fail('shelter_not_entered');
+  const cells = enclosureCells(top);
+  const roof = cells.pop();
+  if (!shelterSolid(read(roof)) && !SIDES.some(offset => shelterSolid(read(roof.offset(...offset))))) {
+    const support = SIDES4.map(([x, z]) => roof.offset(x, 0, z))
+      .find(p => naturalCover(read(p)) && !bot.companionPlayerBlock?.(p) && !bot.companionHomeSite?.(p));
+    if (!support) return fail('no_support');
+    cells.push(support);
+  }
+  for (const p of [...cells, roof]) {
+    if (shelterSolid(read(p))) continue;
+    if (!inside() || bot.companionHomeSite?.(p) || !naturalCover(read(p))) return fail('no_bunker_spot');
+    const result = await placeAt(bot, { ...ctx, pathArea: q => top.equals(q) }, p, n => shelterItem(bot, n), { requireAir: true });
+    const placedBlock = read(p);
+    if (result.ok && shelterSolid(placedBlock)) placed.push({ position: p, name: placedBlock.name });
+    if (!result.ok) return result;
+  }
+  return enclosureOccupied(bot, shelter) ? complete() : fail('shelter_not_entered');
+}
+
+async function openEnclosure(bot, ctx, shelter) {
+  for (const { position, name } of [...shelter.placed].reverse()) {
+    const block = bot.blockAt(position);
+    if (block?.name !== name || bot.companionPlayerBlock?.(position)) continue;
+    const dug = await actions.digBlock(bot, ctx, block);
+    if (!dug.ok) return dug;
+    await actions.collectDrops(bot, ctx, position.offset(0.5, 0.5, 0.5), n => n === name, { radius: 2, timeoutMs: 1000 });
+  }
+  return complete();
 }
 
 async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}) {
@@ -1158,6 +1215,6 @@ async function useBed(bot, ctx, { position }) {
 }
 
 const skills = { gatherOne, craft, placeAt, clearCoverAt, pourLiquid, scoopLiquid, smelt, huntOne, pickBerries, explore, useChest,
-  storeItems, storeInChest, takeItems, fillBucket, useBed, digIn, digOut, prepareShelterSeal, tossStacks };
-module.exports = { isFluidSource, sheepWool, shelterSealCount, inventoryCounts, entityInside, aimAtFace, bunkerOccupied };
+  storeItems, storeInChest, takeItems, fillBucket, useBed, digIn, digOut, enclose, openEnclosure, prepareShelterSeal, tossStacks };
+module.exports = { isFluidSource, sheepWool, shelterSealCount, inventoryCounts, entityInside, aimAtFace, bunkerOccupied, enclosureOccupied };
 for (const [name, execute] of Object.entries(skills)) module.exports[name] = settleAction(execute, name === 'digOut' ? 'surface' : undefined);

@@ -56,21 +56,26 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
   if (!bot || typeof home !== 'function') throw new TypeError('bot and home are required');
   const { complete, factsOf, failure, isComplete, waiting } = require('../action-result');
   const { BAND } = require('../brain');
-  const { bunkerOccupied, shelterSealCount } = require('../skills');
+  const { bunkerOccupied, enclosureOccupied, shelterSealCount } = require('../skills');
   const { boundedWork } = require('../work-budget');
-  let shelter = null, missedReturn = false, bedRefusedUntil = 0;
+  const { leaveMine, mineExit } = require('../mining');
+  let shelter = null, enclosure = null, missedReturn = false, missedDig = false, warned = false;
+  let returnUntil = null, bedRefusedUntil = 0;
   let checkShelterAt = 0, lostShelter = false;
   const reset = () => {
     shelter = null;
     lostShelter = false;
-    missedReturn = false;
+    missedReturn = missedDig = warned = false;
+    returnUntil = null;
     bedRefusedUntil = 0;
     bot.companionSheltered = false;
   };
   const verify = (state) => {
     if (!shelter || now() < checkShelterAt || !late(timing(state, home()))) return;
     checkShelterAt = now() + 10_000;
-    if (shelter === HOME_SHELTER ? home()?.inside === true : bunkerOccupied(bot, shelter)) return;
+    const occupied = shelter === HOME_SHELTER ? home()?.inside === true
+      : (shelter === enclosure ? enclosureOccupied : bunkerOccupied)(bot, shelter);
+    if (occupied) return;
     reset();
     lostShelter = true;
   };
@@ -87,35 +92,70 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
   async function digIn(ctx, budget) {
     ctx.record('night_rest', { action: 'dig_in', distance: budget.distanceHome, ticksToDark: budget.ticksToDark,
       returnTicks: Number.isFinite(budget.returnTicks) ? budget.returnTicks : null });
-    const dug = await skills.digIn(bot, ctx, {
+    const dug = await skills.digIn(bot, { ...ctx, dryRoute: true }, {
       avoid: p => bot.companionHomeSite?.(p) || bot.blockAt?.(p.offset(0, -1, 0))?.name === 'farmland',
       prepareSeal: prepareSeals(),
     });
     const bunker = isComplete(dug) && factsOf(dug).bunker;
     if (bunker && bunkerOccupied(bot, bunker)) {
-      shelter = bunker;
-      checkShelterAt = now() + 10_000;
-      bot.companionSheltered = true;
-      ctx.record('night_rest', { action: 'dug_in', top: bunker.top });
+      holdShelter(ctx, bunker, 'dug_in', { top: bunker.top });
+      return dug;
     }
-    return bunker && !shelter ? failure('shelter_not_entered', {}, ctx, bot) : dug;
+    if (!ctx.signal?.aborted && !dug.wait && dug.kind !== 'interrupted') missedDig = true;
+    return bunker ? failure('shelter_not_entered', {}, ctx, bot) : dug;
   }
 
-  async function goHome(ctx, spot, budget) {
-    const timeoutMs = Math.max(2_000, (budget.ticksToDark - SHELTER_TICKS) * 50);
-    const limitResult = () => {
-      missedReturn = true;
-      return failure('path_timeout', {}, ctx, bot);
-    };
-    const moved = await boundedWork(bot, { ...ctx, dryRoute: true }, { timeoutMs, check: () => true, limitResult }, async travel => {
+  function holdShelter(ctx, room, action, evidence) {
+    shelter = room;
+    checkShelterAt = now() + 10_000;
+    bot.companionSheltered = true;
+    ctx.record('night_rest', { action, ...evidence });
+  }
+
+  function shelterLocally(ctx, budget) {
+    if (!missedDig) return digIn(ctx, budget);
+    if (warned) return wait(ctx);
+    enclosure ||= { top: bot.entity.position.floored(), placed: [] };
+    return (skills.enclose?.(bot, ctx, enclosure) ?? Promise.resolve(null)).then(result => {
+      if (isComplete(result) && enclosureOccupied(bot, enclosure)) {
+        holdShelter(ctx, enclosure, 'enclosed', { position: enclosure.top, placed: enclosure.placed.map(b => b.position) });
+        return result;
+      }
+      if (ctx.signal?.aborted || result?.wait || result?.kind === 'interrupted') return result;
+      warned = true;
+      ctx.record('night_rest', { action: 'shelter_exhausted', result, position: enclosure.top });
+      return wait(ctx);
+    });
+  }
+
+  function undergroundExit(spot) {
+    if (!actions.underground?.(bot)) return null;
+    const position = bot.entity.position;
+    const known = mineExit(bot.companionMineRoute, position);
+    if (known) return { ...known, mine: bot.companionMineRoute, method: 'mine_exit' };
+    const point = position.offset(0, Math.max(spot.centre.y, actions.localSurfaceY?.(bot) ?? position.y) - position.y, 0);
+    return { point, ticks: travelTicks(position, point), method: 'surface' };
+  }
+
+  async function goHome(ctx, spot, budget, exit) {
+    const { returnTicks, ticksToDark, dark } = budget;
+    const limit = ticksToDark - SHELTER_TICKS;
+    returnUntil ??= now() + Math.max(2_000, 50 * (dark || returnTicks > limit ? returnTicks + 200 : limit));
+    const timeoutMs = Math.max(0, returnUntil - now());
+    const limitResult = () => failure('path_timeout', {}, ctx, bot);
+    const moved = await boundedWork(bot, { ...ctx, dryRoute: true }, { timeoutMs, check: () => timeoutMs > 0, limitResult }, async travel => {
+      ctx.record('night_rest', { action: dark ? 'go_home' : 'dusk_home', distance: Math.round(budget.distanceHome),
+        ticksToDark, returnTicks, ...(exit && { underground: true, method: exit.method }) });
+      if (exit) {
+        const leg = exit.mine && await leaveMine(bot, travel, exit, actions);
+        return leg || (await actions.surface?.(bot, travel, { targetY: exit.point.y })) || failure('still_below_surface', {}, ctx, bot);
+      }
       const crossed = await enterShelter?.(travel);
       if (isComplete(crossed) || crossed?.wait || travel.signal.aborted) return crossed;
-      ctx.record('night_rest', { action: budget.dark ? 'go_home' : 'dusk_home', distance: Math.round(budget.distanceHome),
-        ticksToDark: budget.ticksToDark, returnTicks: budget.returnTicks });
-      const destination = spot.entrance && budget.returnTicks > NEAR_DOOR_TICKS ? spot.entrance : spot.centre;
+      const destination = spot.entrance && returnTicks > NEAR_DOOR_TICKS ? spot.entrance : spot.centre;
       return actions.goNear(bot, travel, destination, 0, { exact: true, retryNoProgress: false, timeoutMs });
     });
-    if (moved?.ok === false && !['start', 'interrupted'].includes(moved.kind) && !ctx.signal?.aborted) missedReturn = true;
+    if (moved?.ok === false && moved.kind !== 'interrupted' && !ctx.signal?.aborted) missedReturn = true;
     return moved;
   }
 
@@ -124,16 +164,16 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
     band: BAND.MAINTENANCE,
     taskAllowed(state, goal) {
       verify(state);
-      return !overworld(bot.game?.dimension) || (!shelter && !late(timing(state, home()), goal));
+      return !overworld(bot.game?.dimension) || (!shelter && !enclosure?.placed.length && !late(timing(state, home()), goal));
     },
     want(state) {
       verify(state);
       if (!overworld(bot.game?.dimension)) return 0;
-      if (shelter) return 0.8;
+      if (shelter || enclosure?.placed.length) return 0.8;
       const spot = home(), budget = timing(state, spot);
       if (needsSeal(state, budget)) return 0.5;
       if (spot && late(budget)) return 0.8;
-      missedReturn = false;
+      reset();
       return 0;
     },
     async run(ctx) {
@@ -145,13 +185,19 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
       }
       const spot = home(), budget = timing(state, spot);
       const hold = spot && late(budget), bunker = shelter === HOME_SHELTER ? null : shelter;
-      if (!hold && shelter) {
-        if (bunker) ctx.record('night_rest', { action: 'dig_out' });
-        const result = bunker
+      if (!hold && (shelter || enclosure)) {
+        const shaft = bunker && bunker !== enclosure;
+        if (shaft) ctx.record('night_rest', { action: 'dig_out' });
+        const result = shaft
           ? await skills.digOut(bot, { ...ctx, rescue: 'surface', adapt: ctx.adapt ?? adaptation?.scope(() => !ctx.signal?.aborted) }, bunker)
-          : await shelterDoor?.(ctx, true) ?? complete();
+          : shelter === HOME_SHELTER ? await shelterDoor?.(ctx, true) ?? complete()
+            : await skills.openEnclosure?.(bot, ctx, enclosure) ?? complete();
         if (isComplete(result)) {
-          if (bunker) ctx.record('night_rest', { action: 'dug_out' });
+          if (shaft) ctx.record('night_rest', { action: 'dug_out' });
+          else if (enclosure && shelter !== HOME_SHELTER) {
+            ctx.record('night_rest', { action: 'enclosure_opened' });
+            enclosure = null;
+          }
           reset();
         }
         return result;
@@ -163,10 +209,13 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
         return stock;
       }
       if (!hold) return complete(false);
-      if (!spot.centre || !spot.inside && actions.underground?.(bot)) return digIn(ctx, budget);
-      if (spot.inside !== true) {
-        const latestReturn = budget.dark ? NEAR_DOOR_TICKS : budget.ticksToDark - SHELTER_TICKS;
-        return !missedReturn && budget.returnTicks <= latestReturn ? goHome(ctx, spot, budget) : digIn(ctx, budget);
+      if (!spot.inside) {
+        const exit = spot.centre && undergroundExit(spot);
+        if (exit) budget.returnTicks = exit.ticks + travelTicks(exit.point, spot.centre);
+        const margin = budget.distanceHome <= 48 ? 200 : 0;
+        const latestReturn = budget.dark ? NEAR_DOOR_TICKS : budget.ticksToDark - SHELTER_TICKS + margin;
+        return spot.centre && !missedReturn && (returnUntil !== null || budget.returnTicks <= latestReturn)
+          ? goHome(ctx, spot, budget, exit) : shelterLocally(ctx, budget);
       }
 
       if (shelterDoor && !shelter) {
@@ -193,8 +242,9 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
       return wait(ctx);
     },
   };
-  bot.on?.('death', reset);
-  behavior.dispose = () => bot.removeListener?.('death', reset);
+  const onDeath = () => { enclosure = null; reset(); };
+  bot.on?.('death', onDeath);
+  behavior.dispose = () => bot.removeListener?.('death', onDeath);
   return behavior;
 }
 

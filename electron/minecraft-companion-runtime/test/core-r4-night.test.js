@@ -68,7 +68,7 @@ test('at the same dusk tick a 20-block return fits but a 120-block return does n
 
 test('covered cave waits overnight in a local bunker and resumes the same task after the dawn exit', async (t) => {
   const centre = new Vec3(0, 70, 0);
-  const top = centre.offset(10, -3, 0);
+  const top = centre.offset(120, -3, 0);
   const bot = { entity: { position: top } };
   let state = { timeOfDay: 11_900, position: top };
   const records = [], shaft = { top };
@@ -143,4 +143,77 @@ test('the shared outing budget reserves both the departure and return legs and o
   assert.equal(budget.maxOutingDistance, (2042 - 290 - 120) / 20);
   assert.equal(nightBudget({ ...state, timeOfDay: 11_500 }, home).maxOutingDistance, 0);
   assert.equal(nightBudget({ ...state, dimension: 'minecraft:the_nether', timeOfDay: 13_000 }, home).maxOutingDistance, Infinity);
+});
+
+
+test('late underground return estimates surface plus travel and tolerates a near twilight overrun', async () => {
+  const centre = new Vec3(0, 92, 0), at = new Vec3(26.7, 61, 0);
+  const bot = { entity: { position: at }, game: { dimension: 'overworld' } };
+  const evidence = [];
+  let tick = 10_819, underground = true;
+  const rest = createNightRest({ bot, home: () => ({ centre, inside: false }),
+    actions: {
+      underground: () => underground,
+      async surface(_bot, ctx, { targetY }) {
+        assert.equal(ctx.dryRoute, true);
+        assert.equal(targetY, 92);
+        bot.entity.position = at.offset(0, 31, 0);
+        underground = false;
+        tick = 12_543;
+        return { ok: true };
+      },
+      async goNear(_bot, ctx, p) {
+        assert.equal(ctx.dryRoute, true);
+        assert.equal(p, centre);
+        return { ok: true };
+      },
+    },
+    skills: { digIn: () => assert.fail('return is still in flight') },
+  });
+  const ctx = { perceive: () => ({ position: bot.entity.position, timeOfDay: tick }),
+    record: (_type, data) => evidence.push(data) };
+  await rest.run(ctx);
+  assert.equal(evidence[0].returnTicks, 887);
+  assert.equal(evidence[0].method, 'surface');
+  await rest.run(ctx);
+  assert.equal(evidence[1].action, 'go_home');
+
+  bot.entity.position = new Vec3(34, 74.65, 0);
+  tick = 11_859;
+  const margin = createNightRest({ bot, home: () => ({ centre, inside: false }),
+    actions: { goNear: async () => ({ ok: true }) }, skills: { digIn: () => assert.fail('near return has a margin') } });
+  await margin.run(ctx);
+  assert.equal(evidence.at(-1).returnTicks, 687);
+});
+
+test('a failed shaft gets one enclosure, confirmed from the body and world, then opens after dawn', async () => {
+  const top = new Vec3(120, 66, 0);
+  const bot = { entity: { position: top.offset(0.5, 0, 0.5) }, blockAt: () => ({ name: 'stone', boundingBox: 'block' }) };
+  const events = [];
+  let tick = 11_000, attempts = 0, opened = 0;
+  const rest = createNightRest({ bot, home: () => ({ centre: new Vec3(0, 70, 0) }),
+    skills: {
+      async digIn(_bot, ctx) { assert.equal(ctx.dryRoute, true); attempts++; return { ok: false, reason: 'no_bunker_spot' }; },
+      async enclose(_bot, _ctx, shelter) {
+        assert.deepEqual(shelter.top, top);
+        shelter.placed.push({ position: top.offset(1, 0, 0), name: 'cobblestone' });
+        return { ok: true };
+      },
+      async openEnclosure(_bot, _ctx, shelter) {
+        assert.equal(shelter.placed.length, 1);
+        opened++;
+        return { ok: true };
+      },
+    },
+  });
+  const ctx = { perceive: () => ({ timeOfDay: tick, position: bot.entity.position }),
+    record: (_type, data) => events.push(data.action) };
+  assert.equal((await rest.run(ctx)).reason, 'no_bunker_spot');
+  await rest.run(ctx);
+  assert.equal(bot.companionSheltered, true);
+  tick = 100;
+  await rest.run(ctx);
+  assert.equal(bot.companionSheltered, false);
+  assert.deepEqual([attempts, opened], [1, 1]);
+  assert.deepEqual(events, ['dig_in', 'enclosed', 'enclosure_opened']);
 });

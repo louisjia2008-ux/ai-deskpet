@@ -111,7 +111,8 @@ function createBrain({
 
   function rating(behavior, want, inputs) {
     const { state } = inputs;
-    if (behavior.band >= BAND.DEFENSE || behavior.band === BAND.IDLE) return { behavior, tier: behavior.band, value: want, want };
+    const band = behavior.rescue?.(state) ? BAND.ESCAPE : behavior.band;
+    if (band >= BAND.DEFENSE || band === BAND.IDLE) return { behavior, tier: band, value: want, want };
     if (behavior.name === 'eat' && state.food <= DANGER.food) return { behavior, tier: BAND.DEFENSE, value: want, want };
     const value = behavior.band === BAND.GOAL
       ? (behavior.goalEntry?.autonomy?.value?.() ?? DEFAULT_TASK_VALUE)
@@ -329,7 +330,8 @@ function createBrain({
         if (!stillWanted) {
           await preempt('goal_cleared');
         } else if ((current.isGoal && !taskAllowed(state, current.def)) || best && best.behavior.name !== current.name
-            && (best.tier > running.tier || best.tier === BAND.GOAL && !best.behavior.isGoal
+            && (best.tier > running.tier || current.name === 'home_escape' && best.behavior.name === 'breathe' && state.oxygen <= 4
+              || best.tier === BAND.GOAL && !best.behavior.isGoal
               && outranks(best, rating(current, running.want, inputs)))) {
           const by = best?.behavior.name ?? 'task_unavailable';
           emit('preempted', { behavior: current.name, by, attemptId: running.attemptId, ...correlation(current.goalEntry) });

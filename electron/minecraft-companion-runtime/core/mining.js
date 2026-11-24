@@ -582,6 +582,12 @@ function chain(mine, k) {
   return out;
 }
 
+function mineExit(mine, position) {
+  if (!mine || !position || position.y >= mine.surfaceY - 1) return null;
+  const here = cellAt(mine, position.floored());
+  return here && { point: mine.entrance, ticks: chain(mine, here).length * 16 };
+}
+
 /**
  * One leg (a few blocks) along the bot's own tunnel, towards the entrance
  * ('out') or the front ('front'). Every dug cell remembers the cell it was
@@ -724,5 +730,5 @@ async function maybeTorch(bot, ctx, mine, cell) {
   } catch { /* a torch is a nicety, not progress */ }
 }
 
-module.exports = { installCheapDigging, inspectStep, turn, knownOpen, mineStep, leaveMine, walkTunnel, walkToCell, entranceCooling, coolEntrance, LIQUID, visibleOre, exposed, advance, retarget, pickFor, isLoot,
+module.exports = { installCheapDigging, inspectStep, turn, knownOpen, mineStep, leaveMine, mineExit, walkTunnel, walkToCell, entranceCooling, coolEntrance, LIQUID, visibleOre, exposed, advance, retarget, pickFor, isLoot,
   LOOT_ORES, DIRS, BRANCH_EVERY, BRANCH_LENGTH, cardinalRejoin };

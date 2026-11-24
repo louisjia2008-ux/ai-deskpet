@@ -228,12 +228,12 @@ test('a water rescue cannot release the tracker after swimming farther in water'
   const tracker = createSelfStuck(bot);
   tracker.force('route_origin_water');
   const escape = createHomeEscape({ bot, home: () => null, tracker, actions: {
-    async unstick() {
+    async swimAshore() {
       bot.entity.position = new Vec3(17.5, 62, 0.5);
       return { ok: true, moved: 'swam_ashore' };
     },
   } });
-  assert.equal((await escape.run({ record: () => assert.fail('there was no dry landing') })).reason, 'self_escape_unconfirmed');
+  assert.equal((await escape.run({ record: type => assert.notEqual(type, 'self_stuck_escaped') })).reason, 'self_escape_unconfirmed');
   assert.equal(tracker.state().reason, 'route_origin_water');
 });
 
