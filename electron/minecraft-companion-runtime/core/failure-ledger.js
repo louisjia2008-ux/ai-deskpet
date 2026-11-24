@@ -20,7 +20,7 @@ const policies = {
   hunt: [MINUTE, 1], hunt_far: [5 * MINUTE, 1], berry: [MINUTE, 1],
   guard_hunt: [30_000, 1],
   berry_materials: [2 * MINUTE, 1], ranch_fence: [15_000, 1], ranch_lure: [20_000, 1],
-  target_hazard: [10 * MINUTE, 1], director_step: [10 * MINUTE, 3], mine_entrance: [10 * MINUTE, 1], route_water: [2 * MINUTE, 2],
+  target_hazard: [10 * MINUTE, 1], director_step: [10 * MINUTE, 3], director_start: [10 * MINUTE, 1], mine_entrance: [10 * MINUTE, 1], route_water: [2 * MINUTE, 2],
   lava_pool_candidate: [10 * MINUTE, 3, false, 30 * MINUTE],
   // R6 callers retain their existing per-purpose duration while using the same ledger.
   legacy_30000: [30_000, 1], legacy_60000: [MINUTE, 1], legacy_120000: [2 * MINUTE, 1],
@@ -41,7 +41,7 @@ function context(spec) {
   const position = cell(spec.position);
   const goal = token(spec.goal), step = token(spec.step);
   const purpose = token(spec.purpose) || (step === 'chase' ? step : goal && step ? 'target' : null);
-  if (!purpose || (!position && purpose !== 'director_step')) return null;
+  if (!purpose || (!position && !purpose.startsWith('director_'))) return null;
   const target = spec.entity == null ? cellKey(position) : token(String(spec.entity));
   if (!target) return null;
   const key = goal && step ? [dimension, goal, step, target].join('|') : [dimension, purpose, target].join('|');

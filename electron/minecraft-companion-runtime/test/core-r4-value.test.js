@@ -3,8 +3,9 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { chooseNext, createDirector } = require('../core/director');
+const { stepRetryAt } = require('../core/planner');
 const { createDefaultCards } = require('../core/goals/registry');
-const { complete } = require('../core/action-result');
+const { complete, failure } = require('../core/action-result');
 
 function fixture(cards, state) {
   let at = 0, goal, governor, generation = 0, director;
@@ -30,7 +31,8 @@ function fixture(cards, state) {
     goal = null;
     director.handleEvent({ ...fields, type: 'goal_yielded', goal: previous.name, generation: previous.generation });
   }
-  return { director, events, at: next => { at = next; }, yieldGoal, boundary: result => governor.outcome(result, 1_000) };
+  return { director, events, at: next => { at = next; }, yieldGoal, step: (step, result) => governor.stepOutcome(step, result, () => {}),
+    planning: () => governor.planning(), boundary: result => governor.outcome(result, 1_000) };
 }
 
 const card = (id, options = {}) => ({
@@ -99,4 +101,69 @@ test('no-progress value decays at ten minutes and card ownership expires at four
   assert.equal(run.events.at(-1).reason, 'card_stalled');
   assert.equal(run.director.status().current, null);
   assert.equal(run.director.tick(), null);
+});
+
+
+test('R4 seed 1 farm travel stops refreshing a held card', () => {
+  const run = fixture([card('wheat_farm', { work: () => ({ remaining: 9, readiness: 0.3 }) })], day);
+  assert.equal(run.director.tick(), 'wheat_farm');
+  for (let minute = 1; minute < 14; minute++) {
+    run.at(minute * 60_000);
+    assert.equal(run.boundary(complete(true, { moved: 28 })), null);
+  }
+  run.at(840_000);
+  assert.equal(run.boundary(complete(true)).reason, 'card_stalled');
+  const { remaining, readiness, sinceProgressMs, scores } = run.events.at(-1);
+  assert.deepEqual([remaining, readiness, sinceProgressMs, scores[0].progress], [9, 0.3, 840_000, 0]);
+});
+
+test('physical work, a readiness increase or a milestone advances the progress clock', () => {
+  const work = { remaining: 49, readiness: 0.2 };
+  const run = fixture([card('homestead', { work: () => ({ ...work }) })], day);
+  run.director.tick();
+  run.at(60_000);
+  work.remaining = 48;
+  run.boundary(complete(false));
+  assert.equal(run.events.at(-1).sinceProgressMs, 0);
+  run.at(120_000);
+  work.readiness = 0.24;
+  run.boundary(complete(true));
+  assert.equal(run.events.at(-1).sinceProgressMs, 60_000);
+  run.at(180_000);
+  work.readiness = 0.25;
+  run.boundary(complete(false));
+  assert.equal(run.events.at(-1).sinceProgressMs, 0);
+  work.remaining = 49;
+  run.at(240_000);
+  run.boundary(complete(true));
+  run.at(300_000);
+  work.remaining = 48;
+  run.boundary(complete(true));
+  assert.equal(run.events.at(-1).sinceProgressMs, 120_000);
+  run.director.handleEvent({ type: 'site_chosen' });
+  run.at(360_000);
+  run.boundary(complete(false));
+  assert.equal(run.events.at(-1).sinceProgressMs, 60_000);
+});
+
+test('the eighth start failure excludes its planner source for ten minutes', () => {
+  const run = fixture([card('homestead')], day);
+  run.director.tick();
+  const station = { kind: 'place_station', station: 'crafting_table', for: 'stone_sword', position: { x: 157, y: 70, z: 62 } };
+  const nextStand = { ...station, position: { ...station.position, z: 63 } };
+  const start = () => failure('unsafe_build_stand');
+  assert.equal(failure('furniture_blocks_exit').kind, 'target');
+  for (let i = 0; i < 7; i++) assert.equal(run.step(station, start()).kind, 'start');
+  run.step(station, complete(false));
+  for (let i = 0; i < 7; i++) assert.equal(run.step(station, start()).kind, 'start');
+  assert.equal(run.step(station, { ...start(), facts: { rescue: 'leave_fire' } }).kind, 'start');
+  assert.equal(run.step(nextStand, start()).kind, 'start');
+  const result = run.step(station, start());
+  assert.equal(result.kind, 'target');
+  assert.equal(result.facts.startAttempts, 8);
+  assert.equal(result.facts.target.excluded, true);
+  assert.equal(stepRetryAt(station, run.planning()), 600_000);
+  assert.equal(stepRetryAt(nextStand, run.planning()), 0);
+  run.at(600_000);
+  assert.equal(stepRetryAt(station, run.planning()), 0);
 });

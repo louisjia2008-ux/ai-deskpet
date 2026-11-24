@@ -23,7 +23,7 @@ const NEW_AREA = 'move_to_fresh_area';
 const MOVABLE = new Set(['home_site', 'wood', 'diamond']);
 const IMMEDIATE_FAILURES = {
   home_site: new Set(['no_suitable_site', 'relocation_routes_exhausted']),
-  wood: new Set(['no_target_in_range']),
+  wood: new Set(['no_target_in_range', 'search_leg_budget']),
   bed: new Set(['no_mob_in_range', 'bed_hunt_exhausted']),
   route: new Set(['choose_another_target', 'route_region_avoided']),
   goal: new Set(['no_recovery_available', 'goal_methods_exhausted']),

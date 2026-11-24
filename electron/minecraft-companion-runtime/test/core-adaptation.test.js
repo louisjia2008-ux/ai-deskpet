@@ -9,7 +9,7 @@ const { createBrain } = require('../core/brain');
 const { failure: actionFailure } = require('../core/action-result');
 const { runPlanned } = require('../core/goals/common');
 const { createHomesteadGoal } = require('../core/goals/homestead');
-const { gatherWood, outwardLeg, OUTWARD_HEADINGS } = require('../core/adaptation-strategies');
+const { gatherWood, outwardLeg, runSearchLeg, OUTWARD_HEADINGS } = require('../core/adaptation-strategies');
 const { posKey } = require('../core/blacklist');
 const { createSelfStuck } = require('../core/self-stuck');
 const { blockTarget, watchDestination } = require('../core/target-recovery');
@@ -489,4 +489,18 @@ test('a card without a recovery implementation executes other work after the thr
   assert.ok(events.some(e => e.type === 'goal_yielded' && e.method === 'other_work'));
   assert.equal(director.tick(), 'food');
   await brain.dispose();
+});
+
+
+test('R4 seed 2 wood search stops at the sixth successful empty leg', async () => {
+  const memory = {};
+  let walked = 0;
+  const leg = () => { walked++; return { ok: true, progress: false, moved: 28 }; };
+  for (let i = 0; i < 5; i++) assert.equal((await runSearchLeg({}, memory, leg)).ok, true);
+  const stopped = await runSearchLeg({}, memory, leg);
+  assert.equal(stopped.reason, 'search_leg_budget');
+  assert.deepEqual(stopped.facts, { legs: 6, distance: 168 });
+  assert.equal((await runSearchLeg({}, memory, leg)).reason, 'search_leg_budget');
+  assert.equal(walked, 6);
+  assert.equal((await runSearchLeg({}, { legs: 4, distance: 164 }, leg)).facts.distance, 192);
 });

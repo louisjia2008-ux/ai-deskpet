@@ -160,10 +160,10 @@ function createBrain({
     }
     // Being interrupted by survival is not a lack of progress, and neither is
     // waiting out the night: a wait neither spends nor refills the budget.
-    if (preempted || result.kind === 'start' || result.kind === 'interrupted') return;
+    if (preempted || result.kind === 'interrupted') return;
     const yielded = entry.autonomy?.outcome(result, now() - entry.startedAt);
     if (yielded) return finishGoal('goal_yielded', entry, { ...yielded, result });
-    if (result.wait) return;
+    if (result.wait || result.kind === 'start') return;
     const progress = safeProgress(entry.def, state);
     // The goal knows it cannot go on here (nothing to build with in reach of
     // the site): end it now and say why, rather than burn the stall budget.

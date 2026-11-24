@@ -17,7 +17,7 @@ const { posKey } = require('../blacklist');
 const { ledgerFor, ledgerTarget } = require('../failure-ledger');
 const { waitUntil } = require('../confirm');
 const { exploreFor, furnaceStock, placeStation, runPlanned } = require('./common');
-const { outwardLeg, gatherWood, OUTWARD_HEADINGS } = require('../adaptation-strategies');
+const { outwardLeg, gatherWood, runSearchLeg, OUTWARD_HEADINGS } = require('../adaptation-strategies');
 const { alternateStand, clearTerrain } = require('../target-recovery');
 const { topology, safeStand, isBed, clear, supports, SIDES } = require('../home-topology');
 const { dryComponent, drySiteAccess } = require('../dry-route');
@@ -463,7 +463,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   const explore = (ctx, why) => exploreFor(ctx, why, { bot, skills, memory, anchor: memory.house?.anchor || near,
     searchRadius, maxSearchStreak, maxExploreStreak });
 
-  const plan = (ctx, args) => planNext({ ...args, kb, planning: ctx.planning });
+  const plan = (ctx, args) => planNext({ ...args, kb, planning: ctx.planning, portableTable: true,
+    positionForStep: step => memory.house?.furniture[step.station]?.position });
   const runPlannerStep = (ctx, step, requirement) => runPlanned(ctx, step, attempt => executePlannerStep(attempt, step, requirement));
 
   async function executePlannerStep(ctx, step, requirement) {
@@ -472,7 +473,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     // A crafting table carried along: crafting happens where the bot is, down
     // in its quarry, rather than after a climb that can fail and a walk back.
     const portable = step.kind === 'craft' && step.table && !nearHouseTable()
-      && (ctx.perceive().inventory.crafting_table || 0) > 0;
+      && ctx.perceive().inventory.crafting_table > 0;
     // Everything else happens up top: climb out of the pit first.
     if (step.kind !== 'gather' && !portable) {
       const up = await surfaceFirst(ctx);
@@ -495,10 +496,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         if (portable) {
           const placed = await placePortableTable(ctx);
           if (placed.ok) table = carried = placed.position;
-          else {
-            const up = await surfaceFirst(ctx);
-            if (up) return up;
-          }
+          else return (await surfaceFirst(ctx)) || placed;
         }
         let result;
         try {
@@ -710,6 +708,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         && bot.entity.position.y >= task.position.y + 0.9
         && targetFailure(result) && !result.facts.terminal
         && ['NoPath', 'not_arrived', 'no_progress', 'path_timeout', 'Timeout'].includes(result.reason);
+      if (result.reason === 'furniture_blocks_exit') {
+        ctx.record('home_furniture_deferred', { ...result.facts, item: task.what });
+        continue;
+      }
       if (!blockedRoof) return result;
       // An adjacent panel can make the current corner reachable. Try another
       // ready panel in this turn; the next turn reads the roof again.
@@ -1083,7 +1085,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   }
 
   async function placePortableTable(ctx) {
-    const result = await placeStation(bot, ctx, { skills, avoid: nearHouseColumn, from: 1, to: 3,
+    const result = await placeStation(bot, ctx, { skills, avoid: nearHouseColumn, from: 1, to: 6,
       columns: r => [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]] });
     if (!isComplete(result)) return result;
     ctx.record('portable_table', { action: 'place', position: posKey(result.position) });
@@ -1190,7 +1192,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     }
     let placements = 0;
     const place = async (p = position, opts = options) => {
-      if (!site) return { ok: false, reason: 'furniture_blocks_exit' };
+      if (!site) return failure('furniture_blocks_exit', { ...room({ occupy: [p, ...(opts.alsoClear || [])] }).obstruction,
+        furniture: what }, ctx);
       const matchesPlaced = opts.purpose ? n => placedFor(opts.purpose, n) : match;
       if ([p, ...(opts.alsoClear || [])].some(q => bot.companionPlayerBlock?.(q) && !matchesPlaced(nameAt(q)))) {
         return { ok: false, reason: 'protected_player_block' };
@@ -1753,7 +1756,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     work(state, inventory) {
       if (!memory.house || memory.established) return null;
       const hs = houseState(), tasks = buildTasks(hs);
-      const remaining = Math.max(tasks.length, hs.missing.length);
+      const remaining = hs.missing.length + hs.foundationMissing.length + tasks.filter(task => !task.purpose).length;
       if (!inventory && remaining > 2) return { remaining, ready: false };
       inventory ??= state.inventory;
       const stock = materialStock(hs, inventory);
@@ -1765,7 +1768,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         if (have > 0) { available++; usable.set(task.material, have - 1); }
       }
       return { remaining, ready: available >= remaining, readiness: remaining ? available / remaining : 1,
-        progress: Math.max(0, 8 - Math.ceil(hs.missing.length / 12)), position: memory.house.anchor };
+        position: memory.house.anchor };
     },
     maintenance,
     observeParts,
@@ -1844,12 +1847,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           if (method === 'relocate' || method === 'move_to_fresh_area') {
             const up = await surfaceFirst(ctx);
             if (up) return up;
-            const route = (memory.homesteadRoute ||= {});
-            if (route.method !== method) {
-              route.heading = method === 'move_to_fresh_area' ? 2 : 0;
-              route.bearing = Math.atan2(state.position.z - origin.z, state.position.x - origin.x);
-              route.method = method;
-            }
+            if (memory.homesteadRoute?.method !== method) memory.homesteadRoute = { method,
+              heading: method === 'move_to_fresh_area' ? 2 : 0,
+              bearing: Math.atan2(state.position.z - origin.z, state.position.x - origin.x) };
+            const route = memory.homesteadRoute;
             const travelCtx = autonomous ? { ...ctx, dryRoute: true } : ctx;
             for (let tried = 0; tried < OUTWARD_HEADINGS.length; tried++) {
               const from = bot.entity.position.clone();
@@ -1870,7 +1871,8 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
               // ground, gives the porch search a new starting point.
               site = findSite(here, siteSearch(here, ctx.adapt), SITE_METHODS);
               if (site) break;
-              return { ok: true, moved: distance, progress: false };
+              return method === 'relocate' ? finished(false, { moved: distance })
+                : runSearchLeg(ctx, route, () => finished(false, { moved: distance }), { reason: 'relocation_routes_exhausted' });
             }
             if (!site) return { ok: false, reason: 'relocation_routes_exhausted' };
           } else {
@@ -1947,7 +1949,10 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       if (door?.kind === 'craft' && door.key === 'door') return runPlannerStep(ctx, door, null);
     }
     const earlyStep = plan(ctx, { requirements: early, inventory, stations });
-    if (earlyStep?.kind !== 'blocked' && earlyStep) return runPlannerStep(ctx, earlyStep, early.find((r) => r.key === earlyStep.for));
+    if (earlyStep && earlyStep.kind !== 'blocked') {
+      const result = await runPlannerStep(ctx, earlyStep, early.find(r => r.key === earlyStep.for));
+      if (!['furniture_blocks_exit', 'no_table_spot'].includes(result.reason)) return result;
+    }
     // Raw meat is worth two to three times as much cooked: once the furnace
     // stands, a few pieces in the bag go into it before anything else.
     if (hs.placed.furnace) {

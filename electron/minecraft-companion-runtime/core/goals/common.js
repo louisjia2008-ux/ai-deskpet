@@ -21,7 +21,7 @@ async function runPlanned(ctx, step, execute) {
   const raw = await execute(ctx);
   const result = resultFrom(raw, ctx);
   const data = factsOf(raw);
-  if (data.transit || (!result.ok && (data.target || data.adaptation || data.terminal))) return result;
+  if (data.transit || (!result.ok && result.kind !== 'start' && (data.target || data.adaptation || data.terminal))) return result;
   if (result.progress && !data.moved && !data.skipped && !data.idle) ctx.adapt?.progress();
   return ctx.stepOutcome?.(step, result) ?? result;
 }

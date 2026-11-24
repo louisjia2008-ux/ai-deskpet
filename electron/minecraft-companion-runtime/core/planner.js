@@ -15,13 +15,21 @@ const { KNOWLEDGE, FUELS, countKey } = require('./knowledge');
 const MAX_DEPTH = 24;
 
 const stepTarget = (step, dimension) => ({ purpose: 'director_step', entity: `${step.kind}/${step.key || step.station}`, dimension });
-const stepRetryAt = (step, planning) => planning?.ledger?.skip(stepTarget(step, planning.dimension))?.until || 0;
+const startTarget = (step, { card, dimension }) => ({
+  purpose: 'director_start', dimension, entity: [card, step.kind, step.for || step.key || step.station,
+    ...(step.position ? [step.position.x, step.position.y, step.position.z] : [])].join('/'),
+});
+const stepRetryAt = (step, planning) => Math.max(planning?.ledger?.skip(startTarget(step, planning))?.until || 0,
+  planning?.ledger?.skip(stepTarget(step, planning.dimension))?.until || 0);
 
-function planNext({ requirements, inventory, stations = {}, kb = KNOWLEDGE, planning }) {
+function planNext({ requirements, inventory, stations = {}, kb = KNOWLEDGE, planning, positionForStep, portableTable = false }) {
   const virt = { ...inventory };
   const restore = (snapshot) => Object.assign(virt, snapshot);
+  let requirementKey;
   const check = (step) => {
     if (!step || step.kind === 'blocked') return step;
+    const position = positionForStep?.(step);
+    if (step.for !== requirementKey || position) step = { ...step, for: requirementKey, ...(position && { position }) };
     const retryAt = stepRetryAt(step, planning);
     return retryAt ? { kind: 'blocked', key: step.key || step.station, retryAt } : step;
   };
@@ -49,7 +57,7 @@ function planNext({ requirements, inventory, stations = {}, kb = KNOWLEDGE, plan
   }
 
   function ensureStation(station, depth) {
-    if (stations[station]) return null;
+    if (stations[station] || (portableTable && station === 'crafting_table' && inventory.crafting_table && kb[requirementKey]?.tool)) return null;
     if ((virt[station] || 0) > 0) return { kind: 'place_station', station };
     return need(station, 1, depth + 1) || { kind: 'place_station', station };
   }
@@ -154,6 +162,7 @@ function planNext({ requirements, inventory, stations = {}, kb = KNOWLEDGE, plan
 
   let deferred;
   for (const requirement of requirements) {
+    requirementKey = requirement.key;
     const snapshot = { ...virt };
     const step = check(need(requirement.key, requirement.count));
     if (step?.kind === 'blocked') {
@@ -161,9 +170,9 @@ function planNext({ requirements, inventory, stations = {}, kb = KNOWLEDGE, plan
       restore(snapshot);
       continue;
     }
-    if (step) return { ...step, for: requirement.key };
+    if (step) return step;
   }
   return deferred || null;
 }
 
-module.exports = { stepTarget, stepRetryAt, planNext };
+module.exports = { stepTarget, startTarget, stepRetryAt, planNext };

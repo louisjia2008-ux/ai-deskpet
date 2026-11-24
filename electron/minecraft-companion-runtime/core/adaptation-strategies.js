@@ -2,7 +2,7 @@
 
 const { goals } = require('mineflayer-pathfinder');
 const { blockTarget } = require('./target-recovery');
-const { complete, resultFrom, failure, isComplete } = require('./action-result');
+const { complete, resultFrom, failure, factsOf, isComplete } = require('./action-result');
 
 const OUTWARD_HEADINGS = Object.freeze([0, 1, -1, 2, -2, 3, -3, 4]);
 async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, timeoutMs = 15000, bearing } = {}) {
@@ -24,38 +24,39 @@ async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, time
   return complete(false, { moved });
 }
 
-const biome = (bot) => bot.blockAt(bot.entity.position.floored())?.biome?.name
-  ?? bot.world?.getBiome?.(bot.entity.position.floored()) ?? null;
+async function runSearchLeg(ctx, memory, move, { reason = 'search_leg_budget', observe } = {}) {
+  const exhausted = () => memory.legs >= 6 || memory.distance >= 192;
+  const failed = () => failure(reason, { legs: memory.legs, distance: memory.distance }, ctx);
+  if (exhausted()) return failed();
+  const from = observe?.()?.clone();
+  const result = resultFrom(await move(), ctx);
+  if (!isComplete(result)) return result;
+  const to = observe?.();
+  memory.legs = (memory.legs || 0) + 1;
+  memory.distance = (memory.distance || 0) + (from && to ? from.distanceTo(to) : factsOf(result).moved || 0);
+  return exhausted() ? failed() : result;
+}
 
 async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blocks, dropMatch, exclude }) {
-  const location = { position: anchor || bot.entity.position, target: 'log' };
+  const origin = anchor || (memory.woodOrigin ||= bot.entity.position.clone());
+  const location = { position: origin, target: 'log' };
   const spec = (p) => blockTarget(bot, 'wood', 'gather_log', p, { cells: [p.offset(0, -1, 0)] });
   const avoid = (p) => exclude?.(p) || ctx.adapt.avoids('hard_route', p) || ctx.adapt.targets.avoid(spec(p));
-  return ctx.adapt.run('wood', location, async (method, _plan, observe) => {
-    const gather = (radius) => skills.gatherOne(bot, ctx, { blocks, dropMatch, exclude: avoid, radius,
-      destination: { spec, observe } });
-    const route = (memory.woodRoute ||= { heading: 0, from: bot.entity.position.clone(), biome: biome(bot) });
+  return ctx.adapt.run('wood', location, async (method, plan, observe) => {
     const near = method === 'near_tree';
-    const far = method === 'different_biome' || method === 'move_to_fresh_area';
-    if (route.method !== method) {
-      route.heading = method === 'wider_heading' ? 1 : method === 'different_biome' ? 2 : method === 'move_to_fresh_area' ? 3 : 0;
-      route.method = method;
-      route.departed = false;
+    const found = resultFrom(await skills.gatherOne(bot, ctx, { blocks, dropMatch, exclude: avoid,
+      radius: near ? 48 : 128, destination: { spec, observe } }), ctx, bot);
+    const id = `${plan.key}:${plan.revision}:${method}`;
+    if (found.progress) { memory.woodRoute = null; return found; }
+    if (near || ['start', 'interrupted'].includes(found.kind) || found.facts?.target || found.facts?.adaptation || !['no_target_in_range', 'not_arrived',
+      'path_timeout', 'no_progress', 'NoPath', 'Timeout', 'choose_another_target', 'route_region_avoided'].includes(found.reason)) return found;
+    if (memory.woodRoute?.id !== id) {
+      const heading = ['near_tree', 'wider_heading', 'different_biome', 'move_to_fresh_area'].indexOf(method);
+      memory.woodRoute = { id, heading: Math.max(0, heading) };
     }
-    if (far && (!route.departed || (method === 'different_biome' && biome(bot) !== null && route.biome === biome(bot)
-      && route.from.distanceTo(bot.entity.position) < 128))) {
-      const move = await outwardLeg(bot, ctx, actions, route, route.from, { distance: 28 });
-      route.departed ||= isComplete(move);
-      return move;
-    }
-    const found = resultFrom(await gather(near ? 48 : 128), ctx, bot);
-    if (found.ok || near || found.facts?.target || found.facts?.adaptation || found.kind === 'start' || found.kind === 'interrupted') return found;
-    if (!['no_target_in_range', 'not_arrived', 'path_timeout', 'no_progress', 'NoPath', 'Timeout', 'choose_another_target',
-      'route_region_avoided'].includes(found.reason)) return found;
-    const moved = await outwardLeg(bot, ctx, actions, route, route.from, { distance: far ? 28 : 20 });
-    if (!isComplete(moved)) return moved;
-    return gather(128);
+    return runSearchLeg(ctx, memory.woodRoute,
+      () => outwardLeg(bot, ctx, actions, memory.woodRoute, origin, { distance: method === 'wider_heading' ? 20 : 28 }));
   });
 }
 
-module.exports = { outwardLeg, gatherWood, OUTWARD_HEADINGS };
+module.exports = { outwardLeg, runSearchLeg, gatherWood, OUTWARD_HEADINGS };

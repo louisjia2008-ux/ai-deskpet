@@ -1,10 +1,10 @@
 'use strict';
 // Reassess autonomous cards between steps while the selected card owns the goal.
 
-const { stepTarget } = require('./planner');
+const { stepTarget, startTarget } = require('./planner');
 const { createScheduleBackoff } = require('./schedule-backoff');
 const { createAdaptation } = require('./adaptation');
-const { complete, failure, isComplete } = require('./action-result');
+const { complete, failure, isComplete, isRescueBehavior, factsOf } = require('./action-result');
 const { schedulingInputs, travelTicks, nightBudget } = require('./scheduling');
 
 const RISKS = new Set(['low', 'medium', 'high']);
@@ -39,6 +39,21 @@ function downstream(id) {
   return cards.size;
 }
 
+function workStock(state, memory) {
+  const stock = { ...state.inventory };
+  for (const contents of Object.values(memory.autonomyStock || {})) {
+    for (const [item, count] of Object.entries(contents)) stock[item] = (stock[item] || 0) + count;
+  }
+  return stock;
+}
+
+function readWork(card, goal, state, memory, stock) {
+  return goal?.work?.(state, stock) ?? card.work?.(state, memory, stock);
+}
+
+const proofFields = current => ({ remaining: current.work?.remaining ?? null,
+  readiness: current.work?.readiness ?? null, sinceProgressMs: current.sinceProgressMs });
+
 function cardValue(card, memory, { state, home, returnTicks, ticksToDark, dark }, at, work, ledger, hazards, target, staleMs) {
   const position = work?.position ?? (card.local ? home : state.position);
   const travel = point => point && position ? travelTicks(point, position) : 0;
@@ -72,10 +87,7 @@ function chooseNext(state, memory, cards, { stage = 0, maxStage = Infinity, rese
   const entries = new Map();
   const hazards = ledger?.snapshot().filter(entry => entry.purpose === 'target_hazard' && entry.dimension === state.dimension)
     .map(entry => entry.position) ?? [];
-  const stock = { ...state.inventory };
-  for (const contents of Object.values(memory.autonomyStock || {})) {
-    for (const [item, count] of Object.entries(contents)) stock[item] = (stock[item] || 0) + count;
-  }
+  const stock = workStock(state, memory);
   for (const card of new Set([...cards, ...reserveCards])) {
     const entry = { id: card.id, score: 0 };
     entries.set(card, entry);
@@ -87,12 +99,10 @@ function chooseNext(state, memory, cards, { stage = 0, maxStage = Infinity, rese
     if (cooldown && cooldown.until > now) { entry.skipped = 'cooldown'; entry.until = cooldown.until; continue; }
     try {
       if (card.requires && !card.requires(state, memory)) { entry.skipped = 'requires'; continue; }
-      const goal = definitions.get(card.id);
-      const estimated = card.work?.(state, memory, stock);
-      const reported = goal?.work?.(state, stock);
       const active = current?.id === card.id ? current : null;
-      const work = { ...estimated, ...reported, position: active?.position ?? reported?.position ?? estimated?.position,
-        readiness: Math.max(estimated?.readiness ?? 0, reported?.readiness ?? 0), progress: reported?.progress ?? active?.progress };
+      const work = { ...(active ? active.work : readWork(card, definitions.get(card.id), state, memory, stock)),
+        progress: active?.progress };
+      work.position = active?.position ?? work.position;
       Object.assign(entry, cardValue(card, memory, inputs, now, work, ledger, hazards, targets.get(card.id), active ? now - active.progressAt : 0));
       if (entry.score === 0) entry.skipped = 'no_value';
     } catch (error) {
@@ -131,7 +141,7 @@ function createDirector({
   if (!brain || typeof perceive !== 'function') throw new TypeError('brain and perceive are required');
   for (const card of [...cards, ...reserveCards]) validateCard(card);
   const cooldowns = { get: id => ({ until: backoff.blocked(`card:${id}`) }) };
-  const definitions = new Map(), targets = new Map();
+  const definitions = new Map(), targets = new Map(), starts = new Map();
   let enabled = false;
   let own = null; // { id, goal }: the goal the director handed the brain
   let playerActive = false;
@@ -184,12 +194,32 @@ function createDirector({
     return { ...choice, stage, inputs };
   }
 
+  function refreshWork(current, state, at, result) {
+    if (!state || own !== current) return;
+    const { card, definition } = current;
+    try { current.work = readWork(card, definition, state, memory, workStock(state, memory)); }
+    catch { current.work = null; } // A perception gap cannot prove progress.
+    const { remaining, readiness } = current.work || {};
+    const smaller = Number.isFinite(remaining) && current.bestRemaining != null && remaining < current.bestRemaining;
+    const readier = Number.isFinite(readiness) && current.bestReadiness != null && readiness + 1e-9 >= current.bestReadiness + 0.05;
+    if (Number.isFinite(remaining) && (current.bestRemaining == null || smaller)) current.bestRemaining = remaining;
+    if (Number.isFinite(readiness) && (current.bestReadiness == null || readier)) current.bestReadiness = readiness;
+    const legacy = !card.work && !definition.work && isComplete(result) && result.progress !== false && !factsOf(result).transit;
+    if (smaller || readier || legacy) markProgress(current, at);
+  }
+
+  function markProgress(current, at) {
+    current.progressAt = at;
+    current.progress++;
+  }
+
   function reconsider(current, state, at, boundary) {
     if (own !== current || !state || state.alive === false) return null;
     const { card, scores, stage, inputs } = evaluate(state, at);
     const value = current.value = scores.find(score => score.id === current.id)?.score || 0;
     const challenger = card?.id !== current.id && card && scores.find(score => score.id === card.id);
-    const stalled = at - current.progressAt >= STOP_MS;
+    current.sinceProgressMs = at - current.progressAt;
+    const stalled = current.sinceProgressMs >= STOP_MS;
     const sheltered = inputs.dark && state.sheltered;
     const higher = challenger && challenger.score > value * SWITCH_RATIO;
     const change = !sheltered && boundary && higher;
@@ -199,7 +229,7 @@ function createDirector({
     if (stalled || change || at >= current.nextScoreAt) {
       current.nextScoreAt = at + RESCORE_MS;
       emit('autonomy_choice', { card: current.id, goal: current.goal, stage, scores,
-        reason, reassessment: true, retained: !stalled && !change, challenger: challenger?.id });
+        reason, reassessment: true, retained: !stalled && !change, challenger: challenger?.id, ...proofFields(current) });
     }
     return stalled ? { card: current.id, reason, until: at + MINUTE }
       : change ? { card: current.id, reason, until: at } : null;
@@ -233,14 +263,30 @@ function createDirector({
         if (p.method === 'do_other_work') return adaptation.defer(p);
         return null;
       },
-      planning: () => ({ ledger, dimension: perceive()?.dimension }),
+      planning: () => ({ ledger, card, dimension: perceive()?.dimension }),
       stepOutcome(step, result, record) {
         clearFailures(card, result);
-        if (!ledger || !result || result.wait || ['start', 'interrupted'].includes(result.kind)
-          || result.facts?.target || result.facts?.adaptation || result.facts?.terminal) return result;
-        const target = stepTarget(step, perceive()?.dimension);
+        if (!ledger || !result || result.wait || result.kind === 'interrupted' || result.facts?.rescue
+          || isRescueBehavior(result.reason)) return result;
+        const dimension = perceive()?.dimension;
+        const retry = startTarget(step, { card, dimension });
+        const key = `${retry.dimension}|${retry.entity}`;
+        let target = stepTarget(step, dimension);
+        if (result.kind === 'start') {
+          const at = now();
+          for (const [id, times] of starts) if (times.at(-1) <= at - 10 * MINUTE) starts.delete(id);
+          const times = [...(starts.get(key) || []).filter(time => time > at - 10 * MINUTE), at];
+          if (times.length < 8) { starts.set(key, times); return result; }
+          target = retry;
+          result = { ...result, kind: 'target', facts: { ...result.facts, startAttempts: times.length } };
+        } else if (result.facts?.target || result.facts?.adaptation || result.facts?.terminal) {
+          starts.delete(key);
+          return result;
+        }
+        starts.delete(key);
+        if (factsOf(result).transit) return result;
         targets.set(card, target);
-        if (streak && (streak.entity !== target.entity || streak.dimension !== target.dimension) && !ledger.skip(streak)) {
+        if (streak && (streak.entity !== target.entity || streak.purpose !== target.purpose || streak.dimension !== target.dimension) && !ledger.skip(streak)) {
           ledger.clearOnSuccess(streak);
         }
         streak = target;
@@ -255,10 +301,8 @@ function createDirector({
       outcome(result, elapsedMs) {
         clearFailures(card, result); // Direct steps such as tilling bypass the planner.
         const at = now();
-        if (isComplete(result) && result.progress !== false && !result.facts?.transit) {
-          current.progressAt = at;
-          current.progress += 1;
-        }
+        const state = perceive();
+        refreshWork(current, state, at, result);
         const p = result?.ok === false && !result.facts?.target && !result.facts?.adaptation && !result.facts?.terminal
           && !['start', 'interrupted', 'material'].includes(result.kind) ? generic(card) : null;
         const handled = p ? adapt.outcome(p, result) : result;
@@ -269,7 +313,6 @@ function createDirector({
         }
         if (result?.wait) {
           if (card === 'homestead' && result.wait.reason === 'sheltering_until_daylight') {
-            const state = perceive();
             if (state && nightBudget(state).dark && state.sheltered) return null;
           }
           waits += 1;
@@ -278,7 +321,7 @@ function createDirector({
             return { card, reason: result.wait.reason, waits, waitMs, until: Math.max(at + yieldCooldownMs, result.wait.until || 0) };
           }
         } else waits = 0;
-        return reconsider(current, perceive(), at, true);
+        return reconsider(current, state, at, true);
       },
     };
   }
@@ -287,7 +330,7 @@ function createDirector({
     /** Feed every brain event here. */
     handleEvent(event) {
       if (own && ['autonomy_milestone', 'site_chosen', 'home_part_restored', 'depot_built'].includes(event?.type)) {
-        own.progressAt = now();
+        markProgress(own, now());
       }
       if (own && event?.generation === own.generation) {
         if (event.type === 'plan_step') own.position = null;
@@ -358,13 +401,15 @@ function createDirector({
       lastIdle = null;
       const goal = card.create(memory);
       definitions.set(card.id, goal);
-      emit('autonomy_choice', { card: card.id, goal: goal.name, stage, scores, reason: 'highest_value', retained: false,
-        ...(reserveUntil === null ? {} : { reserveUntil, retryAt }) });
-      const current = { id: card.id, goal: goal.name, expedition: card.expedition, stage: card.budgetStage ?? card.stage,
-        cardStage: card.stage, safeReturn: card.safeReturn, reserveUntil, progressAt: at, nextScoreAt: at + RESCORE_MS,
+      const current = { id: card.id, card, definition: goal, goal: goal.name, expedition: card.expedition,
+        stage: card.budgetStage ?? card.stage, cardStage: card.stage, safeReturn: card.safeReturn, reserveUntil,
+        progressAt: at, nextScoreAt: at + RESCORE_MS, sinceProgressMs: 0,
         progress: 0, value: scores.find(score => score.id === card.id)?.score || 0 };
       current.generation = brain.setGoal(goal, { autonomy: governor(current, goal) });
       own = current;
+      refreshWork(current, state, at);
+      emit('autonomy_choice', { card: card.id, goal: goal.name, stage, scores, reason: 'highest_value', retained: false,
+        ...proofFields(current), ...(reserveUntil === null ? {} : { reserveUntil, retryAt }) });
       idleSince = null;
       return card.id;
     },

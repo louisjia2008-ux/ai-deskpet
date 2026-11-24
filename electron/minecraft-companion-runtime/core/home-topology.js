@@ -52,7 +52,9 @@ function topology(house, read, { occupy = [], remove = [] } = {}) {
   }
   const threshold = new Vec3(door.x, door.y, door.z);
   const porch = new Vec3(house.entrance.x, house.entrance.y, house.entrance.z);
-  const open = walkable(threshold, true) && walkable(porch);
+  const obstruction = !walkable(porch) ? { part: 'porch', position: porch }
+    : !walkable(threshold, true) ? { part: 'threshold', position: threshold } : null;
+  const open = !obstruction;
   const next = new Map();
   const queue = open ? [threshold] : [];
   for (let i = 0; i < queue.length; i++) {
@@ -63,7 +65,7 @@ function topology(house, read, { occupy = [], remove = [] } = {}) {
     }
   }
   const disconnected = [...cells.values()].filter(p => !next.has(posKey(p)));
-  return { known, open, cells, reachable: new Set(next.keys()), next, disconnected, connected: known && open && cells.size > 0 && !disconnected.length };
+  return { known, open, obstruction: obstruction || { part: 'interior', position: disconnected[0] || house.interiorCenter }, cells, reachable: new Set(next.keys()), next, disconnected, connected: known && open && cells.size > 0 && !disconnected.length };
 }
 
 module.exports = { topology, safeStand, supports, clear, isBed, SIDES, homeContains };

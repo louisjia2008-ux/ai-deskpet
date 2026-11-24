@@ -17,7 +17,7 @@ const anchor = { x: 0, y: 64, z: 0 };
 const above = (p) => new Vec3(p.x, p.y + 1, p.z);
 
 function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false, widerStone = false,
-  unconfirmed = () => false, afterWalk = () => {} } = {}) {
+  unconfirmed = () => false, afterWalk = () => {}, portable = false } = {}) {
   const blueprint = createStarterHouse(anchor, { variant });
   const roof = blueprint.blocks.filter(b => b.phase === 'roof').map(b => b.position);
   const walls = blueprint.blocks.filter(b => b.phase === 'walls').map(b => b.position);
@@ -29,7 +29,7 @@ function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false
   for (const p of walls) setBlock(p, 'cobblestone');
   for (const [key, n] of Object.entries(panels)) blocks.set(key, n);
   const f = blueprint.furniture;
-  for (const key of ['crafting_table', 'furnace', 'chest']) setBlock(f[key].position, key);
+  for (const key of ['crafting_table', 'furnace', 'chest']) if (!portable || key !== 'crafting_table') setBlock(f[key].position, key);
   for (const p of [f.door.position, f.door.upper]) setBlock(p, 'oak_door');
   for (const p of [f.bed.position, f.bed.head, f.guestBed.position, f.guestBed.head]) setBlock(p, 'white_bed');
   for (const p of f.torches) setBlock(p, 'torch');
@@ -51,8 +51,13 @@ function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false
       afterWalk(setBlock);
       return { ok: true };
     },
+    async collectDrops(_bot, _ctx, _p, match) {
+      assert.ok(portable && match('crafting_table'));
+      inventory.crafting_table += 1;
+      return { ok: true };
+    },
     async digBlock(_bot, _ctx, block, { ownedHomeRemoval } = {}) {
-      assert.equal(ownedHomeRemoval?.(block), true);
+      assert.ok(ownedHomeRemoval?.(block) || (portable && block.name === 'crafting_table'));
       worked.push({ kind: 'dig', position: posKey(block.position), item: block.name });
       setBlock(block.position, 'air');
       return { ok: true };
@@ -77,6 +82,12 @@ function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false
       return { ok: true, gained: 1 };
     },
     async craft(_bot, _ctx, { item, times, tablePosition }) {
+      if (portable) {
+        assert.equal(item, 'stone_sword');
+        assert.equal(bot.blockAt(tablePosition).name, 'crafting_table');
+        inventory[item] = 1;
+        return { ok: true, usedTable: true };
+      }
       assert.equal(item, 'sandstone');
       assert.equal(tablePosition, null);
       assert.ok(inventory.sand >= 4 * times);
@@ -102,7 +113,7 @@ function site({ materials = {}, panels = {}, variant = 'starter', onRoof = false
   const state = { inventory, position, isDay: true, timeOfDay: 4000, health: 20, food: 20 };
   const adapt = createAdaptation({ onEvent: e => events.push(e) }).scope(() => true);
   const ctx = { perceive: () => state, record: (type, data) => events.push({ type, ...data }), adapt };
-  const newHome = () => createHomesteadGoal({ bot, anchor, variant, autonomous: true, gear: [], actions, skills });
+  const newHome = () => createHomesteadGoal({ bot, anchor, variant, autonomous: true, gear: portable ? ['stone_sword'] : [], actions, skills });
   return { roof, walls, setBlock, setWatcher: fn => { afterChange = fn; }, bot, state, ctx, newHome, events, worked };
 }
 
@@ -386,4 +397,16 @@ test('ample cobblestone and planks preserve the north-facing 7×7 shell material
   assert.ok(fixture.walls.every(p => fixture.bot.blockAt(p).name === 'cobblestone'));
   assert.ok(fixture.roof.every(p => fixture.bot.blockAt(p).name === 'oak_planks'));
   assert.equal(fixture.events.some(e => e.type === 'home_material_acquisition'), false);
+});
+
+
+test('the compact site crafts a stone sword outside and picks up the temporary table', async () => {
+  const fixture = site({ variant: 'compact', materials: { cobblestone: 2, stick: 1 }, portable: true });
+  const home = fixture.newHome();
+  const threshold = home.memory.house.furniture.door.position;
+  fixture.setBlock(new Vec3(threshold.x, threshold.y - 1, threshold.z), 'air');
+  for (let i = 0; i < 3 && !fixture.state.inventory.stone_sword; i++) assert.equal((await home.run(fixture.ctx)).ok, true);
+  assert.equal(fixture.state.inventory.stone_sword, 1);
+  assert.equal(fixture.state.inventory.crafting_table, 1);
+  assert.deepEqual(fixture.events.filter(e => e.type === 'portable_table').map(e => e.action), ['place', 'pick_up']);
 });

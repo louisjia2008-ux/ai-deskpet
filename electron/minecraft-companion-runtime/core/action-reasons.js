@@ -21,7 +21,7 @@ const reasons = Object.freeze({
     city_blocked city_empty clearance_not_open cliff_overhang cliff_pillar_short cliff_too_high combat_leash combat_timeout
     corridor_full cover_not_cleared depth direction_proposal_changed door_station_unreachable door_unchanged
     doorstep_unreached doorway_not_clear dragon_alive elytra_not_taken end_return_blocked exit_portal_missed
-    explore_blocked farm_out_of_sight forbidden_obstacle fortress_unreachable fresh_natural_shore_and_portal_required
+    explore_blocked farm_out_of_sight forbidden_obstacle furniture_blocks_exit fortress_unreachable fresh_natural_shore_and_portal_required
     front_unreached furnace_missing gravity hazard_margin hazard_or_gravity hazard_or_gravity_ore_margin
     hazard_underfloor_margin invalid_mine_approach lava_flowing lava_not_set ledge_blocked ledge_no_land leg_blocked
     line_of_sight_blocked liquid liquid_ahead log_search_exhausted melee_out_of_reach mine_entrance_near_player_build
@@ -46,7 +46,7 @@ const reasons = Object.freeze({
     reverse_clearance_changed reverse_edge_no_longer_safe reverse_margin_changed revisited_route_refused
     roof_step_unavailable roof_wood_cap_still_present roof_wood_cleanup_blocked roof_wood_cover_unavailable
     roof_wood_no_support roof_wood_opening_changed roof_wood_panel_changed roof_wood_unsafe_stand route_region_avoided
-    search_exhausted shelter_wall_open shore_body_sweep_unsafe shore_natural_patch_unconfirmed shore_no_path
+    search_exhausted search_leg_budget shelter_wall_open shore_body_sweep_unsafe shore_natural_patch_unconfirmed shore_no_path
     shore_route_unsafe shulker_survived site_changed site_rejected spawner_unreachable spiral_place_failed spiral_step_failed
     station_out_of_reach survey_adjacent_fluid survey_cross_boundary_tree survey_falling_column
     survey_outside_attachment survey_site_changed table_missing target_excluded target_lost target_unreachable timeout
@@ -58,7 +58,7 @@ const reasons = Object.freeze({
   // Body or starting position prevents making the attempt.
   start: `
     bridge_guard_body bridge_not_grounded bridge_origin_changed cage_climb_short edge_in_flight escape_step_unconfirmed
-    food_retreat furniture_blocks_exit health_retreat home_access_repair_unconfirmed home_entry_obstructed
+    food_retreat health_retreat home_access_repair_unconfirmed home_entry_obstructed
     home_entry_support_missing home_escape_unconfirmed home_exit_blocked home_origin_unrecovered in_lava
     interior_cut_off log_scout_trapped log_scout_water_entered log_water_no_shore
     log_water_recovery_timeout low_health mine_exit_blocked mine_exit_not_arrived not_at_column not_at_confirmed_front
@@ -73,7 +73,7 @@ const reasons = Object.freeze({
     bed_materials_unavailable causeway_blocks end_departure_requirements few_blocks ledge_no_blocks missing_breach_repair_material
     missing_flint_and_steel missing_ingredients missing_obsidian needs_supplies needs_usable_pickaxe
     nether_departure_requirements no_arrows no_bow no_bridge_blocks no_bucket no_diamond_pickaxe no_eye no_eyes no_food
-    no_fuel no_gold no_gold_armour no_golden_apple no_hoe no_igniter no_material no_pearl no_pearls no_pickaxe no_potion
+    no_farmland_near_home no_fuel no_gold no_gold_armour no_golden_apple no_hoe no_igniter no_material no_pearl no_pearls no_pickaxe no_potion
     no_seal_block no_seeds no_shield no_spare_pickaxe no_step_block no_tool no_weapon not_enough_eyes
     roof_step_needs_filler route_floor_missing_material tower_blocks
   `,
