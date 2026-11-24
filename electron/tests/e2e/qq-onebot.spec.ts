@@ -199,9 +199,10 @@ data: [DONE]
     const researchGoal = 'Verify the synthetic default model selection';
     const researchRequests = (start: number, goal = researchGoal) => wires.slice(start).filter(wire =>
       wire.messages.some(message => message.role === 'user' && message.content.includes(goal))).map(wire => wire.model);
-    const submitResearch = (goal: string, selection: string | null) => page.evaluate(({ id, goal, selection }) =>
+    // Like the form, remote consent names the service address it was given for.
+    const submitResearch = (goal: string, selection: string | null) => page.evaluate(({ id, baseUrl, goal, selection }) =>
       window.deskpet.research!.submit({ operationId: crypto.randomUUID(), goal, material: '', providerId: id, model: selection,
-        allowRemote: true, maxMinutes: 2, maxToolCalls: 4 }), { id: provider.id, goal, selection });
+        allowRemote: true, maxMinutes: 2, maxToolCalls: 4, expectedBaseUrl: baseUrl }), { id: provider.id, baseUrl: provider.baseUrl, goal, selection });
     const waitResearch = (id: string, errorCode: string) => expect.poll(() =>
       page.evaluate(taskId => window.deskpet.research!.get(taskId), id), { timeout: 20_000 }).toMatchObject({ status: 'failed', errorCode });
     const waitCompletedResearch = (task: { id: string; reportPath: string }) => expect.poll(() =>

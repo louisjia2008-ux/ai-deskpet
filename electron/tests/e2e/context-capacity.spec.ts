@@ -117,7 +117,7 @@ test('unconfigured capacity carries a full tool result and long job, preserves a
     await expect(page!.locator('.message.assistant').last()).toContainText('app request-size limit');
     await page!.screenshot({ path: info.outputPath('complete-tool-continuation.png'), fullPage: true });
     const provider = (await page!.evaluate(() => window.deskpet.providers.list()))[0]!;
-    const job = await page!.evaluate(input => window.deskpet.jobs.submit(input), { operationId: randomUUID(), instruction: 'Read the synthetic final fact.', material, privacy: 'cloud-allowed' as const, providerId: provider.id, model: provider.model });
+    const job = await page!.evaluate(input => window.deskpet.jobs.submit(input), { operationId: randomUUID(), instruction: 'Read the synthetic final fact.', material, privacy: 'cloud-allowed' as const, providerId: provider.id, model: provider.model, expectedBaseUrl: provider.baseUrl });
     await expect.poll(async () => (await page!.evaluate(id => window.deskpet.jobs.get(id), job.id)).status).toBe('succeeded');
     expect(wires).toHaveLength(3);
     expect(wires[2]!.body.tool_choice).toBe('none');
