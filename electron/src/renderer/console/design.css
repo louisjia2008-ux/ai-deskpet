@@ -41,7 +41,7 @@
 /* Controls */
 .app-shell button { border-radius: 11px; transition: transform .16s var(--ease-out), box-shadow .2s var(--ease-out), background-color .18s, color .18s, border-color .18s; }
 .app-shell button:active:not(:disabled) { transform: scale(.97); }
-.app-shell button:not(.secondary, .text-button, .nav-item, .utility-item, .session-item, .icon-button, .brand, .chat-tool-button, .channel-toggle, .conversation-manage-link, [role=tab], [role=menuitem]):not(:disabled) { box-shadow: 0 1px 2px rgb(20 60 120 / 20%), 0 6px 16px rgb(47 109 189 / 22%); }
+.app-shell button:not(.secondary, .text-button, .nav-item, .utility-item, .session-item, .icon-button, .brand, .chat-tool-button, .channel-toggle, .conversation-manage-link, [role=tab], [role=radio], [role=menuitem]):not(:disabled) { box-shadow: 0 1px 2px rgb(20 60 120 / 20%), 0 6px 16px rgb(47 109 189 / 22%); }
 .app-shell button:hover:not(:disabled) { filter: none; }
 .app-shell button.secondary { background: var(--surface); border: 1px solid var(--border); }
 .app-shell button.secondary:hover:not(:disabled) { background: var(--tinted); }
@@ -213,9 +213,9 @@
 .app-shell .page-scroll.grouped > .page-tabs ~ * h1, .app-shell .page-scroll.grouped > .page-tabs ~ h1 { margin: 0; font-size: 17px; line-height: 1.4; letter-spacing: 0; }
 .app-shell .page-scroll.grouped > .page-tabs ~ * .page-header { margin-bottom: 16px; }
 .app-shell .memory-tabs { width: fit-content; max-width: 100%; gap: 2px; margin: 0 0 20px; padding: 3px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--surface-solid) 55%, transparent); }
-.app-shell .memory-tabs [role=tab] { height: 30px; padding: 0 14px; border-radius: 9px; color: var(--muted); background: transparent; font-size: 13px; font-weight: 500; }
-.app-shell .memory-tabs [role=tab]:hover:not(:disabled) { color: var(--strong); background: var(--tinted); }
-.app-shell .memory-tabs [role=tab][aria-selected=true] { color: var(--blue-strong); background: var(--surface-solid); font-weight: 600; box-shadow: var(--shadow-sm); }
+.app-shell .memory-tabs [role=tab], .app-shell .memory-tabs [role=radio] { height: 30px; padding: 0 14px; border-radius: 9px; color: var(--muted); background: transparent; font-size: 13px; font-weight: 500; }
+.app-shell .memory-tabs [role=tab]:hover:not(:disabled), .app-shell .memory-tabs [role=radio]:hover:not(:disabled) { color: var(--strong); background: var(--tinted); }
+.app-shell .memory-tabs [role=tab][aria-selected=true], .app-shell .memory-tabs [role=radio][aria-checked=true] { color: var(--blue-strong); background: var(--surface-solid); font-weight: 600; box-shadow: var(--shadow-sm); }
 .app-shell .settings-tabs { gap: 0; }
 .app-shell .settings-tabs [role=tab] { height: 34px; }
 .app-shell .settings-tab-group { gap: 2px; }

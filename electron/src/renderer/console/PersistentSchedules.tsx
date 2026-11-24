@@ -93,7 +93,7 @@ export const PersistentSchedules = ({ api, providers, locale }: AutomationUIProp
       privacy, providerId: provider.id, model: model.trim() || null, rule: rule(), timezone, missedPolicy, enabled }); edit(null); setFormOpen(false); });
   };
   const date = (value: string): string => {
-    try { return new Intl.DateTimeFormat(locale === 'zh-CN' ? 'zh-CN' : 'en', { dateStyle: 'medium', timeStyle: 'long', timeZone: timezone }).format(new Date(value)); }
+    try { return new Intl.DateTimeFormat(locale === 'zh-CN' ? 'zh-CN' : 'en', { dateStyle: 'medium', timeStyle: 'short', timeZone: timezone }).format(new Date(value)); }
     catch { return value; }
   };
   const showForm = formOpen || editing !== null || (snapshot?.automationSchedules.length ?? 0) === 0;
