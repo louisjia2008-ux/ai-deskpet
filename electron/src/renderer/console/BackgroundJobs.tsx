@@ -57,7 +57,9 @@ export const BackgroundJobs = ({ providers, locale, openJobId = null }: { provid
   const [material, setMaterial] = useState('');
   // Consent covers exactly one service, endpoint and model; changing any of them withdraws it.
   const [consentFor, setConsentFor] = useState<string | null>(null);
-  const bindingKey = `${provider?.id ?? ''}|${provider?.baseUrl ?? ''}|${model.trim()}`;
+  const bindingKey = `${provider?.id ?? ''}|${provider?.baseUrl ?? ''}|${model.trim() || provider?.model || ''}`;
+  // Any change of target withdraws consent for good; switching back does not restore it.
+  useEffect(() => { setConsentFor(current => current === null || current === bindingKey ? current : null); }, [bindingKey]);
   const cloudAllowed = consentFor === bindingKey;
   const setCloudAllowed = (allowed: boolean): void => setConsentFor(allowed ? bindingKey : null);
   // Asked only for cloud services, or after DeskPet refused to run local-only input on this one.

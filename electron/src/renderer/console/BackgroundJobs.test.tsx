@@ -171,6 +171,10 @@ it('withdraws remote consent when the model changes on the same cloud service', 
   fireEvent.click(screen.getByRole('checkbox'));
   fireEvent.change(screen.getByRole('textbox', { name: 'Model' }), { target: { value: 'another-model' } });
   expect(screen.getByRole('checkbox')).not.toBeChecked();
+  // Switching back does not quietly restore the earlier consent.
+  fireEvent.change(screen.getByRole('textbox', { name: 'Model' }), { target: { value: 'frozen-model' } });
+  expect(screen.getByRole('checkbox')).not.toBeChecked();
+  fireEvent.change(screen.getByRole('textbox', { name: 'Model' }), { target: { value: 'another-model' } });
   fireEvent.click(screen.getByRole('button', { name: 'Run in background' }));
   await waitFor(() => expect(f.submit).toHaveBeenCalledOnce());
   expect(f.submit.mock.calls[0]![0].privacy).toBe('local-only');

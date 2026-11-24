@@ -108,6 +108,8 @@ const zh: typeof en = {
   errorConnect: '连不上 NapCat，请确认容器正在运行。', errorToken: 'NapCat 拒绝了访问令牌，请确认两边填的是同一个。', errorOffline: '小号已退出或离线，请在 NapCat 中重新登录。',
 };
 
+const STOP_UNCONFIRMED = 'deskpet.qq.stopUnconfirmed';
+
 export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[]; locale: string }): JSX.Element => {
   const copy = locale === 'zh-CN' ? zh : en;
   const [state, setState] = useState<QqChannelStatus | null>(null);
@@ -144,7 +146,12 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
   const formReady = useRef(false);
   const acting = useRef(false);
   // A stop whose saved state was not confirmed keeps the stop button, so it can be pressed again.
-  const [stopUnconfirmed, setStopUnconfirmed] = useState(false);
+  // Kept for the session so leaving and reopening this page still offers the retry.
+  const [stopUnconfirmed, setStopUnconfirmedState] = useState(() => { try { return window.sessionStorage.getItem(STOP_UNCONFIRMED) === '1'; } catch { return false; } });
+  const setStopUnconfirmed = (value: boolean): void => {
+    setStopUnconfirmedState(value);
+    try { if (value) window.sessionStorage.setItem(STOP_UNCONFIRMED, '1'); else window.sessionStorage.removeItem(STOP_UNCONFIRMED); } catch { /* the in-page flag still applies */ }
+  };
   useEffect(() => {
     const read = (): void => {
       const id = request.current;

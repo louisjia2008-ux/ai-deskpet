@@ -72,7 +72,9 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
   const mounted = useRef(true), readSequence = useRef(0);
   const provider = enabled.find(item => item.id === providerId);
   // Consent covers exactly one service, endpoint and model; changing any of them withdraws it.
-  const bindingKey = `${provider?.id ?? ''}|${provider?.baseUrl ?? ''}|${model.trim()}`;
+  const bindingKey = `${provider?.id ?? ''}|${provider?.baseUrl ?? ''}|${model.trim() || provider?.model || ''}`;
+  // Any change of target withdraws consent for good; switching back does not restore it.
+  useEffect(() => { setConsentFor(current => current === null || current === bindingKey ? current : null); }, [bindingKey]);
   const allowRemote = consentFor === bindingKey;
   const setAllowRemote = (allowed: boolean): void => setConsentFor(allowed ? bindingKey : null);
   const refresh = useCallback(async (): Promise<void> => {

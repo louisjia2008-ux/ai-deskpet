@@ -16,8 +16,9 @@ export const ActivityPage = ({ t, locale }: { t(key: string): string; locale: Re
   const [failed, setFailed] = useState(false);
   const revision = useRef({ value: 0 });
   // Once older events are open, coming back to the window keeps the reader's place.
-  const olderOpen = useRef(false);
+  const olderOpen = useRef(false), loadingOlder = useRef(false);
   const load = useCallback(async (beforeId?: string) => {
+    if (beforeId) loadingOlder.current = true;
     const current = ++revision.current.value;
     setBusy(true); setFailed(false);
     try {
@@ -27,13 +28,13 @@ export const ActivityPage = ({ t, locale }: { t(key: string): string; locale: Re
       setItems(items => beforeId ? [...page, ...items] : page);
       setMore(page.length === PAGE_SIZE);
     } catch { if (current === revision.current.value) setFailed(true); }
-    finally { if (current === revision.current.value) setBusy(false); }
+    finally { if (beforeId) loadingOlder.current = false; if (current === revision.current.value) setBusy(false); }
   }, []);
   useEffect(() => {
     const current = revision.current;
     void load();
     // Coming back to the window shows the latest events without a refresh button.
-    const reload = (): void => { if (!olderOpen.current) void load(); };
+    const reload = (): void => { if (!olderOpen.current && !loadingOlder.current) void load(); };
     window.addEventListener('focus', reload);
     return () => { current.value++; window.removeEventListener('focus', reload); };
   }, [load]);
