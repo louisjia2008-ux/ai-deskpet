@@ -148,7 +148,13 @@ export const MediaLibraryPage = ({ api, wechat, providers, locale, sessionId, on
         {!asset.deletedAt && <p className="media-card-meta">{asset.enabled ? '自动配图已开' : '仅手动选择'} · {asset.allowQq ? '允许 QQ 使用' : 'QQ 未授权'}
           {asset.allowWechat && ' · 允许微信主号私聊'}{Boolean(asset.allowWechatGroups?.length) && ` · 允许 ${asset.allowWechatGroups!.length} 个微信群`}</p>}
         <div className="media-card-actions">{asset.deletedAt ? <button type="button" disabled={busy !== null} onClick={() => void perform('restore', async () => { await api.restore(asset.id); return '图片已恢复到图库。'; })}>恢复图片</button> : <>
-          <button type="button" disabled={busy !== null || (!sessionId && !createSession)} onClick={() => void perform('attach', async () => { const target = sessionId || await createSession!(); await api.attach({ sessionId: target, assetId: asset.id }); onAttached(); })}>{sessionId ? '放入当前对话' : '放入新对话'}</button>
+          <button type="button" disabled={busy !== null || (!sessionId && !createSession)} onClick={() => void perform('attach', async () => {
+            const created = !sessionId, target = sessionId || await createSession!();
+            // A chat made just for this image is removed again if the image could not be put in.
+            try { await api.attach({ sessionId: target, assetId: asset.id }); }
+            catch (cause) { if (created) await window.deskpet.chat.removeSession(target).catch(() => undefined); throw cause; }
+            onAttached();
+          })}>{sessionId ? '放入当前对话' : '放入新对话'}</button>
           <button type="button" className="secondary" disabled={busy !== null} onClick={() => edit(asset)}>编辑图片信息</button>
           <button type="button" className="secondary" disabled={busy !== null} onClick={() => void perform('remove', async () => { await api.remove(asset.id); if (editor?.id === asset.id) setEditor(null); return '已移入回收站，可随时恢复。'; })}>移入回收站</button>
         </>}</div>
