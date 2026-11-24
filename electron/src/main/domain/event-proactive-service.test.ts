@@ -290,5 +290,10 @@ describe('proactive defaults on first switch-on', () => {
     await chosen.patch({ eventKinds: ['focus-completed'] });
     await chosen.patch({ mode: 'observe', enabled: false });
     expect(chosen.getPolicy()).toMatchObject({ eventKinds: ['focus-completed'], timezone: 'UTC' });
+    // A saved policy whose events were cleared is not silently refilled.
+    const cleared = setup().create();
+    await cleared.patch({ quietStart: '22:00' });
+    await expect(cleared.patch({ mode: 'observe', enabled: false })).rejects.toThrow();
+    expect(cleared.getPolicy().eventKinds).toEqual([]);
   });
 });

@@ -35,7 +35,7 @@ export const CareSettings = ({ api, providers, activeProviderId, locale, request
   const t = copy[locale];
   const zh = locale === 'zh-CN';
   const [policy, setPolicy] = useState<ProactivePolicy | null>(null);
-  const [status, setStatus] = useState<'sent' | 'failed' | null>(null);
+  const [status, setStatus] = useState<'sent' | 'failed' | 'needEvents' | null>(null);
   const [busy, setBusy] = useState(false);
   const usable = providers.filter((provider) => provider.enabled);
   const provider = usable.find((item) => item.id === policy?.providerId) ?? usable.find((item) => item.id === activeProviderId) ?? usable[0];
@@ -61,7 +61,7 @@ export const CareSettings = ({ api, providers, activeProviderId, locale, request
       }
       setPolicy(await api.patchProactive(fields));
       onSaved?.();
-    } catch { setStatus('failed'); }
+    } catch { setStatus(nextMode !== 'off' && policy.eventKinds.length === 0 && policy.revision > 1 ? 'needEvents' : 'failed'); }
     finally { setBusy(false); }
   };
   const checkInNow = async (): Promise<void> => {
@@ -91,6 +91,6 @@ export const CareSettings = ({ api, providers, activeProviderId, locale, request
       </button>}
     </div>}
     {on && <div className="persona-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void checkInNow()}>{t.now}</button></div>}
-    {status && <p role={status === 'failed' ? 'alert' : 'status'}>{t[status]}</p>}
+    {status && <p role={status === 'sent' ? 'status' : 'alert'}>{status === 'needEvents' ? (zh ? '还没选要关心的事件。先在下方「高级」里勾选，再打开。' : 'No events are chosen yet. Pick them under Advanced below, then switch on.') : t[status]}</p>}
   </section>;
 };

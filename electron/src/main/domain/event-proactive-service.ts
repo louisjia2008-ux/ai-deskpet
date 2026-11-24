@@ -109,10 +109,10 @@ export class EventProactiveService {
   /** Applies field patches one at a time on the policy as saved then, so concurrent edits never revive old values. */
   patch(fields: Partial<ProactivePolicyInput>): Promise<ProactivePolicy> {
     const run = this.#patches.then(() => {
-      const { revision, ...current } = this.getPolicy(); void revision;
+      const { revision, ...current } = this.getPolicy();
       const next = { ...current, ...fields };
-      // The very first switch-on (never set up: no events chosen yet) fills in what the system knows.
-      if (proactiveMode(current) === 'off' && proactiveMode(next) !== 'off' && !current.eventKinds.length && fields.eventKinds === undefined) {
+      // The very first switch-on of a never-saved policy fills in what the system knows; later choices are kept.
+      if (revision === 1 && proactiveMode(current) === 'off' && proactiveMode(next) !== 'off' && !current.eventKinds.length && fields.eventKinds === undefined) {
         next.eventKinds = ['task-completed', 'focus-completed', 'explicit-check-in'];
         if (fields.timezone === undefined && next.timezone === 'UTC') next.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
       }
