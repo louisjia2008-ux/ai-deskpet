@@ -2690,7 +2690,10 @@ export class AppController {
     this.#ipc.register('memory-recall:cancel', consoleOnly, input => this.#memoryRecallService.cancel(input));
     this.#ipc.register('research:list', consoleOnly, () => this.#research.list());
     this.#ipc.register('research:get', consoleOnly, ({id}) => this.#research.get(id));
-    this.#ipc.register('research:submit', consoleOnly, input => this.#research.submit(input));
+    this.#ipc.register('research:submit', consoleOnly, ({ expectedBaseUrl, ...input }) => {
+      this.#assertConsentedEndpoint(input.providerId, input.allowRemote ? expectedBaseUrl : undefined, 'research.bindingChanged');
+      return this.#research.submit(input);
+    });
     this.#ipc.register('research:resume', consoleOnly, input => this.#research.resume(input));
     this.#ipc.register('research:cancel', consoleOnly, ({id}) => this.#research.cancel(id));
     this.#ipc.register('research:open-result', consoleOnly, async ({id}) => {
@@ -2747,7 +2750,10 @@ export class AppController {
     this.#ipc.register('consolidation:apply', consoleOnly, (payload) => this.#consolidation.apply(payload));
     this.#ipc.register('consolidation:disable', consoleOnly, (payload) => this.#consolidation.disable(payload));
     this.#ipc.register('consolidation:cancel', consoleOnly, (payload) => this.#consolidation.cancel(payload));
-    this.#ipc.register('jobs:submit', consoleOnly, (payload) => this.#jobs.submit(payload));
+    this.#ipc.register('jobs:submit', consoleOnly, ({ expectedBaseUrl, ...payload }) => {
+      this.#assertConsentedEndpoint(payload.providerId, payload.privacy === 'cloud-allowed' ? expectedBaseUrl : undefined, 'provider.bindingMismatch');
+      return this.#jobs.submit(payload);
+    });
     this.#ipc.register('jobs:list', consoleOnly, async () => (await this.#jobs.list()).filter((job) => job.automaticTriggerId === undefined));
     this.#ipc.register('jobs:get', consoleOnly, async ({ id }) => { const job = await this.#jobs.get(id); if (job.automaticTriggerId) throw new Error('automation.useHistoryEntry'); return job; });
     this.#ipc.register('jobs:cancel', consoleOnly, ({ id }) => this.#jobs.cancel(id));
@@ -4049,6 +4055,15 @@ export class AppController {
     if (!RESEARCH_CAPABILITIES.has(capabilityId)) return;
     for (const [runId] of this.#researchContexts) { this.#chatInteractions.cancel(runId); this.#agent.cancel(runId); }
     await this.#repository.transaction(state => { state.researchPermissionRevision++; });
+  }
+
+  /** Cloud consent names the address it was given for; a service whose address changed since then is refused. */
+  #assertConsentedEndpoint(providerId: string, expectedBaseUrl: string | undefined, code: string): void {
+    if (expectedBaseUrl === undefined) return;
+    const provider = this.#providers.list().find(item => item.id === providerId);
+    let expected: string;
+    try { expected = new URL(expectedBaseUrl).toString(); } catch { throw new Error(code); }
+    if (!provider || normalizedProviderBaseUrl(provider).toString() !== normalizedProviderBaseUrl({ ...provider, baseUrl: expected }).toString()) throw new Error(code);
   }
 
   #researchFingerprint(input: ResearchTaskInput, state: PersistentState = this.#repository.snapshot()): string {

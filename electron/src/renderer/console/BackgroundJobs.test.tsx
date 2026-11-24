@@ -178,4 +178,14 @@ it('withdraws remote consent when the model changes on the same cloud service', 
   fireEvent.click(screen.getByRole('button', { name: 'Run in background' }));
   await waitFor(() => expect(f.submit).toHaveBeenCalledOnce());
   expect(f.submit.mock.calls[0]![0].privacy).toBe('local-only');
+  expect(f.submit.mock.calls[0]![0]).not.toHaveProperty('expectedBaseUrl');
+});
+
+it('names the consented service address when sending to the cloud', async () => {
+  const cloudOnly: ProviderConfig = { ...provider, id: '7b1f4c8e-3d2a-4e5b-9c0d-1e2f3a4b5c6d', kind: 'openai', name: 'Synthetic cloud address', baseUrl: 'https://api.openai.com/v1', localExecutionConfirmed: undefined, secretState: 'configured' };
+  const f = fixture(); render(<BackgroundJobs providers={[cloudOnly]} locale="en" />); fill();
+  fireEvent.click(screen.getByRole('checkbox'));
+  fireEvent.click(screen.getByRole('button', { name: 'Run in background' }));
+  await waitFor(() => expect(f.submit).toHaveBeenCalledOnce());
+  expect(f.submit.mock.calls[0]![0]).toMatchObject({ privacy: 'cloud-allowed', expectedBaseUrl: 'https://api.openai.com/v1' });
 });

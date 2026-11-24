@@ -100,7 +100,7 @@ export const BackgroundJobs = ({ providers, locale, openJobId = null }: { provid
     // this exact payload. Changed content requires a later explicit new job.
     const input = submission.current ?? {
       operationId: crypto.randomUUID(), instruction: instruction.trim(), material,
-      privacy: cloudAllowed ? 'cloud-allowed' : 'local-only', providerId, model: model.trim(),
+      privacy: cloudAllowed ? 'cloud-allowed' : 'local-only', providerId, model: model.trim(), ...(cloudAllowed && provider ? { expectedBaseUrl: provider.baseUrl } : {}),
     };
     if (!input.instruction || !input.providerId || !input.model) return;
     submission.current = input;

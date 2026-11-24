@@ -1,7 +1,7 @@
 import { codingTaskIdSchema, codingTaskStartSchema } from './coding-tasks';
 import { mediaAssetIdSchema, mediaGenerateSchema, mediaSettingsSchema, mediaUpdateSchema } from './media';
 import { memoryRecallInputs } from './memory-recall';
-import { researchTaskInputSchema, researchTaskResumeSchema } from './research-tasks';
+import { researchTaskSubmitSchema, researchTaskResumeSchema } from './research-tasks';
 import { extensionInputs } from './desktop-extensions';
 import { minecraftCompanionConfigSchema, minecraftCompanionTaskSchema } from './minecraft-companion';
 import { minecraftDedicatedIdentitySchema, minecraftDedicatedSettingsSchema } from './minecraft-dedicated';
@@ -118,7 +118,7 @@ export const invokePayloadSchemas = {
   ...memoryRecallInputs,
   'research:list': emptySchema,
   'research:get': z.object({id:idSchema}).strict(),
-  'research:submit': researchTaskInputSchema,
+  'research:submit': researchTaskSubmitSchema,
   'research:resume': researchTaskResumeSchema,
   'research:cancel': z.object({id:idSchema}).strict(),
   'research:open-result': z.object({id:idSchema}).strict(),
@@ -375,7 +375,7 @@ export const invokePayloadSchemas = {
   'consolidation:apply': z.object({ id: idSchema, operationId: idSchema, expectedVersion: z.number().int().positive(), fidelityReviewed: z.literal(true), enableRepresentation: z.boolean() }).strict(),
   'consolidation:disable': z.object({ id: idSchema, operationId: idSchema }).strict(),
   'consolidation:cancel': z.object({ id: idSchema, operationId: idSchema }).strict(),
-  'jobs:submit': z.object({ operationId: idSchema, instruction: textSchema, material: z.string().max(32_000), privacy: contextPrivacySchema, providerId: idSchema, model: chatModelSchema }).strict(),
+  'jobs:submit': z.object({ operationId: idSchema, instruction: textSchema, material: z.string().max(32_000), privacy: contextPrivacySchema, providerId: idSchema, model: chatModelSchema, expectedBaseUrl: z.string().url().max(2048).optional() }).strict(),
   'jobs:list': emptySchema,
   'coding:pick-repository': emptySchema,
   'coding:list': emptySchema,

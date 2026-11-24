@@ -8,6 +8,8 @@ export interface BackgroundJobInput {
   providerId: string;
   model: string;
 }
+/** What the form submits: with cloud consent it names the exact service address that consent covers. */
+export type BackgroundJobSubmit = BackgroundJobInput & { expectedBaseUrl?: string };
 export type BackgroundJobStatus = 'queued' | 'dispatching' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted' | 'blocked';
 export interface BackgroundJob {
   id: string;

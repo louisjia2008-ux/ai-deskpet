@@ -15,6 +15,9 @@ export const researchTaskInputSchema = z.object({
   maxToolCalls: z.number().int().min(4).max(40).default(20),
 }).strict();
 export type ResearchTaskInput = z.infer<typeof researchTaskInputSchema>;
+/** What the form submits: with remote consent it names the exact service address that consent covers. */
+export const researchTaskSubmitSchema = researchTaskInputSchema.extend({ expectedBaseUrl: z.string().url().max(2048).optional() }).strict();
+export type ResearchTaskSubmit = ResearchTaskInput & { expectedBaseUrl?: string };
 
 export const researchTaskResumeSchema = z.object({ id, operationId: id }).strict();
 export const RESEARCH_TASK_STATUSES = ['queued', 'running', 'completed', 'failed', 'interrupted', 'cancelled', 'partial'] as const;
@@ -64,7 +67,7 @@ export type ResearchExecutionResult = z.infer<typeof researchExecutionResultSche
 export interface ResearchTasksApi {
   list(): Promise<ResearchTask[]>;
   get(id: string): Promise<ResearchTask>;
-  submit(input: ResearchTaskInput): Promise<ResearchTask>;
+  submit(input: ResearchTaskSubmit): Promise<ResearchTask>;
   cancel(id: string): Promise<ResearchTask>;
   resume(input: { id: string; operationId: string }): Promise<ResearchTask>;
   openResult(id: string): Promise<void>;

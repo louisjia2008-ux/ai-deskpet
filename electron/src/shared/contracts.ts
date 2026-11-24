@@ -25,7 +25,7 @@ import type { ConsolidationApplyInput, ConsolidationBatch, ConsolidationEditInpu
 import type { DelegationBatch, DelegationDraft, DelegationResult, DelegationSubmit } from './delegations';
 import type { ModelPricing, ProviderDiscoveryInput } from './provider-catalog';
 import type { ProviderUsageTokenDetails } from './providers';
-import type { BackgroundJob, BackgroundJobInput } from './background-jobs';
+import type { BackgroundJob, BackgroundJobSubmit } from './background-jobs';
 import type { ProactiveConfig, ProactiveState } from './proactive';
 import type { MinecraftCompanionConfig, MinecraftCompanionSnapshot, MinecraftCompanionTaskInput } from './minecraft-companion';
 import type { MinecraftDedicatedIdentity, MinecraftDedicatedSettings, MinecraftDedicatedSnapshot } from './minecraft-dedicated';
@@ -628,7 +628,7 @@ export interface DeskPetApi {
     onChanged(listener: () => void): Unsubscribe;
   };
   jobs: {
-    submit(input: BackgroundJobInput): Promise<BackgroundJob>;
+    submit(input: BackgroundJobSubmit): Promise<BackgroundJob>;
     list(): Promise<BackgroundJob[]>;
     get(id: string): Promise<BackgroundJob>;
     cancel(id: string): Promise<BackgroundJob>;
