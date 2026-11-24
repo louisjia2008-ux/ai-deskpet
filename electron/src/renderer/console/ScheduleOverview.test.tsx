@@ -20,7 +20,8 @@ const setup = (cron: Record<string, ChatCronSchedule[]>, telegram?: Pick<Telegra
 it('lists schedules made in any conversation, which the old page never showed', async () => {
   const f = setup({ s1: [schedule], s2: [{ ...schedule, id: 'c2', title: '已取消', cancelledAt: '2026-11-02T00:00:00.000Z' } as ChatCronSchedule] });
   expect(await screen.findByRole('heading', { name: '上海每日早安与穿衣建议' })).toBeTruthy();
-  expect(screen.getByText('每天 07:00 · Asia/Shanghai')).toBeTruthy();
+  // The time zone is named only when it differs from this computer's.
+  expect(screen.getByText(/^每天 07:00( · Asia\/Shanghai)?$/u)).toBeTruthy();
   expect(screen.queryByText('已取消')).toBeNull();
   expect(f.api.listCron).not.toHaveBeenCalledWith('s3');
   fireEvent.click(screen.getByRole('button', { name: '打开对话' }));

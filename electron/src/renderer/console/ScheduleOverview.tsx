@@ -74,6 +74,7 @@ export const ScheduleOverview = ({ api, telegram, qq, sessions, locale, onOpenSe
     setBusy(true); setFailed(false);
     try { await operation(); await load(); } catch { setFailed(true); } finally { setBusy(false); }
   };
+  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const qqReady = !!qqTarget?.enabled && !qqTarget.stopped && !!qqTarget.privateBindingId;
   const date = (value: string, timezone: string): string => {
     try { return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone: timezone }).format(new Date(value)); }
@@ -84,7 +85,7 @@ export const ScheduleOverview = ({ api, telegram, qq, sessions, locale, onOpenSe
     {failed && <p role="alert" className="error-banner">{t.failed}</p>}
     {rows !== null && rows.length === 0 && <div className="panel schedule-empty"><p>{t.empty}</p></div>}
     <div className="schedule-list">{rows?.map((item) => <article className="panel schedule-card" key={item.id} data-cron-id={item.id}>
-      <div className="schedule-card-heading"><div><h2>{item.title}</h2><p title={item.expression}>{describeCron(item.expression, locale)} · {item.timezone}</p></div>
+      <div className="schedule-card-heading"><div><h2>{item.title}</h2><p title={item.expression}>{describeCron(item.expression, locale)}{item.timezone !== localZone ? ` · ${item.timezone}` : ''}</p></div>
         <span className={`status-pill ${item.enabled ? 'succeeded' : ''}`}>{item.enabled ? t.active : t.paused}</span></div>
       <dl>
         <dt>{t.next}</dt><dd>{item.enabled && item.nextRunAt ? <time dateTime={item.nextRunAt}>{date(item.nextRunAt, item.timezone)}</time> : t.none}</dd>
@@ -92,7 +93,8 @@ export const ScheduleOverview = ({ api, telegram, qq, sessions, locale, onOpenSe
         <dt>{t.tools}</dt><dd>{item.allowedCapabilities.length > 0 ? item.allowedCapabilities.join(', ') : t.noTools}</dd>
       </dl>
       <details className="settings-more"><summary>{t.instruction}</summary><p>{item.instruction}</p></details>
-      {telegram && item.desktopSession && !item.channel && <div>
+      {/* A channel appears only once it is paired, or when this task already delivers there (so a broken delivery stays visible). */}
+      {telegram && item.desktopSession && !item.channel && ((target?.enabled && target.bindingId) || item.telegramDelivery) && <div>
         <label className="check-row"><input type="checkbox" disabled={busy || !target?.enabled || !target.bindingId}
           checked={!!target?.enabled && !!target.bindingId && item.telegramDelivery?.bindingId === target.bindingId && item.telegramDelivery.revision === item.revision}
           onChange={event => {
@@ -101,7 +103,7 @@ export const ScheduleOverview = ({ api, telegram, qq, sessions, locale, onOpenSe
           }} />{t.telegram}{target?.bindingDisplayName ? ` · ${target.bindingDisplayName}` : ''}</label>
         {(!target?.enabled || !target.bindingId) && <small>{t.pairFirst}</small>}
       </div>}
-      {qq && item.desktopSession && !item.channel && <div>
+      {qq && item.desktopSession && !item.channel && (qqReady || item.qqDelivery) && <div>
         <label className="check-row"><input type="checkbox" disabled={busy || !qqReady}
           checked={qqReady && item.qqDelivery?.bindingId === qqTarget?.privateBindingId && item.qqDelivery?.revision === item.revision}
           onChange={event => {

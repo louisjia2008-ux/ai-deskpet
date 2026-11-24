@@ -28,10 +28,11 @@ afterEach(cleanup);
 describe('PersistentSchedules controlled UI', () => {
   it('asks the authoritative API for timezone preview without submitting a job or saving a rule', async () => {
     const f = fixture(); render(<PersistentSchedules api={f.api} providers={[provider]} locale="en" />);
-    fireEvent.change(screen.getByLabelText('IANA time zone'), { target: { value: 'America/New_York' } });
+    fireEvent.change(screen.getByLabelText('Time zone (defaults to this computer)'), { target: { value: 'America/New_York' } });
     fireEvent.change(screen.getByLabelText('Local time'), { target: { value: '01:30' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Preview next times' }));
-    await screen.findByText('2026-11-02T06:30:00Z');
+    // The next times follow the form by themselves, as readable dates.
+    await waitFor(() => expect(f.api.schedulePreview).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'America/New_York', rule: { kind: 'daily', time: '01:30' } })));
+    expect(screen.queryByText('2026-11-02T06:30:00Z')).toBeNull();
     expect(f.api.schedulePreview).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'America/New_York', rule: { kind: 'daily', time: '01:30' }, count: 3 }));
     expect(f.api.scheduleUpsert).not.toHaveBeenCalled(); expect(f.api.scheduleRunNow).not.toHaveBeenCalled();
     expect(screen.getByText(/A request with an unknown dispatched result is never automatically resent/)).toBeInTheDocument();
@@ -42,7 +43,7 @@ describe('PersistentSchedules controlled UI', () => {
     fireEvent.change(screen.getByLabelText('Time rule'), { target: { value: 'weekly' } });
     fireEvent.change(screen.getByLabelText('Weekday'), { target: { value: '5' } });
     fireEvent.change(screen.getByLabelText('Local time'), { target: { value: '17:30' } });
-    fireEvent.change(screen.getByLabelText('IANA time zone'), { target: { value: 'Asia/Shanghai' } });
+    fireEvent.change(screen.getByLabelText('Time zone (defaults to this computer)'), { target: { value: 'Asia/Shanghai' } });
     fireEvent.change(screen.getByLabelText('When an execution was missed'), { target: { value: 'run-once' } });
     fireEvent.change(screen.getByLabelText('Instruction'), { target: { value: 'Summarize selected text.' } });
     fireEvent.change(screen.getByLabelText('Explicit material'), { target: { value: 'SYNTHETIC_ONLY_SELECTED_TEXT' } });
@@ -66,8 +67,8 @@ describe('PersistentSchedules controlled UI', () => {
   });
   it('shows each durable trigger once and uses a fresh explicit operation identity for a manual run', async () => {
     const f = fixture([example]); f.state.automationTriggers.push({ id: 'ae975e32-244e-4e22-8f0d-f7f0150718c4', key: `schedule:${example.id}:2026-10-28T09:00:00Z`, kind: 'schedule', sourceId: example.id, dueAt: '2026-10-28T09:00:00Z', policyRevision: 1, status: 'unknown', jobId: '80541163-3ea1-4ba8-994c-f8052ba050ea', messageId: null, createdAt: '2026-10-28T09:00:00Z', updatedAt: '2026-10-28T09:00:10Z', cancelledAt: null, errorCode: 'schedule.reservationUncertain' });
-    render(<PersistentSchedules api={f.api} providers={[provider]} locale="en" />); await screen.findByText('unknown');
-    expect(screen.getAllByText('schedule.reservationUncertain')).toHaveLength(1);
+    render(<PersistentSchedules api={f.api} providers={[provider]} locale="en" />); await screen.findByText('Unknown');
+    expect(screen.getAllByText('Could not confirm it started; it will not be retried automatically')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Run once now' })); await waitFor(() => expect(f.api.scheduleRunNow).toHaveBeenCalledTimes(1));
     expect(f.api.scheduleRunNow).toHaveBeenCalledWith({ id: example.id, operationId: expect.stringMatching(/^[a-f\d-]{36}$/u) });
   });
