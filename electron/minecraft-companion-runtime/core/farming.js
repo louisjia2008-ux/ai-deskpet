@@ -3,19 +3,17 @@
 // seeds. Each function does one thing and confirms it against the world
 // (the block that is there afterwards), like every other skill.
 
+const { equipMatching } = require('./inventory');
 const { Vec3 } = require('vec3');
-const { isComplete } = require('./action-result');
+const { fail, isComplete } = require('./action-result');
 const actions = require('./actions');
 const { clearCoverAt, pourLiquid } = require('./skills');
 const { naturalCover, isWaterlogged } = require('./natural-cover');
 const { SIDES, supports } = require('./home-topology');
-const { waitUntil } = require('./confirm');
-const { posKey } = require('./blacklist');
+const { isAbort, waitUntil } = require('./confirm');
+const { vec: v, posKey } = require('./blacklist');
 const { ledgerFor, ledgerTarget, recordTarget } = require('./failure-ledger');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
-const isAbort = (error) => error?.code === 'aborted';
-const v = (p) => new Vec3(p.x, p.y, p.z);
 const TILLABLE = new Set(['grass_block', 'dirt', 'dirt_path', 'coarse_dirt', 'rooted_dirt']);
 const RIPE = 7;
 
@@ -116,9 +114,7 @@ function plotState(bot, plot) {
 }
 
 async function equip(bot, match) {
-  const item = bot.inventory.items().find((i) => match(i.name));
-  if (!item) return false;
-  try { await bot.equip(item, 'hand'); } catch { return false; }
+  if (!await equipMatching(bot, match)) return false;
   return bot.heldItem && match(bot.heldItem.name);
 }
 

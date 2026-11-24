@@ -3,6 +3,7 @@
 // Only small terrain fixes are accepted (one-block bumps and holes); sites with
 // trees, water or steep ground are skipped rather than terraformed.
 
+const { integerBox } = require('./geometry');
 const { createStarterHouse, SIZE, WALL_HEIGHT } = require('./blueprints/starterHouse');
 const { isAir: airName } = require('./natural-cover');
 const { naturalWall } = require('./materials');
@@ -33,16 +34,14 @@ function groundAt(blockAt, x, z, top, bottom) {
 function evaluateSite(blockAt, corner, around, { variant = 'starter', protectedCell = () => false, ground = (x,z) => groundAt(blockAt, x, z, around.y + 10, around.y - 12) } = {}) {
   const size = variant === 'starter' ? SIZE : 5;
   const heights = [];
-  for (let dx = -1; dx <= size; dx += 1) {
-    for (let dz = -1; dz <= size; dz += 1) {
-      const column = ground(corner.x + dx, corner.z + dz);
-      const inside = dx >= 0 && dz >= 0 && dx < size && dz < size;
-      if (column.y === undefined) {
-        if (inside || column.liquid) return null; // water next to the walls floods the door
-        continue;
-      }
-      if (inside) heights.push(column.y);
+  for (const [dx, dz] of integerBox([-1, size], [-1, size])) {
+    const column = ground(corner.x + dx, corner.z + dz);
+    const inside = dx >= 0 && dz >= 0 && dx < size && dz < size;
+    if (column.y === undefined) {
+      if (inside || column.liquid) return null; // water next to the walls floods the door
+      continue;
     }
+    if (inside) heights.push(column.y);
   }
   const counts = new Map();
   for (const h of heights) counts.set(h, (counts.get(h) || 0) + 1);
@@ -111,19 +110,17 @@ function chooseSite(blockAt, around, { radius = 32, step = 3, maxWork = 12, avoi
   };
   let best = null;
   const center = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
-  for (let dx = -radius; dx <= radius; dx += step) {
-    for (let dz = -radius; dz <= radius; dz += step) {
-      const half = variant === 'starter' ? Math.floor(SIZE / 2) : 2;
-      const corner = { x: center.x + dx - half, z: center.z + dz - half };
-      const site = evaluateSite(blockAt, corner, center, { variant, protectedCell, ground });
-      const blocked = site && avoid(site.anchor);
-      const reason = !site ? 'terrain' : blocked ? typeof blocked === 'string' ? blocked : 'restricted' : site.fills + site.digs > maxWork ? 'earthwork'
-        : best && site.cost >= best.cost ? 'higher_cost' : null;
-      if (reason) { review?.(site || { anchor: corner, variant }, reason); continue; }
-      const route = access(createStarterHouse(site.anchor, site));
-      review?.(site, route ? 'reachable' : 'dry_access');
-      if (route) best = { ...site, route };
-    }
+  for (const [dx, dz] of integerBox([-radius, radius, step], [-radius, radius, step])) {
+    const half = variant === 'starter' ? Math.floor(SIZE / 2) : 2;
+    const corner = { x: center.x + dx - half, z: center.z + dz - half };
+    const site = evaluateSite(blockAt, corner, center, { variant, protectedCell, ground });
+    const blocked = site && avoid(site.anchor);
+    const reason = !site ? 'terrain' : blocked ? typeof blocked === 'string' ? blocked : 'restricted' : site.fills + site.digs > maxWork ? 'earthwork'
+      : best && site.cost >= best.cost ? 'higher_cost' : null;
+    if (reason) { review?.(site || { anchor: corner, variant }, reason); continue; }
+    const route = access(createStarterHouse(site.anchor, site));
+    review?.(site, route ? 'reachable' : 'dry_access');
+    if (route) best = { ...site, route };
   }
   return best;
 }

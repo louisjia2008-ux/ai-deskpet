@@ -16,7 +16,7 @@
 // cells: { stand, button, buttonAim?, drop }, noStep }. A floor button is aimed
 // at just above its cell's floor; a wall button at `buttonAim`.
 
-const { findDeviceSite, LIQUID, isAir, isSoft, partMatches, guardDeviceCells, goToStand, adoptDeviceSite, digDeviceCell, placeDevicePart, recordDevicePart } = require('./device-site');
+const { findDeviceSite, LIQUID, isAir, isSoft, partMatches, guardDeviceCells, goToStand, adoptDeviceSite, digDeviceCell, placeDevicePart, finishDevicePart, validDeviceLayers } = require('./device-site');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -30,16 +30,13 @@ const DIGGABLE = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'roote
 
 const isFloor = (block) => Boolean(block) && block.boundingBox === 'block' && !LIQUID.has(block.name)
   && !/^(sand|red_sand|gravel|.*_concrete_powder)$/.test(block.name);
-const droppedName = (entity) => { try { return entity.getDroppedItem?.()?.name || null; } catch { return null; } };
+const { droppedItemName: droppedName } = defaultActions;
 const v = (p) => new Vec3(p.x, p.y, p.z);
 
 function evaluateDeviceSite(create, blockAt, anchor, facing) {
   const device = create(anchor, facing);
-  const at = (p) => blockAt(p.x, p.y, p.z);
-  for (const p of device.floor) if (!isFloor(at(p))) return null;
-  for (const p of device.clear) if (!isSoft(at(p))) return null;
-  for (const p of device.hollow || []) { const b = at(p); if (!isAir(b) && !DIGGABLE.has(b?.name)) return null; }
-  return device;
+  return validDeviceLayers(blockAt, [device.floor, isFloor], [device.clear, isSoft],
+    [device.hollow || [], b => isAir(b) || DIGGABLE.has(b?.name)]) ? device : null;
 }
 
 /** Nearest flat spot for `create(anchor, facing)`; the anchor is a ground block. */
@@ -140,10 +137,8 @@ function createDuperGoal({ bot, name, create, product, seedKey, pickup = (n) => 
         const part = s.nextPart;
         const current = blockAt(part.position);
         if (!isAir(current)) return digDeviceCell(bot, ctx, actions, current);
-        const result = await placeDevicePart(bot, ctx, skills, part, () => partOk(part), { acceptItem: true, stand: part.stand,
-        });
-        recordDevicePart(ctx, blockAt, part, result);
-        return result;
+        return finishDevicePart(ctx, blockAt, part, placeDevicePart(bot, ctx, skills, part, () => partOk(part),
+          { acceptItem: true, stand: part.stand }));
       }
       if (lying()) {
         const result = await collect(ctx);

@@ -9,6 +9,7 @@
 // They watch the brain's events and the bot's deaths; the brain still decides
 // who owns the body, so survival reflexes keep outranking them.
 
+const { integerBox } = require('../geometry');
 const { isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
@@ -65,13 +66,9 @@ function surroundings(bot) {
   const feet = bot.entity?.position?.floored?.();
   if (!feet || typeof bot.blockAt !== 'function') return null;
   const cells = [];
-  for (let dy = -1; dy <= 2; dy += 1) {
-    for (let dx = -1; dx <= 1; dx += 1) {
-      for (let dz = -1; dz <= 1; dz += 1) {
-        const name = bot.blockAt(feet.offset(dx, dy, dz))?.name;
-        if (name && !/^(cave_|void_)?air$/.test(name)) cells.push(`${dx},${dy},${dz}:${name}`);
-      }
-    }
+  for (const [dy, dx, dz] of integerBox([-1, 2], [-1, 1], [-1, 1])) {
+    const name = bot.blockAt(feet.offset(dx, dy, dz))?.name;
+    if (name && !/^(cave_|void_)?air$/.test(name)) cells.push(`${dx},${dy},${dz}:${name}`);
   }
   return { feet: `${feet.x},${feet.y},${feet.z}`, cells };
 }

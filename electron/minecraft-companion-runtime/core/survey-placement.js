@@ -1,5 +1,6 @@
 'use strict';
 
+const { integerBox } = require('./geometry');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('./actions');
@@ -166,15 +167,13 @@ function standingPoint(bot, pos) {
 function stationChoices(bot, step, used) {
   const pos = vec(step[0].pos);
   const stations = [];
-  for (let x = -4; x <= 4; x++) {
-    for (let z = -4; z <= 4; z++) {
-      if (x * x + z * z > 20) continue;
-      for (let y = -4; y <= 3; y++) {
-        const cell = pos.offset(x, y, z);
-        const feet = standingPoint(bot, cell);
-        if (!feet || !hitFor(bot, step, feet, used)) continue;
-        stations.push(cell);
-      }
+  for (const [x, z] of integerBox([-4, 4], [-4, 4])) {
+    if (x * x + z * z > 20) continue;
+    for (let y = -4; y <= 3; y++) {
+      const cell = pos.offset(x, y, z);
+      const feet = standingPoint(bot, cell);
+      if (!feet || !hitFor(bot, step, feet, used)) continue;
+      stations.push(cell);
     }
   }
   return stations.sort((a, b) => a.distanceSquared(bot.entity.position) - b.distanceSquared(bot.entity.position));

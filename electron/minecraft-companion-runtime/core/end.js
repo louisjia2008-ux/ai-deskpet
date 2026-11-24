@@ -5,6 +5,9 @@
 // entities, the dragon's synced phase and health, and the exit portal's
 // end_portal blocks, which only appear once the server has counted the kill.
 
+const { integerBox } = require('./geometry');
+const { ARMOR_SLOTS, bestArmor, armorRank } = require('./armor');
+const { equipMatching } = require('./inventory');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('./actions');
@@ -138,10 +141,7 @@ const eye = (bot) => bot.entity.position.offset(0, 1.62 - 0.1, 0);
 /** Holds `name` in the main hand; false if the bot has none. */
 async function hold(bot, name) {
   if (bot.heldItem?.name === name) return true;
-  const item = bot.inventory.items().find((i) => i.name === name);
-  if (!item) return false;
-  try { await bot.equip(item, 'hand'); } catch { return false; }
-  return bot.heldItem?.name === name;
+  return await equipMatching(bot, item => item === name) && bot.heldItem?.name === name;
 }
 
 /**
@@ -504,12 +504,7 @@ async function pillarUp(bot, ctx, y, { maxSteps = 32, stop = () => false, dig = 
       const cut = await actions.digBlock(bot, ctx, head, { timeoutMs: 8000 });
       if (!cut.ok) break;
     }
-    try {
-      await bot.equip(item, 'hand');
-      if (await actions.jumpPlace(bot, ctx, below, feet)) placed++;
-    } catch (error) {
-      if (error?.code === 'aborted') throw error;
-    }
+    if (await actions.tryJumpPlace(bot, ctx, below, feet, undefined, item)) placed++;
     await waitUntil(() => bot.entity.onGround, { timeoutMs: 1500, signal: ctx.signal });
     misses = bot.entity.position.y < feet.y + 0.5 ? misses + 1 : 0;
   }
@@ -539,21 +534,17 @@ function stranded(bot) {
 
 // ---- armor -----------------------------------------------------------------
 
-const ARMOR_RANK = ['leather', 'golden', 'chainmail', 'iron', 'diamond', 'netherite'];
-const ARMOR_SLOTS = [['helmet', 'head', 5], ['chestplate', 'torso', 6], ['leggings', 'legs', 7], ['boots', 'feet', 8]];
-
 /**
  * Wears the best armor carried. In the End the head gets a carved pumpkin:
  * endermen then ignore the bot's gaze, and the fight looks around a lot.
  */
 async function wearArmor(bot, { pumpkin = inEnd(bot) } = {}) {
   const worn = [];
-  for (const [kind, slot, index] of ARMOR_SLOTS) {
+  for (const [slot, index, matches] of ARMOR_SLOTS) {
     const current = bot.inventory.slots[index]?.name || '';
     const score = (name) => (name === 'carved_pumpkin' ? (pumpkin ? 100 : -1)
-      : name.endsWith(`_${kind}`) ? ARMOR_RANK.indexOf(name.split('_')[0]) : -1);
-    const best = bot.inventory.items().filter((i) => score(i.name) >= 0 && (kind === 'helmet' || i.name !== 'carved_pumpkin'))
-      .sort((a, b) => score(b.name) - score(a.name))[0];
+      : matches.test(name) ? armorRank(name) : -1);
+    const best = bestArmor(bot, name => score(name) >= 0 && (slot === 'head' || name !== 'carved_pumpkin'), score);
     if (!best || score(best.name) <= score(current)) continue;
     try { await bot.equip(best, slot); worn.push(best.name); } catch { /* next run tries again */ }
   }
@@ -591,10 +582,8 @@ function crystalsOf(bot) {
 /** A crystal inside an iron-bar cage: arrows cannot reach it. */
 function caged(bot, crystal) {
   const c = crystal.position.floored();
-  for (let dx = -2; dx <= 2; dx += 1) {
-    for (let dz = -2; dz <= 2; dz += 1) {
-      for (let dy = -1; dy <= 3; dy += 1) if (bot.blockAt(c.offset(dx, dy, dz))?.name === 'iron_bars') return true;
-    }
+  for (const [dx, dz, dy] of integerBox([-2, 2], [-2, 2], [-1, 3])) {
+    if (bot.blockAt(c.offset(dx, dy, dz))?.name === 'iron_bars') return true;
   }
   return false;
 }

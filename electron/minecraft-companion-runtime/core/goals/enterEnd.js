@@ -7,7 +7,7 @@
 // eye in every empty frame and hop into the portal. Every run() decides from
 // what is in sight now; the sightings are the only thing remembered.
 
-const { waiting } = require('../action-result');
+const { fail, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultActions = require('../actions');
@@ -20,7 +20,6 @@ const { planNext } = require('../planner');
 const { KNOWLEDGE, countKey } = require('../knowledge');
 const { createPlannerRunner } = require('./common');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const at = (p) => (p ? `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}` : null);
 
 // Cheap enough to bridge instead: a walk across a lake.

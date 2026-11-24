@@ -1,4 +1,6 @@
 'use strict';
+
+const { Vec3 } = require('vec3');
 // Compatibility for Nether and End goals until R6. Their packed targets
 // resolve to a concrete position before the shared ledger accepts a failure.
 function createBlacklist({ bot, namespace, ttlMs, durations = [] }) {
@@ -33,4 +35,5 @@ function createBlacklist({ bot, namespace, ttlMs, durations = [] }) {
 
 const posKey = (p) => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
 
-module.exports = { createBlacklist, posKey };
+const vec = p => new Vec3(p.x, p.y, p.z);
+module.exports = { vec, createBlacklist, posKey };

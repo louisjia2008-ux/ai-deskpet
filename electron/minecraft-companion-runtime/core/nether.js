@@ -6,14 +6,14 @@
 // rest on the bottom corners and the top row is placed against the top
 // corners, so no block needs a face the bot cannot click.
 
+const { integerBox } = require('./geometry');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('./actions');
-const { waitUntil, runCancellable, sleep } = require('./confirm');
+const { isAbort, waitUntil, runCancellable, sleep } = require('./confirm');
 const { posKey } = require('./blacklist');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
-const isAbort = (error) => error?.code === 'aborted';
 const AIR = new Set(['air', 'cave_air', 'void_air']);
 const CORNERS = new Set(['cobblestone', 'cobbled_deepslate', 'netherrack', 'dirt', 'stone', 'blackstone']);
 
@@ -81,16 +81,12 @@ function portalSiteOk(bot, base, axis) {
 function findPortalSite(bot, radius = 16) {
   const here = bot.entity.position.floored();
   let best = null;
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      for (let dy = -3; dy <= 3; dy += 1) {
-        const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy) * 2;
-        if (best && d >= best.d) continue;
-        const base = here.offset(dx, dy, dz);
-        for (const axis of ['x', 'z']) {
-          if (portalSiteOk(bot, base, axis)) { best = { base, axis, d }; break; }
-        }
-      }
+  for (const [dx, dz, dy] of integerBox([-radius, radius], [-radius, radius], [-3, 3])) {
+    const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy) * 2;
+    if (best && d >= best.d) continue;
+    const base = here.offset(dx, dy, dz);
+    for (const axis of ['x', 'z']) {
+      if (portalSiteOk(bot, base, axis)) { best = { base, axis, d }; break; }
     }
   }
   return best;
@@ -417,10 +413,8 @@ function lavaRisk(bot, p) {
 /** Any lava within `range` cells of the bot's feet (for logging and checks). */
 function lavaNear(bot, range = 2) {
   const feet = bot.entity.position.floored();
-  for (let dx = -range; dx <= range; dx += 1) {
-    for (let dy = -2; dy <= 1; dy += 1) {
-      for (let dz = -range; dz <= range; dz += 1) if (bot.blockAt(feet.offset(dx, dy, dz))?.name === 'lava') return true;
-    }
+  for (const [dx, dy, dz] of integerBox([-range, range], [-2, 1], [-range, range])) {
+    if (bot.blockAt(feet.offset(dx, dy, dz))?.name === 'lava') return true;
   }
   return false;
 }

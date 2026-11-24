@@ -16,7 +16,7 @@
 const { Vec3 } = require('vec3');
 const defaultSkills = require('./skills');
 const defaultActions = require('./actions');
-const { posKey } = require('./blacklist');
+const { vec: v, posKey } = require('./blacklist');
 const { waitUntil } = require('./confirm');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
@@ -30,7 +30,6 @@ const DIAMOND_PICKS = new Set(['diamond_pickaxe', 'netherite_pickaxe']);
 const OBSIDIAN_DIG_MS = 15000;
 const WET_DIG_MS = 60000;
 
-const v = (p) => new Vec3(p.x, p.y, p.z);
 const isAir = (b) => Boolean(b) && AIR.has(b.name);
 const solid = (b) => Boolean(b) && b.boundingBox === 'block' && MOLD.has(b.name);
 const has = (bot, name) => bot.inventory.items().some((i) => i.name === name);

@@ -12,8 +12,8 @@
 //   6. otherwise                -> wait for the furnace, take the output chest's contents
 // The only memory kept across runs is the site and what was taken out.
 
-const { findDeviceSite, isAir, isSoft, partMatches, isSolid, guardDeviceCells, adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, recordDevicePart } = require('./device-site');
-const { posKey: key } = require('../blacklist');
+const { findDeviceSite, isAir, isSoft, partMatches, isSolid, guardDeviceCells, adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, finishDevicePart, TERRAIN: DIGGABLE, validDeviceLayers } = require('./device-site');
+const { vec: v, posKey: key } = require('../blacklist');
 const { factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
@@ -23,24 +23,14 @@ const { createAutoSmelter } = require('../blueprints/autoSmelter');
 const { sleep } = require('../confirm');
 const { deviceTargets } = require('../target-recovery');
 
-const DIGGABLE = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'stone',
-  'andesite', 'diorite', 'granite', 'cobblestone', 'cobbled_deepslate', 'deepslate', 'tuff', 'clay', 'mud',
-  'terracotta', 'moss_block', 'netherrack']);
 // One item smelts in 10 s; the hoppers move one item every 0.4 s.
 const SMELT_WAIT_MS = 11000;
 
-const v = (p) => new Vec3(p.x, p.y, p.z);
 
 function evaluateSmelterSite(blockAt, anchor, facing) {
   const device = createAutoSmelter(anchor, facing);
-  const at = (p) => blockAt(p.x, p.y, p.z);
-  for (const p of device.dig) {
-    const block = at(p);
-    if (!block || !DIGGABLE.has(block.name)) return null;
-  }
-  for (const p of device.floor) if (!isSolid(at(p))) return null;
-  for (const p of device.clearAbove) if (!isSoft(at(p))) return null;
-  return device;
+  return validDeviceLayers(blockAt, [device.dig, b => b && DIGGABLE.has(b.name)],
+    [device.floor, isSolid], [device.clearAbove, isSoft]) ? device : null;
 }
 
 /** Nearest buildable spot; the anchor (furnace cell) is the top solid block of its column. */
@@ -136,10 +126,9 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
         if (target) return targets.run(ctx, 'dig', target,
           () => digDeviceCell(bot, ctx, actions, blockAt(target)), { relocate: relocation });
         const part = s.nextPart;
-        const result = await targets.run(ctx, 'part', part.position, () => placeDevicePart(bot, ctx, skills, part, () => partOk(part), { sneak: Boolean(part.sneak) }),
-          { cells: [part.against], tag: `${part.block}:${d.facing}`, relocate: relocation });
-        recordDevicePart(ctx, blockAt, part, result);
-        return result;
+        return finishDevicePart(ctx, blockAt, part, targets.run(ctx, 'part', part.position,
+          () => placeDevicePart(bot, ctx, skills, part, () => partOk(part), { sneak: Boolean(part.sneak) }),
+          { cells: [part.against], tag: `${part.block}:${d.facing}`, relocate: relocation }));
       }
 
       // Built: the hoppers feed whatever is in the chests.

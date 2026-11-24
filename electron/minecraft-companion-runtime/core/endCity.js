@@ -2,6 +2,7 @@
 // Outer End: the gateway the dragon's death opens, the outer islands, end
 // cities (purpur in the chunk data), their chests and the elytra on a ship.
 
+const { integerBox } = require('./geometry');
 const { Vec3 } = require('vec3');
 const end = require('./end');
 
@@ -83,12 +84,8 @@ function cityChests(bot, maxDistance = 96) {
 }
 
 function nearPurpur(bot, p) {
-  for (let dx = -3; dx <= 3; dx += 1) {
-    for (let dy = -3; dy <= 3; dy += 1) {
-      for (let dz = -3; dz <= 3; dz += 1) {
-        if (/^(purpur|end_stone_bricks)/.test(bot.blockAt(p.offset(dx, dy, dz))?.name || '')) return true;
-      }
-    }
+  for (const [dx, dy, dz] of integerBox([-3, 3], [-3, 3], [-3, 3])) {
+    if (/^(purpur|end_stone_bricks)/.test(bot.blockAt(p.offset(dx, dy, dz))?.name || '')) return true;
   }
   return false;
 }

@@ -12,7 +12,9 @@
 // Every run() decides from where the bot is and what it holds, like the
 // quartz goal: a death in the nether sends it back through the portal.
 
-const { factsOf, waiting } = require('../action-result');
+const { integerBox } = require('../geometry');
+const { ARMOR_SLOTS, bestArmor, armorRank } = require('../armor');
+const { fail, factsOf, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
@@ -22,13 +24,8 @@ const end = require('../end');
 const structures = require('../netherStructures');
 const { createPortalTrip } = require('../netherTrip');
 const { createBlacklist, posKey } = require('../blacklist');
-const { waitUntil, runCancellable, sleep } = require('../confirm');
+const { isAbort, waitUntil, runCancellable, sleep } = require('../confirm');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
-const isAbort = (error) => error?.code === 'aborted';
-const ARMOR = [['head', /_helmet$/], ['torso', /_chestplate$/], ['legs', /_leggings$/], ['feet', /_boots$/]];
-const ARMOR_SLOT = { head: 5, torso: 6, legs: 7, feet: 8 };
-const ARMOR_RANK = ['leather', 'golden', 'chainmail', 'iron', 'diamond', 'netherite'];
 const SCAN_EVERY_MS = 10000;
 // Below this the fortress is left to its mobs until health is back.
 const HUNT_HEALTH = 15;
@@ -97,10 +94,10 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
 
   /** Wears the best armour it carries, but always a gold helmet when it has one (piglins). */
   async function wearArmour(ctx) {
-    for (const [slot, pattern] of ARMOR) {
-      const worn = bot.inventory.slots[ARMOR_SLOT[slot]];
-      const rank = (name) => (slot === 'head' && name.startsWith('golden_') ? 99 : ARMOR_RANK.indexOf(name.split('_')[0]));
-      const best = bot.inventory.items().filter((i) => pattern.test(i.name)).sort((a, b) => rank(b.name) - rank(a.name))[0];
+    for (const [slot, index, pattern] of ARMOR_SLOTS) {
+      const worn = bot.inventory.slots[index];
+      const rank = name => slot === 'head' && name.startsWith('golden_') ? 99 : armorRank(name);
+      const best = bestArmor(bot, name => pattern.test(name), rank);
       if (!best || (worn && rank(worn.name) >= rank(best.name))) continue;
       try {
         await bot.equip(best, slot);
@@ -544,10 +541,8 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
     const key = posKey(p);
     if (!seaSide.has(key)) {
       let lava = false;
-      for (let dy = 0; dy >= -5 && !lava; dy -= 1) {
-        for (let dx = -2; dx <= 2 && !lava; dx += 1) {
-          for (let dz = -2; dz <= 2 && !lava; dz += 1) lava = /^lava$/.test(bot.blockAt(p.offset(dx, dy, dz))?.name || '');
-        }
+      for (const [below, dx, dz] of integerBox([0, 5], [-2, 2], [-2, 2])) {
+        if (bot.blockAt(p.offset(dx, -below, dz))?.name === 'lava') { lava = true; break; }
       }
       seaSide.set(key, lava);
     }
@@ -728,7 +723,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
   }
 
   function wearsGold() {
-    return ARMOR.some(([slot]) => /^golden_/.test(bot.inventory.slots[ARMOR_SLOT[slot]]?.name || ''));
+    return ARMOR_SLOTS.some(([, index]) => /^golden_/.test(bot.inventory.slots[index]?.name || ''));
   }
 
   const goldOnGround = (origin, radius) => Object.values(bot.entities).filter((e) => e.name === 'item'

@@ -56,31 +56,27 @@ const stockWork = (stock, key, target, kb) => {
 function createReserveCards(bot, kb, food, inOverworld) {
   const hasRoom = (state) => state.freeSlots !== 0 && inOverworld();
   const faces = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-  return [food, {
-    id: 'stock_wood', stage: 0, risk: 'medium', requires: hasRoom, bounded: true,
-    demand: (state) => stockWork(state.inventory, 'log', 64, kb).remaining / 64,
-    work: (_state, _memory, stock) => stockWork(stock, 'log', 64, kb),
-    create: () => createGatherLogsGoal({ bot, count: 1 }),
-  }, {
-    id: 'stock_cobblestone', stage: 0, risk: 'medium', bounded: true,
-    requires: (state) => hasRoom(state) && countKey('pickaxe', state.inventory, kb) > 0,
-    demand: (state) => stockWork(state.inventory, 'cobblestone', 64, kb).remaining / 64,
-    work: (_state, _memory, stock) => stockWork(stock, 'cobblestone', 64, kb),
-    create: (memory) => {
-      const home = homeOf(memory);
-      const protect = home && avoidFor(memory, home);
-      return createGatherBlocksGoal({ bot, name: 'stock_cobblestone', count: 1,
-        itemMatch: kb.cobblestone.match, blockMatch: kb.cobblestone.sources[0].blocks,
-        acceptTarget(block) {
-          const p = block.position;
-          if (p.y < Math.floor(bot.entity.position.y) - 2 || protect?.(p)
-            || bot.companionProtectBlock?.(block) || bot.companionPlayerBlock?.(p)) return false;
-          const neighbors = faces.map((face) => bot.blockAt(p.offset(...face)));
-          return neighbors.some((b) => b?.name === 'air') && neighbors.every((b) => b && !/water|lava/.test(b.name));
-        },
-      });
-    },
-  }];
+  const reserve = (id, key, create, requires = hasRoom) => ({
+    id, stage: 0, risk: 'medium', requires, bounded: true, create,
+    demand: state => stockWork(state.inventory, key, 64, kb).remaining / 64,
+    work: (_state, _memory, stock) => stockWork(stock, key, 64, kb),
+  });
+  const wood = reserve('stock_wood', 'log', () => createGatherLogsGoal({ bot, count: 1 }));
+  const cobblestone = reserve('stock_cobblestone', 'cobblestone', memory => {
+    const home = homeOf(memory);
+    const protect = home && avoidFor(memory, home);
+    return createGatherBlocksGoal({ bot, name: 'stock_cobblestone', count: 1,
+      itemMatch: kb.cobblestone.match, blockMatch: kb.cobblestone.sources[0].blocks,
+      acceptTarget(block) {
+        const p = block.position;
+        if (p.y < Math.floor(bot.entity.position.y) - 2 || protect?.(p)
+          || bot.companionProtectBlock?.(block) || bot.companionPlayerBlock?.(p)) return false;
+        const neighbors = faces.map((face) => bot.blockAt(p.offset(...face)));
+        return neighbors.some((b) => b?.name === 'air') && neighbors.every((b) => b && !/water|lava/.test(b.name));
+      },
+    });
+  }, state => hasRoom(state) && countKey('pickaxe', state.inventory, kb) > 0);
+  return [food, wood, cobblestone];
 }
 
 function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = FOOD_TARGET, progression = false } = {}) {
@@ -111,34 +107,24 @@ function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = 
   ];
 
   // One project per machine for the whole run, like the homestead.
-  const machine = (id, makeDevice, headingOffset) => (memory) => {
-    if (memory[id]) return memory[id];
-    const home = homeOf(memory);
-    const avoid = avoidFor(memory, home, id);
-    const device = makeDevice((p) => avoid(p) || bot.companionNearPlayerBuild?.(p));
-    memory[id] = createDeviceProjectGoal({ bot, name: id === 'cobbleGenerator' ? 'build_cobble_generator' : 'build_auto_smelter',
-      device, home: { ...home, headingOffset }, kb });
-    return memory[id];
-  };
   const built = (memory, id, state) => Boolean(memory[id]?.isDone(state));
-  const deviceWork = create => (_state, _memory, inventory) => materialWork(create().needs(), inventory, kb);
+  const machine = (id, key, risk, makeDevice, headingOffset, after) => ({
+    id, stage: 1, risk, local: true,
+    requires: (state, memory) => Boolean(homeOf(memory)) && (!after || built(memory, after, state)) && !built(memory, key, state),
+    work: (_state, _memory, inventory) => materialWork(makeDevice().needs(), inventory, kb),
+    create(memory) {
+      if (memory[key]) return memory[key];
+      const home = homeOf(memory);
+      const avoid = avoidFor(memory, home, key);
+      return (memory[key] = createDeviceProjectGoal({ bot, name: `build_${id}`,
+        device: makeDevice(p => avoid(p) || bot.companionNearPlayerBuild?.(p)), home: { ...home, headingOffset }, kb }));
+    },
+  });
   cards.push(
-    {
-      id: 'cobble_generator',
-      stage: 1,
-      risk: 'medium', local: true,
-      requires: (state, memory) => Boolean(homeOf(memory)) && !built(memory, 'cobbleGenerator', state),
-      work: deviceWork(() => createCobbleGeneratorGoal({ bot, collector: true })),
-      create: machine('cobbleGenerator', (avoid) => createCobbleGeneratorGoal({ bot, harvest: GENERATOR_HARVEST, collector: true, avoid }), 0),
-    },
-    {
-      id: 'auto_smelter',
-      stage: 1,
-      risk: 'low', local: true,
-      requires: (state, memory) => Boolean(homeOf(memory)) && built(memory, 'cobbleGenerator', state) && !built(memory, 'autoSmelter', state),
-      work: deviceWork(() => createAutoSmelterGoal({ bot, count: SMELT_COUNT, fuel: progression ? 'charcoal' : 'coal' })),
-      create: machine('autoSmelter', (avoid) => createAutoSmelterGoal({ bot, count: SMELT_COUNT, ...(progression ? { fuel: 'charcoal' } : {}), avoid }), Math.PI),
-    },
+    machine('cobble_generator', 'cobbleGenerator', 'medium',
+      avoid => createCobbleGeneratorGoal({ bot, harvest: GENERATOR_HARVEST, collector: true, avoid }), 0),
+    machine('auto_smelter', 'autoSmelter', 'low',
+      avoid => createAutoSmelterGoal({ bot, count: SMELT_COUNT, fuel: progression ? 'charcoal' : 'coal', avoid }), Math.PI, 'cobbleGenerator'),
   );
 
   if (progression) {

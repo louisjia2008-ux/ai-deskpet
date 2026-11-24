@@ -90,39 +90,32 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
     && prepareSeals() && shelterSealCount(state.inventory) < 2 && !actions.underground?.(bot);
   const wait = ({ signal }) => sleep(3_000, signal).then(() => waiting('sheltering_until_daylight'));
 
-  async function digIn(ctx, budget) {
-    ctx.record('night_rest', { action: 'dig_in', distance: budget.distanceHome, ticksToDark: budget.ticksToDark,
+  async function shelterLocally(ctx, budget) {
+    const shaft = !missedDig;
+    if (!shaft && warned) return wait(ctx);
+    if (shaft) ctx.record('night_rest', { action: 'dig_in', distance: budget.distanceHome, ticksToDark: budget.ticksToDark,
       returnTicks: Number.isFinite(budget.returnTicks) ? budget.returnTicks : null });
-    const dug = await skills.digIn(bot, { ...ctx, dryRoute: true }, {
+    else enclosure ||= { top: bot.entity.position.floored(), placed: [] };
+    const result = shaft ? await skills.digIn(bot, { ...ctx, dryRoute: true }, {
       avoid: p => bot.companionHomeSite?.(p) || bot.blockAt?.(p.offset(0, -1, 0))?.name === 'farmland',
       prepareSeal: prepareSeals(),
-    });
-    const bunker = isComplete(dug) && factsOf(dug).bunker;
-    if (bunker && bunkerOccupied(bot, bunker)) {
-      holdShelter(ctx, bunker, 'dug_in', { top: bunker.top });
-      return dug;
-    }
-    if (!ctx.signal?.aborted && !dug.wait && dug.kind !== 'interrupted') missedDig = true;
-    return bunker ? failure('shelter_not_entered', {}, ctx, bot) : dug;
-  }
-
-  function holdShelter(ctx, room, action, evidence) {
-    shelter = room;
-    checkShelterAt = now() + 10_000;
-    bot.companionSheltered = true;
-    ctx.record('night_rest', { action, ...evidence });
-  }
-
-  async function shelterLocally(ctx, budget) {
-    if (!missedDig) return digIn(ctx, budget);
-    if (warned) return wait(ctx);
-    enclosure ||= { top: bot.entity.position.floored(), placed: [] };
-    const result = await skills.enclose?.(bot, ctx, enclosure);
-    if (isComplete(result) && enclosureOccupied(bot, enclosure)) {
-      holdShelter(ctx, enclosure, 'enclosed', { position: enclosure.top, placed: enclosure.placed.map(b => b.position) });
+    }) : await skills.enclose?.(bot, ctx, enclosure);
+    const room = shaft ? isComplete(result) && factsOf(result).bunker : enclosure;
+    const occupied = shaft ? bunkerOccupied : enclosureOccupied;
+    if (room && isComplete(result) && occupied(bot, room)) {
+      shelter = room;
+      checkShelterAt = now() + 10_000;
+      bot.companionSheltered = true;
+      ctx.record('night_rest', shaft ? { action: 'dug_in', top: room.top }
+        : { action: 'enclosed', position: room.top, placed: room.placed.map(b => b.position) });
       return result;
     }
-    if (ctx.signal?.aborted || result?.wait || result?.kind === 'interrupted') return result;
+    const interrupted = ctx.signal?.aborted || result?.wait || result?.kind === 'interrupted';
+    if (shaft) {
+      if (!interrupted) missedDig = true;
+      return room ? failure('shelter_not_entered', {}, ctx, bot) : result;
+    }
+    if (interrupted) return result;
     warned = true;
     ctx.record('night_rest', { action: 'shelter_exhausted', result, position: enclosure.top });
     return wait(ctx);

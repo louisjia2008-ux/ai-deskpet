@@ -13,6 +13,16 @@ const { dimension } = require('../nether');
 const { sleep } = require('../confirm');
 const end = require('../end');
 
+function onEndTick(bot, react, reset = () => {}) {
+  const onTick = () => {
+    const entity = bot.entity;
+    if (entity?.position && dimension(bot) === 'the_end') react(entity);
+    else reset();
+  };
+  bot.on('physicsTick', onTick);
+  return () => { bot.removeListener('physicsTick', onTick); reset(); };
+}
+
 /**
  * Water-bucket landing. Runs on every physics tick (a behavior tick is far too
  * slow): when falling fast from more than five blocks, hold the bucket and
@@ -30,9 +40,7 @@ function installFallGuard(bot, onEvent = () => {}) {
     }
     return null;
   };
-  const onTick = () => {
-    const e = bot.entity;
-    if (!e?.position || dimension(bot) !== 'the_end') return;
+  return onEndTick(bot, e => {
     if (e.onGround || e.isInWater) { armed = null; return; }
     const vy = e.velocity?.y ?? 0;
     const ground = groundBelow();
@@ -60,9 +68,7 @@ function installFallGuard(bot, onEvent = () => {}) {
       onEvent({ type: 'water_landing', at: Date.now(), height: Math.round(armed.from - ground.position.y) });
       armed = null;
     }
-  };
-  bot.on('physicsTick', onTick);
-  return () => bot.removeListener('physicsTick', onTick);
+  });
 }
 
 /**
@@ -77,9 +83,8 @@ function installVoidBrake(bot, onEvent = () => {}) {
     if (braking && !bot.companionSneaking) bot.setControlState('sneak', false);
     braking = false;
   };
-  const onTick = () => {
-    const e = bot.entity;
-    if (!e?.position || dimension(bot) !== 'the_end' || !e.onGround || e.isInWater) { release(); return; }
+  return onEndTick(bot, e => {
+    if (!e.onGround || e.isInWater) { release(); return; }
     const v = e.velocity || { x: 0, z: 0 };
     const speed = Math.hypot(v.x, v.z);
     const moving = speed > 0.01 || bot.controlState.forward || bot.controlState.back || bot.controlState.left || bot.controlState.right;
@@ -95,9 +100,7 @@ function installVoidBrake(bot, onEvent = () => {}) {
       braking = true;
       bot.setControlState('sneak', true);
     } else release();
-  };
-  bot.on('physicsTick', onTick);
-  return () => { bot.removeListener('physicsTick', onTick); release(); };
+  }, release);
 }
 
 /**
@@ -108,18 +111,15 @@ function installVoidBrake(bot, onEvent = () => {}) {
  */
 function installBulletSwatter(bot, onEvent = () => {}) {
   let last = 0;
-  const onTick = () => {
-    const here = bot.entity?.position;
-    if (!here || dimension(bot) !== 'the_end' || Date.now() - last < 200) return;
+  return onEndTick(bot, ({ position: here }) => {
+    if (Date.now() - last < 200) return;
     const bullet = Object.values(bot.entities).find((e) => e.name === 'shulker_bullet' && e.position
       && e.position.distanceTo(here.offset(0, 1, 0)) <= 3.5);
     if (!bullet) return;
     last = Date.now();
     bot.attack(bullet);
     onEvent({ type: 'bullet_swatted', at: last });
-  };
-  bot.on('physicsTick', onTick);
-  return () => bot.removeListener('physicsTick', onTick);
+  });
 }
 
 /**
@@ -128,17 +128,13 @@ function installBulletSwatter(bot, onEvent = () => {}) {
  * the eyes on the ground while any enderman is about. Walking only needs yaw.
  */
 function installGazeGuard(bot) {
-  const onTick = () => {
-    const e = bot.entity;
-    if (!e?.position || dimension(bot) !== 'the_end') return;
+  return onEndTick(bot, e => {
     if (bot.inventory.slots[5]?.name === 'carved_pumpkin') return;
     if (e.pitch <= -0.6) return;
     const here = e.position;
     const near = Object.values(bot.entities).some((m) => m.name === 'enderman' && m.position && m.position.distanceTo(here) <= 64);
     if (near) bot.look(e.yaw, -0.6, true).catch(() => {});
-  };
-  bot.on('physicsTick', onTick);
-  return () => bot.removeListener('physicsTick', onTick);
+  });
 }
 
 function createEndHazards({ bot, actions = defaultActions, skills = defaultSkills, onEvent } = {}) {

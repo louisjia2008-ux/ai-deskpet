@@ -21,12 +21,11 @@ const defaultActions = require('./actions');
 const defaultSkills = require('./skills');
 const { posKey } = require('./blacklist');
 const { ledgerFor, ledgerTarget, recordTarget } = require('./failure-ledger');
-const { failure, isComplete, resultFrom } = require('./action-result');
+const { fail, failure, isComplete, resultFrom } = require('./action-result');
 const { abortError, withRouteDeadline } = require('./confirm');
 const { blockTarget, watchDestination } = require('./target-recovery');
 const { pickItem, stableSolid } = require('./materials');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 const FACES = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const LIQUID = /^(water|lava|bubble_column)$/;

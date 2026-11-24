@@ -408,11 +408,8 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
       }
       case 'fill': {
         const isLava = step.liquid === 'lava';
-        const findLiquid = async (exclude, observeDestination) => {
-          const args = { liquid: step.liquid, exclude, observeDestination };
-          const result = await skills.fillBucket(bot, ctx, args);
-          return result.reason === 'no_target_in_range' ? skills.fillBucket(bot, ctx, { ...args, radius: 128 }) : result;
-        };
+        const findLiquid = (exclude, observeDestination) => gatherInLoadedRange(bot, ctx, skills,
+          { liquid: step.liquid, exclude, observeDestination }, 'fillBucket');
         if (isLava && ctx.adapt) {
           return ctx.adapt.run('lava_pool', { position: adaptationAnchor }, async (method, _plan, observeDestination) => {
             const result = await findLiquid(p => ctx.adapt.avoids('lava_pool', p)

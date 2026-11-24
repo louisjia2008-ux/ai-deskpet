@@ -5,8 +5,8 @@
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('./actions');
-const { waitUntil, runCancellable, sleep, abortError } = require('./confirm');
-const { posKey } = require('./blacklist');
+const { isAbort, waitUntil, runCancellable, sleep, abortError } = require('./confirm');
+const { vec: v, posKey } = require('./blacklist');
 const { ledgerFor, ledgerTarget, recordTarget, targetsFor } = require('./failure-ledger');
 const { FUELS, COLORS } = require('./knowledge');
 const { countInventory, ownedItems } = require('./perception');
@@ -17,11 +17,8 @@ const { wet } = require('./dry-route');
 const { contactBlock } = require('./home-topology');
 const { blockTarget, watchDestination } = require('./target-recovery');
 const { accepts, pickItem, stableSolid, seal: sealMatch, isSealSoil, isSealRock, SANDSTONE } = require('./materials');
-const { complete, factsOf, failure, isComplete, resultFrom, settleAction, waiting, waterRouteFailure, waterRouteTarget } = require('./action-result');
+const { fail, complete, factsOf, failure, isComplete, resultFrom, settleAction, waiting, waterRouteFailure, waterRouteTarget } = require('./action-result');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
-const isAbort = (error) => error?.code === 'aborted';
-const v = (p) => new Vec3(p.x, p.y, p.z);
 
 const inventoryCounts = bot => countInventory(ownedItems(bot));
 
@@ -429,13 +426,7 @@ async function pourLiquid(bot, ctx, position, fluid, { against = null } = {}) {
     if (aimed) break;
   }
   if (!aimed) return fail('no_pour_face');
-  try {
-    // The server aims the bucket from its own copy of the player's position: let it catch up.
-    await bot.waitForTicks(2);
-    bot.activateItem();
-  } catch (error) {
-    if (isAbort(error)) throw error;
-  }
+  await tryBucket(bot);
   const poured = await waitUntil(() => isFluidSource(bot.blockAt(target), fluid), { timeoutMs: 2000, signal: ctx.signal });
   if (poured) return { ok: true };
   ctx.record('pour_failed', { target: posKey(target), fluid, at: posKey(bot.entity.position),
@@ -500,18 +491,24 @@ async function scoopLiquid(bot, ctx, position, fluid) {
     if (!near()) return fail('not_arrived');
   }
   const before = filled();
-  try {
+  await tryBucket(bot, async () => {
     await bot.equip(empty, 'hand');
     await bot.lookAt(target.offset(0.5, 0.8, 0.5), true);
+  });
+  const scooped = await waitUntil(() => filled() > before, { timeoutMs: 2000, signal: ctx.signal });
+  if (scooped) return { ok: true };
+  ctx.record('scoop_failed', { target: posKey(target), at: posKey(bot.entity.position), holding: bot.heldItem?.name || null });
+  return fail('scoop_unconfirmed');
+}
+
+async function tryBucket(bot, aim) {
+  try {
+    if (aim) await aim();
     await bot.waitForTicks(2);
     bot.activateItem();
   } catch (error) {
     if (isAbort(error)) throw error;
   }
-  const scooped = await waitUntil(() => filled() > before, { timeoutMs: 2000, signal: ctx.signal });
-  if (scooped) return { ok: true };
-  ctx.record('scoop_failed', { target: posKey(target), at: posKey(bot.entity.position), holding: bot.heldItem?.name || null });
-  return fail('scoop_unconfirmed');
 }
 
 function goToGoal(bot, ctx, goal, arrived) {
@@ -531,13 +528,7 @@ function entityInside(bot, target) {
     && overlaps(entity, target));
 }
 
-function furnaceInventory(window) {
-  const counts = {};
-  for (const item of window.slots.slice(window.inventoryStart, window.inventoryEnd)) {
-    if (item) counts[item.name] = (counts[item.name] || 0) + item.count;
-  }
-  return counts;
-}
+const furnaceInventory = window => countInventory(window.slots.slice(window.inventoryStart, window.inventoryEnd));
 
 function pickFuel(window, items) {
   const inventory = furnaceInventory(window);
@@ -1003,13 +994,12 @@ function bunkerSpot(bot, top) {
   return SHAFT_SOLID(bot.blockAt(top.offset(0, -4, 0)));
 }
 
-function shaftCentered(at, top) {
-  return Math.hypot(at.x - top.x - 0.5, at.z - top.z - 0.5) <= 0.2;
-}
+const shelterFooting = (at, top, y = top.y) => at && Math.abs(at.y - y) <= 0.1
+  && Math.hypot(at.x - top.x - 0.5, at.z - top.z - 0.5) <= 0.2;
 
 function bunkerOccupied(bot, { top }) {
   const at = bot.entity?.position;
-  return Boolean(at && shaftCentered(at, top) && Math.abs(at.y - (top.y - 3)) <= 0.1
+  return Boolean(shelterFooting(at, top, top.y - 3)
     && at.y + (bot.entity.height || 1.8) <= top.y - 1);
 }
 
@@ -1024,13 +1014,13 @@ function enclosureCells(top) {
 
 function enclosureOccupied(bot, { top }) {
   const at = bot.entity?.position;
-  return at && shaftCentered(at, top) && Math.abs(at.y - top.y) <= 0.1
+  return shelterFooting(at, top)
     && enclosureCells(top).every(p => shelterSolid(bot.blockAt(p)));
 }
 
 async function enclose(bot, ctx, shelter) {
   const { top, placed } = shelter;
-  const inside = () => shaftCentered(bot.entity.position, top) && Math.abs(bot.entity.position.y - top.y) <= 0.1;
+  const inside = () => shelterFooting(bot.entity.position, top);
   const read = p => bot.blockAt(p);
   if (actions.countItems(bot, n => shelterItem(bot, n)) + placed.length < 5) return fail('no_seal_block');
   await actions.recentre(bot, ctx, { accept: p => p.equals(top) });
@@ -1112,8 +1102,7 @@ async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false } = {}
       if (!back.ok) return back;
     }
   }
-  const at = () => bot.entity.position;
-  const settle = y => bot.entity.onGround === true && shaftCentered(at(), top) && Math.abs(at().y - y) <= 0.1;
+  const settle = y => bot.entity.onGround === true && shelterFooting(bot.entity.position, top, y);
   const recenter = overEdge => actions.recentre(bot, ctx, { overEdge, accept: p => p.x === top.x && p.z === top.z });
   await recenter(false);
   if (!settle(top.y)) return fail('shelter_not_entered');

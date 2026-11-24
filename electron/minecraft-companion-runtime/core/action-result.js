@@ -80,6 +80,8 @@ function sameWater(bot, from, to) {
   return false;
 }
 
+const fail = (reason, details = {}) => ({ ok: false, reason, ...details });
+
 function failure(reason, facts = {}, ctx, state) {
   let kind = classifyReason(reason);
   const rescue = rescueOf(ctx);
@@ -194,5 +196,5 @@ function settleAction(run, rescue) {
   };
 }
 
-module.exports = { classifyReason, complete, createAttempt, departRoute, factsOf, failure, FAILURE_LIMIT, FAILURE_WINDOW_MS,
+module.exports = { classifyReason, complete, createAttempt, departRoute, factsOf, fail, failure, FAILURE_LIMIT, FAILURE_WINDOW_MS,
   isComplete, isRescueBehavior, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waiting, waterRouteFailure, waterRouteTarget };

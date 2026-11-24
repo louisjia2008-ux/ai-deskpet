@@ -6,6 +6,7 @@
 // With `home`, the trip ends back in the overworld: through the exit portal
 // the dragon's death lights (the server sends the bot to its bed).
 
+const { integerBox } = require('../geometry');
 const { createEnterEndGoal } = require('./enterEnd');
 const { createEndDragonGoal } = require('./endDragon');
 const { createEndCityGoal } = require('./endCity');
@@ -17,12 +18,10 @@ const { waitUntil } = require('../confirm');
 /** The lit exit portal's cells, nearest first; [] where they are not loaded. */
 function exitPortalCells(bot) {
   const cells = [];
-  for (let x = -3; x <= 3; x += 1) {
-    for (let z = -3; z <= 3; z += 1) {
-      for (let y = 40; y <= 90; y += 1) {
-        const p = new Vec3(x, y, z);
-        if (bot.blockAt(p)?.name === 'end_portal') { cells.push(p); break; }
-      }
+  for (const [x, z] of integerBox([-3, 3], [-3, 3])) {
+    for (let y = 40; y <= 90; y += 1) {
+      const p = new Vec3(x, y, z);
+      if (bot.blockAt(p)?.name === 'end_portal') { cells.push(p); break; }
     }
   }
   const here = bot.entity.position;

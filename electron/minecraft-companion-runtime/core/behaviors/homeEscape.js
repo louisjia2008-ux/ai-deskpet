@@ -28,11 +28,7 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
   }
 
   async function waterEscape(ctx, stuck) {
-    const dry = () => {
-      const feet = bot.entity.position.floored();
-      return !bot.entity.isInWater && bot.entity.onGround === true && safeStand(p => bot.blockAt(p), feet)
-        && [-1, 0, 1].every(dy => !wet(bot.blockAt(feet.offset(0, dy, 0))));
-    };
+    const dry = () => defaultActions.dryLanding(bot, true);
     if (episode?.stuck !== stuck) episode = { stuck, index: 0, elapsed: 0, interruptions: [] };
     const record = (type, method, fields) => ctx.record(type, { episode: stuck.at, method, ...fields });
     if (episode.pending) {

@@ -48,9 +48,9 @@ async function surfaceFirst(bot, ctx, actions) {
   return result;
 }
 
-async function gatherInLoadedRange(bot, ctx, skills, options) {
-  const result = await skills.gatherOne(bot, ctx, options);
-  return result.reason === 'no_target_in_range' ? skills.gatherOne(bot, ctx, { ...options, radius: 128 }) : result;
+async function gatherInLoadedRange(bot, ctx, skills, options, find = 'gatherOne') {
+  const result = await skills[find](bot, ctx, options);
+  return result.reason === 'no_target_in_range' ? skills[find](bot, ctx, { ...options, radius: 128 }) : result;
 }
 
 function shortfallRequirements(memory, inventory, kb) {

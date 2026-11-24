@@ -3,6 +3,8 @@
 // updates) with no ordering guarantee. An action is only "done" once every
 // fact it promises is observed together; one early packet proves nothing.
 
+const isAbort = error => error?.code === 'aborted';
+
 function abortError(signal) {
   const error = new Error(String(signal?.reason || 'aborted'));
   error.code = 'aborted';
@@ -86,4 +88,4 @@ async function withRouteDeadline(ctx, timeoutMs, halt, timedOut, run) {
   } finally { clearTimeout(timer); }
 }
 
-module.exports = { sleep, waitUntil, runCancellable, abortError, withRouteDeadline };
+module.exports = { sleep, waitUntil, runCancellable, abortError, isAbort, withRouteDeadline };

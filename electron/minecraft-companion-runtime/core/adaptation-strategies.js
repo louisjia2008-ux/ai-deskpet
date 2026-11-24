@@ -6,25 +6,31 @@ const { blockTarget } = require('./target-recovery');
 const { complete, resultFrom, failure, factsOf, isComplete } = require('./action-result');
 
 const OUTWARD_HEADINGS = Object.freeze([0, 1, -1, 2, -2, 3, -3, 4]);
+const outwardPoint = (from, angle, distance) => ({
+  x: Math.round(from.x + Math.cos(angle) * distance), z: Math.round(from.z + Math.sin(angle) * distance),
+});
+function walkOutward(bot, ctx, actions, { x, z }, timeoutMs) {
+  const goal = new goals.GoalNearXZ(x, z, 3);
+  return { goal, result: actions.goTo(bot, ctx, goal, { timeoutMs, retryNoProgress: false }) };
+}
 async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, timeoutMs = 15000, bearing, around } = {}) {
   const from = bot.entity.position.clone();
   const base = bearing ?? Math.atan2(from.z - away.z, from.x - away.x);
   const turn = OUTWARD_HEADINGS[(memory.heading || 0) % OUTWARD_HEADINGS.length];
   let angle = base + turn * Math.PI / 4;
-  const point = a => ({ x: Math.round(from.x + Math.cos(a) * distance), z: Math.round(from.z + Math.sin(a) * distance) });
-  let end = point(angle);
+  let end = outwardPoint(from, angle, distance);
   if (around && !around(end)) {
     angle = Math.atan2(away.z - from.z, away.x - from.x);
-    end = point(angle);
+    end = outwardPoint(from, angle, distance);
   }
   const { x, z } = end;
   if ((ctx.workArea && !ctx.workArea(end)) || (around && !around(end))) return failure('search_area_exhausted', ctx.exploration || {}, ctx);
   ctx.record?.(ctx.exploration ? 'task_explore' : 'adaptation_route', { ...ctx.exploration, from, x, z, heading: turn, bearing: angle });
-  const goal = new goals.GoalNearXZ(x, z, 3);
-  const result = resultFrom(await actions.goTo(bot, ctx, goal, { timeoutMs, retryNoProgress: false }), ctx, bot);
+  const walk = walkOutward(bot, ctx, actions, end, timeoutMs);
+  const result = resultFrom(await walk.result, ctx, bot);
   if (result.wait || result.kind === 'start' || result.kind === 'interrupted') return result;
   const moved = Math.hypot(bot.entity.position.x - from.x, bot.entity.position.z - from.z);
-  if (!result.ok || moved < 6 || !goal.isEnd(bot.entity.position.floored())) {
+  if (!result.ok || moved < 6 || !walk.goal.isEnd(bot.entity.position.floored())) {
     memory.heading = (memory.heading || 0) + 1;
     return result.ok ? failure('not_arrived', {}, ctx, bot) : result;
   }
@@ -67,4 +73,4 @@ async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blocks, d
   });
 }
 
-module.exports = { outwardLeg, runSearchLeg, gatherWood, OUTWARD_HEADINGS };
+module.exports = { outwardLeg, runSearchLeg, gatherWood, OUTWARD_HEADINGS, outwardPoint, walkOutward };

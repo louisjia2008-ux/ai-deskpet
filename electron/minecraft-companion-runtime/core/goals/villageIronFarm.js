@@ -21,6 +21,7 @@
 // The line starts at the rail on the stairs' top and only ever grows from its
 // end, so each new rail joins the previous one and curves shape themselves.
 
+const { integerBox } = require('../geometry');
 const { goToStand } = require('./device-site');
 const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
@@ -154,28 +155,26 @@ function chooseVillageFarmSite(blockAt, village, { radius = 4 } = {}) {
       const angle = (a / 16) * Math.PI * 2;
       const ox = Math.round(c.x + Math.cos(angle) * distance);
       const oz = Math.round(c.z + Math.sin(angle) * distance);
-      for (let dx = -radius; dx <= radius; dx += 2) {
-        for (let dz = -radius; dz <= radius; dz += 2) {
-          let y = null;
-          for (let top = c.y + 4; top >= c.y - 6; top -= 1) {
-            const block = blockAt(ox + dx, top, oz + dz);
-            if (!block) break;
-            if (isAir(block) || block.boundingBox === 'empty') continue;
-            y = top;
-            break;
-          }
-          if (y === null) continue;
-          for (const facing of Object.keys(FACINGS)) {
-            const farm = evaluateIronFarmSite(blockAt, { x: ox + dx, y, z: oz + dz }, facing);
-            if (!farm) continue;
-            const top = farm.cells.stairsTop;
-            const fromVillage = Math.hypot(top.x - c.x, top.z - c.z);
-            const corridor = Math.hypot(farm.anchor.x - c.x, farm.anchor.z - c.z);
-            // The stairs' top nearer the village than the farm is, but not in it.
-            if (corridor < NEAR || fromVillage >= corridor || fromVillage < CLEAR) continue;
-            const score = fromVillage;
-            if (!best || score < best.score) best = { farm, score };
-          }
+      for (const [dx, dz] of integerBox([-radius, radius, 2], [-radius, radius, 2])) {
+        let y = null;
+        for (let top = c.y + 4; top >= c.y - 6; top -= 1) {
+          const block = blockAt(ox + dx, top, oz + dz);
+          if (!block) break;
+          if (isAir(block) || block.boundingBox === 'empty') continue;
+          y = top;
+          break;
+        }
+        if (y === null) continue;
+        for (const facing of Object.keys(FACINGS)) {
+          const farm = evaluateIronFarmSite(blockAt, { x: ox + dx, y, z: oz + dz }, facing);
+          if (!farm) continue;
+          const top = farm.cells.stairsTop;
+          const fromVillage = Math.hypot(top.x - c.x, top.z - c.z);
+          const corridor = Math.hypot(farm.anchor.x - c.x, farm.anchor.z - c.z);
+          // The stairs' top nearer the village than the farm is, but not in it.
+          if (corridor < NEAR || fromVillage >= corridor || fromVillage < CLEAR) continue;
+          const score = fromVillage;
+          if (!best || score < best.score) best = { farm, score };
         }
       }
     }
@@ -552,19 +551,17 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
       const cells = [...d.parts.map((p) => p.position), ...(d.floor || [])];
       const xs = cells.map((c) => c.x);
       const zs = cells.map((c) => c.z);
-      for (let x = Math.min(...xs) - 2; x <= Math.max(...xs) + 2; x += 1) {
-        for (let z = Math.min(...zs) - 2; z <= Math.max(...zs) + 2; z += 1) {
-          const ground = blockXYZ(x, d.anchor.y, z);
-          if (!ground || ground.boundingBox !== 'block' || NOT_FULL.test(ground.name) || ground.name === 'dirt_path') {
-            memory.why = { x, y: d.anchor.y, z, block: ground?.name };
+      for (const [x, z] of integerBox([Math.min(...xs) - 2, Math.max(...xs) + 2], [Math.min(...zs) - 2, Math.max(...zs) + 2])) {
+        const ground = blockXYZ(x, d.anchor.y, z);
+        if (!ground || ground.boundingBox !== 'block' || NOT_FULL.test(ground.name) || ground.name === 'dirt_path') {
+          memory.why = { x, y: d.anchor.y, z, block: ground?.name };
+          return false;
+        }
+        for (let y = d.anchor.y + 1; y <= d.anchor.y + 3; y += 1) {
+          const b = blockXYZ(x, y, z);
+          if (!isAir(b) && (b.boundingBox !== 'empty' || LIQUID.has(b.name) || KEEP.test(b.name))) {
+            memory.why = { x, y, z, block: b.name };
             return false;
-          }
-          for (let y = d.anchor.y + 1; y <= d.anchor.y + 3; y += 1) {
-            const b = blockXYZ(x, y, z);
-            if (!isAir(b) && (b.boundingBox !== 'empty' || LIQUID.has(b.name) || KEEP.test(b.name))) {
-              memory.why = { x, y, z, block: b.name };
-              return false;
-            }
           }
         }
       }
@@ -576,11 +573,9 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
     };
     // Spots on a grid round the stairs' top, nearest first, not toward the farm.
     const arounds = [];
-    for (let dx = -24; dx <= 24; dx += 8) {
-      for (let dz = -24; dz <= 24; dz += 8) {
-        if ((dx * lane.x + dz * lane.z) > 0) continue;
-        arounds.push({ x: top.x + dx, y: top.y, z: top.z + dz });
-      }
+    for (const [dx, dz] of integerBox([-24, 24, 8], [-24, 24, 8])) {
+      if ((dx * lane.x + dz * lane.z) > 0) continue;
+      arounds.push({ x: top.x + dx, y: top.y, z: top.z + dz });
     }
     arounds.sort((a, b) => Math.hypot(a.x - top.x, a.z - top.z) - Math.hypot(b.x - top.x, b.z - top.z));
     let device = null;

@@ -5,6 +5,7 @@
 // goal can search for new terrain first, using the same cancellable body.
 
 const defaultActions = require('../actions');
+const { withoutDigging } = require('../target-recovery');
 const { failure, isComplete } = require('../action-result');
 const { goals } = require('mineflayer-pathfinder');
 const { abortError } = require('../confirm');
@@ -116,20 +117,11 @@ function isSurfaceLog(bot, block) {
     && [[0, 0], ...SIDES].some(([x, z]) => hasOpenColumn(bot, block.position.offset(x, 0, z), topY));
 }
 
-async function withLogRouteMovements(bot, action) {
+function withLogRouteMovements(bot, action) {
   const movements = bot.pathfinder?.movements;
-  if (!movements) return action();
-  const { canDig, maxDropDown } = movements;
-  try {
-    movements.canDig = false;
-    // Mineflayer measures from the current feet to the landing support block.
-    // A limit of two allows one block of actual descent, which we can climb back.
-    if (Number.isFinite(maxDropDown)) movements.maxDropDown = Math.min(maxDropDown, 2);
-    return await action();
-  } finally {
-    movements.canDig = canDig;
-    if (Number.isFinite(maxDropDown)) movements.maxDropDown = maxDropDown;
-  }
+  const limit = movements?.maxDropDown;
+  // A native limit of two is one block of actual descent.
+  return withoutDigging(movements, action, Number.isFinite(limit) ? Math.min(limit, 2) : undefined);
 }
 
 /** Block submerged steps while scouting and retire the path if the body falls into water. */

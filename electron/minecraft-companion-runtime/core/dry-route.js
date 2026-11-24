@@ -7,12 +7,14 @@ const { clear, safeStand, SIDES } = require('./home-topology');
 const wet = (b) => Boolean(b && (/^(water|lava|bubble_column|kelp|kelp_plant|seagrass|tall_seagrass)$/.test(b.name)
   || b.getProperties?.().waterlogged === true));
 
+const dryStand = (read, p) => safeStand(read, p) && [0, 1, -1].every(dy => !wet(read(p.offset(0, dy, 0))));
+
 // Evidence for site selection, not a speculative pathfinder route: every
 // edge is walkable in both directions with no digging, bridging or swimming.
 function dryComponent(read, from, limit = 52) {
   const start = new Vec3(Math.floor(from.x), Math.floor(from.y), Math.floor(from.z));
   const cells = new Map(), queue = [];
-  const dry = p => safeStand(read, p) && [p, p.offset(0, 1, 0), p.offset(0, -1, 0)].every(q => !wet(read(q)));
+  const dry = p => dryStand(read, p);
   const add = (p) => {
     cells.set(posKey(p), p);
     queue.push(p);
@@ -54,4 +56,4 @@ function drySiteAccess(read, from, logs) {
   };
 }
 
-module.exports = { dryComponent, drySiteAccess, wet };
+module.exports = { dryComponent, drySiteAccess, dryStand, wet };

@@ -1,11 +1,16 @@
 'use strict';
 
 const { Vec3 } = require('vec3');
+const { waitUntil } = require('../confirm');
 const { factsOf, isComplete } = require('../action-result');
 const { goals } = require('mineflayer-pathfinder');
 const { posKey } = require('../blacklist');
 const { FACINGS } = require('../blueprints/cobbleGenerator');
 
+const TERRAIN = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'stone',
+  'andesite', 'diorite', 'granite', 'cobblestone', 'cobbled_deepslate', 'deepslate', 'tuff', 'clay', 'mud',
+  'terracotta', 'moss_block', 'netherrack']);
+const TUNNEL = /^(stone|andesite|diorite|granite|tuff|deepslate|cobbled_deepslate|cobblestone|dirt|grass_block|coarse_dirt|rooted_dirt|podzol|mycelium|clay|calcite|.*_ore)$/;
 const LIQUID = new Set(['water', 'lava', 'bubble_column']);
 const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
 const isAir = block => !block || ['air', 'cave_air', 'void_air'].includes(block.name);
@@ -46,6 +51,36 @@ async function digDeviceCell(bot, ctx, actions, block, beforeDig) {
   return beforeDig?.() || actions.digBlock(bot, ctx, block);
 }
 
+async function swimOutOfDevice(bot, ctx, aim, clear) {
+  try {
+    await bot.lookAt(aim, true);
+    bot.setControlState('jump', true);
+    bot.setControlState('forward', true);
+    await waitUntil(clear, { timeoutMs: 4000, signal: ctx.signal });
+  } finally {
+    bot.setControlState('jump', false);
+    bot.setControlState('forward', false);
+  }
+}
+
+async function digFromBeside(bot, ctx, actions, blockAt, p, move) {
+  const block = blockAt(p);
+  if (!actions.withinReach(bot, new Vec3(p.x, p.y, p.z))) {
+    const reach = await actions.goToDig(bot, ctx, block);
+    if (!reach.ok) return reach;
+  }
+  const feet = bot.entity.position.floored();
+  return p.x === feet.x && p.z === feet.z && p.y === feet.y - 1
+    ? move() : actions.digBlock(bot, ctx, blockAt(p));
+}
+
+async function stepBeside(blockAt, p, heights, walk) {
+  const spots = Object.values(FACINGS).flatMap(({ x, z }) => heights.map(dy => ({ x: p.x + x, y: p.y + 1 + dy, z: p.z + z })));
+  const clear = spots.filter(c => isAir(blockAt(c)) && isAir(blockAt({ ...c, y: c.y + 1 })) && isSolid(blockAt({ ...c, y: c.y - 1 })));
+  for (const c of clear) if (await walk(c)) return { ok: true };
+  return { ok: false, reason: 'no_spot_beside' };
+}
+
 async function stepOffDevice(bot, ctx, actions, goal, trapped, detail) {
   await actions.goTo(bot, ctx, goal, { timeoutMs: detail?.from ? 10000 : 15000, arrived: () => !trapped() });
   if (!trapped()) return { ok: true };
@@ -61,8 +96,14 @@ function placeDevicePart(bot, ctx, skills, part, verify, options) {
   return skills.placeAt(bot, ctx, part.position, match, { faces: [toward], verify, ...placement });
 }
 
-function recordDevicePart(ctx, blockAt, part, { ok, reason }) {
-  ctx.record('device_part', { part: part.key, ok, reason, facing: facingOf(blockAt(part.position)) });
+async function finishDevicePart(ctx, blockAt, part, attempt) {
+  const result = await attempt;
+  ctx.record('device_part', { part: part.key, ok: result.ok, reason: result.reason, facing: facingOf(blockAt(part.position)) });
+  return result;
+}
+
+function validDeviceLayers(blockAt, ...layers) {
+  return layers.every(([cells, check]) => cells.every(p => check(blockAt(p.x, p.y, p.z))));
 }
 
 function standingAt(bot, p, tolerance = 0.5) {
@@ -102,5 +143,5 @@ function findDeviceSite(blockAt, around, { radius, step = 1, soft = isSoft, avoi
   return best;
 }
 
-module.exports = { findDeviceSite, LIQUID, isAir, isSoft, isSolid, facingOf, partAccepts, partMatches, guardDeviceCells, standingAt, goToStand,
-  adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, recordDevicePart };
+module.exports = { findDeviceSite, LIQUID, isAir, isSoft, isSolid, facingOf, partAccepts, partMatches, guardDeviceCells, standingAt, goToStand, validDeviceLayers,
+  adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, finishDevicePart, swimOutOfDevice, digFromBeside, stepBeside, TERRAIN, TUNNEL };

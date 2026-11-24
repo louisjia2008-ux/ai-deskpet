@@ -14,13 +14,13 @@ const { KNOWLEDGE, countKey } = require('../knowledge');
 const { createStarterHouse } = require('../blueprints/starterHouse');
 const { filler, pickItem, placedFor, matchesRoofWood, matchesRoofFallback, budget, supply, acquisition, setFallback, restoreFallbacks } = require('../materials');
 const { chooseSite, chooseHillside, evaluateSite, safeCaveDig, canClearTerrain, isSoft, siteWork } = require('../site');
-const { posKey } = require('../blacklist');
+const { vec: v, posKey } = require('../blacklist');
 const { ledgerFor, ledgerTarget } = require('../failure-ledger');
 const { waitUntil } = require('../confirm');
 const { exploreFor, furnaceStock, gatherInLoadedRange, rememberShortfall, placeStation, recoverToward,
   runPlanned, shortfallRequirements, surfaceFirst: surface } = require('./common');
-const { outwardLeg, gatherWood, OUTWARD_HEADINGS } = require('../adaptation-strategies');
-const { alternateStand, clearTerrain } = require('../target-recovery');
+const { outwardLeg, gatherWood, OUTWARD_HEADINGS, outwardPoint, walkOutward } = require('../adaptation-strategies');
+const { alternateStand, clearTerrain, withoutDigging } = require('../target-recovery');
 const { topology, safeStand, isBed, clear, supports, SIDES } = require('../home-topology');
 const { dryComponent, drySiteAccess } = require('../dry-route');
 const { isAir: air, naturalCover } = require('../natural-cover');
@@ -69,7 +69,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
 
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   const nameAt = (p) => blockAt(p)?.name || null;
-  const v = (p) => new Vec3(p.x, p.y, p.z);
   const matches = (family, name) => Boolean(name) && kb[family].match(name);
   const matchesBuilding = (b, name, block) => placedFor(b.purpose, name, block);
 
@@ -868,8 +867,12 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   }
 
   async function relocateSite(ctx, state, origin, method) {
+    const retry = !method && memory.relocation;
+    if (retry?.retryAt > Date.now()) return waiting('relocation_routes_exhausted', retry.retryAt);
+    if (retry?.retryAt) Object.assign(retry, { attempt: 0, retryAt: 0 });
     const up = await surfaceFirst(ctx);
     if (up) return up;
+    if (retry) return relocateAway(ctx, retry);
     const route = (memory.homesteadRoute ||= { heading: 0,
       bearing: Math.atan2(state.position.z - origin.z, state.position.x - origin.x) });
     const travel = { ...ctx, dryRoute: true, ...explorationScope(ctx, origin, 200), exploration: undefined };
@@ -928,28 +931,20 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     return failure('relocation_routes_exhausted', {}, ctx);
   }
 
-  async function exploreRelocation(ctx) {
-    const r = memory.relocation;
-    if (r.retryAt > Date.now()) return waiting('relocation_routes_exhausted', r.retryAt);
-    if (r.retryAt) { r.attempt = 0; r.retryAt = 0; }
-    const up = await surfaceFirst(ctx);
-    if (up) return up;
+  async function relocateAway(ctx, retry) {
     const from = bot.entity.position.clone();
-    const closest = (bot.companionDanger || []).filter((p) => Math.hypot(from.x - p.x, from.z - p.z) < 80)
-      .sort((a, b) => from.distanceTo(a) - from.distanceTo(b))[0] || r.anchor;
-    const outward = Math.atan2(from.z - closest.z, from.x - closest.x);
-    const turns = [0, 1, -1, 2, -2, 3, -3, 4];
-    const distance = r.attempt < turns.length ? 24 : 12;
-    const angle = outward + turns[r.attempt % turns.length] * Math.PI / 4;
-    const x = Math.round(from.x + Math.cos(angle) * distance);
-    const z = Math.round(from.z + Math.sin(angle) * distance);
-    ctx.record('recovery_switch', { task: 'homestead_site', to: 'outward_route', x, z, attempt: r.attempt + 1 });
-    const route = new goals.GoalNearXZ(x, z, 3);
-    const result = await actions.goTo(bot, ctx, route, { timeoutMs: 15000, retryNoProgress: false });
+    const closest = (bot.companionDanger || []).filter(p => Math.hypot(from.x - p.x, from.z - p.z) < 80)
+      .sort((a, b) => from.distanceTo(a) - from.distanceTo(b))[0] || retry.anchor;
+    const turns = OUTWARD_HEADINGS.length;
+    const angle = Math.atan2(from.z - closest.z, from.x - closest.x) + OUTWARD_HEADINGS[retry.attempt % turns] * Math.PI / 4;
+    const end = outwardPoint(from, angle, retry.attempt < turns ? 24 : 12);
+    ctx.record('recovery_switch', { task: 'homestead_site', to: 'outward_route', ...end, attempt: retry.attempt + 1 });
+    const walk = walkOutward(bot, ctx, actions, end, 15000);
+    const result = await walk.result;
     if (result.reason === 'aborted' || ctx.signal?.aborted) return result;
     const moved = bot.entity.position.distanceTo(from);
-    if (result.ok && moved >= 6 && route.isEnd(bot.entity.position.floored())) return { ok: true, moved };
-    if (++r.attempt >= 2 * turns.length) r.retryAt = Date.now() + 10 * 60_000;
+    if (result.ok && moved >= 6 && walk.goal.isEnd(bot.entity.position.floored())) return { ok: true, moved };
+    if (++retry.attempt >= 2 * turns) retry.retryAt = Date.now() + 10 * 60_000;
     return result.ok ? { ok: false, reason: 'relocation_not_arrived' } : result;
   }
 
@@ -1529,10 +1524,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         const work = roofWoodWork(ctx.perceive());
         if (!work) return { ok: true, skipped: 'roof_wood_unavailable' };
         const { stand } = work;
-        const movements = bot.pathfinder?.movements;
-        const canDig = movements?.canDig;
-        if (movements) movements.canDig = false;
-        try {
+        return withoutDigging(bot.pathfinder?.movements, async () => {
           if (!bot.entity.position.floored().equals(stand)) {
             const moved = await actions.goTo(bot, { ...ctx, nearDestination: true }, new goals.GoalBlock(stand.x, stand.y, stand.z),
               { timeoutMs: 5000, retryNoProgress: false });
@@ -1541,9 +1533,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           const result = await replaceRoofPanel(ctx, work);
           replaced = result.ok;
           return replaced || ctx.signal?.aborted ? result : resultFrom({ ...result, facts: { ...result.facts, terminal: true } }, ctx, bot);
-        } finally {
-          if (movements) movements.canDig = canDig;
-        }
+        });
       },
     };
   }
@@ -1899,7 +1889,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
         });
       }
       const site = chooseSite(readSite, near || state.position, siteSearch(state, ctx.adapt));
-      if (!site) return memory.relocation?.anchor ? exploreRelocation(ctx) : explore(ctx, 'site');
+      if (!site) return memory.relocation?.anchor ? relocateSite(ctx, state) : explore(ctx, 'site');
       memory.house = createStarterHouse(site.anchor);
       memory.relocation = null;
       ctx.record('site_chosen', { anchor: site.anchor, fills: site.fills, digs: site.digs });

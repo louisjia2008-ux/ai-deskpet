@@ -7,7 +7,7 @@
 // a ship's item frame when one is in sight. With no city in view, head away
 // from the main island, bridging over the void between islands.
 
-const { factsOf } = require('../action-result');
+const { fail, factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
@@ -17,7 +17,6 @@ const city = require('../endCity');
 const { createBlacklist, posKey } = require('../blacklist');
 const { sleep, waitUntil } = require('../confirm');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const at = (p) => (p ? `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}` : null);
 // Further search rings (in view distances, points round each), walked only
 // once the near ones found nothing worth looting.
@@ -38,6 +37,18 @@ function createEndCityGoal({ bot, chests = 2, actions = defaultActions, skills =
   let restore = null;
   const enterMode = () => { if (!restore) restore = end.applyEndMovements(bot); };
   const hasElytra = () => actions.countItems(bot, (n) => n === 'elytra') > 0;
+
+  function waitForGateway(ctx, from) {
+    memory.pearls += 1;
+    return waitUntil(() => bot.entity.position.distanceTo(from) > 200, { timeoutMs: 6000, signal: ctx.signal });
+  }
+
+  async function finishGateway(ctx) {
+    memory.gatewayUsed = true;
+    try { await bot.waitForChunksToLoad(); } catch { /* re-checked next run */ }
+    await waitUntil(() => bot.entity.onGround, { timeoutMs: 5000, signal: ctx.signal });
+    return { ok: true };
+  }
 
   async function useGateway(ctx) {
     // Every way through a gateway takes a pearl (the hole is one block high).
@@ -72,14 +83,10 @@ function createEndCityGoal({ bot, chests = 2, actions = defaultActions, skills =
     const target = gateway.position.offset(0.5, 0.5, 0.5);
     const thrown = await end.throwPearl(bot, ctx, target, { high });
     if (!thrown.ok) return thrown;
-    memory.pearls += 1;
-    const jumped = await waitUntil(() => bot.entity.position.distanceTo(from) > 200, { timeoutMs: 6000, signal: ctx.signal });
+    const jumped = await waitForGateway(ctx, from);
     ctx.record('pearl_thrown', { gateway: at(gateway.position), from: at(from), high, through: jumped });
     if (!jumped) return fail('pearl_missed');
-    memory.gatewayUsed = true;
-    try { await bot.waitForChunksToLoad(); } catch { /* re-checked next run */ }
-    await waitUntil(() => bot.entity.onGround, { timeoutMs: 5000, signal: ctx.signal });
-    return { ok: true };
+    return finishGateway(ctx);
   }
 
   /**
@@ -129,10 +136,7 @@ function createEndCityGoal({ bot, chests = 2, actions = defaultActions, skills =
     let jumped = false;
     if (bot.entity.position.floored().y >= g.y - 1) {
       const thrown = await end.throwPearl(bot, ctx, g.offset(0.5, 0.5, 0.5));
-      if (thrown.ok) {
-        memory.pearls += 1;
-        jumped = await waitUntil(() => bot.entity.position.distanceTo(from) > 200, { timeoutMs: 6000, signal: ctx.signal });
-      }
+      if (thrown.ok) jumped = await waitForGateway(ctx, from);
     }
     ctx.record('pearl_thrown', { gateway: at(g), from: at(from), tower: true, through: jumped });
     if (!jumped) {
@@ -140,10 +144,7 @@ function createEndCityGoal({ bot, chests = 2, actions = defaultActions, skills =
       await end.digPillarDown(bot, ctx);
       return fail('pearl_missed');
     }
-    memory.gatewayUsed = true;
-    try { await bot.waitForChunksToLoad(); } catch { /* re-checked next run */ }
-    await waitUntil(() => bot.entity.onGround, { timeoutMs: 5000, signal: ctx.signal });
-    return { ok: true };
+    return finishGateway(ctx);
   }
 
   async function takeElytra(ctx, frame) {

@@ -67,4 +67,11 @@ async function withCursorConfirmation(bot, run) {
   }
 }
 
-module.exports = { installInventoryCompatibility, withCursorConfirmation };
+async function equipMatching(bot, match) {
+  const item = bot.inventory.items().find(i => match(i.name));
+  if (!item) return false;
+  try { await bot.equip(item, 'hand'); } catch { return false; }
+  return true;
+}
+
+module.exports = { installInventoryCompatibility, withCursorConfirmation, equipMatching };

@@ -20,35 +20,29 @@
 // The villagers still have to sleep in their beds once before they call golems:
 // the farm starts working after its first night.
 
-const { findDeviceSite, LIQUID, isAir, isSolid, guardDeviceCells, standingAt, goToStand, adoptDeviceSite, placeDevicePart, recordDevicePart } = require('./device-site');
-const { posKey: key } = require('../blacklist');
+const { findDeviceSite, LIQUID, isAir, isSolid, guardDeviceCells, standingAt, goToStand, adoptDeviceSite, placeDevicePart, finishDevicePart, digFromBeside, stepBeside, TUNNEL: DIGGABLE, validDeviceLayers } = require('./device-site');
+const { vec: v, posKey: key } = require('../blacklist');
 const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
-const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const { FACINGS } = require('../blueprints/cobbleGenerator');
 const { createIronFarm } = require('../blueprints/ironFarm');
 const { sleep, waitUntil } = require('../confirm');
 
-const DIGGABLE = /^(stone|andesite|diorite|granite|tuff|deepslate|cobbled_deepslate|cobblestone|dirt|grass_block|coarse_dirt|rooted_dirt|podzol|mycelium|clay|calcite|.*_ore)$/;
 const DROPS = new Set(['iron_ingot', 'poppy']);
 const VILLAGERS = 3;
 // Golems come about one a minute once the villagers have slept.
 const WAIT_MS = 15000;
 
-const v = (p) => new Vec3(p.x, p.y, p.z);
-const droppedName = (entity) => { try { return entity.getDroppedItem?.()?.name || null; } catch { return null; } };
+const { droppedItemName: droppedName } = defaultActions;
 
 function evaluateIronFarmSite(blockAt, anchor, facing) {
   const farm = createIronFarm(anchor, facing);
-  const at = (p) => blockAt(p.x, p.y, p.z);
   const top = farm.cells.stairsTop;
-  if (!isSolid(at({ ...top, y: top.y - 1 })) || !isAir(at(top)) || !isAir(at({ ...top, y: top.y + 1 }))) return null;
-  for (const p of farm.digOrder) if (!DIGGABLE.test(at(p)?.name || '')) return null;
-  for (const p of farm.solid) if (!isSolid(at(p))) return null;
-  for (const part of farm.parts) if (!isSolid(at(part.against))) return null;
-  return farm;
+  return validDeviceLayers(blockAt, [[{ ...top, y: top.y - 1 }], isSolid], [[top, { ...top, y: top.y + 1 }], isAir],
+    [farm.digOrder, b => DIGGABLE.test(b?.name || '')], [farm.solid, isSolid],
+    [farm.parts.map(part => part.against), isSolid]) ? farm : null;
 }
 
 /** Nearest spot with solid rock under it; the anchor is the ground's top block above the corridor. */
@@ -131,25 +125,10 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
     return !bot.entities[cart.id];
   }
 
-  async function dig(ctx, p) {
-    const block = blockAt(p);
-    if (!actions.withinReach(bot, v(p))) {
-      const reach = await actions.goToDig(bot, ctx, block);
-      if (!reach.ok) return reach;
-    }
-    const f = feet();
-    // The route may end right on top of the cell: never dig out the ground underfoot.
-    if (p.x === f.x && p.z === f.z && p.y === f.y - 1) {
-      // Beside it, or down in a dug bed pit beside it (the last pit has no other neighbour).
-      const spots = Object.values(FACINGS).flatMap((u) => [0, -1].map((dy) => ({ x: p.x + u.x, y: p.y + 1 + dy, z: p.z + u.z })))
-        .filter((c) => isAir(blockAt(c)) && isAir(blockAt({ ...c, y: c.y + 1 })) && isSolid(blockAt({ ...c, y: c.y - 1 })));
-      for (const c of spots) {
-        const moved = await goStand(ctx, c, 8000);
-        if (moved.ok) return { ok: true };
-      }
-      return { ok: false, reason: 'no_spot_beside' };
-    }
-    return actions.digBlock(bot, ctx, blockAt(p));
+  function dig(ctx, p) {
+    // The last bed pit has no other neighbour. Check the dug pit below as well.
+    return digFromBeside(bot, ctx, actions, blockAt, p, () =>
+      stepBeside(blockAt, p, [0, -1], async c => (await goStand(ctx, c, 8000)).ok));
   }
 
   // A spawn egg on a block's face: the mob appears in the cell beyond that face.
@@ -232,10 +211,8 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
       if (s.nextPart) {
         const part = s.nextPart;
         if (!isAir(blockAt(part.position))) return dig(ctx, part.position); // wrong block or facing
-        const result = await placeDevicePart(bot, ctx, skills, part, () => partOk(part), { acceptItem: true, stand: part.stand, alsoClear: part.head ? [part.head] : [],
-        });
-        recordDevicePart(ctx, blockAt, part, result);
-        return result;
+        return finishDevicePart(ctx, blockAt, part, placeDevicePart(bot, ctx, skills, part, () => partOk(part),
+          { acceptItem: true, stand: part.stand, alsoClear: part.head ? [part.head] : [] }));
       }
       if (s.dry) {
         // Its floor is above the bot's eyes: click the far wall from the tunnel.

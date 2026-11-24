@@ -3,23 +3,21 @@
 
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
-const { waitUntil, runCancellable, sleep, abortError, withRouteDeadline } = require('./confirm');
+const { isAbort, waitUntil, runCancellable, sleep, abortError, withRouteDeadline } = require('./confirm');
 const { ownedItems } = require('./perception');
 const { dropReturnPosition } = require('./pathReturn');
 const { posKey } = require('./blacklist');
 const { homeContains, safeStand, SIDES: CARDINAL } = require('./home-topology');
 const { pickItem, isSealSoil, isSealRock } = require('./materials');
 const shore = require('./shore-route');
-const { wet: wetBlock } = require('./dry-route');
+const { dryStand, wet: wetBlock } = require('./dry-route');
 const { meleeGeometry, meleeSight, MeleeFollowGoal, entitySizeEvidence } = require('./entityGeometry');
 const { surveyDigPermit, withSurveyStep, surveyPlace, openSurveyChest, openSurveyDoor, closeSurveyDoor, isSurveyNight } = require('./survey-plan-actions');
-const { complete, createAttempt, departRoute, factsOf, failure, isComplete, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waterRouteFailure } = require('./action-result');
+const { fail, complete, createAttempt, departRoute, factsOf, failure, isComplete, rescueOf, resultFrom, settleAction, settleRoute, startProblem, waterRouteFailure } = require('./action-result');
 
 const { withWorkTarget } = require('./work-target');
 const digTarget = run => (bot, ctx, block, options) => withWorkTarget(bot, ctx, block?.position, () => run(bot, ctx, block, options));
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
-const isAbort = (error) => error?.code === 'aborted';
 
 function haltBody(bot) {
   try { bot.pathfinder?.setGoal(null); } catch { /* ignore */ }
@@ -397,21 +395,24 @@ async function walkGroundLegs(bot, ctx, position, goal, route, prefix, initial =
     const result = await direct(limit, dryOnly);
     return result.ok && !(await shore.settleDry(bot, ctx.signal)) ? fail('not_arrived') : result;
   };
+  const recoverIfWet = () => shore.waterContact(bot) ? recoverHomeOrigin(bot, ctx, position) : null;
+  const finalLeg = async limit => {
+    last = await confirmedDirect(limit, avoided);
+    if (last.ok || !shore.waterContact(bot, true)) return last;
+    const recovery = await observeBank();
+    return recovery && shoreFailure(recovery);
+  };
   for (let leg = 0; leg < 12 && remaining() > 0; leg += 1) {
-    if (shore.waterContact(bot)) {
-      const recovery = await recoverHomeOrigin(bot, ctx, position);
-      if (recovery) return shoreFailure(recovery);
-    }
+    const beforeLeg = await recoverIfWet();
+    if (beforeLeg) return shoreFailure(beforeLeg);
     if (bank && returns >= 2) {
       const oldBank = bank;
       route.shoreHandled = true;
       ctx.record?.(`${prefix}_route_shore`, { phase: 'alternate', bank, returns });
       const detour = await confirmedDirect(Math.min(20000, remaining() / 2), true);
       if (detour.ok) return detour;
-      if (shore.waterContact(bot)) {
-        const recovery = await recoverHomeOrigin(bot, ctx, position);
-        if (recovery) return shoreFailure(recovery);
-      }
+      const afterDetour = await recoverIfWet();
+      if (afterDetour) return shoreFailure(afterDetour);
       let leftBank = false;
       for (const p of shore.bankDetours(bot, bank, goal)) {
         if (remaining() < 5000) break;
@@ -443,10 +444,8 @@ async function walkGroundLegs(bot, ctx, position, goal, route, prefix, initial =
     const flat = Math.hypot(dx, dz);
     if (flat <= 20) {
       const nearWater = shore.waterContact(bot, true);
-      last = await confirmedDirect(nearWater ? Math.min(10000, remaining()) : remaining(), avoided);
-      if (last.ok || !shore.waterContact(bot, true)) return last;
-      const recovery = await observeBank();
-      if (recovery) return shoreFailure(recovery);
+      const arrived = await finalLeg(nearWater ? Math.min(10000, remaining()) : remaining());
+      if (arrived) return arrived;
       continue;
     }
     let advanced = false;
@@ -465,10 +464,8 @@ async function walkGroundLegs(bot, ctx, position, goal, route, prefix, initial =
       if (returns >= 2) break;
     }
     if (advanced || returns >= 2) continue;
-    last = await confirmedDirect(remaining(), avoided);
-    if (last.ok || !shore.waterContact(bot, true)) return last;
-    const recovery = await observeBank();
-    if (recovery) return shoreFailure(recovery);
+    const arrived = await finalLeg(remaining());
+    if (arrived) return arrived;
   }
   const result = last?.ok === false ? last : fail('path_timeout');
   return route.shoreHandled ? shoreFailure(result) : result;
@@ -957,11 +954,9 @@ async function drainPocket(bot, ctx) {
   if (!ceiling || ceiling.boundingBox !== 'block') return false;
   const bucket = bot.inventory.items().find((i) => i.name === 'bucket');
   const sources = [];
+  const waterSource = b => b?.name === 'water' && Number(b.getProperties?.().level) === 0;
   for (const base of [head, feet]) {
-    for (const [dx, dy, dz] of [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
-      const b = bot.blockAt(base.offset(dx, dy, dz));
-      if (b?.name === 'water' && Number(b.getProperties?.().level) === 0) sources.push(b);
-    }
+    sources.push(...[[0, 0], ...SIDES].map(([dx, dz]) => bot.blockAt(base.offset(dx, 0, dz))).filter(waterSource));
   }
   if (!bucket || !sources.length) return blockInflow(bot, ctx, feet);
   try { await bot.equip(bucket, 'hand'); } catch (error) { if (error?.code === 'aborted') throw error; return false; }
@@ -971,12 +966,10 @@ async function drainPocket(bot, ctx) {
     await bot.lookAt(target.position.offset(0.5, 0.5, 0.5), true);
     await sleep(100, ctx.signal);
     try { bot.activateItem(); } catch { /* checked below */ }
-    if (await waitUntil(() => bot.blockAt(target.position)?.name !== 'water'
-      || Number(bot.blockAt(target.position)?.getProperties?.().level) !== 0, { timeoutMs: 1000, signal: ctx.signal })) drained += 1;
+    if (await waitUntil(() => !waterSource(bot.blockAt(target.position)), { timeoutMs: 1000, signal: ctx.signal })) drained += 1;
   }
-  if (drained) ctx.record?.('drain_pocket', { drained, at: `${feet.x},${feet.y},${feet.z}` });
-  if (drained) return true;
-  return blockInflow(bot, ctx, feet);
+  if (drained) ctx.record?.('drain_pocket', { drained, at: posKey(feet) });
+  return drained > 0 || blockInflow(bot, ctx, feet);
 }
 
 // If a bucket cannot remove the source, block the inflow to drain the cell.
@@ -984,10 +977,7 @@ async function blockInflow(bot, ctx, feet) {
   const own = new Set([0, 1].map((dy) => `${feet.x},${feet.y + dy},${feet.z}`));
   const inflow = [];
   for (const dy of [1, 2]) {
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const b = bot.blockAt(feet.offset(dx, dy, dz));
-      if (b?.name === 'water') inflow.push(b);
-    }
+    inflow.push(...SIDES.map(([dx, dz]) => bot.blockAt(feet.offset(dx, dy, dz))).filter(b => b?.name === 'water'));
   }
   if (!inflow.length || typeof bot.placeBlock !== 'function') return false;
   const filler = pickItem('filler', bot.inventory.items());
@@ -1014,6 +1004,10 @@ async function blockInflow(bot, ctx, feet) {
   return waitUntil(() => bot.blockAt(feet.offset(0, 1, 0))?.name !== 'water', { timeoutMs: 4000, signal: ctx.signal });
 }
 
+function climbPath(bot, ctx, y, options) {
+  return withClimbing(bot, y + 4, () => goTo(bot, ctx, new goals.GoalY(Math.floor(y)), options));
+}
+
 async function unstick(bot, ctx, { landed = () => true } = {}) {
   const under = bot.blockAt(bot.entity.position.offset(0, -1, 0));
   if (under && under.name.endsWith('_leaves') && await dropThroughLeaves(bot, ctx)) return { ok: true, moved: 'off_canopy' };
@@ -1037,8 +1031,7 @@ async function unstick(bot, ctx, { landed = () => true } = {}) {
   if (underground(bot)) {
     const surface = Number.isFinite(bot.companionSurfaceY) ? bot.companionSurfaceY : start.y + 6;
     if (countItems(bot, (n) => CLIMB_BLOCKS.includes(n)) < 4) await gatherClimbBlocks(bot, ctx);
-    await withClimbing(bot, surface + 4, () => goTo(bot, ctx, new goals.GoalY(Math.floor(surface)), { timeoutMs: 30000,
-      arrived: () => true }));
+    await climbPath(bot, ctx, surface, { timeoutMs: 30000, arrived: () => true });
     if (bot.entity.position.y - start.y >= 2) return { ok: true, moved: 'climbed' };
     const stairs = await digStairsUp(bot, ctx, Number.isFinite(bot.companionSurfaceY) ? bot.companionSurfaceY : localSurfaceY(bot));
     if (stairs >= 2) return { ok: true, moved: 'stairs' };
@@ -1059,12 +1052,10 @@ async function unstick(bot, ctx, { landed = () => true } = {}) {
       return false;
     };
     if (await walkOut()) return { ok: true, moved: 'walked' };
-    // Boxed in beside lava: try again with only the lava cells themselves shut.
     if (nether && await require('./nether').withLavaMarginsLifted(bot, walkOut)) return { ok: true, moved: 'walked_near_lava' };
-    // A fence top can leave the planner without a starting node.
-    if (await breakLattice(bot, ctx) && await walkOut()) return { ok: true, moved: 'broke_lattice' };
-    // A low wet cell needs headroom before the body can rise.
-    if (!nether && await openHeadroom(bot, ctx) && await walkOut()) return { ok: true, moved: 'opened_headroom' };
+    for (const [open, moved] of [[breakLattice, 'broke_lattice'], ...(!nether ? [[openHeadroom, 'opened_headroom']] : [])]) {
+      if (await open(bot, ctx) && await walkOut()) return { ok: true, moved };
+    }
   } finally {
     movements.maxDropDown = saved;
   }
@@ -1081,10 +1072,11 @@ async function unstick(bot, ctx, { landed = () => true } = {}) {
 
 /** Digs the block over the bot's head and those beside its head. True if any went. */
 const SEA = new Set(['water', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass', 'bubble_column']);
+const seaAt = (bot, p) => SEA.has(bot.blockAt(p)?.name);
 /** Out on open water, swims along the surface to the nearest land within sight. True once ashore. */
 async function swimAshore(bot, ctx, { maxTicks = 1200 } = {}) {
   const feet = bot.entity.position.floored();
-  const wet = (p) => SEA.has(bot.blockAt(p)?.name);
+  const wet = p => seaAt(bot, p);
   if (!wet(feet) && !wet(feet.offset(0, -1, 0))) return false;
   // Not a puddle: open water all round.
   if (![[2, 0], [-2, 0], [0, 2], [0, -2]].every(([dx, dz]) => wet(feet.offset(dx, -1, dz)))) return false;
@@ -1125,7 +1117,7 @@ async function cutClearance(bot, ctx, cells, { open = b => !b || b.boundingBox =
 // Lower a flooded pit's rim to a step the bot can climb from water.
 async function stepOutOfPool(bot, ctx, { maxTicks = 200 } = {}) {
   const feet = bot.entity.position.floored();
-  const wet = (p) => SEA.has(bot.blockAt(p)?.name);
+  const wet = p => seaAt(bot, p);
   if (!wet(feet) && !wet(feet.offset(0, -1, 0))) return false;
   let top = wet(feet) ? feet : feet.offset(0, -1, 0);
   while (wet(top.offset(0, 1, 0))) top = top.offset(0, 1, 0);
@@ -1198,6 +1190,22 @@ async function jumpPlace(bot, ctx, ref, cell, { waitMs = 800, rise = 1.05, keepJ
   }
 }
 
+async function tryJumpPlace(bot, ctx, ref, cell, options, item) {
+  try {
+    if (item) await bot.equip(item, 'hand');
+    return await jumpPlace(bot, ctx, ref, cell, options);
+  } catch (error) {
+    if (isAbort(error)) throw error;
+    return false;
+  }
+}
+
+function dryLanding(bot, checkFluids = false) {
+  const { position, onGround, isInWater } = bot.entity;
+  const stand = checkFluids ? dryStand : safeStand;
+  return (checkFluids ? onGround === true : onGround) && !isInWater && stand(p => bot.blockAt(p), position.floored());
+}
+
 const RESCUE_ROCK = /^(sand|red_sand|gravel|.*_concrete_powder)$/;
 const protectedRescueCell = (bot, b) => !b || bot.companionProtectBlock?.(b)
   || bot.companionHomeSite?.(b.position) || bot.companionPlayerBlock?.(b.position);
@@ -1245,17 +1253,12 @@ async function digWaterExit(bot, ctx, { pillar = false } = {}) {
     const item = pickItem('filler', bot.inventory.items());
     if (!item || !reference || protectedRescueCell(bot, read(floor))) return false;
     await bot.equip(item, 'hand');
-    try {
-      await jumpPlace(bot, ctx, reference, floor, { waitMs: 2500, rise: 1.02, waitForLift: true, keepJump: true, aim: false });
-    } catch (error) {
-      if (isAbort(error)) throw error;
-    }
+    await tryJumpPlace(bot, ctx, reference, floor, { waitMs: 2500, rise: 1.02, waitForLift: true, keepJump: true, aim: false });
     // At an open mouth, push against the newly reachable rim to climb out
     // of water. A straight-up swim can stall below the next placement height.
     if (!solidGround(read(floor))) return stepOutOfPool(bot, ctx, { maxTicks: 45 });
   }
-  return waitUntil(() => bot.entity.onGround && !bot.entity.isInWater && safeStand(read, bot.entity.position.floored()),
-    { timeoutMs: 1500, signal: ctx.signal });
+  return waitUntil(() => dryLanding(bot), { timeoutMs: 1500, signal: ctx.signal });
 }
 
 const WOODEN_DOOR = /^(?!iron_).*_door$/;
@@ -1272,7 +1275,7 @@ async function openNearDoor(bot, ctx) {
 
 async function openHeadroom(bot, ctx) {
   const head = bot.entity.position.floored().offset(0, 1, 0);
-  const cells = [head.offset(0, 1, 0), ...[[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => head.offset(dx, 0, dz))];
+  const cells = [head.offset(0, 1, 0), ...SIDES.map(([dx, dz]) => head.offset(dx, 0, dz))];
   let dug = 0;
   for (const cell of cells) {
     const block = bot.blockAt(cell);
@@ -1382,14 +1385,16 @@ async function climbPitDirectly(bot, ctx, targetY) {
   return Boolean(ok);
 }
 
+function dryClearance(bot, p, checkEmpty = false) {
+  const b = bot.blockAt(p);
+  if (!b || FLUID.test(b.name)) return false;
+  if (b.boundingBox === 'empty') return !checkEmpty || !fluidNext(bot, p);
+  return bot.canDigBlock(b) && b.diggable !== false && !fluidNext(bot, p);
+}
+
 // Clear headroom and climb one stair at a time, avoiding fluid-adjacent digs.
 async function digStairsUp(bot, ctx, targetY, { maxSteps = 24, stop = () => false } = {}) {
-  const clearable = (p) => {
-    const b = bot.blockAt(p);
-    if (!b || FLUID.test(b.name)) return false;
-    if (b.boundingBox === 'empty') return true;
-    return bot.canDigBlock(b) && b.diggable !== false && !fluidNext(bot, p);
-  };
+  const clearable = p => dryClearance(bot, p);
   let direction = null;
   let climbed = 0;
   for (let step = 0; step < maxSteps; step += 1) {
@@ -1424,12 +1429,7 @@ async function stepInto(bot, ctx, into) {
 }
 
 async function digStairsDown(bot, ctx, target, { maxSteps = 16 } = {}) {
-  const clearable = (p) => {
-    const b = bot.blockAt(p);
-    if (!b || FLUID.test(b.name)) return false;
-    if (b.boundingBox === 'empty') return !fluidNext(bot, p);
-    return bot.canDigBlock(b) && b.diggable !== false && !fluidNext(bot, p);
-  };
+  const clearable = p => dryClearance(bot, p, true);
   const floorOk = (p) => {
     const b = bot.blockAt(p);
     return b && b.boundingBox === 'block' && !FLUID.test(b.name) && !/magma/.test(b.name)
@@ -1496,7 +1496,7 @@ async function surface(bot, ctx, { targetY, bunker = false } = {}) {
   const target = Math.floor(explicit ? targetY : Math.max(start.y + 2, reference));
   if (!explicit && bot.entity.position.y >= target - 1) return null;
   const reached = () => explicit ? bot.entity.position.y >= target - 0.1 : bot.entity.onGround !== false && !underground(bot);
-  const climb = (y, options) => withClimbing(bot, y + 4, () => goTo(bot, { ...ctx, nearDestination: true }, new goals.GoalY(y), options));
+  const climb = (y, options) => climbPath(bot, { ...ctx, nearDestination: true }, y, options);
   if (rim && ctx.adapt) {
     const deadline = Date.now() + 30_000;
     const shaft = { position: start };
@@ -1540,7 +1540,7 @@ module.exports = {
   openSurveyChest, openSurveyDoor: settleAction(openSurveyDoor), closeSurveyDoor: settleAction(closeSurveyDoor), isSurveyNight,
   drainPocket,
   recentre, surface: settleAction(surface, 'surface'), underground, openSky, localSurfaceY, isHomeTarget, routeOrigin, originFailure,
-  unstick: settleAction(unstick, 'unstick'), nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, moveBodyToward, jumpPlace, digWaterExit, gatherClimbBlocks,
+  unstick: settleAction(unstick, 'unstick'), nudge, breakLattice, openHeadroom, openNearDoor, swimAshore, stepOutOfPool, moveBodyToward, jumpPlace, tryJumpPlace, digWaterExit, dryLanding, gatherClimbBlocks,
   digStairsUp, digStairsDown, goTo: settleAction(goTo), goNear: settleAction(goNear), goToDig: settleAction(digTarget(goToDig)), withinReach,
   digBlock: settleAction(digTarget(digBlock)), collectDrops: settleAction(collectDrops), countItems, eat: settleAction(eat), pickFood,
   attack: settleAction((bot, ctx, id, options) => {

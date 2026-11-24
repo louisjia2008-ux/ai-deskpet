@@ -14,10 +14,10 @@
 //                                 the piston to fire and pick up the drop
 // Only cane gained after the column was cut while the bot waited counts.
 
-const { findDeviceSite, LIQUID, isAir, isSoft, isSolid, partMatches, guardDeviceCells, partAccepts, goToStand, adoptDeviceSite, digDeviceCell, recordDevicePart } = require('./device-site');
-const { posKey: key } = require('../blacklist');
+const { integerBox } = require('../geometry');
+const { findDeviceSite, LIQUID, isAir, isSoft, isSolid, partMatches, guardDeviceCells, partAccepts, goToStand, adoptDeviceSite, digDeviceCell, finishDevicePart, stepOffDevice, swimOutOfDevice, validDeviceLayers } = require('./device-site');
+const { vec: v, posKey: key } = require('../blacklist');
 const { Vec3 } = require('vec3');
-const { factsOf, isComplete } = require('../action-result');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -31,16 +31,11 @@ const DIGGABLE = new Set([...CANE_SOIL, 'stone', 'andesite', 'diorite', 'granite
 // 68 s (16 steps per block); each wait ends at the next step or the timeout.
 const HARVEST_WAIT_MS = 60000;
 
-const v = (p) => new Vec3(p.x, p.y, p.z);
 
 function evaluateCaneSite(blockAt, anchor, facing) {
   const farm = createCaneFarm(anchor, facing);
-  const at = (p) => blockAt(p.x, p.y, p.z);
-  for (const p of farm.dig) if (!DIGGABLE.has(at(p)?.name)) return null;
-  if (!CANE_SOIL.has(at(farm.cells.dirt)?.name)) return null;
-  for (const p of [...farm.solid, ...farm.standFloors]) if (!isSolid(at(p))) return null;
-  for (const p of farm.clear) { const b = at(p); if (!b || !isSoft(b)) return null; }
-  return farm;
+  return validDeviceLayers(blockAt, [farm.dig, b => DIGGABLE.has(b?.name)], [[farm.cells.dirt], b => CANE_SOIL.has(b?.name)],
+    [[...farm.solid, ...farm.standFloors], isSolid], [farm.clear, b => b && isSoft(b)]) ? farm : null;
 }
 
 /** Nearest buildable spot; the anchor (the cane's first cell) is the top solid block of its column. */
@@ -79,23 +74,11 @@ function createCaneFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
     if (inWaterHole()) {
       // Swim up and out toward the open ground beyond the hole.
       const out = f.parts.find((p) => p.key === 'piston').stand;
-      try {
-        await bot.lookAt(new Vec3(out.x + 0.5, out.y + 1.6, out.z + 0.5), true);
-        bot.setControlState('jump', true);
-        bot.setControlState('forward', true);
-        await waitUntil(() => !inWaterHole(), { timeoutMs: 4000, signal: ctx.signal });
-      } finally {
-        bot.setControlState('jump', false);
-        bot.setControlState('forward', false);
-      }
+      await swimOutOfDevice(bot, ctx, new Vec3(out.x + 0.5, out.y + 1.6, out.z + 0.5), () => !inWaterHole());
     }
     const a = f.anchor;
     const away = new goals.GoalInvert(new goals.GoalNear(a.x, a.y + 1, a.z, 2));
-    await actions.goTo(bot, ctx, away, { timeoutMs: 15000, arrived: () => !overDig() && !inWaterHole() });
-    if (!overDig() && !inWaterHole()) return { ok: true };
-    const result = await actions.unstick(bot, ctx);
-    ctx.record('device_step_off', { result: isComplete(result) ? factsOf(result).moved : result.wait?.reason ?? result.reason });
-    return overDig() || inWaterHole() ? (result.wait ? result : { ok: false, reason: 'trapped_in_device' }) : { ok: true };
+    return stepOffDevice(bot, ctx, actions, away, () => overDig() || inWaterHole());
   }
 
   function inspect() {
@@ -116,13 +99,9 @@ function createCaneFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
     const w = f.cells.water;
     let stray = null;
     if (!water) {
-      for (let dy = 1; dy <= 2 && !stray; dy += 1) {
-        for (let dx = -1; dx <= 1 && !stray; dx += 1) {
-          for (let dz = -1; dz <= 1 && !stray; dz += 1) {
-            const p = { x: w.x + dx, y: w.y + dy, z: w.z + dz };
-            if (skills.isFluidSource(blockAt(p), 'water')) stray = p;
-          }
-        }
+      for (const [dy, dx, dz] of integerBox([1, 2], [-1, 1], [-1, 1])) {
+        const p = { x: w.x + dx, y: w.y + dy, z: w.z + dz };
+        if (skills.isFluidSource(blockAt(p), 'water')) { stray = p; break; }
       }
     }
     return { toDig, water, stray, nextPart, built: f.parts.filter(partOk).length };
@@ -198,18 +177,11 @@ function createCaneFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
       if (s.nextPart) {
         const part = s.nextPart;
         const current = blockAt(part.position);
-        if (!isAir(current) && current.boundingBox !== 'empty') {
-          const reach = await actions.goToDig(bot, ctx, current);
-          if (!reach.ok) return reach;
-          return actions.digBlock(bot, ctx, current);
-        }
+        if (!isAir(current) && current.boundingBox !== 'empty') return digDeviceCell(bot, ctx, actions, current);
         const names = new Set([part.block, part.item || part.block]);
-        const result = await skills.placeAt(bot, ctx, part.position, (n) => names.has(n), {
-          stand: part.stand, verify: () => partOk(part),
-        });
-        recordDevicePart(ctx, blockAt, part, result);
         // Placed, but facing the wrong way: dig it up next run and try again.
-        return result;
+        return finishDevicePart(ctx, blockAt, part, skills.placeAt(bot, ctx, part.position, (n) => names.has(n),
+          { stand: part.stand, verify: () => partOk(part) }));
       }
       return waitForHarvest(ctx);
     },

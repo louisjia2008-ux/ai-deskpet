@@ -55,7 +55,6 @@ function perceive(bot, { hostileRange = 16, now = Date.now } = {}) {
     health: bot.health,
     food: bot.food,
     position: position.clone(),
-    dimension: bot.game?.dimension,
     onGround: self.onGround === true,
     inWater: self.isInWater === true,
     selfStuck: Boolean(bot.companionSelfStuck?.state()),

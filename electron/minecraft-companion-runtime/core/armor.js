@@ -6,6 +6,10 @@ const OFF_HAND = 45;
 const RANK = ['leather', 'golden', 'chainmail', 'iron', 'diamond', 'netherite'];
 const rank = (name) => RANK.indexOf(name.split('_')[0]);
 
+function bestArmor(bot, matches, score = rank) {
+  return bot.inventory.items().filter(i => matches(i.name)).sort((a, b) => score(b.name) - score(a.name))[0];
+}
+
 /** The armour (and shield) in the bag that beats what is worn, as [item, slot] pairs. */
 function upgrades(bot) {
   const out = [];
@@ -17,7 +21,7 @@ function upgrades(bot) {
   for (const [slot, index, pattern] of ARMOR_SLOTS) {
     const worn = bot.inventory.slots[index];
     if ((dimension === 'the_end' && slot === 'head' && worn?.name === 'carved_pumpkin') || index === goldSlot) continue;
-    const best = bot.inventory.items().filter((i) => pattern.test(i.name)).sort((a, b) => rank(b.name) - rank(a.name))[0];
+    const best = bestArmor(bot, name => pattern.test(name));
     if (best && (!worn || rank(worn.name) < rank(best.name))) out.push([best, slot]);
   }
   const shield = bot.inventory.items().find((i) => i.name === 'shield');
@@ -25,4 +29,4 @@ function upgrades(bot) {
   return out;
 }
 
-module.exports = { upgrades };
+module.exports = { upgrades, ARMOR_SLOTS, bestArmor, armorRank: rank };

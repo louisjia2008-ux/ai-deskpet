@@ -147,6 +147,22 @@ function lavaSurface(bot, feet) {
  */
 const SIDES = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)];
 
+function nearestColumn(radius, evaluate) {
+  let best = null, nearest = Infinity;
+  for (let dx = -radius; dx <= radius; dx++) {
+    for (let dz = -radius; dz <= radius; dz++) {
+      const distance = Math.hypot(dx, dz);
+      if (distance >= nearest) continue;
+      const found = evaluate(dx, dz, distance);
+      if (found) { best = found; nearest = distance; }
+    }
+  }
+  return best;
+}
+
+const lavaFooting = b => b && b.boundingBox === 'block' && !/magma/.test(b.name);
+const roomOver = (bot, p, accepts) => [1, 2].every(up => accepts(bot.blockAt(p.offset(0, up, 0))));
+
 function lavaShore(bot, radius = 16, usable = () => true, lip = 0) {
   const feet = bot.entity.position.floored();
   // Under the edge of an overhang its own column's surface is the overhang's
@@ -162,62 +178,37 @@ function lavaShore(bot, radius = 16, usable = () => true, lip = 0) {
     }
   }
   const surface = top + lip;
-  const open = (b) => b && b.boundingBox === 'empty' && !/lava|fire/.test(b.name);
-  let best = null;
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      for (let y = feet.y - 1; y <= surface; y += 1) {
-        const p = new Vec3(feet.x + dx, y, feet.z + dz);
-        const d = Math.hypot(dx, dz);
-        if (best && d >= best.d) continue;
-        const floor = bot.blockAt(p);
-        if (!floor || floor.boundingBox !== 'block' || /magma/.test(floor.name)) continue;
-        if (!open(bot.blockAt(p.offset(0, 1, 0))) || !open(bot.blockAt(p.offset(0, 2, 0)))) continue;
-        // A ledge a block up is climbed from open lava beside it, not from
-        // under the ledge's own overhang.
-        if (lip && y > surface - lip && !SIDES.some((s) => {
-          const beside = p.plus(s);
-          return bot.blockAt(beside.offset(0, -1, 0))?.name === 'lava' && open(bot.blockAt(beside)) && open(bot.blockAt(beside.offset(0, 1, 0)));
-        })) continue;
-        if (!usable(p)) continue;
-        best = { p, d };
-      }
+  const open = b => b && b.boundingBox === 'empty' && !/lava|fire/.test(b.name);
+  return nearestColumn(radius, (dx, dz) => {
+    for (let y = feet.y - 1; y <= surface; y += 1) {
+      const p = new Vec3(feet.x + dx, y, feet.z + dz);
+      if (!lavaFooting(bot.blockAt(p)) || !roomOver(bot, p, open)) continue;
+      // Climb a raised ledge from open lava beside it, rather than from underneath it.
+      if (lip && y > surface - lip && !SIDES.some(side => {
+        const beside = p.plus(side);
+        return bot.blockAt(beside.offset(0, -1, 0))?.name === 'lava'
+          && open(bot.blockAt(beside)) && open(bot.blockAt(beside.offset(0, 1, 0)));
+      })) continue;
+      if (usable(p)) return p;
     }
-  }
-  return best?.p || null;
+    return null;
+  });
 }
 
-/**
- * With no shore to climb: the top lava cell nearest the bot that has a solid
- * block beside it, where a placed block makes a step out.
- */
+/** Nearest lava cell where a supported placement would create a step. */
 function lavaStep(bot, radius = 40) {
   const feet = bot.entity.position.floored();
   const surface = lavaSurface(bot, feet);
   const supports = [...SIDES, new Vec3(0, -1, 0)];
-  let best = null;
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      const d = Math.hypot(dx, dz);
-      if (best && d >= best.d) continue;
-      const cell = new Vec3(feet.x + dx, surface, feet.z + dz);
-      if (bot.blockAt(cell)?.name !== 'lava') continue;
-      // Not a cell the bot itself is in: no block can be placed there.
-      const at = bot.entity.position;
-      if (Math.abs(at.x - (cell.x + 0.5)) < 0.8 && Math.abs(at.z - (cell.z + 0.5)) < 0.8) continue;
-      // Room to stand on the step once it is placed.
-      if (![1, 2].every((up) => { const b = bot.blockAt(cell.offset(0, up, 0)); return b?.boundingBox === 'empty' && b.name !== 'lava'; })) continue;
-      // The floor under a shallow sea is a wall too: out on a lava sea one
-      // block deep, with no shore in 40 blocks, a pillar never got up (a jump
-      // in lava is a swim stroke) and the bot spent the last half hour there.
-      const wall = supports.map((f) => cell.plus(f)).find((p) => {
-        const b = bot.blockAt(p);
-        return b && b.boundingBox === 'block' && !/magma/.test(b.name);
-      });
-      if (wall) best = { cell, wall, d };
-    }
-  }
-  return best;
+  return nearestColumn(radius, (dx, dz, d) => {
+    const cell = new Vec3(feet.x + dx, surface, feet.z + dz);
+    if (bot.blockAt(cell)?.name !== 'lava') return null;
+    const at = bot.entity.position;
+    if (Math.abs(at.x - (cell.x + 0.5)) < 0.8 && Math.abs(at.z - (cell.z + 0.5)) < 0.8) return null;
+    if (!roomOver(bot, cell, b => b?.boundingBox === 'empty' && b.name !== 'lava')) return null;
+    const wall = supports.map(side => cell.plus(side)).find(p => lavaFooting(bot.blockAt(p)));
+    return wall ? { cell, wall, d } : null;
+  });
 }
 
 /** True when no full block lies on the straight line between two points. */
@@ -751,6 +742,11 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   };
   // A pocket of lava under a low roof has no shore with room to stand: dig
   // out the two blocks above a wall beside the bot, so the wall becomes one.
+  const lavaOut = () => !bot.entity.isInLava && bot.entity.onGround !== false;
+  const lavaLip = wall => [1, 2].map(up => bot.blockAt(wall.offset(0, up, 0)));
+  const solidLip = above => above.filter(b => b?.boundingBox === 'block' && b.diggable !== false);
+  const swimOverLip = (ctx, wall) => swimTo(ctx, wall.offset(0.5, 1.2, 0.5), lavaOut, 80);
+
   async function digShore(ctx) {
     const feet = bot.entity.position.floored();
     const surface = lavaSurface(bot, feet);
@@ -760,16 +756,15 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     if (surface - feet.y > 2) return false;
     for (const side of SIDES) {
       const wall = new Vec3(feet.x, surface, feet.z).plus(side);
-      const b = bot.blockAt(wall);
-      if (!b || b.boundingBox !== 'block' || /magma/.test(b.name)) continue;
-      const above = [1, 2].map((up) => bot.blockAt(wall.offset(0, up, 0)));
+      if (!lavaFooting(bot.blockAt(wall))) continue;
+      const above = lavaLip(wall);
       // Digging into more lava only floods the pocket.
       if (above.some((a) => a?.name === 'lava') || bot.blockAt(wall.offset(0, 3, 0))?.name === 'lava') continue;
-      const solid = above.filter((a) => a && a.boundingBox === 'block' && a.diggable !== false);
+      const solid = solidLip(above);
       if (!solid.length) continue;
       ctx.record('leave_lava', { dig: `${wall.x},${wall.y},${wall.z}`, blocks: solid.length });
       try { await digLavaBlocks(ctx, solid); } catch { return false; }
-      await swimTo(ctx, wall.offset(0.5, 1.2, 0.5), () => !bot.entity.isInLava && bot.entity.onGround !== false, 80);
+      await swimOverLip(ctx, wall);
       return true;
     }
     return false;
@@ -795,7 +790,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       bot.pathfinder?.setGoal(null);
       // Out means standing out of it: bobbing up at the surface for a tick is
       // not, and stopping the swim there lets the bot slide straight back.
-      const out = () => !bot.entity.isInLava && bot.entity.onGround !== false;
+      const out = lavaOut;
       const usable = (p) => {
         const miss = shoreMisses.get(p.toString());
         return !miss || miss.until <= Date.now() || miss.count < 4;
@@ -848,12 +843,12 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       if (step && !block && step.wall.y === step.cell.y) {
         const centre = step.cell.offset(0.5, 0.5, 0.5);
         await swimTo(ctx, centre, () => out() || Math.hypot(bot.entity.position.x - centre.x, bot.entity.position.z - centre.z) <= 0.6, 400);
-        const above = [1, 2].map((up) => bot.blockAt(step.wall.offset(0, up, 0)));
-        const solid = above.filter((a) => a && a.boundingBox === 'block' && a.diggable !== false);
+        const above = lavaLip(step.wall);
+        const solid = solidLip(above);
         if (!out() && !above.some((a) => a?.name === 'lava')) {
           ctx.record('leave_lava', { dig: `${step.wall.x},${step.wall.y},${step.wall.z}`, blocks: solid.length, noBlocks: true });
           try { await digLavaBlocks(ctx, solid); } catch { /* the next try looks again */ }
-          await swimTo(ctx, step.wall.offset(0.5, 1.2, 0.5), out, 80);
+          await swimOverLip(ctx, step.wall);
           return lavaResult(ctx, out());
         }
       }
@@ -1013,20 +1008,15 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   function airColumn() {
     const feet = bot.entity.position.floored();
     const passable = (p) => { const b = bot.blockAt(p); return Boolean(b) && b.boundingBox === 'empty'; };
-    let best = null;
-    for (let dx = -3; dx <= 3; dx += 1) {
-      for (let dz = -3; dz <= 3; dz += 1) {
-        const d = Math.hypot(dx, dz);
-        if (d > 3.2 || (best && d >= best.d)) continue;
-        const col = feet.offset(dx, 0, dz);
-        if (d > 0 && !(passable(col) && passable(col.offset(0, 1, 0)))) continue;
-        let y = 0;
-        while (y < 6 && WET.test(bot.blockAt(col.offset(0, y, 0))?.name || '')) y += 1;
-        const top = bot.blockAt(col.offset(0, y, 0));
-        if (top && top.boundingBox === 'empty' && !WET.test(top.name) && top.name !== 'lava') best = { x: col.x, z: col.z, d };
-      }
-    }
-    return best;
+    return nearestColumn(3, (dx, dz, d) => {
+      if (d > 3.2) return null;
+      const col = feet.offset(dx, 0, dz);
+      if (d > 0 && !(passable(col) && passable(col.offset(0, 1, 0)))) return null;
+      let y = 0;
+      while (y < 6 && WET.test(bot.blockAt(col.offset(0, y, 0))?.name || '')) y += 1;
+      const top = bot.blockAt(col.offset(0, y, 0));
+      return top?.boundingBox === 'empty' && !WET.test(top.name) && top.name !== 'lava' ? { x: col.x, z: col.z } : null;
+    });
   }
 
   // Times breathe had to surface lately: back under again and again means

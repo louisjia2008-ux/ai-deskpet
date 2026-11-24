@@ -3,12 +3,13 @@
 // an animal in with its food, and breed two adults. Confirmed against the
 // world: fences standing, the animal inside the fence line, a new baby.
 
+const { integerBox } = require('./geometry');
+const { equipMatching } = require('./inventory');
 const { Vec3 } = require('vec3');
 const actions = require('./actions');
-const { waitUntil, sleep } = require('./confirm');
+const { isAbort, waitUntil, sleep } = require('./confirm');
 
 const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
-const isAbort = (error) => error?.code === 'aborted';
 const v = (p) => new Vec3(p.x, p.y, p.z);
 
 // What each animal follows and breeds on.
@@ -27,11 +28,9 @@ function penLayout(corner, size = 6) {
   const at = (dx, dz) => ({ x: corner.x + dx, y: corner.y, z: corner.z + dz });
   const fences = [];
   const gateDx = Math.floor(size / 2);
-  for (let dx = 0; dx < size; dx += 1) {
-    for (let dz = 0; dz < size; dz += 1) {
-      const border = dx === 0 || dz === 0 || dx === size - 1 || dz === size - 1;
-      if (border && !(dz === 0 && dx === gateDx)) fences.push(at(dx, dz));
-    }
+  for (const [dx, dz] of integerBox([0, Math.ceil(size) - 1], [0, Math.ceil(size) - 1])) {
+    const border = dx === 0 || dz === 0 || dx === size - 1 || dz === size - 1;
+    if (border && !(dz === 0 && dx === gateDx)) fences.push(at(dx, dz));
   }
   return {
     corner: { ...corner }, size, fences,
@@ -49,26 +48,24 @@ function penLayout(corner, size = 6) {
 function choosePenSite(blockAt, center, { size = 6, radius = 20, exclude = () => false } = {}) {
   const c = { x: Math.floor(center.x), y: Math.floor(center.y), z: Math.floor(center.z) };
   let best = null;
-  for (let dx = -radius; dx <= radius; dx += 2) {
-    for (let dz = -radius; dz <= radius; dz += 2) {
-      for (const dy of [0, -1, 1, -2, 2]) {
-        const corner = { x: c.x + dx, y: c.y + dy, z: c.z + dz };
-        let ok = true;
-        for (let x = -1; x <= size && ok; x += 1) {
-          for (let z = -2; z <= size && ok; z += 1) {
-            const ground = blockAt({ x: corner.x + x, y: corner.y - 1, z: corner.z + z });
-            const cell = blockAt({ x: corner.x + x, y: corner.y, z: corner.z + z });
-            const head = blockAt({ x: corner.x + x, y: corner.y + 1, z: corner.z + z });
-            ok = ground?.boundingBox === 'block' && !/leaves|log/.test(ground.name)
-              && cell?.boundingBox === 'empty' && head?.boundingBox === 'empty'
-              && !/water|lava/.test(cell.name) && !exclude({ x: corner.x + x, y: corner.y, z: corner.z + z });
-          }
+  for (const [dx, dz] of integerBox([-radius, radius, 2], [-radius, radius, 2])) {
+    for (const dy of [0, -1, 1, -2, 2]) {
+      const corner = { x: c.x + dx, y: c.y + dy, z: c.z + dz };
+      let ok = true;
+      for (let x = -1; x <= size && ok; x += 1) {
+        for (let z = -2; z <= size && ok; z += 1) {
+          const ground = blockAt({ x: corner.x + x, y: corner.y - 1, z: corner.z + z });
+          const cell = blockAt({ x: corner.x + x, y: corner.y, z: corner.z + z });
+          const head = blockAt({ x: corner.x + x, y: corner.y + 1, z: corner.z + z });
+          ok = ground?.boundingBox === 'block' && !/leaves|log/.test(ground.name)
+            && cell?.boundingBox === 'empty' && head?.boundingBox === 'empty'
+            && !/water|lava/.test(cell.name) && !exclude({ x: corner.x + x, y: corner.y, z: corner.z + z });
         }
-        if (!ok) continue;
-        const cost = Math.hypot(dx, dz) + Math.abs(dy) * 3;
-        if (!best || cost < best.cost) best = { corner, cost };
-        break;
       }
+      if (!ok) continue;
+      const cost = Math.hypot(dx, dz) + Math.abs(dy) * 3;
+      if (!best || cost < best.cost) best = { corner, cost };
+      break;
     }
   }
   return best?.corner || null;
@@ -83,11 +80,8 @@ function animalsIn(bot, pen, kind) {
   return Object.values(bot.entities).filter((e) => e.name === kind && e.position && pen.contains(e.position));
 }
 
-async function holdFood(bot, kind) {
-  const item = bot.inventory.items().find((i) => FOOD[kind]?.includes(i.name));
-  if (!item) return false;
-  try { await bot.equip(item, 'hand'); } catch { return false; }
-  return true;
+function holdFood(bot, kind) {
+  return equipMatching(bot, name => FOOD[kind]?.includes(name));
 }
 
 async function setGate(bot, ctx, pen, open) {

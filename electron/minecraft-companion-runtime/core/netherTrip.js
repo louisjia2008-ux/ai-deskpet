@@ -318,27 +318,37 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     }
   }
 
+  const sameBridgeCell = (p, q) => p.x === q.x && p.y === q.y && p.z === q.z;
+
+  async function followBridge(ctx, route, index, direction) {
+    const outbound = direction > 0;
+    const failStep = reason => outbound ? fail(reason, { landed: false }) : fail(reason);
+    for (let i = index + direction; i >= 0 && i < route.length; i += direction) {
+      if (ctx.signal?.aborted) throw abortError(ctx.signal);
+      const changed = bridgeRouteFailure(route);
+      if (changed) return failStep(changed);
+      if (!bot.entity.onGround) return failStep('bridge_not_grounded');
+      const target = route[i];
+      const centre = new Vec3(target.x + 0.5, target.y, target.z + 0.5);
+      const step = await end.bridgeStep(bot, ctx, centre, bridgeOptions(ctx, true));
+      if (!step.ok) return outbound && step.reason === 'no_bridge_blocks' ? failStep('ledge_no_blocks') : step;
+      if (!bot.entity.onGround || !sameBridgeCell(target, bot.entity.position.floored())) {
+        return failStep(outbound ? 'bridge_step_unconfirmed' : 'bridge_return_not_confirmed');
+      }
+    }
+    return null;
+  }
+
   async function forwardBridge(ctx) {
     const route = memory.ledgeRoute;
     if (!Array.isArray(route) || route.length < 2) return null;
-    const index = route.findIndex((p) => new Vec3(p.x, p.y, p.z).equals(bot.entity.position.floored()));
+    const index = route.findIndex(p => sameBridgeCell(p, bot.entity.position.floored()));
     if (index < 0) return null;
     const failure = bridgeRouteFailure(route);
     if (failure) return fail(failure, { landed: false });
     ctx.record('bridge_outbound', { at: cellKey(route[index]), cells: route.length - index });
-    for (let i = index + 1; i < route.length; i++) {
-      if (ctx.signal?.aborted) throw abortError(ctx.signal);
-      const changed = bridgeRouteFailure(route);
-      if (changed) return fail(changed, { landed: false });
-      if (!bot.entity.onGround) return fail('bridge_not_grounded', { landed: false });
-      const target = route[i];
-      const result = await end.bridgeStep(bot, ctx, new Vec3(target.x + 0.5, target.y, target.z + 0.5),
-        bridgeOptions(ctx, true));
-      if (!result.ok) return result.reason === 'no_bridge_blocks' ? fail('ledge_no_blocks', { landed: false }) : result;
-      if (!bot.entity.onGround || !new Vec3(target.x, target.y, target.z).equals(bot.entity.position.floored())) {
-        return fail('bridge_step_unconfirmed', { landed: false });
-      }
-    }
+    const stopped = await followBridge(ctx, route, index, 1);
+    if (stopped) return stopped;
     const landed = landedHere();
     memory.ledgeTransit = !landed;
     ctx.record('bridge_outbound_end', { at: cellKey(bot.entity.position.floored()), landed });
@@ -347,8 +357,7 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
 
   async function reverseBridge(ctx, route) {
     if (ctx.signal?.aborted) throw abortError(ctx.signal);
-    const same = (p, q) => p.x === q.x && p.y === q.y && p.z === q.z;
-    let index = route.findIndex((p) => same(p, bot.entity.position.floored()));
+    let index = route.findIndex(p => sameBridgeCell(p, bot.entity.position.floored()));
     if (index === 0 && memory.netherPortal && bot.entity.position.distanceTo(memory.netherPortal) <= 8) {
       const originFailure = bridgeRouteFailure([route[0]]);
       if (originFailure) return fail(originFailure);
@@ -364,22 +373,13 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
         : await actions.goNear(bot, ctx, new Vec3(landing.x, landing.y, landing.z), 0, { timeoutMs: 120000 });
       if (ctx.signal?.aborted) throw abortError(ctx.signal);
       if (!arrived.ok) return arrived;
-      if (!same(landing, bot.entity.position.floored()) || !bot.entity.onGround) {
+      if (!sameBridgeCell(landing, bot.entity.position.floored()) || !bot.entity.onGround) {
         return fail(arrived.ok ? 'bridge_anchor_not_reached' : arrived.reason);
       }
       index = route.length - 1;
     }
-    for (; index > 0; index -= 1) {
-      if (ctx.signal?.aborted) throw abortError(ctx.signal);
-      const changed = bridgeRouteFailure(route);
-      if (changed) return fail(changed);
-      if (!bot.entity.onGround) return fail('bridge_not_grounded');
-      const target = route[index - 1];
-      const step = await end.bridgeStep(bot, ctx, new Vec3(target.x + 0.5, target.y, target.z + 0.5),
-        bridgeOptions(ctx, true));
-      if (!step.ok) return step;
-      if (!same(target, bot.entity.position.floored()) || !bot.entity.onGround) return fail('bridge_return_not_confirmed');
-    }
+    const stopped = await followBridge(ctx, route, index, -1);
+    if (stopped) return stopped;
     ctx.record('bridge_returned', { at: cellKey(bot.entity.position.floored()), cells: route.length });
     return { ok: true, retraced: true };
   }

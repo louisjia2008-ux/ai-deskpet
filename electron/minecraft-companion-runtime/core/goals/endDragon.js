@@ -8,7 +8,7 @@
 // decides from what is in sight now: crystals still standing, the dragon's
 // synced phase and health.
 
-const { complete, waiting } = require('../action-result');
+const { fail, complete, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const end = require('../end');
@@ -16,7 +16,6 @@ const { returnToEnd } = require('./endReturn');
 const { createBlacklist } = require('../blacklist');
 const { sleep, waitUntil } = require('../confirm');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const key = (e) => String(e.id);
 const at = (p) => `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}`;
 // The exit portal sits on the column x = z = 0; the fight happens around it.

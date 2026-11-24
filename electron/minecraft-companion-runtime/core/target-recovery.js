@@ -58,6 +58,15 @@ async function watchDestination(bot, ctx, spec, observe, attempt, { resolves = t
     : { ...result, facts: { ...result.facts, destinationObserved: true } };
 }
 
+async function withoutDigging(movements, run, maxDropDown) {
+  if (!movements) return run();
+  const saved = { canDig: movements.canDig };
+  if (maxDropDown !== undefined) saved.maxDropDown = movements.maxDropDown;
+  movements.canDig = false;
+  if (maxDropDown !== undefined) movements.maxDropDown = maxDropDown;
+  try { return await run(); } finally { Object.assign(movements, saved); }
+}
+
 // One alternate approach from a supported cell. Do not plan a second tunnel
 // just to get there, and do not trample a crop or step on a build footprint.
 async function alternateStand(bot, ctx, actions, position, { avoid = () => false, distance = 2 } = {}) {
@@ -72,14 +81,8 @@ async function alternateStand(bot, ctx, actions, position, { avoid = () => false
     })
     .sort((a, b) => a.distanceTo(from) - b.distanceTo(from))[0];
   if (!stand || !actions.goTo) return failure('no_alternate_stand', {}, ctx, bot);
-  const canDig = movements?.canDig;
-  if (movements) movements.canDig = false;
-  try {
-    return await actions.goTo(bot, ctx, new goals.GoalBlock(stand.x, stand.y, stand.z),
-      { timeoutMs: 6500, retryNoProgress: false });
-  } finally {
-    if (movements) movements.canDig = canDig;
-  }
+  return withoutDigging(movements, () => actions.goTo(bot, ctx, new goals.GoalBlock(stand.x, stand.y, stand.z),
+    { timeoutMs: 6500, retryNoProgress: false }));
 }
 
 async function clearTerrain(bot, ctx, actions, p) {
@@ -128,4 +131,4 @@ function deviceTargets(bot, actions, goal, memory) {
   };
 }
 
-module.exports = { blockTarget, watchDestination, alternateStand, clearTerrain, dimensionOf, deviceTargets };
+module.exports = { withoutDigging, blockTarget, watchDestination, alternateStand, clearTerrain, dimensionOf, deviceTargets };

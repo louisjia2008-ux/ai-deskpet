@@ -1,5 +1,6 @@
 'use strict';
 
+const { integerBox } = require('./geometry');
 const { Vec3 } = require('vec3');
 const { isSurveyPlant, isSurveyReplaceable } = require('./natural-cover');
 
@@ -92,18 +93,14 @@ function walkTree(bot, origin, area, found) {
   for (let index = 0; index < queue.length; index += 1) {
     const pos = queue[index];
     if (found('log', pos)) return true;
-    for (let dx = -1; dx <= 1; dx += 1) {
-      for (let dy = -1; dy <= 1; dy += 1) {
-        for (let dz = -1; dz <= 1; dz += 1) {
-          const next = pos.offset(dx, dy, dz);
-          const key = positionKey(next);
-          if (checked.has(key)) continue;
-          checked.add(key);
-          const actual = stateName(bot.blockAt(next));
-          if (naturalLeaves(actual) && found('leaf', next)) return true;
-          if (log(actual) && containsColumn(area, next, 8)) queue.push(next);
-        }
-      }
+    for (const [dx, dy, dz] of integerBox([-1, 1], [-1, 1], [-1, 1])) {
+      const next = pos.offset(dx, dy, dz);
+      const key = positionKey(next);
+      if (checked.has(key)) continue;
+      checked.add(key);
+      const actual = stateName(bot.blockAt(next));
+      if (naturalLeaves(actual) && found('leaf', next)) return true;
+      if (log(actual) && containsColumn(area, next, 8)) queue.push(next);
     }
   }
   return false;
@@ -149,14 +146,10 @@ function removalConflict(bot, plan, operations) {
     for (let above = pos.offset(0, 1, 0); FALLING.has(bot.blockAt(above)?.name); above = above.offset(0, 1, 0)) {
       if (!positions.has(positionKey(above))) return 'survey_falling_column';
     }
-    for (let x = -1; x <= 1; x += 1) {
-      for (let y = -1; y <= 1; y += 1) {
-        for (let z = -1; z <= 1; z += 1) {
-          if (x === 0 && y === 0 && z === 0) continue;
-          const at = pos.offset(x, y, z);
-          if (!positions.has(positionKey(at)) && supportsBlock(bot.blockAt(at), at, pos)) return 'survey_outside_attachment';
-        }
-      }
+    for (const [x, y, z] of integerBox([-1, 1], [-1, 1], [-1, 1])) {
+      if (x === 0 && y === 0 && z === 0) continue;
+      const at = pos.offset(x, y, z);
+      if (!positions.has(positionKey(at)) && supportsBlock(bot.blockAt(at), at, pos)) return 'survey_outside_attachment';
     }
   }
   return null;

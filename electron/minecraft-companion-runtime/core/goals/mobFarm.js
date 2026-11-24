@@ -14,23 +14,20 @@
 //   5. otherwise                      -> wait in the alcove, empty the chest
 // Only mob drops gained after the goal started count.
 
-const { findDeviceSite, LIQUID, isAir, isSolid, partMatches, guardDeviceCells, standingAt, goToStand, adoptDeviceSite, placeDevicePart, recordDevicePart } = require('./device-site');
-const { posKey: key } = require('../blacklist');
+const { findDeviceSite, LIQUID, isAir, isSolid, partMatches, guardDeviceCells, standingAt, goToStand, adoptDeviceSite, placeDevicePart, finishDevicePart, digFromBeside, stepBeside, TUNNEL: DIGGABLE, validDeviceLayers } = require('./device-site');
+const { vec: v, posKey: key } = require('../blacklist');
 const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
-const { FACINGS } = require('../blueprints/cobbleGenerator');
 const { createMobFarm } = require('../blueprints/mobFarm');
 const { waitUntil, sleep, abortError } = require('../confirm');
 
-const DIGGABLE = /^(stone|andesite|diorite|granite|tuff|deepslate|cobbled_deepslate|cobblestone|dirt|grass_block|coarse_dirt|rooted_dirt|podzol|mycelium|clay|calcite|.*_ore)$/;
 const MOB_DROPS = new Set(['rotten_flesh', 'bone', 'arrow', 'gunpowder', 'string', 'spider_eye', 'ender_pearl']);
 // Mobs come one every few tens of seconds; the chest is emptied about as often.
 const COLLECT_WAIT_MS = 20000;
 
-const v = (p) => new Vec3(p.x, p.y, p.z);
 
 function evaluateMobFarmSite(blockAt, anchor, facing) {
   const farm = createMobFarm(anchor, facing);
@@ -40,11 +37,8 @@ function evaluateMobFarmSite(blockAt, anchor, facing) {
   for (const p of [farm.anchor, exit]) {
     if (!isSolid(at(p)) || !isAir(at({ ...p, y: p.y + 1 }))) return null;
   }
-  for (const p of [...farm.stairs, ...farm.room, ...farm.channels, ...farm.shaft, ...farm.bottom]) {
-    if (!DIGGABLE.test(at(p)?.name || '')) return null;
-  }
-  for (const p of farm.solid) if (!isSolid(at(p))) return null;
-  return farm;
+  const tunnel = [...farm.stairs, ...farm.room, ...farm.channels, ...farm.shaft, ...farm.bottom];
+  return validDeviceLayers(blockAt, [tunnel, b => DIGGABLE.test(b?.name || '')], [farm.solid, isSolid]) ? farm : null;
 }
 
 /** Nearest spot with solid rock all the way down; the anchor is the ground's top block above the hole. */
@@ -90,27 +84,11 @@ function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
   const inColumn = (p) => feet().x === p.x && feet().z === p.z;
   const inStand = () => standingAt(bot, memory.farm.cells.stand);
 
-  async function dig(ctx, p) {
-    const block = blockAt(p);
-    if (!actions.withinReach(bot, v(p))) {
-      const reach = await actions.goToDig(bot, ctx, block);
-      if (!reach.ok) return reach;
-    }
-    const f = feet();
-    // The route may end right on top of the cell: never dig out the ground underfoot.
-    if (p.x === f.x && p.z === f.z && p.y === f.y - 1) return stepAside(ctx, p);
-    return actions.digBlock(bot, ctx, blockAt(p));
-  }
-
-  // Off the cell about to be dug, onto a dug neighbour with a floor.
-  async function stepAside(ctx, p) {
-    const spots = Object.values(FACINGS).map((u) => ({ x: p.x + u.x, y: p.y + 1, z: p.z + u.z }))
-      .filter((c) => isAir(blockAt(c)) && isAir(blockAt({ ...c, y: c.y + 1 })) && isSolid(blockAt({ ...c, y: c.y - 1 })));
-    for (const c of spots) {
+  function dig(ctx, p) {
+    return digFromBeside(bot, ctx, actions, blockAt, p, () => stepBeside(blockAt, p, [0], async c => {
       const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(c.x, c.y, c.z), { timeoutMs: 8000 });
-      if (moved.ok && !inColumn(p)) return { ok: true };
-    }
-    return { ok: false, reason: 'no_spot_beside' };
+      return moved.ok && !inColumn(p);
+    }));
   }
 
   // Standing in the shaft's column: dig the next block underfoot and drop onto the one below it.
@@ -217,8 +195,7 @@ function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
         let result = await place();
         if (part.key === 'hopper' && result.reason === 'cell_occupied_by_entity'
           && await clearCollectorBat(ctx, part.position)) result = await place();
-        recordDevicePart(ctx, blockAt, part, result);
-        return result;
+        return finishDevicePart(ctx, blockAt, part, result);
       }
       return collect(ctx);
     },

@@ -12,7 +12,7 @@
 // The only memory kept across runs is the site and the harvest count, which
 // counts only cobblestone seen regenerating in C and arriving in the inventory.
 
-const { findDeviceSite, LIQUID, isAir, isSoft, partMatches, guardDeviceCells, adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, recordDevicePart } = require('./device-site');
+const { findDeviceSite, LIQUID, isAir, isSoft, partMatches, guardDeviceCells, adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, finishDevicePart, TERRAIN: DIGGABLE, swimOutOfDevice, validDeviceLayers } = require('./device-site');
 const { posKey: key } = require('../blacklist');
 const { factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
@@ -24,9 +24,6 @@ const { sleep, waitUntil } = require('../confirm');
 const { deviceTargets, clearTerrain } = require('../target-recovery');
 const { stableSolid } = require('../materials');
 
-const DIGGABLE = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'mycelium', 'stone',
-  'andesite', 'diorite', 'granite', 'cobblestone', 'cobbled_deepslate', 'deepslate', 'tuff', 'clay', 'mud',
-  'terracotta', 'moss_block', 'netherrack']);
 const REGENERATE_MS = 5000;
 
 // Lava burns flammable neighbours away (with fire ticks on), opening the seal.
@@ -41,11 +38,7 @@ function evaluateGeneratorSite(blockAt, anchor, facing, options = {}) {
   const device = createCobbleGenerator(anchor, facing, options);
   const at = (p) => blockAt(p.x, p.y, p.z);
   let fixes = 0;
-  for (const p of [...device.open, ...device.parts.map((part) => part.position)]) {
-    const block = at(p);
-    if (!block) return null;
-    if (!DIGGABLE.has(block.name)) return null;
-  }
+  if (!validDeviceLayers(blockAt, [[...device.open, ...device.parts.map(part => part.position)], b => b && DIGGABLE.has(b.name)])) return null;
   for (const p of device.seal) {
     const block = at(p);
     if (!block || LIQUID.has(block.name)) return null;
@@ -53,10 +46,7 @@ function evaluateGeneratorSite(blockAt, anchor, facing, options = {}) {
     if (!isSoft(block)) return null;
     fixes += 1;
   }
-  for (const p of device.clearAbove) {
-    const block = at(p);
-    if (!block || !isSoft(block)) return null;
-  }
+  if (!validDeviceLayers(blockAt, [device.clearAbove, b => b && isSoft(b)])) return null;
   return { device, fixes };
 }
 
@@ -132,15 +122,7 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
     const surfaceY = memory.device.anchor.y + 1;
     if (bot.entity.position.y < surfaceY - 0.5 && bot.entity.isInWater) {
       const exit = memory.device.cells.stand;
-      try {
-        await bot.lookAt(new Vec3(exit.x + 0.5, surfaceY + 1.6, exit.z + 0.5), true);
-        bot.setControlState('jump', true);
-        bot.setControlState('forward', true);
-        await waitUntil(() => !trappedCell(), { timeoutMs: 4000, signal: ctx.signal });
-      } finally {
-        bot.setControlState('jump', false);
-        bot.setControlState('forward', false);
-      }
+      await swimOutOfDevice(bot, ctx, new Vec3(exit.x + 0.5, surfaceY + 1.6, exit.z + 0.5), () => !trappedCell());
       if (!trappedCell()) return { ok: true };
     }
     const away = new goals.GoalInvert(new goals.GoalNear(cell.x, surfaceY, cell.z, 1));
@@ -279,14 +261,10 @@ function createCobbleGeneratorGoal({ bot, anchor = null, facing = 'east', harves
       }
       if (s.nextPart) {
         const part = s.nextPart;
-        const result = await targets.run(ctx, 'part', part.position, async () => {
-          if (!isAir(blockAt(part.position))) {
-            return digDeviceCell(bot, ctx, actions, blockAt(part.position));
-          }
+        return finishDevicePart(ctx, blockAt, part, targets.run(ctx, 'part', part.position, () => {
+          if (!isAir(blockAt(part.position))) return digDeviceCell(bot, ctx, actions, blockAt(part.position));
           return placeDevicePart(bot, ctx, skills, part, () => partOk(part), { sneak: Boolean(part.sneak) });
-        }, { cells: [part.against], tag: `${part.block}:${d.facing}`, relocate: relocation });
-        recordDevicePart(ctx, blockAt, part, result);
-        return result;
+        }, { cells: [part.against], tag: `${part.block}:${d.facing}`, relocate: relocation }));
       }
       if (!s.water) return targets.run(ctx, 'pour_water', d.cells.water, () => skills.pourLiquid(bot, ctx, d.cells.water, 'water'),
         { cells: d.seal, relocate: relocation });
