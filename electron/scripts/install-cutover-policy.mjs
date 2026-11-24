@@ -413,6 +413,11 @@ const wechatOwnerTextRuntime = {
   mainSHA256: '4690dcbba940376f435e9b6a767bcb2f13a112e0aadae5ba682ef0b7239d1361',
   asarSHA256: 'd9ee99ffc91e705b3a1112ffb78c1e70652f15f20ebf7efd76248d5553a04fc3',
 };
+const uxPrinciplesRuntime = {
+  sourceSHA256: '5be9a0d357fa73f6733ce6b88fcda1ffad7f1687683a51de481fa39f4d0cbfe7',
+  mainSHA256: 'ef380d45eaea898f4b2305762db854a8412dd772dcecfec7f156ce2eae099045',
+  asarSHA256: '7737a63d3316cba3dbbd7b9619faebdba1129076bdc3220d1dbe1a094c357456',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -536,6 +541,8 @@ const reviewedRuntimeManifest = [
   { runtime: groupDigestDeliveryRuntime, previous: momentsVisibilityRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   // Owner chat text limit, details detection and send diagnostics over the group digest build, diary still on (2026-11-24).
   { runtime: wechatOwnerTextRuntime, previous: groupDigestDeliveryRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Owner-first UX round plus the committed owner-text and drawer work, over the installed group digest build, diary still on (2026-11-24).
+  { runtime: uxPrinciplesRuntime, previous: groupDigestDeliveryRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
