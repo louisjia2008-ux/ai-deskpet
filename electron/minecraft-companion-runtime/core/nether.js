@@ -6,7 +6,7 @@
 // rest on the bottom corners and the top row is placed against the top
 // corners, so no block needs a face the bot cannot click.
 
-const { integerBox } = require('./geometry');
+const { integerBox, CARDINAL_XZ } = require('./geometry');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('./actions');
@@ -395,7 +395,7 @@ function lavaRisk(bot, p) {
   const at = (dx, dy, dz) => bot.blockAt(p.offset(dx, dy, dz))?.name || '';
   if (LAVA.test(at(0, -1, 0)) || LAVA.test(at(0, 0, 0)) || LAVA.test(at(0, 1, 0))) return 1000;
   let risk = 0;
-  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+  for (const [dx, dz] of CARDINAL_XZ) {
     if (LAVA.test(at(dx, 0, dz)) || LAVA.test(at(dx, 1, dz))) risk += 60;
     // Next to a drop into lava: one slip and the bot burns.
     if (LAVA.test(at(dx, -1, dz)) || LAVA.test(at(dx, -2, dz))) risk += 30;

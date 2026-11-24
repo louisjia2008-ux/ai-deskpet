@@ -249,7 +249,8 @@ function createBrain({
           if (isCurrent()) {
             backoff.observe(behavior.name, result, behavior.isGoal
               ? { base: goalRetryDelayMs, cap: 3000, stalls: goal?.stalls || 0, emit, cancelled: controller.signal.aborted }
-              : { base: failureCooldownMs, cap: maxCooldownMs, emit, cancelled: controller.signal.aborted });
+              : { base: behavior.retryDelayMs?.(result) ?? failureCooldownMs,
+                  cap: maxCooldownMs, emit, cancelled: controller.signal.aborted });
             if (behavior.isGoal) await settleGoal(behavior.goalEntry, safePerceive(), result, entry.preempted);
             // A terminal observer may synchronously submit another goal. Do not
             // let this finished callback perturb that goal's recovery tracking.

@@ -1010,6 +1010,9 @@ function createDoctorRules() {
         D10: event.type === 'home_site_abandon_pending' ? detect('abandon:' + pointText(event.anchor), frame.at,
           'Abandoning house site with ' + event.builtWalls + '/' + event.walls + ' wall blocks in place (' + event.reason + ').', [frame])
           : event.type === 'site_abandoned' ? null : undefined,
+        D13: event.type === 'escape_fallback' && event.ok === false
+          ? detect('escape:' + event.threatId, frame.at, 'Escape and fallback could not clear ' + event.mob + '.', [frame])
+          : event.type === 'escape_result' && event.ok ? null : undefined,
         D12: ['water_rescue_alert', 'pit_rescue_alert'].includes(event.type) ? detect(event.episode + ':' + event.reason, frame.at,
           (event.type === 'water_rescue_alert' ? 'Water' : 'Pit') + ' rescue ' + event.reason + (event.method ? ' at ' + event.method : '') + '.', [frame])
           : ['self_stuck_escaped', 'pit_rescue_escaped'].includes(event.type) ? null : undefined,

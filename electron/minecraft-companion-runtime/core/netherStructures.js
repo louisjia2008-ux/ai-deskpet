@@ -6,6 +6,7 @@
 // too, so a bastion needs many of them together). Only a fortress has blaze
 // spawners near nether bricks; a bastion's spawners hold magma cubes.
 
+const { CARDINAL_XZ } = require('./geometry');
 const FORTRESS_BLOCKS = ['nether_bricks', 'nether_brick_fence', 'nether_brick_stairs', 'nether_brick_slab'];
 const BASTION_BLOCKS = ['polished_blackstone_bricks', 'cracked_polished_blackstone_bricks', 'gilded_blackstone',
   'polished_blackstone_brick_stairs', 'polished_blackstone_brick_slab', 'polished_blackstone_brick_wall'];
@@ -67,7 +68,7 @@ function towerSpots(bot, floor, from, { maxDrop = 48 } = {}) {
   const seen = new Set();
   const spots = [];
   for (const deck of floor) {
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (const [dx, dz] of CARDINAL_XZ) {
       const side = deck.offset(dx, 0, dz);
       if (!open(bot, side) || !open(bot, side.offset(0, 1, 0)) || !open(bot, side.offset(0, 2, 0))) continue;
       let ground = null;

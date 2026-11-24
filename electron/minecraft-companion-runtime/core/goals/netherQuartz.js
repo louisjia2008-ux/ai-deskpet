@@ -6,6 +6,7 @@
 // bot is and what it holds: after a death in the nether it respawns in the
 // overworld, walks back to the portal it remembers and goes through again.
 
+const { CARDINAL_XZ } = require('../geometry');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -52,7 +53,7 @@ function quartzFootFailure(bot, p) {
   if (!fullCube(blocks[0]) || blocks.some((b) => HAZARD.test(b.name))
     || blocks.slice(1).some((b) => b.boundingBox !== 'empty')) return 'unsafe_stance';
   // lavaRisk must not silently treat an unloaded neighbouring cell as dry.
-  for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+  for (const [x, z] of CARDINAL_XZ) {
     for (let y = -2; y <= 1; y++) if (!bot.blockAt(p.offset(x, y, z))) return 'unknown_margin';
   }
   return nether.lavaRisk(bot, p) > 0 ? 'lava_margin' : null;

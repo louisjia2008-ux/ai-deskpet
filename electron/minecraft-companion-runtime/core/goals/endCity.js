@@ -7,6 +7,7 @@
 // a ship's item frame when one is in sight. With no city in view, head away
 // from the main island, bridging over the void between islands.
 
+const { CARDINAL_XZ } = require('../geometry');
 const { fail, factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
@@ -278,7 +279,7 @@ function createEndCityGoal({ bot, chests = 2, actions = defaultActions, skills =
         // Out of blocks low under the islands: a throw up onto one is the way out.
         const stand = end.surfaceAt(bot, x, z, { yMax: Math.floor(here.y) + (bridgeBlocks() < 16 ? 28 : 6), yMin: Math.floor(here.y) - 12 });
         if (!stand || bot.blockAt(stand.offset(0, -1, 0))?.name !== 'end_stone') continue;
-        if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => end.deepDrop(bot, x + a, stand.y, z + b, 4))) continue;
+        if (CARDINAL_XZ.some(([a, b]) => end.deepDrop(bot, x + a, stand.y, z + b, 4))) continue;
         const target = stand.offset(0.5, 0.1, 0.5);
         const shot = end.aim(origin, target, end.PEARL);
         if (!shot || !end.flightInfo(bot, origin, shot, target, end.PEARL, { radius: 0.8, size: 0.15 }).hit) continue;
@@ -314,7 +315,7 @@ function createEndCityGoal({ bot, chests = 2, actions = defaultActions, skills =
 
   const atEdge = () => {
     const feet = bot.entity.position.floored();
-    return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([x, z]) => end.deepDrop(bot, feet.x + x, feet.y, feet.z + z));
+    return CARDINAL_XZ.some(([x, z]) => end.deepDrop(bot, feet.x + x, feet.y, feet.z + z));
   };
 
   async function explore(ctx) {

@@ -39,6 +39,7 @@
 // in the slit block the villagers' view of the zombie; a bottom slab does not,
 // and keeps even a baby zombie out.
 
+const { AXIS_OFFSETS } = require('../geometry');
 const { blueprintFrame, DIRECTION_NAMES } = require('./cobbleGenerator');
 
 // The ground's top layer to the villagers' feet. Villagers notice an iron
@@ -128,7 +129,7 @@ function createIronFarm(anchor, facing = 'east') {
   const key = (c) => `${c.x},${c.y},${c.z}`;
   const dug = new Set([...stairs, ...tunnel, ...room, ...pits, ...zombie, ...shafts, ...lava].map(key));
   const solid = [...treads];
-  const around = (c) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+  const around = (c) => AXIS_OFFSETS
     .map(([dx, dy, dz]) => ({ x: c.x + dx, y: c.y + dy, z: c.z + dz }));
   const taken = new Set(solid.map(key));
   const parted = new Set(parts.map((p) => key(p.position)));

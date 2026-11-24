@@ -248,7 +248,10 @@ test('a shallow sandstone pit uses a direct pillar when the walking plan does no
     game: { dimension: 'overworld' }, entity: { position: before.clone(), onGround: true },
     inventory: { items: () => [{ name: 'sandstone', count: 20 - placed }] },
     registry: { itemsByName: { sandstone: { id: 1 } } },
-    pathfinder: { movements: { allow1by1towers: false, scafoldingBlocks: [] }, async goto() {} },
+    pathfinder: { movements: { allow1by1towers: false, scafoldingBlocks: [] }, async goto(goal) {
+      const exit = new Vec3(goal.x, goal.y, goal.z);
+      if (placed === 3 && goal.y === 64) bot.entity.position = exit.offset(0.5, 0, 0.5);
+    } },
     blockAt(p) {
       const top = p.x === 0 && p.z === 0 ? height : 63;
       return { name: p.y <= top ? 'sandstone' : 'air', boundingBox: p.y <= top ? 'block' : 'empty', position: p };
@@ -268,8 +271,8 @@ test('a shallow sandstone pit uses a direct pillar when the walking plan does no
   assert.equal(factsOf(result).surfaced, true);
   assert.equal(placed, 3);
   assert.equal(bot.entity.position.y, 64);
-  assert.equal(records.find((entry) => entry.type === 'recovery_switch').to, 'direct_pillar');
-  assert.equal(records.find((entry) => entry.type === 'pit_pillar_result').ok, true);
+  assert.equal(bot.entity.onGround, true);
+  assert.ok(bot.entity.position.x !== before.x || bot.entity.position.z !== before.z);
   assert.equal(bot.pathfinder.movements.allow1by1towers, false);
 });
 

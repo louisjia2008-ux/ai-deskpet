@@ -14,6 +14,7 @@ const { SIDES, supports } = require('./home-topology');
 const { ignoreUnlessAborted, waitUntil } = require('./confirm');
 const { vec: v, posKey } = require('./blacklist');
 const { ledgerFor, ledgerTarget, recordTarget } = require('./failure-ledger');
+const { boundedWork } = require('./work-budget');
 
 const TILLABLE = new Set(['grass_block', 'dirt', 'dirt_path', 'coarse_dirt', 'rooted_dirt']);
 const RIPE = 7;
@@ -177,25 +178,34 @@ async function harvest(bot, ctx, plot) {
   return { ok: true, gained: actions.countItems(bot, (n) => n === 'wheat') - before };
 }
 
-/** Breaks the nearest grass for a chance (1 in 8) at seeds. */
-async function gatherSeeds(bot, ctx, { radius = 32, exclude = () => false } = {}) {
-  const ids = ['short_grass', 'tall_grass'].map((n) => bot.registry.blocksByName[n]?.id).filter(Number.isInteger);
-  const here = bot.entity.position;
-  const ledger = ledgerFor(bot, ctx), target = p => ledgerTarget(bot, 'grass', p);
-  const grass = bot.findBlocks({ matching: ids, maxDistance: radius, count: 32 })
-    .filter(p => !ledger.skip(target(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p))
-    .sort((a, b) => a.distanceTo(here) - b.distanceTo(here))
-    .map((p) => bot.blockAt(p)).filter(Boolean)[0];
-  if (!grass) return fail('no_grass');
-  const moved = await actions.goToDig(bot, ctx, grass, { timeoutMs: 30000 });
-  if (!isComplete(moved)) return recordTarget(bot, ctx, moved, target(grass.position));
-  const before = actions.countItems(bot, (n) => n === 'wheat_seeds');
-  const dug = await actions.digBlock(bot, ctx, grass);
-  if (!dug.ok) return recordTarget(bot, ctx, dug, target(grass.position));
-  ledger.clearOnSuccess(target(grass.position));
-  await actions.collectDrops(bot, ctx, grass.position.offset(0.5, 0.5, 0.5), (n) => n === 'wheat_seeds', { radius: 3, timeoutMs: 1500 });
-  // No seed this time is still a block of work done, not a failure.
-  return { ok: true, seeds: actions.countItems(bot, (n) => n === 'wheat_seeds') - before };
+async function gatherSeeds(bot, ctx, { radius = 32, exclude = () => false, required = 1 } = {}) {
+  const ids = ['short_grass', 'tall_grass'].map(n => bot.registry.blocksByName[n]?.id).filter(Number.isInteger);
+  const match = n => n === 'wheat_seeds';
+  const count = () => actions.countItems(bot, match), before = count(), started = Date.now();
+  const ledger = ledgerFor(bot, ctx);
+  let pulled = 0, last;
+  const result = await boundedWork(bot, ctx, { timeoutMs: 90_000, check: () => true, limitResult: () => null }, async work => {
+    for (const p of bot.findBlocks({ matching: ids, maxDistance: radius, count: Infinity })) {
+      if (pulled >= 24 || count() >= required || work.signal.aborted) break;
+      const target = ledgerTarget(bot, 'grass', p), grass = bot.blockAt(p);
+      if (!/^(short_grass|tall_grass)$/.test(grass?.name) || ledger.skip(target) || exclude(p) ||
+        bot.companionPlayerBlock?.(p) || ctx.workArea && !ctx.workArea(p)) continue;
+      const moved = await actions.goToDig(bot, work, grass, { timeoutMs: 30000 });
+      const dug = isComplete(moved) ? await actions.digBlock(bot, work, grass) : moved;
+      if (!isComplete(dug)) {
+        last = recordTarget(bot, work, dug, target);
+        if (last.kind === 'start' || last.kind === 'interrupted' || last.wait) return last;
+        continue;
+      }
+      ledger.clearOnSuccess(target);
+      pulled++;
+      await actions.collectDrops(bot, work, p.offset(0.5, 0.5, 0.5), match, { radius: 3, timeoutMs: 1500 });
+    }
+  });
+  const held = count(), gained = held - before;
+  const proof = { startedEmpty: before === 0, pulled, gained, required, missing: Math.max(0, required - held), elapsed: Date.now() - started };
+  ctx.record?.('farm_seed_batch', proof);
+  return { ...(result || (pulled || held >= required ? { ok: true } : last || fail('no_grass'))), ...proof, seeds: gained };
 }
 
 module.exports = { findGround, choosePlots, findWater, litPlot, plotState, till, plant, harvest, gatherSeeds, returnTo, irrigate, TILLABLE, RIPE };

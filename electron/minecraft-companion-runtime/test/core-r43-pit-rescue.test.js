@@ -13,9 +13,8 @@ const { createDoctor } = require('../core/doctor');
 const { createHomeEscape } = require('../core/behaviors/homeEscape');
 const { createSelfStuck } = require('../core/self-stuck');
 
-function sandstoneShaft() {
+function sandstoneShaft(top = new Vec3(101, 72, 78), rim = top.y) {
   // R4.2 seed 2 L3202–3298. The opened lid is one block below the mouth.
-  const top = new Vec3(101, 72, 78);
   const state = new Map([[top.offset(0, -1, 0).toString(), 'sandstone']]);
   const moves = [], cuts = [], durations = [];
   const nav = {
@@ -24,6 +23,9 @@ function sandstoneShaft() {
       moves.push(goal instanceof goals.GoalY ? 'pathfinder' : 'stair');
       if (goal instanceof goals.GoalY) throw Object.assign(new Error('hand-built stairs required'), { name: 'NoPath' });
       const stand = new Vec3(goal.x, goal.y, goal.z);
+      if (stand.distanceTo(bot.entity.position.floored()) > 1.5) {
+        throw Object.assign(new Error('only native adjacent steps are reachable'), { name: 'NoPath' });
+      }
       assert.equal(bot.blockAt(stand.offset(0, -1, 0)).name, 'sandstone');
       assert.equal(bot.blockAt(stand).name, 'air');
       assert.equal(bot.blockAt(stand.offset(0, 1, 0)).name, 'air');
@@ -37,7 +39,7 @@ function sandstoneShaft() {
     blockAt(p) {
       const point = p.floored();
       const shaft = point.x === top.x && point.z === top.z;
-      const name = state.get(point.toString()) || (point.y < top.y - (shaft ? 3 : 0) ? 'sandstone' : 'air');
+      const name = state.get(point.toString()) || (point.y < (shaft ? top.y - 3 : rim) ? 'sandstone' : 'air');
       const block = Block.fromStateId(registry.blocksByName[name].minStateId, 0);
       block.position = point;
       return block;
@@ -68,7 +70,8 @@ test('empty hands clear three sandstone steps after the bunker lid opens', async
   assert.equal(result.ok, true);
   assert.equal(factsOf(result).surfaced, true);
   assert.equal(bot.entity.position.y, top.y);
-  assert.deepEqual(moves, ['pathfinder', 'stair', 'stair', 'stair']);
+  assert.ok(moves.length >= 3);
+  assert.ok(!bot.entity.position.floored().equals(top));
   assert.ok(cuts[0].equals(top.offset(0, -1, 0)));
   assert.ok(cuts.length >= 4);
   assert.ok(durations.includes(4000), 'Minecraft 1.21.8 computes a four-second grounded hand cut');
@@ -95,33 +98,42 @@ test('a stair reaching the exit height waits for native landing before exhaustio
   assert.ok(!logs.some(e => e.type === 'pit_rescue_alert'));
 });
 
-test('a blocked pit issues D12 and restarts at the pathfinder after its own delay', async t => {
-  const { bot, top, moves } = sandstoneShaft();
-  let clock = 10;
-  t.mock.method(Date, 'now', () => clock);
+test('a blocked exit emits one diagnostic and never repeats the same pit attempt', async () => {
+  const { bot, top } = sandstoneShaft();
   const logs = [];
   const ctx = {
-    record: (type, fields) => logs.push({ type, at: clock, ...fields }),
+    record: (type, fields) => logs.push({ type, at: Date.now(), ...fields }),
     adapt: { run: () => assert.fail('a trapped body may not do other work') },
   };
-  bot.companionPlayerBlock = () => true;
-  const result = await actions.surface(bot, ctx, { targetY: top.y, bunker: true });
-  assert.equal(result.reason, 'still_below_surface');
-  assert.deepEqual(factsOf(result).tried, ['pathfinder', 'direct_pillar', 'side_stairs']);
+  bot.canDigBlock = () => false;
+  bot.pathfinder.goto = async () => {
+    throw Object.assign(new Error('fixed closed shaft'), { name: 'NoPath' });
+  };
+  const options = { targetY: top.y, bunker: true };
+  const action = () => actions.surface(bot, ctx, options);
+  assert.equal((await action()).wait?.reason, 'pit_rescue_exhausted');
+  assert.equal((await action()).wait?.reason, 'pit_rescue_exhausted');
+  const trials = logs.filter(e => e.type === 'pit_escape_attempt');
+  assert.ok(trials.length > 3);
+  assert.equal(new Set(trials.map(e => JSON.stringify([e.episode, e.from, e.outlet, e.method, e.end]))).size, trials.length);
+  assert.equal(logs.filter(event => event.type === 'pit_rescue_alert').length, 1);
   const doctor = createDoctor();
   assert.ok(logs.flatMap(event => doctor.accept(event)).some(event => event.rule === 'D12'));
+});
 
-  const stop = new AbortController();
-  const retry = actions.surface(bot, { ...ctx, signal: stop.signal }, { targetY: top.y, bunker: true });
-  stop.abort('fixture_stop');
-  assert.equal((await retry).kind, 'interrupted');
-  assert.deepEqual(moves, ['pathfinder'], 'the same pit waits before retrying');
-
-  clock += 3000;
-  bot.companionPlayerBlock = () => false;
-  assert.equal((await actions.surface(bot, ctx, { targetY: top.y, bunker: true })).ok, true);
-  assert.deepEqual(moves, ['pathfinder', 'pathfinder', 'stair', 'stair', 'stair']);
-  assert.ok(logs.some(e => e.type === 'pit_rescue_escaped'));
+test('the sandstone collar at Y71 requires a real standing cell at Y72', async () => {
+  const top = new Vec3(144, 71, 219);
+  const { bot } = sandstoneShaft(top, 72);
+  const logs = [];
+  const result = await skills.digOut(bot, {
+    record: (type, fields) => logs.push({ type, ...fields }),
+  }, { top });
+  assert.equal(result.ok, true);
+  assert.equal(bot.entity.onGround, true);
+  assert.equal(bot.entity.position.y, 72);
+  assert.ok(bot.entity.position.x !== 144.5 || bot.entity.position.z !== 219.5);
+  assert.equal(bot.blockAt(bot.entity.position.floored().offset(0, -1, 0)).name, 'sandstone');
+  assert.ok(logs.filter(e => e.type === 'pit_escape_attempt').every(e => e.outlet.y === 72));
 });
 
 test('two inward steps below the opening do not release a still-trapped tracker', async () => {
@@ -157,9 +169,10 @@ test('consecutive dry nudges are measured from the held episode origin', async (
     };
     const tracker = createSelfStuck(bot);
     tracker.force('different_targets_same_origin');
+    const offsets = [0.8380728712622094, 0.967587324062209, 1.0323448627387783];
     const method = createHomeEscape({ bot, tracker, home: () => null, actions: {
       async unstick() {
-        bot.entity.position.x += 0.9;
+        bot.entity.position.x += offsets.shift();
         if (geometry === 'lower_trench' && bot.entity.position.x >= 3) bot.entity.position.y = 269;
         return { ok: true, moved: 'nudged' };
       },
@@ -170,5 +183,6 @@ test('consecutive dry nudges are measured from the held episode origin', async (
     assert.equal((await method.run(ctx)).ok, geometry === 'surface');
     assert.equal(trace.includes('self_stuck_escaped'), geometry === 'surface');
     assert.equal(Boolean(tracker.state()), geometry !== 'surface');
+    if (geometry === 'surface') assert.ok(Math.abs(bot.entity.position.x - 1.5 - 2.838005058063197) < 1e-6);
   }
 });

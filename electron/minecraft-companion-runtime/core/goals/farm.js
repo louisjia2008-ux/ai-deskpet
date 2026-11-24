@@ -143,20 +143,21 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
       if (isComplete(result)) memory.harvested += result.gained || 0;
       return result;
     }
-    const empty = byState('empty')[0];
-    if (empty && inventory.wheat_seeds > 0) return work('plant', empty);
+    const empty = byState('empty');
+    if (empty.length && inventory.wheat_seeds > 0) return work('plant', empty[0]);
     // Tilled only with a seed to sow: bare farmland dries back to dirt, and a
     // farm short of seeds in the desert tilled the same plots 400 times.
-    const untilled = byState('untilled')[0];
-    if (untilled && inventory.wheat_seeds > 0) {
+    const untilled = byState('untilled');
+    if (untilled.length && inventory.wheat_seeds > 0) {
       const hoeStep = planNext({ requirements: [{ key: 'hoe', count: 1 }], inventory, stations, kb, planning: ctx.planning });
       if (hoeStep) return step(ctx, { ...hoeStep, for: 'hoe' });
-      return work('till', untilled);
+      return work('till', untilled[0]);
     }
     // Empty farmland and no seeds: break grass until some drop.
-    if ((byState('empty').length || untilled) && !(inventory.wheat_seeds > 0)) {
+    const required = empty.length + untilled.length;
+    if (required && !(inventory.wheat_seeds > 0)) {
       ctx.record('farm', { action: 'seeds' });
-      const result = await farming.gatherSeeds(bot, ctx, { exclude: onPlot });
+      const result = await farming.gatherSeeds(bot, ctx, { exclude: onPlot, required });
       if (result.reason === 'no_grass') return explore(ctx, 'seeds');
       if (result.seeds > 0 && memory.search) delete memory.search.seeds;
       return result;

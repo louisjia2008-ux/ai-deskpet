@@ -9,7 +9,7 @@
 // synced phase and health.
 
 const { fail, complete, waiting } = require('../action-result');
-const { integerBox } = require('../geometry');
+const { integerBox, CARDINAL_XZ } = require('../geometry');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const end = require('../end');
@@ -67,7 +67,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
     const under = bot.blockAt(feet.offset(0, -1, 0))?.name || '';
     // The arrival platform floats off the island: bridge straight in first.
     const offIsland = under !== 'end_stone'
-      || [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([x, z]) => end.overVoid(bot, feet.x + x, feet.y, feet.z + z));
+      || CARDINAL_XZ.some(([x, z]) => end.overVoid(bot, feet.x + x, feet.y, feet.z + z));
     ctx.record('end_approach', { from: `${Math.round(here.x)},${Math.round(here.y)},${Math.round(here.z)}`,
       stand: stand ? `${stand.x},${stand.y},${stand.z}` : null, bridge: offIsland });
     if (offIsland) {
@@ -213,7 +213,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
   async function uncage(ctx, crystal) {
     const c = crystal.position.floored();
     const here = bot.entity.position.clone();
-    const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([x, z]) => ({ x, z,
+    const sides = CARDINAL_XZ.map(([x, z]) => ({ x, z,
       stand: end.surfaceAt(bot, c.x + x * 3, c.z + z * 3, { yMax: c.y - 4 }) }))
       .filter((s) => s.stand && bot.blockAt(s.stand.offset(0, -1, 0))?.name === 'end_stone')
       // The side facing the island's middle: the firing spots are out there.

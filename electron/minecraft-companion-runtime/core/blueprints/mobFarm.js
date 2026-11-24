@@ -23,6 +23,7 @@
 // The 1-wide channels and the 2-high ceiling keep spiders and endermen out.
 // Mobs never spawn within 24 blocks of a player, so the bot is ~29 blocks below.
 
+const { AXIS_OFFSETS } = require('../geometry');
 const { blueprintFrame, FACINGS, DIRECTION_NAMES } = require('./cobbleGenerator');
 
 const ARM = 8; // channel cells from the hole to the water source
@@ -103,7 +104,7 @@ function createMobFarm(anchor, facing = 'east') {
   const open = new Set([...shaft, cells.alcoveHead, cells.stand, cells.pocket].map(key));
   const taken = new Set(solid.map(key));
   for (const c of [cells.alcoveHead, cells.stand, cells.pocket, cells.chest, cells.hopper]) {
-    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+    for (const [dx, dy, dz] of AXIS_OFFSETS) {
       const n = { x: c.x + dx, y: c.y + dy, z: c.z + dz };
       if (open.has(key(n)) || taken.has(key(n)) || key(n) === key(cells.chest) || key(n) === key(cells.hopper)) continue;
       taken.add(key(n));

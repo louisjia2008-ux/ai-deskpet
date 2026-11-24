@@ -91,7 +91,7 @@ test('wood work from the shoreline leaves the tree and the ladder untouched', as
   assert.deepEqual(attempts, [tree, tree]);
 });
 
-test('a changed grass block excludes only that candidate and the next sowing step can continue', async t => {
+test('a changed grass block excludes only that candidate and a batch continues to the next', async t => {
   const first = p(4), second = p(6);
   const bot = { entity: { position: p(0) }, registry: { blocksByName: { short_grass: { id: 1 } } },
     findBlocks: () => [first, second], blockAt: position => ({ name: 'short_grass', position }),
@@ -104,12 +104,11 @@ test('a changed grass block excludes only that candidate and the next sowing ste
     return block.position.equals(first) ? { ok: false, reason: 'block_changed' } : { ok: true };
   });
   t.mock.method(actions, 'collectDrops', async () => ({ ok: true }));
-  const failed = await gatherSeeds(bot, ctx);
-  assert.equal(failed.kind, 'target');
-  assert.equal(failed.facts.target.excluded, true);
+  const batch = await gatherSeeds(bot, ctx);
+  assert.equal(batch.ok, true);
+  assert.equal(batch.pulled, 1);
   const ledger = ledgerFor(bot, ctx);
   assert.ok(ledger.skip(ledgerTarget(bot, 'grass', first)));
   assert.equal(ledger.skip(ledgerTarget(bot, 'grass', second)), null);
-  assert.equal((await gatherSeeds(bot, ctx)).ok, true);
   assert.deepEqual(dug, [first, second]);
 });

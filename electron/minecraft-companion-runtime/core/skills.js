@@ -15,7 +15,7 @@ const { isLog, isSurfaceLog } = require('./goals/gatherBlocks');
 const { isAir, naturalCover, plantPartner, isWaterlogged } = require('./natural-cover');
 const { wet } = require('./dry-route');
 const { contactBlock } = require('./home-topology');
-const { integerBox } = require('./geometry');
+const { integerBox, CARDINAL_XZ: SIDES4, AXIS_OFFSETS: SIDES } = require('./geometry');
 const { blockTarget, watchDestination } = require('./target-recovery');
 const { accepts, pickItem, stableSolid, seal: sealMatch, isSealSoil, isSealRock, SANDSTONE } = require('./materials');
 const { fail, complete, factsOf, failure, isComplete, resultFrom, settleAction, waiting, waterRouteFailure, waterRouteTarget } = require('./action-result');
@@ -92,7 +92,6 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, purpose = 'gather', excl
   return actions.collectDrops(bot, ctx, block.position.offset(0.5, 0.5, 0.5), dropMatch);
 }
 
-const SIDES = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 function buried(bot, p) {
   for (const [dx, dy, dz] of SIDES) {
     const n = bot.blockAt(p.offset(dx, dy, dz));
@@ -921,7 +920,6 @@ async function fillBucketAt(bot, ctx, target, full, liquid) {
 // the top down with open air above it, so its walls and floor may be sand:
 // a desert has nothing else.
 const SHAFT_SOLID = (b) => b && b.boundingBox === 'block' && !/water|lava|soul_sand/.test(b.name);
-const SIDES4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const RING2 = [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 1], [-2, -1], [1, -2], [-1, 2]];
 const shelterSealCount = (inventory = {}) => Object.entries(inventory).reduce((n, [name, count]) => sealMatch(name) ? n + count : n, 0);
 
@@ -1163,12 +1161,12 @@ async function tossStacks(bot, ctx, items) {
 async function digOut(bot, ctx, bunker) {
   const cover = coverPosition(bunker);
   const seal = bot.blockAt(cover);
-  if (seal?.boundingBox === 'block' && bot.entity.position.y < cover.y) {
+  if (!actions.pitStopped(bot, bunker) && seal?.boundingBox === 'block' && bot.entity.position.y < cover.y) {
     const dug = await actions.digBlock(bot, ctx, seal);
     if (!dug.ok) return dug;
   }
-  const exit = await actions.surface(bot, ctx, { targetY: bunker.top.y, bunker: true });
-  if (bunker.supports?.length && bot.entity.position.y >= bunker.top.y - 0.1) {
+  const exit = await actions.surface(bot, ctx, { targetY: bunker.top.y, bunker: true, pit: bunker });
+  if (isComplete(exit) && bunker.supports?.length) {
     return openEnclosure(bot, ctx, { placed: bunker.supports });
   }
   return exit;

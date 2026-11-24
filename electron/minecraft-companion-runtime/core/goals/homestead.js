@@ -2,6 +2,7 @@
 // Choose a site, build a usable house through the material planner, and
 // confirm optional upgrades against the current world.
 
+const { CARDINAL_XZ } = require('../geometry');
 const { complete: finished, createAttempt, factsOf, fail, failure, isComplete, resultFrom, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { nightBudget } = require('../behaviors/nightRest');
@@ -179,17 +180,16 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   };
   const positionsFor = (f) => [f.crafting_table.position, f.furnace.position, f.chest.position, f.door.position, f.door.upper,
     f.bed.position, f.bed.head, f.bed.stand, f.guestBed.position, f.guestBed.head, f.guestBed.stand];
-  const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   function torchAlternates(p) {
     const h = memory.house;
-    return sides.map(([dx, dz]) => ({ x: p.x + dx, y: p.y, z: p.z + dz }))
+    return CARDINAL_XZ.map(([dx, dz]) => ({ x: p.x + dx, y: p.y, z: p.z + dz }))
       .filter(q => (p.z < h.anchor.z ? q.z === p.z : insideRoom(q))
         && !idAt([...positionsFor(h.furniture), h.entrance, h.interiorCenter, ...h.furniture.torches], q));
   }
   function guestAlternates() {
     const f = memory.house.furniture, bed = f.guestBed;
     const reserved = positionsFor(f).slice(0, -3).concat(f.torches, memory.house.interiorCenter);
-    return sides.map(([dx, dz]) => {
+    return CARDINAL_XZ.map(([dx, dz]) => {
       const move = (p) => ({ x: p.x + dx, y: p.y, z: p.z + dz });
       return { ...bed, position: move(bed.position), head: move(bed.head), stand: move(bed.stand) };
     }).filter(b => [b.position, b.head, b.stand].every(p => insideRoom(p) && !idAt(reserved, p)));
@@ -1226,7 +1226,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (bot.entity.position.y < peak.y + 0.9) return placed;
     // An occluded corner may be visible from another roof panel after the
     // inner tiles connect the deck. Move on the finished panels, not off it.
-    const adjacent = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => new Vec3(position.x + dx, position.y, position.z + dz))
+    const adjacent = CARDINAL_XZ.map(([dx, dz]) => new Vec3(position.x + dx, position.y, position.z + dz))
       .filter((p) => placedFor('roof', nameAt(p)))
       .sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b));
     for (const panel of adjacent.slice(0, 2)) {

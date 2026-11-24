@@ -17,11 +17,10 @@ const defaultSkills = require('./skills');
 const defaultActions = require('./actions');
 const { vec: v, posKey } = require('./blacklist');
 const { waitUntil } = require('./confirm');
-const { integerBox } = require('./geometry');
+const { integerBox, CARDINAL_XZ: SIDES } = require('./geometry');
 
 const { fail } = require('./action-result');
 const AIR = new Set(['air', 'cave_air', 'void_air']);
-const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 // Soil and rock a pit can be dug in, that lava does not burn and nothing falls into.
 const MOLD = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'rooted_dirt', 'stone', 'andesite', 'diorite',
   'granite', 'cobblestone', 'deepslate', 'cobbled_deepslate', 'tuff', 'obsidian']);

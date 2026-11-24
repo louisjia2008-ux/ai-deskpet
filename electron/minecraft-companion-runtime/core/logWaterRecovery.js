@@ -1,11 +1,11 @@
 'use strict';
 
+const { CARDINAL_XZ: CARDINAL } = require('./geometry');
 const { abortError, sleep } = require('./confirm');
 const { naturalWalkingFoot } = require('../vendor/server/minecraft/houseSurfaceGraph');
 
 const WATER = new Set(['water', 'bubble_column', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass']);
 const AIR = new Set(['air', 'cave_air', 'void_air']);
-const CARDINAL = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const SHORE_RADIUS = 32;
 const MAX_ASCENT = 24;
 const MAX_ASCENT_MS = 8_000;

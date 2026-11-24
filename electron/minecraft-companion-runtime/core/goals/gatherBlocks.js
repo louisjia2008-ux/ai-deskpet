@@ -4,6 +4,7 @@
 // Each run() handles one block: reach it, break it, pick up the drop. A log
 // goal can search for new terrain first, using the same cancellable body.
 
+const { CARDINAL_XZ: SIDES } = require('../geometry');
 const defaultActions = require('../actions');
 const { withoutDigging } = require('../target-recovery');
 const { failure, isComplete } = require('../action-result');
@@ -25,7 +26,6 @@ const CANOPY_SCAN_RADIUS = 112;
 const CANOPY_SCAN_INTERVAL = 3;
 const HEADINGS = Array.from({ length: 8 }, (_, i) => (i * Math.PI) / 4);
 const TREE_BIOME = /forest|taiga|jungle|savanna|swamp|grove|wooded|cherry/;
-const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const WATER = /^(?:water|bubble_column|kelp(?:_plant)?|(?:tall_)?seagrass)$/;
 
 const wet = block => WATER.test(block?.name) || [true, 'true'].includes(block?.getProperties?.().waterlogged);

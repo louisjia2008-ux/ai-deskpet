@@ -1,5 +1,6 @@
 'use strict';
 
+const { AXIS_OFFSETS: FACES } = require('./geometry');
 const { withWorkTarget, hazardTarget } = require('./work-target');
 const { localOpportunity, opportunityAllowed } = require('./work-budget');
 // Branch mining at a fixed height, one block of tunnel per call.
@@ -27,7 +28,6 @@ const { blockTarget, watchDestination } = require('./target-recovery');
 const { pickItem, stableSolid } = require('./materials');
 
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
-const FACES = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const LIQUID = /^(water|lava|bubble_column)$/;
 const GRAVITY = new Set(['sand', 'red_sand', 'gravel', 'suspicious_sand', 'suspicious_gravel']);
 // Rubble kept when the bag fills up: one stack of stone for sealing and climbing.

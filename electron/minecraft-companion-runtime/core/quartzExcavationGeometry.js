@@ -1,12 +1,12 @@
 'use strict';
 // Shared read-only geometry. Actual stance/lease/native gates stay in the actuator.
+const { AXIS_OFFSETS: NEIGHBORS } = require('./geometry');
 const CAPS = Object.freeze({ down: 16, flat: 48, feet: 64, digs: 192, diamondRock: 64, nativeDigAttempts: 192,
   outboundEdges: 64, returnEdges: 64, knownEdges: 128, totalEdges: 128, leaseMs: 20000 });
 const ROCK = new Set(['basalt', 'polished_basalt', 'smooth_basalt', 'netherrack', 'blackstone', 'polished_blackstone']);
 const DANGER = /^(water|lava|bubble_column|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|powder_snow|nether_portal)$/;
 const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
-const NEIGHBORS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const key = p => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
 const same = (a, b) => key(a) === key(b);
 const fail = (reason, extra = {}) => ({ ok: false, progress: false, reason, ...extra });

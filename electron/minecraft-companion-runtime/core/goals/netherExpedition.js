@@ -12,7 +12,7 @@
 // Every run() decides from where the bot is and what it holds, like the
 // quartz goal: a death in the nether sends it back through the portal.
 
-const { integerBox } = require('../geometry');
+const { integerBox, AXIS_OFFSETS: SIDES } = require('../geometry');
 const { ARMOR_SLOTS, bestArmor, armorRank, equipAndRecord } = require('../armor');
 const { fail, factsOf, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
@@ -284,7 +284,6 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
   // below a fortress dug the pillar bricks beside the lava sea one by one,
   // walked into the gap and fell in twice, and a quarter of its hour went on
   // climbing back up.
-  const SIDES = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
   const unsafeDig = (p) => {
     if (bot.blockAt(p)?.name === 'nether_bricks' && p.y < Math.floor(bot.entity.position.y)) return true;
     // Not round the way home: three blocks dug beside the arrival portal let

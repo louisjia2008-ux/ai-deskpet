@@ -1,7 +1,7 @@
 'use strict';
 
 const RESCUE = new Set(['home_escape', 'unstick', 'surface', 'pit', 'mine_retreat', 'mine_hazard',
-  'breathe', 'unbury', 'leave_lava', 'leave_fire', 'leave_contact', 'leave_danger', 'leave_breath', 'escape']);
+  'breathe', 'unbury', 'leave_lava', 'leave_fire', 'leave_contact', 'leave_danger', 'leave_breath', 'escape', 'escape_fallback']);
 const isRescueBehavior = name => RESCUE.has(name);
 const FAILURE_WINDOW_MS = 60_000, FAILURE_LIMIT = 20; // Circuit breaker for otherwise unbounded retries.
 
@@ -86,7 +86,7 @@ const reasons = Object.freeze({
   `,
   // Observation, bounds, server confirmation, or action environment prevented completion.
   environment: `
-    exploration_return_unconfirmed
+    escape_not_clear exploration_return_unconfirmed
     action_failed actual_held_tool_unconfirmed adaptation_other_work awaiting_villagers bed_explodes_here behavior_error
     berries_unconfirmed bridge_guard_changed bridge_guard_partial bridge_guard_place_failed bridge_guard_unknown
     bridge_inspection_reentrant bridge_observation_changed bridge_place_failed bridge_prepare_failed

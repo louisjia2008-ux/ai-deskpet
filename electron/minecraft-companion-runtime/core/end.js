@@ -5,7 +5,7 @@
 // entities, the dragon's synced phase and health, and the exit portal's
 // end_portal blocks, which only appear once the server has counted the kill.
 
-const { integerBox } = require('./geometry');
+const { integerBox, CARDINAL_XZ, AXIS_OFFSETS } = require('./geometry');
 const { ARMOR_SLOTS, bestArmor, armorRank } = require('./armor');
 const { equipMatching } = require('./inventory');
 const { Vec3 } = require('vec3');
@@ -220,7 +220,7 @@ function applyEndMovements(bot) {
     const p = block?.position;
     if (!p) return 0;
     let cost = voidAt(p.x, p.y, p.z) ? 6 : 0;
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (voidAt(p.x + dx, p.y, p.z + dz)) cost += 3;
+    for (const [dx, dz] of CARDINAL_XZ) if (voidAt(p.x + dx, p.y, p.z + dz)) cost += 3;
     return cost;
   });
 }
@@ -236,7 +236,7 @@ const UNBREAKABLE = /^(bedrock|obsidian|end_portal_frame|end_gateway|end_portal|
  * in short pulses that stop on the new block's centre. Returns { ok, moved }.
  */
 const LIQUID = /^(water|lava)$/;
-const touchesLiquid = (bot, p) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+const touchesLiquid = (bot, p) => AXIS_OFFSETS
   .some(([x, y, z]) => LIQUID.test(bot.blockAt(p.offset(x, y, z))?.name || ''));
 
 async function bridgeStep(bot, ctx, target, options = {}) {
@@ -354,7 +354,7 @@ async function bridgeToward(bot, ctx, target, { maxSteps = 48, stopOnLand = true
     if (!step.ok) return steps > 0 ? { ok: true, steps, stopped: step.reason } : step;
     // Natural ground on both sides: off the bridge.
     const f = bot.entity.position.floored();
-    const landed = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    const landed = CARDINAL_XZ
       .filter(([x, z]) => /end_stone/.test(bot.blockAt(f.offset(x, -1, z))?.name || '') && !overVoid(bot, f.x + x, f.y, f.z + z)).length >= 3;
     if (landed && stopOnLand) { steps += 1; break; }
   }
@@ -440,7 +440,7 @@ async function digShelter(bot, ctx) {
   for (const depth of [1, 2, 3]) {
     const below = feet.offset(0, -depth, 0);
     if (!isStone(below) || !isStone(below.offset(0, -1, 0))) return fail('no_shelter_ground');
-    for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (bot.blockAt(below.offset(x, 0, z))?.boundingBox !== 'block') return fail('shelter_wall_open');
+    for (const [x, z] of CARDINAL_XZ) if (bot.blockAt(below.offset(x, 0, z))?.boundingBox !== 'block') return fail('shelter_wall_open');
   }
   for (const depth of [1, 2, 3]) {
     const below = feet.offset(0, -depth, 0);

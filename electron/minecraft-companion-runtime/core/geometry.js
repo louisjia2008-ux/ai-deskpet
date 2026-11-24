@@ -1,5 +1,8 @@
 'use strict';
 
+const CARDINAL_XZ = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const AXIS_OFFSETS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
 // Visit integer coordinates in the requested order without materializing a grid.
 function* integerBox([a0, a1, da = 1], [b0, b1, db = 1], [c0, c1, dc = 1] = [0, 0]) {
   for (let a = a0; a <= a1; a += da) {
@@ -9,4 +12,4 @@ function* integerBox([a0, a1, da = 1], [b0, b1, db = 1], [c0, c1, dc = 1] = [0, 
   }
 }
 
-module.exports = { integerBox };
+module.exports = { integerBox, CARDINAL_XZ, AXIS_OFFSETS };

@@ -1,5 +1,6 @@
 'use strict';
 
+const { AXIS_OFFSETS: WATER_STEPS } = require('./geometry');
 const { randomUUID } = require('node:crypto');
 const { Vec3 } = require('vec3');
 const { classifyReason, FAILURE_LIMIT, FAILURE_WINDOW_MS, isComplete, isRescueBehavior } = require('./action-reasons');
@@ -7,7 +8,6 @@ const { countInventory, ownedItems } = require('./perception');
 
 const receipts = new WeakMap();
 const WATER = new Set(['water', 'bubble_column', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass']);
-const WATER_STEPS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const waterRoutes = new WeakMap();
 const rescueOf = ctx => ctx?.rescue || (isRescueBehavior(ctx?.behavior) ? ctx.behavior : null);
 

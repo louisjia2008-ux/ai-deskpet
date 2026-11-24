@@ -21,7 +21,7 @@
 // The line starts at the rail on the stairs' top and only ever grows from its
 // end, so each new rail joins the previous one and curves shape themselves.
 
-const { integerBox } = require('../geometry');
+const { integerBox, CARDINAL_XZ: STEPS } = require('../geometry');
 const { vec: v } = require('../blacklist');
 const { firstDeviceGround, goToStand, isAir, LIQUID, reachAndDig } = require('./device-site');
 const { waiting } = require('../action-result');
@@ -49,7 +49,6 @@ const NOT_FULL = /(_slab|_stairs|farmland|_bed|chest|_fence|_wall|_pane|glass|le
 const KEEP = /(rail|_door|_sign|torch|banner|_button|lever|pressure_plate|bell|_bed|lantern|tripwire|redstone_wire|repeater|comparator)$/;
 const isRail = (block) => Boolean(block) && /(^|_)rail$/.test(block.name);
 const key = (p) => `${p.x},${p.y},${p.z}`;
-const STEPS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 /**
  * Mineflayer adds the passengers a set_passengers packet lists but never

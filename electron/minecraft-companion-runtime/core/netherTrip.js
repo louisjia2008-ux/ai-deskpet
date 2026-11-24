@@ -13,10 +13,9 @@ const { Vec3 } = require('vec3');
 const nether = require('./nether');
 const end = require('./end');
 const { abortError } = require('./confirm');
-const { integerBox } = require('./geometry');
+const { integerBox, CARDINAL_XZ: CARDINAL } = require('./geometry');
 const { RaycastIterator } = require('prismarine-world').iterators;
 
-const CARDINAL = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const { fail } = require('./action-result');
 // Runtime blocks expose their actual collision shapes. A fence or half slab
 // cannot stand in for the full-height floor and walls admitted by this route.

@@ -1,5 +1,6 @@
 'use strict';
 
+const { CARDINAL_XZ: SIDES } = require('./geometry');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const { isSoft, canClearTerrain } = require('./site');
@@ -8,7 +9,6 @@ const { complete, createAttempt, failure, factsOf, isComplete, rescueOf, resultF
 
 const v = (p) => new Vec3(p.x, p.y, p.z);
 const dimensionOf = (bot) => String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '');
-const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 function blockTarget(bot, goal, step, position, { cells = [], tools = /_(pickaxe|shovel|axe)$/, tag = '' } = {}) {
   return { goal, step, dimension: dimensionOf(bot), position,
     witness: () => {

@@ -8,6 +8,7 @@
 //      (a cobblestone generator with a hopper, then the hopper-fed furnace),
 //      each built beside the house from materials gathered into its chest
 
+const { AXIS_OFFSETS: faces } = require('../geometry');
 const { createHomesteadGoal } = require('./homestead');
 const { createStockFoodGoal } = require('./stockFood');
 const { createGatherBlocksGoal, createGatherLogsGoal } = require('./gatherBlocks');
@@ -55,7 +56,6 @@ const stockWork = (stock, key, target, kb) => {
 
 function createReserveCards(bot, kb, food, inOverworld) {
   const hasRoom = (state) => state.freeSlots !== 0 && inOverworld();
-  const faces = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
   const reserve = (id, key, create, requires = hasRoom) => ({
     id, stage: 0, risk: 'medium', requires, bounded: true, create,
     demand: state => stockWork(state.inventory, key, 64, kb).remaining / 64,

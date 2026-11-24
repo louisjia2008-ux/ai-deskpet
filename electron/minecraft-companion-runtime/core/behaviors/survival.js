@@ -19,15 +19,20 @@ const { createStance } = require('../stance');
 const { goals } = require('mineflayer-pathfinder');
 const { isSurveySurvivalItem } = require('../survey-plan-actions');
 const { contactBlock, safeStand } = require('../home-topology');
-const { applyWalkOnlyMovements } = require('../nether');
+const { applyWalkOnlyMovements, dimension: dimensionOf } = require('../nether');
 const { ledgerTarget } = require('../failure-ledger');
 const { isWaterBlock } = require('../dry-route');
+const { pillarUp } = require('../end');
 
-const SURVEY_REFLEXES = new Set(['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer']);
+const SURVEY_REFLEXES = new Set(['escape', 'escape_fallback', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer']);
 const enabledDuringSurvey = ({ name }) => SURVEY_REFLEXES.has(name);
 const SURVEY_LEASH = 16;
 // Leave room for the body and braking at the edge of a planned route.
 const SURVEY_ROUTE_RADIUS = SURVEY_LEASH - 1;
+const surveyRetreatGoal = (area, target) => new goals.GoalCompositeAll([
+  new goals.GoalInvert(target),
+  new goals.GoalNearXZ(area.x, area.z, SURVEY_ROUTE_RADIUS - 1),
+]);
 const surveyDistance = (area, position) => Math.hypot(position.x - area.x, position.z - area.z);
 
 /** Short reflex-only route, bounded even when A* would prefer a detour. */
@@ -67,7 +72,6 @@ function incomingArrow(bot) {
 
 // Entity flag bit 0 is "on fire".
 const burning = (bot) => (Number(bot.entity?.metadata?.[0]) & 1) === 1 || bot.entity?.isInLava === true;
-const dimensionOf = (bot) => String(bot?.game?.dimension || 'overworld').replace(/^minecraft:/, '');
 const FIRE = new Set(['fire', 'soul_fire']);
 const FIRE_UNSAFE = /^(lava|water|bubble_column|magma_block|campfire|soul_campfire|cactus|powder_snow)$/;
 const fireKey = (p) => `${p.x},${p.y},${p.z}`;
@@ -83,8 +87,10 @@ function fireBodyCells(bot, at = bot.entity?.position) {
   const width = bot.entity.width > 0 && bot.entity.width <= 2 ? bot.entity.width : 0.6;
   const height = bot.entity.height > 0 && bot.entity.height <= 3 ? bot.entity.height : 1.8;
   const cells = [];
-  for (const [x, z] of integerBox([Math.floor(at.x - width / 2 + 1e-7), Math.floor(at.x + width / 2 - 1e-7)], [Math.floor(at.z - width / 2 + 1e-7), Math.floor(at.z + width / 2 - 1e-7)])) {
-    for (let y = Math.floor(at.y + 1e-7); y <= Math.floor(at.y + height - 1e-7); y++) cells.push(new Vec3(x, y, z));
+  const horizontalBounds = coordinate => [Math.floor(coordinate - width / 2 + 1e-7), Math.floor(coordinate + width / 2 - 1e-7)];
+  const verticalBounds = [Math.floor(at.y + 1e-7), Math.floor(at.y + height - 1e-7)];
+  for (const [x, z, y] of integerBox(horizontalBounds(at.x), horizontalBounds(at.z), verticalBounds)) {
+    cells.push(new Vec3(x, y, z));
   }
   return cells;
 }
@@ -95,7 +101,7 @@ const freeOfContact = (bot, at) => ![at.floored().offset(0, -1, 0), ...fireBodyC
 function nearbyContact(bot) {
   const at = bot.entity.position, feet = at.floored();
   let source = null, nearest = Infinity;
-  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 2; dy++) {
+  for (const [dx, dz, dy] of integerBox([-1, 1], [-1, 1], [-1, 2])) {
     const p = feet.offset(dx, dy, dz), b = bot.blockAt(p);
     if (!contactBlock(b)) continue;
     const gap = Math.hypot(Math.max(0, p.x - at.x, at.x - p.x - 1), Math.max(0, p.z - at.z, at.z - p.z - 1),
@@ -116,12 +122,14 @@ function fireEdgeSafe(bot, from, to, allowedFire) {
   const first = fireBodyCells(bot, from), last = fireBodyCells(bot, to);
   if (!first.length || !last.length) return false;
   const points = [...first, ...last];
-  for (let x = Math.min(...points.map((p) => p.x)); x <= Math.max(...points.map((p) => p.x)); x++) {
-    for (const [z, y] of integerBox([Math.min(...points.map((p) => p.z)), Math.max(...points.map((p) => p.z))], [start.y, Math.max(...points.map((p) => p.y))])) {
-      const p = new Vec3(x, y, z), b = bot.blockAt(p);
-      if (!b || b.boundingBox !== 'empty' || FIRE_UNSAFE.test(b.name)
-        || (FIRE.has(b.name) && !allowedFire.has(fireKey(p)))) return false;
-    }
+  const bounds = axis => {
+    const values = points.map(p => p[axis]);
+    return [Math.min(...values), Math.max(...values)];
+  };
+  for (const [x, z, y] of integerBox(bounds('x'), bounds('z'), [start.y, bounds('y')[1]])) {
+    const p = new Vec3(x, y, z), b = bot.blockAt(p);
+    if (!b || b.boundingBox !== 'empty' || FIRE_UNSAFE.test(b.name)
+      || (FIRE.has(b.name) && !allowedFire.has(fireKey(p)))) return false;
   }
   return true;
 }
@@ -231,19 +239,17 @@ function coverSpot(bot, ghast) {
   const feet = bot.entity.position.floored();
   const eye = ghast.position.offset(0, 2, 0);
   let best = null;
-  for (let dx = -6; dx <= 6; dx += 1) {
-    for (const [dz, dy] of integerBox([-6, 6], [-2, 2])) {
-      const p = feet.offset(dx, dy, dz);
-      const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy);
-      if (best && d >= best.d) continue;
-      const floor = bot.blockAt(p.offset(0, -1, 0));
-      if (!floor || floor.boundingBox !== 'block' || /magma|lava/.test(floor.name)) continue;
-      if (bot.blockAt(p)?.boundingBox !== 'empty' || bot.blockAt(p.offset(0, 1, 0))?.boundingBox !== 'empty') continue;
-      if (/lava|fire/.test(bot.blockAt(p)?.name || '')) continue;
-      if (bot.blockAt(p.offset(0, 2, 0))?.boundingBox !== 'block') continue;
-      if (clearLine(bot, eye, p.offset(0.5, 1.6, 0.5)) || clearLine(bot, eye, p.offset(0.5, 0.5, 0.5))) continue;
-      best = { p, d };
-    }
+  for (const [dx, dz, dy] of integerBox([-6, 6], [-6, 6], [-2, 2])) {
+    const p = feet.offset(dx, dy, dz);
+    const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy);
+    if (best && d >= best.d) continue;
+    const floor = bot.blockAt(p.offset(0, -1, 0));
+    if (!floor || floor.boundingBox !== 'block' || /magma|lava/.test(floor.name)) continue;
+    if (bot.blockAt(p)?.boundingBox !== 'empty' || bot.blockAt(p.offset(0, 1, 0))?.boundingBox !== 'empty') continue;
+    if (/lava|fire/.test(bot.blockAt(p)?.name || '')) continue;
+    if (bot.blockAt(p.offset(0, 2, 0))?.boundingBox !== 'block') continue;
+    if (clearLine(bot, eye, p.offset(0.5, 1.6, 0.5)) || clearLine(bot, eye, p.offset(0.5, 0.5, 0.5))) continue;
+    best = { p, d };
   }
   return best?.p || null;
 }
@@ -350,13 +356,14 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   // Legacy entityHurt has no source. For neutral mobs keep the arm-swing
   // heuristic so nearby arrows, falls or fire do not turn the pack hostile.
   const swings = new Map(); // entity id -> time of last arm swing
-  let archerHit = null;
+  let archerHit = null, lastHurt = -Infinity;
   const trackedNeutral = (e) => CALM_UNLESS_PROVOKED.has(e.name) || e.name === 'enderman';
   const onSwing = (entity) => {
     if (entity && trackedNeutral(entity)) swings.set(entity.id, Date.now());
   };
   const onHurt = (entity, source) => {
     if (entity !== bot.entity) return;
+    lastHurt = Date.now();
     if (surveyArea() && source?.position && surveyBowUser(source.name)) {
       archerHit = { source, until: Date.now() + 8000 };
     }
@@ -454,12 +461,64 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   };
   bot.companionSetRisk = (level) => stance.setRisk(level);
 
+  let retreats = new WeakMap();
+  const sameThreat = threat => bot.entities?.[threat.id];
+  const box = p => bot.blockAt?.(p)?.boundingBox;
+  const throat = threat => {
+    const feet = bot.entity.position.floored(), { x, z } = threat.position.minus(bot.entity.position);
+    const dx = Math.abs(x) >= Math.abs(z) ? Math.sign(x) : 0, dz = dx ? 0 : Math.sign(z);
+    const cell = feet.offset(dx, 0, dz);
+    const sides = [-1, 1].map(sign => box(cell.offset(-sign * dz, 0, sign * dx)));
+    return { cell, width: sides.every(Boolean) ? 1 + sides.filter(box => box === 'empty').length : null };
+  };
+  const escapeFacts = (threat, corridorWidth) => ({
+    threatId: threat.id, mob: threat.name, startDistance: threat.distance, health: bot.health,
+    endDistance: sameThreat(threat)?.position?.distanceTo(bot.entity.position) ?? null,
+    corridorWidth, escapeRange: t.escapeRange, hitRecently: Date.now() - lastHurt < 2000,
+  });
+  const escapeFallback = {
+    name: 'escape_fallback',
+    band: BAND.ESCAPE,
+    want(state) {
+      const threat = nearest(state), episode = threat && retreats.get(sameThreat(threat));
+      return !state.sheltered && threat?.distance < t.escapeRange && episode === true ? 1 : 0;
+    },
+    async run(ctx) {
+      const threat = nearest(ctx.perceive()), entity = threat && sameThreat(threat);
+      if (retreats.get(entity) !== true) return complete(false);
+      retreats.set(entity, false);
+      const { cell, width } = throat(threat), feet = bot.entity.position.floored();
+      let method, ok = false;
+      if (!surveyArea()) {
+        if (width === 1 && threat.distance >= 1.8 && !cell.equals(feet)
+          && box(cell) === 'empty' && box(cell.offset(0, 2, 0)) === 'block') {
+          method = 'block_passage';
+          await skills.placeAt(bot, ctx, cell, 'seal', { requireAir: true });
+          ok = box(cell) === 'block' && throat(entity).cell.equals(cell);
+        } else if ([2, 3].every(y => box(feet.offset(0, y, 0)) === 'empty')) {
+          method = 'pillar_up';
+          ok = await pillarUp(bot, ctx, feet.y + 2, { maxSteps: 2 }) === 2
+            && bot.entity.onGround === true && bot.entity.position.y >= feet.y + 1.9;
+        }
+      }
+      if (ctx.signal?.aborted) throw abortError(ctx.signal);
+      const facts = { ...escapeFacts(threat, width), method, ok };
+      ctx.record('escape_fallback', facts);
+      return ok ? complete() : failure('escape_not_clear', facts, ctx, bot);
+    },
+  };
+
   const escape = {
     name: 'escape',
     band: BAND.ESCAPE,
+    // The free throat tile can be occupied before the general failure cooldown ends.
+    retryDelayMs: ({ reason, facts }) => reason === 'escape_not_clear' && facts.corridorWidth === 1 ? 100 : undefined,
     want(state) {
       const threat = nearest(state);
       if (!threat || state.sheltered) return 0;
+      const entity = sameThreat(threat), episode = retreats.get(entity);
+      if (threat.distance >= t.escapeRange) { retreats.delete(entity); return 0; }
+      if (typeof episode === 'boolean') return 0;
       if (threat.name === 'creeper' && threat.distance <= 4) return 1;
       // A brute or hoglin on the bot outruns it: running only takes the hits in the back.
       if (CHARGERS.has(threat.name) && threat.distance <= BRUTE_FIGHT) return 0;
@@ -471,19 +530,33 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     },
     async run(ctx) {
       const threat = nearest(ctx.perceive());
+      if (!threat) return complete(false);
+      ctx.record('escape_start', { threatId: threat.id, mob: threat.name });
       const area = surveyArea();
-      if (!area) return actions.fleeFrom(bot, ctx, threat?.position || bot.entity.position);
-      if (!threat) return { ok: true };
-      const { x, y, z } = threat.position;
-      const goal = new goals.GoalCompositeAll([
-        new goals.GoalInvert(new goals.GoalNear(x, y, z, 8)),
-        new goals.GoalNearXZ(area.x, area.z, SURVEY_ROUTE_RADIUS - 1),
-      ]);
-      ctx.record('survey_escape_start', { mob: threat.name, siteDistance: surveyDistance(area, bot.entity.position) });
-      const result = await withSurveyLeash(bot, area, () => actions.goTo(bot, ctx, goal,
-        { timeoutMs: 5000, retryNoProgress: false }));
-      ctx.record('survey_escape_result', { ok: result.ok, reason: result.reason, siteDistance: surveyDistance(area, bot.entity.position) });
-      return result;
+      const entity = sameThreat(threat);
+      const { width } = throat(threat);
+      if (!area && width === 1) await actions.nudge(bot, ctx, {
+        accept: p => p.offset(0.5, 0, 0.5).distanceTo(threat.position) > threat.distance,
+      });
+      else if (!area) await actions.fleeFrom(bot, ctx, threat.position, { distance: t.escapeRange });
+      else {
+        const { x, y, z } = threat.position;
+        const goal = surveyRetreatGoal(area, new goals.GoalNear(x, y, z, 8));
+        ctx.record('survey_escape_start', { mob: threat.name, siteDistance: surveyDistance(area, bot.entity.position) });
+        const result = await withSurveyLeash(bot, area, () => actions.goTo(bot, ctx, goal,
+          { timeoutMs: 5000, retryNoProgress: false }));
+        ctx.record('survey_escape_result', { ok: result.ok, reason: result.reason, siteDistance: surveyDistance(area, bot.entity.position) });
+      }
+      if (ctx.signal?.aborted) throw abortError(ctx.signal);
+      const facts = escapeFacts(threat, width);
+      const ok = facts.endDistance > threat.distance && facts.endDistance >= t.escapeRange && !facts.hitRecently;
+      ctx.record('escape_result', { ...facts, ok, reason: ok ? null : 'escape_not_clear' });
+      if (ok) { retreats.delete(entity); return complete(); }
+      if (entity) {
+        const now = Date.now(), previous = retreats.get(entity);
+        retreats.set(entity, now - previous <= 20_000 ? true : now);
+      }
+      return failure('escape_not_clear', facts, ctx, bot);
     },
   };
 
@@ -879,8 +952,9 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     want: () => (!bot.entity?.isInLava && fireContacts(bot).length > 0 ? 1.8 : 0),
     async run(ctx) {
       const m = bot.pathfinder?.movements;
-      const keys = ['canDig', 'allowParkour', 'allow1by1towers', 'scafoldingBlocks', 'maxDropDown', 'allowSprinting', 'companionWalkOnly'];
-      const saved = m && keys.map((key) => [key, Object.hasOwn(m, key),
+      const profile = { canDig: false, allowParkour: false, allow1by1towers: false,
+        scafoldingBlocks: [], maxDropDown: 0, allowSprinting: false, companionWalkOnly: true };
+      const saved = m && Object.keys(profile).map((key) => [key, Object.hasOwn(m, key),
         key === 'allowSprinting' ? (m.sprintSetting ?? m.allowSprinting) : m[key]]);
       const ownedSneaking = Object.hasOwn(bot, 'companionSneaking'), savedSneaking = bot.companionSneaking;
       const halt = () => {
@@ -899,16 +973,16 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
         if (ctx.signal?.aborted) throw abortError(ctx.signal);
         if (bot.entity.isInLava) return finish(false, 'in_lava');
         const from = bot.entity.position.clone(), feet = from.floored();
-        const contacts = fireContacts(bot), allowedFire = new Set(contacts.map(fireKey));
+        const contacts = fireContacts(bot).map(fireKey);
         if (!contacts.length) return finish(false, 'fire_contact_changed');
+        const allowedFire = new Set(contacts);
         const candidates = [feet, ...SIDES.map((side) => feet.plus(side))].map((p) => p.offset(0.5, 0, 0.5));
         const target = candidates.find((p) => !fireContacts(bot, p).length && fireEdgeSafe(bot, from, p, allowedFire));
         if (!target) return finish(false, 'no_safe_fire_exit');
         const targetCell = target.floored();
-        if (m) Object.assign(m, { canDig: false, allowParkour: false, allow1by1towers: false,
-          scafoldingBlocks: [], maxDropDown: 0, allowSprinting: false, companionWalkOnly: true });
+        if (m) Object.assign(m, profile);
         ctx.record?.('fire_escape_start', { from: fireKey(from), target: fireKey(target),
-          mode: targetCell.equals(feet) ? 'recentre' : 'neighbour', contacts: contacts.map(fireKey) });
+          mode: targetCell.equals(feet) ? 'recentre' : 'neighbour', contacts });
         bot.companionSneaking = true;
         for (let i = 0; i < 40; i++) {
           if (ctx.signal?.aborted) throw abortError(ctx.signal);
@@ -944,6 +1018,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   const onHealth = () => {
     const damage = health - bot.health;
     health = bot.health;
+    if (damage > 0) lastHurt = Date.now();
     if (!(damage > 0) || surveyArea() || !bot.entity?.position || !bot.blockAt || bot.entity.isInLava
       || nearHostile()) return;
     const source = nearbyContact(bot);
@@ -952,7 +1027,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     const spec = ledgerTarget(bot, 'contact_hazard', source.p);
     bot.companionFailureLedger?.record(failure('contact_hazard', { block: source.name, damage }), spec);
   };
-  const clearContact = () => { hurtContact = null; };
+  const clearContact = () => { hurtContact = null; lastHurt = -Infinity; retreats = new WeakMap(); };
   bot.on?.('health', onHealth);
   bot.on?.('death', clearContact);
   const leaveContact = {
@@ -1327,10 +1402,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       }
 
       ctx.record('survey_archer_response', { mob: shooter.name, action: 'withdraw', distance });
-      const goal = new goals.GoalCompositeAll([
-        new goals.GoalInvert(new goals.GoalNearXZ(shooter.position.x, shooter.position.z, 16)),
-        new goals.GoalNearXZ(area.x, area.z, SURVEY_ROUTE_RADIUS - 1),
-      ]);
+      const goal = surveyRetreatGoal(area, new goals.GoalNearXZ(shooter.position.x, shooter.position.z, 16));
       return withSurveyLeash(bot, area, () => actions.goTo(bot, ctx, goal, { timeoutMs: 4000, retryNoProgress: false }));
     },
   };
@@ -1417,7 +1489,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   };
   deflect.dispose = disposeNether;
 
-  return [quench, leaveLava, leaveFire, leaveContact, unbury, heal, escape, breathe, deflect, block, surveyArcher, hide, defend, cover, avoid, eat, provision, recover, recoverDrops];
+  return [quench, leaveLava, leaveFire, leaveContact, unbury, heal, escape, escapeFallback, breathe, deflect, block, surveyArcher, hide, defend, cover, avoid, eat, provision, recover, recoverDrops];
 }
 
 module.exports = { createSurvivalBehaviors, enabledDuringSurvey };

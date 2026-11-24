@@ -27,9 +27,9 @@ function setup(items = []) {
 }
 
 test('survey only schedules non-mutating reflexes and joins one action before restarting construction', async () => {
-  assert.deepEqual(['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer',
+  assert.deepEqual(['escape', 'escape_fallback', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer',
     'night_rest', 'danger_bunker', 'unstick', 'unbury', 'recover_drops', 'provision', 'home_maintenance']
-    .filter((name) => enabledDuringSurvey({ name })), ['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer']);
+    .filter((name) => enabledDuringSurvey({ name })), ['escape', 'escape_fallback', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer']);
   const runs = [];
   let threatened = false;
   const brain = createBrain({
@@ -69,6 +69,7 @@ test('survey defense and escape filter path detours and restore the original mov
   const original = function () { assert.equal(this, bot.pathfinder.movements); return [inner, outer, farther]; };
   bot.pathfinder = { movements: { companionWalkOnly: true, getNeighbors: original } };
   const target = { id: 10, name: 'spider', distance: 2, position: origin.offset(0, 0, 2) };
+  bot.entities[target.id] = target;
   const state = { alive: true, health: 4, food: 20, position: origin, hostiles: [target], inventory: {} };
   const calls = [];
   const checkRoute = () => {
@@ -91,6 +92,7 @@ test('survey defense and escape filter path detours and restore the original mov
         assert.equal(goal.isEnd({ x: -10, y: 64, z: 0 }), true);
         assert.equal(options.retryNoProgress, false);
         calls.push('escape');
+        bot.entity.position = origin.offset(-10, 0, 0);
         return { ok: true };
       },
       collectDrops() { assert.fail('defense left the site to retrieve drops'); },
