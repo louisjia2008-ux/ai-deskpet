@@ -63,3 +63,18 @@ it('sits over her head when the window has room there, else under her face, neve
   expect(screen.getByRole('status')).toHaveClass('is-above');
   expect(screen.getByRole('status').style.bottom).toBe('398px');
 });
+
+it('holds while the pointer is over it and gives a few seconds after leaving', async () => {
+  render(bubble());
+  await act(async () => vi.advanceTimersByTimeAsync(55_000));
+  fireEvent.pointerEnter(screen.getByRole('status'));
+  await act(async () => vi.advanceTimersByTimeAsync(120_000));
+  expect(screen.getByRole('status')).not.toHaveClass('is-fading');
+  expect(dismissBubble).not.toHaveBeenCalled();
+  fireEvent.pointerLeave(screen.getByRole('status'));
+  await act(async () => vi.advanceTimersByTimeAsync(7_999));
+  expect(screen.getByRole('status')).not.toHaveClass('is-fading');
+  await act(async () => vi.advanceTimersByTimeAsync(1 + 600));
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(dismissBubble).toHaveBeenCalledOnce();
+});

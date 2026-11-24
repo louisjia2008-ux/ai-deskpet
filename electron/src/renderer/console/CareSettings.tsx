@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { JSX } from 'react';
 import { proactiveMode } from '../../shared/automation';
 import type { AutomationAPI, ProactivePolicy } from '../../shared/automation';
+import { providerIsLocal } from './provider-locality';
 import type { ProviderConfig } from '../../shared';
 import './persona-settings.css';
 
@@ -18,9 +19,9 @@ const copy = {
   'zh-CN': {
     title: '主动关心', intro: '让她主动来找你：早上、你回来时、连续用电脑太久、夜深了还没睡。',
     detail: '使用时间、空闲时长及隐私允许的记忆和日记摘要，不读取屏幕内容或输入。保留已有安静时段（默认23:00–08:00）；聊完两小时内不打扰，当天未回复不连发。',
-    cloud: '允许把可用于云端的记忆和日记摘要交给所选模型（云端模型需要开启）。仅本地数据仍留在本机。',
+    cloud: '问候时参考记忆和日记摘要（会发给云端模型；标为仅本机的内容不会发出）',
     toggle: '让她主动关心我', frequency: '频率', rare: '少（每天最多 1 次）', normal: '正常（每天最多 2 次）', often: '多（每天最多 3 次）', model: '使用的模型',
-    now: '现在问候一次', sent: '已请求问候，稍后会出现在角色旁边。', failed: '没有成功。请确认已配置模型，并允许了权限。', noProvider: '请先配置模型。',
+    now: '现在问候一次', sent: '已让她准备问候，写好后会出现在桌面（或你选的渠道）。', failed: '没有成功。请确认已配置模型，并允许了权限。', noProvider: '请先配置模型。',
   },
 } as const;
 
@@ -61,8 +62,8 @@ export const CareSettings = ({ api, providers, activeProviderId, locale, request
     <div><h2>{t.title}</h2><p>{t.intro}</p></div>
     <p className="muted">{t.detail}</p>
     {usable.length === 0 && <p role="status">{t.noProvider}</p>}
-    <label className="check-row"><input type="checkbox" checked={on} disabled={busy || policy === null || usable.length === 0} onChange={(event) => void apply(event.target.checked, policy ? frequencyOf(policy) : 'normal')} />{t.toggle}</label>
-    {policy && <label className="check-row"><input type="checkbox" checked={policy.privacy === 'cloud-allowed'} disabled={busy} onChange={e => void apply(on, frequencyOf(policy), provider, e.target.checked ? 'cloud-allowed' : 'local-only')} />{t.cloud}</label>}
+    <label className="check-row"><input type="checkbox" checked={on} disabled={busy || policy === null || (!on && usable.length === 0)} onChange={(event) => void apply(event.target.checked, policy ? frequencyOf(policy) : 'normal')} />{t.toggle}</label>
+    {on && policy && provider && !providerIsLocal(provider) && <label className="check-row"><input type="checkbox" checked={policy.privacy === 'cloud-allowed'} disabled={busy} onChange={e => void apply(on, frequencyOf(policy), provider, e.target.checked ? 'cloud-allowed' : 'local-only')} />{t.cloud}</label>}
     {on && policy && <div className="persona-row">
       <label>{t.frequency}<select value={frequencyOf(policy)} disabled={busy} onChange={(event) => void apply(true, event.target.value as Frequency)}>
         {(['rare', 'normal', 'often'] as const).map((value) => <option key={value} value={value}>{t[value]}</option>)}</select></label>

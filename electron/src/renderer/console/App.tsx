@@ -37,7 +37,7 @@ import { BackgroundJobs } from './BackgroundJobs';
 import { CodingTasks } from './CodingTasks';
 import { MinecraftPage } from './MinecraftPage';
 import { MinecraftDedicatedSettings, MinecraftDedicatedStatus } from './MinecraftDedicatedPanel';
-import { ArrowUp, Bell, BookOpen, CalendarDots, CaretRight, PaperPlaneTilt, ChatCircleDots, ClockCounterClockwise, Copy, GearSix, ListChecks, MagnifyingGlass, PushPin, SidebarSimple, Plus, Sparkle, Square, Toolbox } from '@phosphor-icons/react';
+import { ArrowUp, Bell, BookOpen, CalendarDots, CaretRight, TreeStructure, ChatCircleDots, ClockCounterClockwise, Copy, GearSix, ListChecks, MagnifyingGlass, PushPin, SidebarSimple, Plus, Sparkle, Square, Toolbox } from '@phosphor-icons/react';
 import { ChatReply } from './ChatReply';
 import { MediaLibraryPage } from './MediaLibraryPage';
 import { ChatImages } from './ChatImages';
@@ -67,6 +67,8 @@ import { CharacterSheetSettings } from './CharacterSheetSettings';
 import { VoiceSettings } from './VoiceSettings';
 import { QuickSetup } from './QuickSetup';
 import { CareSettings } from './CareSettings';
+import { ConfirmButton } from './ConfirmButton';
+import { HotkeyRecorder } from './HotkeyRecorder';
 import { ChatContextReceipts } from './ChatContextReceipts';
 import { ConversationImports } from './ConversationImports';
 import { CharacterPreviewProvider, CompanionAvatar, CompanionPanel, LiveCompanion } from './CompanionPreview';
@@ -153,14 +155,23 @@ const MainConsoleApp = (): JSX.Element => {
     return () => media.removeEventListener('change', change);
   }, []);
   const [error, setError] = useState(false);
+  // WeChat-only pages (digests, follow-ups) appear once the WeChat channel is set up.
+  const [wechatConfigured, setWechatConfigured] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const read = (): void => { void window.deskpet.wechat?.getState().then(state => { if (live) setWechatConfigured(state.configured); }).catch(() => undefined); };
+    read(); window.addEventListener('focus', read);
+    return () => { live = false; window.removeEventListener('focus', read); };
+  }, []);
 
-  const locale = snapshot?.app.resolvedLocale ?? 'en';
+  const locale = snapshot?.app.resolvedLocale ?? (/^zh/iu.test(window.navigator.language) ? 'zh-CN' : 'en');
   useEffect(() => { document.documentElement.lang = locale; }, [locale]);
   const t = useCallback((key: string): string => chatInteractionCopy[locale][key] ?? consoleCopy[locale][key] ?? messages[locale][key as MessageKey] ?? key, [locale]);
   const activeSessions = snapshot?.sessions.filter((session) => !session.archivedAt && !session.deletedAt) ?? [];
   const ownSessions = activeSessions.filter(session => !isChannelSession(session));
   const channelSessions = activeSessions.filter(isChannelSession);
-  const activeSessionId = selectedChat ?? ownSessions[0]?.id ?? activeSessions[0]?.id ?? '';
+  // Open on the owner's own latest chat; a channel conversation opens only when chosen.
+  const activeSessionId = selectedChat ?? ownSessions[0]?.id ?? '';
   // Opening a channel conversation by other means reveals where it lives; the toggle stays free after that.
   const activeIsChannel = channelSessions.some(session => session.id === activeSessionId);
   useEffect(() => { if (activeIsChannel) setChannelsOpen(true); }, [activeIsChannel, activeSessionId]);
@@ -183,7 +194,7 @@ const MainConsoleApp = (): JSX.Element => {
   };
 
   if (snapshot === null) {
-    return <main className="loading-state" aria-live="polite">{error || snapshotError ? t('common.error') : t('common.loading')}</main>;
+    return <main className="loading-state" aria-live="polite">{error || snapshotError ? <>{t('common.error')} <button type="button" onClick={() => { setError(false); void refresh(); }}>{t('common.retry')}</button></> : t('common.loading')}</main>;
   }
 
   const name = snapshot.relationship.nickname.trim() || snapshot.character.modelName || t('nav.companion');
@@ -199,8 +210,8 @@ const MainConsoleApp = (): JSX.Element => {
     setView('chat');
   };
   const zh = locale === 'zh-CN', attentionCount = (snapshot.attention?.items.filter(item => item.kind !== 'notice').length ?? 0) + healthIssues;
-  const digests = window.deskpet.wechatDigests;
-  const followup = window.deskpet.wechatFollowup;
+  const digests = wechatConfigured ? window.deskpet.wechatDigests : undefined;
+  const followup = wechatConfigured ? window.deskpet.wechatFollowup : undefined;
   const primary: NavEntry[] = [
     { id: 'chat', key: 'nav.chat', icon: <ChatCircleDots size={18} /> },
     { id: 'companion', label: snapshot.relationship.nickname.trim() || t('nav.companion'), icon: <Sparkle size={18} /> },
@@ -208,8 +219,8 @@ const MainConsoleApp = (): JSX.Element => {
     { id: 'memory', key: 'nav.memory', icon: <BookOpen size={18} /> },
   ];
   const openMedia = (): void => {
+    // Browsing images never creates a chat; one is created only when an image is put into a new conversation.
     setView('media');
-    if (!activeSessionId && !conversationBusy) void window.deskpet.chat.createSession({ title: zh ? '图片对话' : 'Image conversation', kind: 'normal' }).then(async session => { setSelectedChat(session.id); await refresh(); }).catch(() => setError(true));
   };
   const go = (next: View): void => {
     // A shortcut into one settings or companion tab applies once; the sidebar opens the first tab.
@@ -237,12 +248,12 @@ const MainConsoleApp = (): JSX.Element => {
     { id: 'schedules', label: t('nav.schedules') },
     { id: 'focus', label: t('nav.focus') },
   ] : group === 'updates' ? [
-    { id: 'attention', label: zh ? '待处理中心' : 'Attention center' },
+    { id: 'attention', label: zh ? '待处理' : 'To do' },
     { id: 'health', label: `${zh ? '运行状态' : 'Background status'}${healthIssues ? ` · ${healthIssues}` : ''}` },
     ...(window.deskpet.attention.doctor ? [{ id: 'doctor' as const, label: zh ? '医生' : 'Doctor' }] : []),
     { id: 'activity', label: t('nav.activity') },
     ...(digests ? [{ id: 'wechat-digests' as const, label: zh ? '群聊每日精华' : 'Daily group digests' }] : []),
-    ...(followup ? [{ id: 'wechat-followup' as const, label: zh ? '等你处理' : 'Waiting for you' }] : []),
+    ...(followup ? [{ id: 'wechat-followup' as const, label: zh ? '群里 @ 你' : 'Group mentions' }] : []),
   ] : group === 'tools' ? [
     { id: 'jobs', label: zh ? '后台任务' : 'Background tasks' },
     ...(window.deskpet.coding ? [{ id: 'coding' as const, label: zh ? '代码任务' : 'Coding tasks' }] : []),
@@ -288,7 +299,7 @@ const MainConsoleApp = (): JSX.Element => {
         {group && <header className="page-header"><h1>{[...primary, ...secondary].find(item => item.group === GROUPS[group])?.label}</h1></header>}
         {tabs && <div className="memory-tabs page-tabs" role="tablist">{tabs.map(tab => <button key={tab.id} type="button" role="tab" aria-selected={view === tab.id} onClick={() => go(tab.id)}>{tab.label}</button>)}</div>}
         {view === 'artifacts' && <ArtifactsPanel api={window.deskpet.chatWork} locale={locale} navigationBusy={conversationBusy} onOpenSession={selectChat} onContinue={continueArtifact} />}
-        {view === 'media' && <MediaLibraryPage api={window.deskpet.media} wechat={window.deskpet.wechat} providers={snapshot.providers} locale={locale} sessionId={activeSessionId} onAttached={() => setView('chat')} />}
+        {view === 'media' && <MediaLibraryPage api={window.deskpet.media} wechat={window.deskpet.wechat} providers={snapshot.providers} locale={locale} sessionId={activeSessionId} onAttached={() => setView('chat')} createSession={conversationBusy ? undefined : async () => { const session = await window.deskpet.chat.createSession({ title: zh ? '图片对话' : 'Image conversation', kind: 'normal' }); setSelectedChat(session.id); await refresh(); return session.id; }} />}
         {view === 'conversations' && <ConversationManager t={t} locale={locale} busy={conversationBusy} onSelect={selectChat} onAction={conversations.act} />}
         {view === 'companion' && <CompanionPage initialTab={companionTab} snapshot={snapshot} name={name} t={t} refresh={refresh} />}
         {view === 'minecraft' && <MinecraftPage locale={locale} t={t} onDedicatedSettings={openDedicatedSettings} />}
@@ -442,6 +453,20 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
   const [progressByMessage, setProgress] = useState<Record<string, ChatProgress>>({});
   const [liveMessageId, setLiveMessageId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  // Each conversation keeps its own unsent draft, so switching never carries text into another chat.
+  const drafts = useRef(new Map<string, string>());
+  const draftSession = useRef(sessionId);
+  useEffect(() => {
+    if (draftSession.current === sessionId) return;
+    const previous = draftSession.current;
+    draftSession.current = sessionId;
+    setDraft(current => {
+      if (current.trim()) drafts.current.set(previous, current); else drafts.current.delete(previous);
+      const restored = drafts.current.get(sessionId) ?? '';
+      drafts.current.delete(sessionId);
+      return restored;
+    });
+  }, [sessionId]);
   const composerForm = useRef<ComponentRef<'form'>>(null);
   const spokenDraft = useRef<string | null>(null);
   useEffect(() => { if (spokenDraft.current !== null && spokenDraft.current === draft) { spokenDraft.current = null; composerForm.current?.requestSubmit(); } }, [draft]);
@@ -723,6 +748,7 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
     setSubmitting(true);
     setSendError(false);
     setDraft('');
+    let submitted = false;
     try {
       const activeSession = await ensureSession(content);
       if (parseDelegationCommand(content) !== null) {
@@ -730,13 +756,20 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
         setDelegationDraft(review); setDelegationsOpen(true); return;
       }
       const result = await window.deskpet.chat.send({ sessionId: activeSession, content });
+      submitted = true;
       // A fast provider can finish before the IPC send promise resolves.
       if (!completedRuns.current.has(result.runId)) { activeRun.current = result.runId; setRunning(result.runId); }
-      const loaded = await window.deskpet.chat.listMessages(activeSession);
-      if (selectedSession.current === activeSession) setMessages((current) => reconcileChatMessages(loaded, current));
+      const reload = async (): Promise<void> => {
+        const loaded = await window.deskpet.chat.listMessages(activeSession);
+        if (selectedSession.current === activeSession) setMessages((current) => reconcileChatMessages(loaded, current));
+      };
+      // The message is already accepted; a failed reload is retried quietly instead of offering a resend.
+      await reload().catch(() => new Promise<void>(resolve => window.setTimeout(resolve, 1_000)).then(reload)).catch(() => undefined);
     } catch {
-      setSendError(true);
-      setDraft((current) => current.length === 0 ? content : current);
+      if (!submitted) {
+        setSendError(true);
+        setDraft((current) => current.length === 0 ? content : current);
+      }
     } finally {
       sending.current = false;
       setSubmitting(false);
@@ -783,12 +816,12 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
   const showCompanion = companionOpen && !narrow && snapshot.character.modelState === 'ready';
   return <section className={showCompanion ? 'chat-layout with-companion' : 'chat-layout'}>
     <div className="chat-pane">
-      <header className="chat-header"><div className="conversation-heading"><span className="eyebrow">{t('ui.chatWith')}</span><h1>{selectedTitle}</h1></div><div className="header-actions"><button type="button" className="icon-button" disabled={archived || Boolean(wechatTranscript)} aria-label={snapshot.app.resolvedLocale === 'zh-CN' ? '委派文本任务' : 'Delegate text task'} title={snapshot.app.resolvedLocale === 'zh-CN' ? '委派文本任务' : 'Delegate text task'} onClick={() => void openDelegation()}><PaperPlaneTilt size={17} /></button><button type="button" className="icon-button" aria-expanded={delegationsOpen} aria-label={snapshot.app.resolvedLocale === 'zh-CN' ? '委派状态' : 'Delegation status'} title={snapshot.app.resolvedLocale === 'zh-CN' ? '委派状态' : 'Delegation status'} onClick={() => setDelegationsOpen(!delegationsOpen)}><ListChecks size={17} /></button><div className="session-control"><ClockCounterClockwise size={18} /><select aria-label={t('chat.new')} title={t('ui.recent')} value={sessionId} disabled={conversationBusy} onChange={(event) => selectSession(event.target.value)}><option value="">{t('chat.new')}</option>{snapshot.sessions.filter((session) => !session.deletedAt && (!session.archivedAt || session.id === sessionId)).map((session) => <option key={session.id} value={session.id}>{session.title}</option>)}</select></div>{selectedConversation && <ConversationMenu session={selectedConversation} disabled={conversationBusy} t={t} onAction={onConversationAction} />}<button type="button" className="icon-button" aria-label={t(companionOpen ? 'ui.hideCompanion' : 'ui.showCompanion')} title={t(companionOpen ? 'ui.hideCompanion' : 'ui.showCompanion')} aria-expanded={companionOpen} onClick={() => setCompanionOpen(!companionOpen)}><SidebarSimple size={18} /></button><button type="button" className="icon-button" disabled={conversationBusy} aria-label={t('ui.newSession')} title={t('ui.newSession')} onClick={() => selectSession('')}><Plus size={18} /></button></div></header>
+      <header className="chat-header"><div className="conversation-heading"><span className="eyebrow">{t('ui.chatWith')}</span><h1>{selectedTitle}</h1></div><div className="header-actions"><button type="button" className="icon-button" disabled={archived || Boolean(wechatTranscript)} aria-label={snapshot.app.resolvedLocale === 'zh-CN' ? '委派文本任务' : 'Delegate text task'} title={snapshot.app.resolvedLocale === 'zh-CN' ? '委派文本任务' : 'Delegate text task'} onClick={() => void openDelegation()}><TreeStructure size={17} /></button><button type="button" className="icon-button" aria-expanded={delegationsOpen} aria-label={snapshot.app.resolvedLocale === 'zh-CN' ? '委派状态' : 'Delegation status'} title={snapshot.app.resolvedLocale === 'zh-CN' ? '委派状态' : 'Delegation status'} onClick={() => setDelegationsOpen(!delegationsOpen)}><ListChecks size={17} /></button><div className="session-control"><ClockCounterClockwise size={18} /><select aria-label={t('chat.new')} title={t('ui.recent')} value={sessionId} disabled={conversationBusy} onChange={(event) => selectSession(event.target.value)}><option value="">{t('chat.new')}</option>{snapshot.sessions.filter((session) => !session.deletedAt && (!session.archivedAt || session.id === sessionId)).map((session) => <option key={session.id} value={session.id}>{session.title}</option>)}</select></div>{selectedConversation && <ConversationMenu session={selectedConversation} disabled={conversationBusy} t={t} onAction={onConversationAction} />}<button type="button" className="icon-button" aria-label={t(companionOpen ? 'ui.hideCompanion' : 'ui.showCompanion')} title={t(companionOpen ? 'ui.hideCompanion' : 'ui.showCompanion')} aria-expanded={companionOpen} onClick={() => setCompanionOpen(!companionOpen)}><SidebarSimple size={18} /></button><button type="button" className="icon-button" disabled={conversationBusy} aria-label={t('ui.newSession')} title={t('ui.newSession')} onClick={() => selectSession('')}><Plus size={18} /></button></div></header>
       {delegationsOpen && !wechatTranscript && <div className="delegation-chat-panel"><Delegations focusRevision={focusDelegationRevision} focusBatchId={focusDelegationId} key={sessionId} sessionId={sessionId} providers={snapshot.providers} locale={snapshot.app.resolvedLocale} draft={delegationDraft?.sessionId === sessionId ? delegationDraft : null} onDraftChange={setDelegationDraft} /></div>}
       <div className="message-list" ref={messageList} aria-live="polite" onScroll={(event) => {
         const list = event.currentTarget;
         followOutput.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 40;
-      }}><div className="transcript-inner">{messagesState.length === 0 ? wechatTranscript ? <p className="muted">{t('conversation.wechatEmpty')}</p> : !snapshot.providers.some((provider) => provider.enabled) ? <QuickSetup locale={snapshot.app.resolvedLocale} refresh={refresh} /> : <div className="chat-welcome"><CompanionAvatar name={name} large /><h2>{t('ui.emptyTitle')}</h2><p>{t('ui.emptyDetail')}</p><div className="prompt-list">{['ui.promptHello', 'ui.promptDay', 'ui.promptFocus'].map((key) => <button type="button" key={key} onClick={() => setDraft(t(key))}>{t(key)}<ArrowUp size={14} /></button>)}</div></div> : messagesState.map((message) => <article key={message.id} className={`message ${message.role}`} data-status={message.status} data-followup-to={message.followupToMessageId}>
+      }}><div className="transcript-inner">{messagesState.length === 0 ? wechatTranscript ? <p className="muted">{t('conversation.wechatEmpty')}</p> : !snapshot.providers.some((provider) => provider.enabled) ? <QuickSetup locale={snapshot.app.resolvedLocale} refresh={refresh} /> : <div className="chat-welcome"><CompanionAvatar name={name} large /><h2>{t('ui.emptyTitle')}</h2><p>{t('ui.emptyDetail')}</p>{!draft.trim() && <div className="prompt-list">{['ui.promptHello', 'ui.promptDay', 'ui.promptFocus'].map((key) => <button type="button" key={key} onClick={() => setDraft(t(key))}>{t(key)}<ArrowUp size={14} /></button>)}</div>}</div> : messagesState.map((message) => <article key={message.id} className={`message ${message.role}`} data-status={message.status} data-followup-to={message.followupToMessageId}>
         {message.role === 'assistant' ? <CompanionAvatar name={name} /> : null}<div className="message-body">{message.role !== 'user' ? <small className="speaker-name">{message.role === 'assistant' ? name : message.role}</small> : null}{wechatTranscript ? <>{message.role === 'user' && <small className="speaker-name">{message.wechatSender ?? t(wechatTranscript === 'private' ? 'conversation.wechatPrivate' : wechatTranscript === 'friend' ? 'conversation.wechatFriend' : 'conversation.wechatGroup')}</small>}<p className="wechat-message-text">{message.content}</p></> : message.role === 'assistant' ? <ChatReply message={message} progress={progressByMessage[message.id]} animate={message.id === liveMessageId} t={t} onReveal={followLatest} /> : <>{message.followupToMessageId && <small className="chat-followup-label">{t('chat.interaction.followup')}</small>}<p>{message.content}</p></>}<ChatImages attachments={message.attachments} />{interaction?.approval?.messageId === message.id && <ChatApprovalCard key={interaction.approval.id} approval={interaction.approval} disabled={cancellingRun !== null || running !== interaction.runId} t={t} decide={decideApproval} />}{message.timerReceipts?.map((receipt) => <div className="timer-receipt" role="status" key={receipt.timerId}><strong>{t('timer.created')}: {receipt.label || t('timer.title')}</strong><time dateTime={receipt.dueAt}>{formatTimerDeadline(receipt.dueAt, receipt.timeZone)}</time></div>)}{message.memoryReceipts?.map((receipt) => <div className="memory-receipt" role="status" key={receipt.memoryId}><strong>{t(receipt.expiresAt ? 'memory.temporarySaved' : receipt.scope?.kind === 'session' ? 'memory.sessionSaved' : receipt.reused ? 'memory.alreadySaved' : 'memory.saved')}</strong><p>{receipt.text}</p><button type="button" className="secondary" onClick={manageMemory}>{t('memory.view')}</button></div>)}{message.memoryForget && <ChatMemoryForget message={message} disabled={archived || conversationBusy || submitting || running !== null} t={t} select={(memoryId) => forgetMemory(message, memoryId)} view={manageMemory} />}{message.memoryEdit && <ChatMemoryEdit message={message} disabled={archived || conversationBusy || submitting || running !== null} t={t} select={(memoryId) => editMemory(message, memoryId)} view={manageMemory} />}{message.role === 'assistant' && <ChatContextReceipts message={message} t={t} />}{message.status === 'failed' ? <small className="message-error" role="alert">{t(CHAT_ERROR_KEYS[message.errorCode ?? ''] ?? 'chat.runFailed')}</small> : null}{message.status === 'failed' && message.errorCode?.startsWith('tool.permission') ? <button type="button" className="secondary" onClick={managePermissions}>{t('tool.openPermissions')}</button> : null}{message.status === 'cancelled' ? <small className="message-note">{t('ui.stopped')}</small> : null}{message.role === 'assistant' && (message.status === 'failed' || message.status === 'cancelled') ? <button type="button" className="secondary" disabled={archived || conversationBusy || submitting || running !== null || modelSaving || provider === undefined} onClick={() => void retry(message.id)}>{t('chat.retry')}</button> : null}{message.role === 'assistant' && message.status === 'complete' && message.content.length > 0 ? <button type="button" className="copy-message" onClick={() => void copy(message)}><Copy size={12} />{t(copied === message.id ? 'ui.copied' : 'ui.copy')}</button> : null}</div>
       </article>)}{sessionId && !wechatTranscript && window.deskpet.chatWork && <ChatWorkPanel sessionId={sessionId} api={window.deskpet.chatWork} locale={snapshot.app.resolvedLocale} onOpenSession={selectSession} onContinueArtifact={onContinueArtifact} continuationDisabled={conversationBusy || archived} />}</div></div>
       <div className="composer-region">
@@ -817,10 +850,10 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) void send(event);
             }} />
           <div className="composer-tools"><small id="chat-composer-hint" className="composer-hint">{t(running === null ? 'chat.composerHint' : 'chat.interaction.followupHint')}</small>
-            {!wechatTranscript && <MicrophoneButton key={sessionId} zh={snapshot.app.resolvedLocale === 'zh-CN'} disabled={archived || running !== null} onResult={(text, autoSend) => {
-              setDraft(current => { if (!current.trim() && autoSend) spokenDraft.current = text; return current.trim() ? `${current}\n${text}` : text; });
-            }} />}
             <div className="composer-actions">
+              {!wechatTranscript && <MicrophoneButton key={sessionId} zh={snapshot.app.resolvedLocale === 'zh-CN'} disabled={archived || running !== null} onResult={(text, autoSend) => {
+                setDraft(current => { if (!current.trim() && autoSend) spokenDraft.current = text; return current.trim() ? `${current}\n${text}` : text; });
+              }} />}
               {window.deskpet.media && <button className="secondary" type="button" disabled={archived || conversationBusy || submitting || running !== null} onClick={manageMedia}>{snapshot.app.resolvedLocale === 'zh-CN' ? '图片 / 表情' : 'Images'}</button>}
               {running !== null && <button className="stop-button secondary" type="button" disabled={cancellingRun === running} onClick={() => void stop()}>{t('chat.cancel')}<Square size={12} weight="fill" /></button>}
               <button className="send-button" type="submit" disabled={archived || restoringInteraction || interactionLoadFailed || draft.trim().length === 0 || (running === null
@@ -989,7 +1022,7 @@ const MemoryPage = ({ onUseQuery, conversationBusy, currentSessionTitle, items, 
     catch (cause) { setError(cause instanceof Error && cause.message.includes('repository.commitUncertain') ? 'repository.commitUncertain' : cause instanceof Error && cause.message.includes('memory.forgetPending') ? 'memory.forgetPending' : cause instanceof Error && cause.message.includes('memory.forgetStale') ? 'memory.forgetStale' : 'memory.forgetFailed'); }
     finally { setBusy(false); }
   };
-  return <section><Header eyebrow={t('nav.memory')} title={t('memory.title')} /><div className="memory-tabs" role="tablist"><button type="button" role="tab" aria-selected={tab === 'memories'} onClick={() => setTab('memories')}>{t('memory.title')}</button>{inbox && <button type="button" role="tab" aria-selected={tab === 'inbox'} onClick={() => setTab('inbox')}>{locale === 'zh-CN' ? '收件箱' : 'Inbox'}</button>}<button type="button" role="tab" aria-selected={tab === 'imports'} onClick={() => setTab('imports')}>{t('imports.tab')}</button><button type="button" role="tab" aria-selected={tab === 'consolidation'} onClick={() => setTab('consolidation')}>{locale === 'zh-CN' ? '手动整理' : 'Manual consolidation'}</button><button type="button" role="tab" aria-selected={tab === 'nightly'} onClick={() => setTab('nightly')}>{locale === 'zh-CN' ? '夜间整理' : 'Nightly tidy-up'}</button></div>{tab === 'inbox' && inbox ? <WeChatInboxPanel api={inbox} locale={locale} /> : tab === 'nightly' ? <MemorySleepPanel api={window.deskpet.memorySleep} locale={locale} onMemoryChanged={refresh}/> : tab === 'consolidation' ? <>{!currentSessionId && <button type="button" disabled={busy || conversationBusy} onClick={() => void startSession()}>{locale === 'zh-CN' ? '开始整理审阅' : 'Start consolidation review'}</button>}{error && <p role="alert">{t(error)}</p>}<MemoryConsolidation openBatchId={openBatchId} providers={providers} sessionId={currentSessionId} locale={locale} /></> : tab === 'imports' ? <ConversationImports t={t} providers={providers} activeProviderId={activeProviderId} refresh={refresh} /> : <>{window.deskpet.memoryRecall && currentSessionId && <MemoryRecallPanel api={window.deskpet.memoryRecall} sessionId={currentSessionId} sessionTitle={currentSessionTitle} memoryVersion={items.map(item => `${item.id}:${item.contextMetadata?.revision ?? 0}`).sort().join('|')} locale={locale} onUseQuery={onUseQuery} continuationDisabled={conversationBusy} />}{window.deskpet.memoryRecall && !currentSessionId && <div><p>{locale === 'zh-CN' ? '请先选择一段未归档的普通对话，或开始一段新对话来确定记忆范围。' : 'Choose an active desktop conversation, or start a new conversation to set the memory scope.'}</p><button type="button" disabled={busy || conversationBusy} onClick={() => void startSession()}>{locale === 'zh-CN' ? '开始检索记忆' : 'Start memory search'}</button></div>}{window.deskpet.companionRecent && <CompanionRecentPanel api={window.deskpet.companionRecent} locale={locale} />}{window.deskpet.autoMemory && <AutoMemoryToggle api={window.deskpet.autoMemory} locale={locale} />}<div className="panel"><form className="stack-form" onSubmit={(event) => void save(event)}><textarea aria-label={t('form.text')} value={text} onChange={(event) => setText(event.target.value)} placeholder={t('form.text')} /><input aria-label={t('form.tags')} value={tags} onChange={(event) => setTags(event.target.value)} placeholder={t('form.tags')} /><button type="submit" disabled={busy}>{t('memory.add')}</button>{error && <p role="alert">{t(error)}</p>}</form></div>{localOnly > 0 && <div className="panel"><p>{locale === 'zh-CN' ? `有 ${localOnly} 条记忆标为仅本地，云端模型看不到。已经标为仅本地的旧对话不会因此改变。` : `${localOnly} memories are local-only, so cloud models cannot see them. Earlier conversations already marked local-only stay that way.`}</p><button type="button" disabled={busy} onClick={() => void shareAll()}>{confirmShare ? (locale === 'zh-CN' ? `确认：${localOnly} 条全部改为可发云端` : `Confirm: allow all ${localOnly} for cloud models`) : (locale === 'zh-CN' ? '全部改为可发云端' : 'Allow all for cloud models')}</button>{confirmShare && <button type="button" disabled={busy} onClick={() => setConfirmShare(false)}>{locale === 'zh-CN' ? '取消' : 'Cancel'}</button>}</div>}<div className="card-grid">{items.length === 0 ? <Empty text={t('memory.empty')} /> : items.map((item) => <article className="memory-card" key={item.id} data-memory-id={item.id}><p>{item.text}</p><div>{item.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div><MemoryContextControls key={`${item.id}:${item.contextMetadata?.revision ?? 0}:${currentSessionId}`} item={item} currentSessionId={currentSessionId} t={t} refresh={refresh} /><button type="button" className="text-button" disabled={busy} onClick={() => void remove(item)}>{t('common.delete')}</button></article>)}</div></>}</section>;
+  return <section><Header eyebrow={t('nav.memory')} title={t('memory.title')} /><div className="memory-tabs" role="tablist"><button type="button" role="tab" aria-selected={tab === 'memories'} onClick={() => setTab('memories')}>{t('memory.title')}</button>{inbox && <button type="button" role="tab" aria-selected={tab === 'inbox'} onClick={() => setTab('inbox')}>{locale === 'zh-CN' ? '收件箱' : 'Inbox'}</button>}<button type="button" role="tab" aria-selected={tab === 'imports'} onClick={() => setTab('imports')}>{t('imports.tab')}</button><button type="button" role="tab" aria-selected={tab === 'consolidation'} onClick={() => setTab('consolidation')}>{locale === 'zh-CN' ? '手动整理' : 'Manual consolidation'}</button><button type="button" role="tab" aria-selected={tab === 'nightly'} onClick={() => setTab('nightly')}>{locale === 'zh-CN' ? '夜间整理' : 'Nightly tidy-up'}</button></div>{tab === 'inbox' && inbox ? <WeChatInboxPanel api={inbox} locale={locale} /> : tab === 'nightly' ? <MemorySleepPanel api={window.deskpet.memorySleep} locale={locale} onMemoryChanged={refresh}/> : tab === 'consolidation' ? <>{!currentSessionId && <button type="button" disabled={busy || conversationBusy} onClick={() => void startSession()}>{locale === 'zh-CN' ? '开始整理审阅' : 'Start consolidation review'}</button>}{error && <p role="alert">{t(error)}</p>}<MemoryConsolidation openBatchId={openBatchId} providers={providers} sessionId={currentSessionId} locale={locale} /></> : tab === 'imports' ? <ConversationImports t={t} providers={providers} activeProviderId={activeProviderId} refresh={refresh} /> : <>{window.deskpet.autoMemory && <AutoMemoryToggle api={window.deskpet.autoMemory} locale={locale} />}{localOnly > 0 && <div className="panel"><p>{locale === 'zh-CN' ? `有 ${localOnly} 条记忆标为仅本地，云端模型看不到。已经标为仅本地的旧对话不会因此改变。` : `${localOnly} memories are local-only, so cloud models cannot see them. Earlier conversations already marked local-only stay that way.`}</p><button type="button" disabled={busy} onClick={() => void shareAll()}>{confirmShare ? (locale === 'zh-CN' ? `确认：${localOnly} 条全部改为可发云端` : `Confirm: allow all ${localOnly} for cloud models`) : (locale === 'zh-CN' ? '全部改为可发云端' : 'Allow all for cloud models')}</button>{confirmShare && <button type="button" disabled={busy} onClick={() => setConfirmShare(false)}>{locale === 'zh-CN' ? '取消' : 'Cancel'}</button>}</div>}<div className="card-grid">{items.length === 0 ? <Empty text={t('memory.empty')} /> : items.map((item) => <article className="memory-card" key={item.id} data-memory-id={item.id}><p>{item.text}</p><div>{item.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div><MemoryContextControls key={`${item.id}:${item.contextMetadata?.revision ?? 0}:${currentSessionId}`} item={item} currentSessionId={currentSessionId} t={t} refresh={refresh} /><ConfirmButton label={t('common.delete')} confirmLabel={locale === 'zh-CN' ? '确认删除' : 'Delete'} cancelLabel={t('common.cancel')} disabled={busy} onConfirm={() => void remove(item)} /></article>)}</div><details className="settings-more memory-add"><summary>{locale === 'zh-CN' ? '手动添加一条记忆' : 'Add a memory yourself'}</summary><div className="panel"><form className="stack-form" onSubmit={(event) => void save(event)}><textarea aria-label={t('form.text')} value={text} onChange={(event) => setText(event.target.value)} placeholder={t('form.text')} /><input aria-label={t('form.tags')} value={tags} onChange={(event) => setTags(event.target.value)} placeholder={t('form.tags')} /><button type="submit" disabled={busy}>{t('memory.add')}</button>{error && <p role="alert">{t(error)}</p>}</form></div></details>{window.deskpet.companionRecent && <CompanionRecentPanel api={window.deskpet.companionRecent} locale={locale} />}{window.deskpet.memoryRecall && currentSessionId && <MemoryRecallPanel api={window.deskpet.memoryRecall} sessionId={currentSessionId} sessionTitle={currentSessionTitle} memoryVersion={items.map(item => `${item.id}:${item.contextMetadata?.revision ?? 0}`).sort().join('|')} locale={locale} onUseQuery={onUseQuery} continuationDisabled={conversationBusy} />}{window.deskpet.memoryRecall && !currentSessionId && <div><p>{locale === 'zh-CN' ? '请先选择一段未归档的普通对话，或开始一段新对话来确定记忆范围。' : 'Choose an active desktop conversation, or start a new conversation to set the memory scope.'}</p><button type="button" disabled={busy || conversationBusy} onClick={() => void startSession()}>{locale === 'zh-CN' ? '开始检索记忆' : 'Start memory search'}</button></div>}</>}</section>;
 };
 
 
@@ -1006,6 +1039,8 @@ const SETTINGS_GROUPS: ReadonlyArray<{ zh: string; en: string; tabs: readonly Se
 const SettingsPage = ({ snapshot, t, refresh, initialTab, onOpenSession }: { snapshot: Snapshot; t: Translator; refresh: () => Promise<void>; initialTab: SettingsEntry; onOpenSession(id: string): void }): JSX.Element => {
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [diagnostics, setDiagnostics] = useState<DiagnosticSnapshot | null>(null);
+  // Opening the diagnostics tab runs the check; the button only repeats it.
+  useEffect(() => { if (tab === 'advanced') void window.deskpet.app.getDiagnostics().then(setDiagnostics).catch(() => undefined); }, [tab]);
   const zh = snapshot.app.resolvedLocale === 'zh-CN';
   const dedicated = window.deskpet.minecraftDedicated;
   return <section><Header eyebrow={t('nav.settings')} title={t('nav.settings')} /><div className="settings-layout"><div className="settings-tabs" role="tablist">{SETTINGS_GROUPS.map(group => <div className="settings-tab-group" key={group.tabs[0]}>
@@ -1025,7 +1060,7 @@ const SettingsPage = ({ snapshot, t, refresh, initialTab, onOpenSession }: { sna
     {tab === 'permissions' && <PermissionSettings permissions={snapshot.permissions} t={t} refresh={refresh} />}
     {tab === 'privacy' && <DataSettings directory={snapshot.app.dataDirectory} t={t} />}
     {tab === 'migration' && <MigrationSettings t={t} refresh={refresh} />}
-    {tab === 'advanced' && <div><h2>{t('diagnostics.title')}</h2><button type="button" onClick={() => void window.deskpet.app.getDiagnostics().then(setDiagnostics)}>{t('diagnostics.refresh')}</button>{diagnostics === null ? null : <pre>{JSON.stringify(diagnostics, null, 2)}</pre>}</div>}
+    {tab === 'advanced' && <div><h2>{t('diagnostics.title')}</h2><button type="button" className="secondary" onClick={() => void window.deskpet.app.getDiagnostics().then(setDiagnostics)}>{t('diagnostics.refresh')}</button>{diagnostics === null ? null : <details className="settings-more"><summary>{snapshot.app.resolvedLocale === 'zh-CN' ? '诊断详情（技术信息）' : 'Diagnostic details (technical)'}</summary><pre>{JSON.stringify(diagnostics, null, 2)}</pre></details>}</div>}
   </div></div></section>;
 };
 
@@ -1076,7 +1111,7 @@ const MigrationSettings = ({ t, refresh }: { t: Translator; refresh: () => Promi
   </div>;
 };
 
-const GeneralSettings = ({ snapshot, t, refresh }: { snapshot: Snapshot; t: Translator; refresh: () => Promise<void> }): JSX.Element => <div><h2>{t('settings.general')}</h2><div className="setting-row"><label htmlFor="language">{t('settings.language')}</label><select id="language" value={snapshot.app.locale} onChange={(event) => void window.deskpet.app.setLocale(event.target.value as AppState['locale']).then(refresh)}><option value="system">{t('settings.system')}</option><option value="en">{t('settings.english')}</option><option value="zh-CN">{t('settings.chinese')}</option></select></div><div className="setting-row"><label htmlFor="theme">{t('settings.theme')}</label><select id="theme" value={snapshot.app.theme} onChange={(event) => void window.deskpet.app.setTheme(event.target.value as AppState['theme']).then(refresh)}><option value="system">{t('settings.system')}</option><option value="light">{t('settings.light')}</option><option value="dark">{t('settings.dark')}</option></select></div><div className="setting-row"><label htmlFor="hotkey">{t('settings.hotkey')}</label><div className="setting-control"><input id="hotkey" value={snapshot.app.hotkey} onChange={(event) => void window.deskpet.app.setHotkey(event.target.value).then(refresh)} /><span className={`status-pill ${snapshot.app.hotkeyRegistered ? 'succeeded' : 'failed'}`}>{snapshot.app.hotkeyRegistered ? t('capability.state.available') : t('capability.state.unavailable')}</span></div></div><StartupSettings app={snapshot.app} t={t} refresh={refresh} /><details className="settings-more"><summary>{t('settings.capabilities')}</summary><div className="capability-list">{snapshot.app.capabilities.map((item) => <CapabilityRow key={item.id} item={item} t={t} />)}</div></details></div>;
+const GeneralSettings = ({ snapshot, t, refresh }: { snapshot: Snapshot; t: Translator; refresh: () => Promise<void> }): JSX.Element => <div><h2>{t('settings.general')}</h2><div className="setting-row"><label htmlFor="language">{t('settings.language')}</label><select id="language" value={snapshot.app.locale} onChange={(event) => void window.deskpet.app.setLocale(event.target.value as AppState['locale']).then(refresh)}><option value="system">{t('settings.system')}</option><option value="en">{t('settings.english')}</option><option value="zh-CN">{t('settings.chinese')}</option></select></div><div className="setting-row"><label htmlFor="theme">{t('settings.theme')}</label><select id="theme" value={snapshot.app.theme} onChange={(event) => void window.deskpet.app.setTheme(event.target.value as AppState['theme']).then(refresh)}><option value="system">{t('settings.system')}</option><option value="light">{t('settings.light')}</option><option value="dark">{t('settings.dark')}</option></select></div><div className="setting-row"><label htmlFor="hotkey">{t('settings.hotkey')}</label><div className="setting-control"><HotkeyRecorder value={snapshot.app.hotkey} zh={snapshot.app.resolvedLocale === 'zh-CN'} onChange={async (next) => { await window.deskpet.app.setHotkey(next); await refresh(); }} /><span className={`status-pill ${snapshot.app.hotkeyRegistered ? 'succeeded' : 'failed'}`}>{snapshot.app.hotkeyRegistered ? t('capability.state.available') : t('capability.state.unavailable')}</span></div></div><StartupSettings app={snapshot.app} t={t} refresh={refresh} /><details className="settings-more"><summary>{t('settings.capabilities')}</summary><div className="capability-list">{snapshot.app.capabilities.map((item) => <CapabilityRow key={item.id} item={item} t={t} />)}</div></details></div>;
 
 const CapabilityRow = ({ item, t }: { item: PlatformCapability; t: Translator }): JSX.Element => <div className="capability-row"><div><strong>{item.id}</strong><small>{t(item.reasonCode)}</small></div><span className={`status-pill ${item.state}`}>{t(`capability.state.${item.state}`)}</span></div>;
 

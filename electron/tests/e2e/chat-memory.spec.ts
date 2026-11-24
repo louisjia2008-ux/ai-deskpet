@@ -87,6 +87,7 @@ test('saves explicit chat memory, deduplicates, recalls after restart and respec
     await expect(page.locator('.memory-receipt')).toHaveCount(0);
     await page.locator('nav').getByRole('button', { name: '记忆', exact: true }).click();
     await page.locator('.memory-card').getByRole('button', { name: '删除', exact: true }).click();
+    await page.locator('.memory-card').getByRole('button', { name: '确认删除', exact: true }).click();
     await expect(page.locator('.memory-card')).toHaveCount(0);
     await stop();
 

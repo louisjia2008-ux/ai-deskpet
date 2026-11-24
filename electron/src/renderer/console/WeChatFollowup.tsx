@@ -7,7 +7,7 @@ import type { WeChatFollowupAction, WeChatFollowupAPI, WeChatFollowupItem, WeCha
 
 const copy = {
   en: {
-    title: 'Waiting for you', time: 'Daily delivery time (local time)', wait: 'Minutes to wait for a reply',
+    title: 'Group mentions', time: 'Daily delivery time (local time)', wait: 'Minutes to wait for a reply',
     description: 'Follow mentions that tag your WeChat account in the selected groups. If DeskPet has not seen you answer, she sends the summary only to your private chat.',
     groupLabel: 'Groups to follow', noGroups: 'There are no groups to select.', reachedLimit: 'You can select up to 12 groups.',
     cloud: 'Allow cloud processing', cloudHelp: 'Cloud processing sends chat excerpts from that group to the selected service. Each new group starts with this off.',
@@ -21,7 +21,7 @@ const copy = {
     actionError: 'Could not update this follow-up. Refresh to try again.', handled: 'Follow-up marked handled.', snoozed: 'Follow-up snoozed for an hour.',
   },
   'zh-CN': {
-    title: '等你处理', time: '每天发送时间（本机时间）', wait: '等待回复（分钟）',
+    title: '群里 @ 你', time: '每天发送时间（本机时间）', wait: '等待回复（分钟）',
     description: '在所选群里，有人 @ 你的微信账号时，她会留意你有没有回应。还没看到回应的事项只汇报到主人私聊。',
     groupLabel: '选择要跟进的群', noGroups: '暂时没有可选择的群。', reachedLimit: '最多可选择 12 个群。',
     cloud: '允许发送给云端模型', cloudHelp: '开启后会把该群的相关消息片段发给选定模型。新选中的群默认关闭。',

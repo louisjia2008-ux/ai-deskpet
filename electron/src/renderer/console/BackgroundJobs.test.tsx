@@ -46,7 +46,7 @@ describe('background text job UI', () => {
     expect(preview).toHaveTextContent('ONLY_EXPLICIT_MATERIAL');
     expect(preview).toHaveTextContent('Synthetic local');
     expect(preview).toHaveTextContent('http://127.0.0.1:11999/v1');
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Run in background' }));
     await screen.findByRole('article', { name: 'SYNTHETIC_JOB_INSTRUCTION' });
     expect(f.submit).toHaveBeenCalledOnce();

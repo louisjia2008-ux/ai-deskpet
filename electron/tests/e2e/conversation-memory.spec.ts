@@ -71,6 +71,7 @@ test('manages conversations and verifies memory isolation across three process l
       return { untouched, archived };
     }, `http://127.0.0.1:${address.port}/v1`);
     await nav('记忆').click();
+    await page.getByText('手动添加一条记忆', { exact: true }).click();
     await page.getByRole('textbox', { name: '内容', exact: true }).fill(memoryText);
     await page.getByRole('textbox', { name: '标签（用逗号分隔）' }).fill('功能测试');
     await page.getByRole('button', { name: '添加记忆' }).click();
@@ -142,6 +143,7 @@ test('manages conversations and verifies memory isolation across three process l
 
     await nav('记忆').click();
     await page.locator('.memory-card').getByRole('button', { name: '删除', exact: true }).click();
+    await page.locator('.memory-card').getByRole('button', { name: '确认删除', exact: true }).click();
     await expect(page.locator('.memory-card')).toHaveCount(0);
     await page.locator('nav').getByRole('button', { name: '新建对话', exact: true }).click();
     await send(question);

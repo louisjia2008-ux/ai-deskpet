@@ -146,7 +146,7 @@ test('installed-version migration, provider confirmation, and local model repair
     await page.locator('nav').getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('tab', { name: '模型服务', exact: true }).click();
     const service = page.getByRole('article', { name: '跟随测试 P', exact: true });
-    await service.getByRole('button', { name: '刷新模型列表', exact: true }).click();
+    await service.getByRole('button', { name: '更换默认模型', exact: true }).click();
     const choice = service.getByRole('combobox', { name: '跟随测试 P 模型', exact: true });
     const modal = page.getByRole('dialog', { name: '同步单独指定的模型' });
     await choice.selectOption('m3');

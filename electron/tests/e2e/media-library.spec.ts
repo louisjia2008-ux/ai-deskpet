@@ -139,7 +139,7 @@ test('managed image library imports, edits, restores, attaches, persists and gen
     await expect(f.page.getByText('图片已恢复到图库。')).toBeVisible();
     await f.page.getByRole('button', { name: '图库 2', exact: true }).click();
     await expect(f.page.locator('.media-card')).toHaveCount(2);
-    await card.getByRole('button', { name: '放入当前对话' }).click();
+    await card.getByRole('button', { name: '放入新对话' }).click();
     await renderedImage(f.page.locator('.message.user .chat-images img'), f.firstId);
     const attachedSession = (await f.page.evaluate(() => window.deskpet.chat.listSessions())).find(session => session.title === '图片对话')!;
     expect(attachedSession).toBeTruthy();

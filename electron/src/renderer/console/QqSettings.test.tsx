@@ -38,11 +38,12 @@ const setup = (patch: Partial<QqChannelStatus> = {}, locale = 'en') => {
 it('does not enable, pair or send credentials merely by opening settings', async () => {
   const f = setup(); await screen.findByLabelText('QQ AppID');
   expect(f.configure).not.toHaveBeenCalled(); expect(f.startPairing).not.toHaveBeenCalled();
-  expect(screen.getByText(/QQ Cron create\/update\/resume require your direct \/confirm/u)).toBeInTheDocument();
+  expect(screen.getByText(/QQ Cron create\/update\/resume require your direct \/confirm/u)).toBeInTheDocument(); // folded under the rules summary
   expect(screen.getByText(/at most 2048 output tokens/u)).toHaveTextContent('120-second run deadline');
   expect(screen.getByText(/QQ tasks pause after restart/u)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Generate pairing code' })).toBeDisabled();
-  expect(screen.getByRole('button', { name: 'Emergency stop QQ' })).toBeEnabled();
+  // Nothing is running, so there is nothing to stop yet.
+  expect(screen.queryByRole('button', { name: 'Emergency stop QQ' })).not.toBeInTheDocument();
 });
 
 it('preserves an unchanged secret, only submits it explicitly and clears the input immediately', async () => {

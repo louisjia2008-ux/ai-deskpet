@@ -118,8 +118,8 @@ export const DoctorPanel = ({ api, locale }: { api: AttentionAPI; locale: string
         <p className="attention-note">{time(status.vm.latest.at)} · {status.vm.failures ? (lang === 'zh-CN' ? '最近采样失败' : 'Latest sample failed') : '✓'}</p></article>}
       {providerTest && <article className="attention-card"><h2>{lang === 'zh-CN' ? '聊天模型自检' : 'Chat model self-test'}</h2>
         <p>{time(providerTest.at)} · {providerTest.status} · {providerTest.durationMs} ms · <code>{providerTest.code}</code></p></article>}
-      {status.cases.length ? <div className="attention-list">{status.cases.slice(0, 50).map(card)}</div>
-        : !status.modelIssues?.length && <p className="muted">{text.empty}</p>}
+      {/* The overview above already says when nothing is wrong; no second empty line. */}
+      {status.cases.length > 0 && <div className="attention-list">{status.cases.slice(0, 50).map(card)}</div>}
     </>}
   </section>;
 };

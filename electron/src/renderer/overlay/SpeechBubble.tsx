@@ -3,6 +3,7 @@ import type { CSSProperties, JSX } from 'react';
 import type { ModelBox } from '../live2d';
 
 const FADE_MS = 600;
+const HOLD_GRACE_MS = 8_000;
 // Space above her head the bubble needs before it sits there rather than under her face.
 const ABOVE_ROOM = 120;
 
@@ -17,7 +18,9 @@ export const bubblePlacement = (box: ModelBox | null | undefined): { above: bool
 export const SpeechBubble = ({ text, revision, expiresAt, closeLabel, sessionId, replyLabel, model, onDismiss }: {
   text: string; revision: number; expiresAt: string | null | undefined; closeLabel: string; sessionId?: string | null | undefined; replyLabel?: string; model?: ModelBox | null; onDismiss(): void;
 }): JSX.Element | null => {
-  const [deadline] = useState(() => {
+  // Reading it (pointer over it, or keyboard focus inside) holds the bubble; leaving gives a few more seconds.
+  const [held, setHeld] = useState(false);
+  const [deadline, setDeadline] = useState(() => {
     const parsed = expiresAt === undefined || expiresAt === null ? NaN : Date.parse(expiresAt);
     return Number.isFinite(parsed) ? parsed : Date.now() + 60_000;
   });
@@ -34,14 +37,17 @@ export const SpeechBubble = ({ text, revision, expiresAt, closeLabel, sessionId,
   }, [revision, onDismiss]);
 
   useEffect(() => {
+    if (held || opening) { setFading(false); return; }
     const fade = window.setTimeout(() => setFading(true), Math.max(0, deadline - Date.now()));
     const expire = window.setTimeout(dismiss, Math.max(0, deadline + FADE_MS - Date.now()));
     return () => { window.clearTimeout(fade); window.clearTimeout(expire); };
-  }, [deadline, dismiss]);
+  }, [deadline, dismiss, held, opening]);
+  const release = (): void => { setHeld(false); setDeadline(current => Math.max(current, Date.now() + HOLD_GRACE_MS)); };
 
   if (hidden) return null;
   const placement = bubblePlacement(model);
-  return <div className={`speech-bubble${placement?.above ? ' is-above' : ''}${fading ? ' is-fading' : ''}`} style={placement?.style} role="status">
+  return <div className={`speech-bubble${placement?.above ? ' is-above' : ''}${fading ? ' is-fading' : ''}`} style={placement?.style} role="status"
+    onPointerEnter={() => setHeld(true)} onPointerLeave={release} onFocus={() => setHeld(true)} onBlur={release}>
     <div className="speech-bubble-text">{text}</div>
     {sessionId && <button type="button" className="speech-bubble-reply" disabled={opening} onClick={() => {
       setOpening(true);

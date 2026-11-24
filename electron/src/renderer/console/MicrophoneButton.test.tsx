@@ -17,7 +17,7 @@ function fixture(mode: 'hold' | 'toggle' = 'hold', autoSend = false) {
   Object.defineProperty(window, 'deskpet', { configurable: true, value: { speech: api } });
   const onResult = vi.fn();
   const view = render(<MicrophoneButton zh disabled={false} onResult={onResult} />);
-  const start = async () => { const button = screen.getByRole('button', { name: '麦克风' }); fireEvent.keyDown(button, { key: ' ' }); await screen.findByRole('button', { name: '结束录音（最长60秒）' }); };
+  const start = async () => { const button = screen.getByRole('button', { name: '按住说话' }); fireEvent.keyDown(button, { key: ' ' }); await screen.findByRole('button', { name: '结束录音（最长60秒）' }); };
   const feed = () => processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(24_000).fill(0.25) } });
   return { api, onResult, getUserMedia, stopTrack, close, view, start, feed };
 }
@@ -35,7 +35,7 @@ it('prepares before opening the microphone, stops tracks on release and returns 
 });
 it('explains permission denial without transcribing and releases the host reservation', async () => {
   const f = fixture(); f.getUserMedia.mockRejectedValueOnce(new Error('denied'));
-  fireEvent.keyDown(screen.getByRole('button', { name: '麦克风' }), { key: ' ' });
+  fireEvent.keyDown(screen.getByRole('button', { name: '按住说话' }), { key: ' ' });
   expect(await screen.findByRole('alert')).toHaveTextContent('麦克风中允许'); expect(f.api.transcribe).not.toHaveBeenCalled(); expect(f.api.cancel).toHaveBeenCalled();
 });
 it('cancels an in-flight result when disabled and does not submit late recognised text', async () => {
@@ -49,7 +49,7 @@ it('cancels an in-flight result when disabled and does not submit late recognise
 it('supports toggle mode, explicit auto-send and the 60-second cap without retaining audio after unmount', async () => {
   const f = fixture('toggle', true); await waitFor(() => expect(f.api.status).toHaveBeenCalled());
   vi.useFakeTimers();
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '麦克风' })); await vi.advanceTimersByTimeAsync(0); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '说话' })); await vi.advanceTimersByTimeAsync(0); });
   expect(screen.getByRole('button', { name: /结束录音/u })).toBeTruthy(); f.feed();
   await act(async () => { await vi.advanceTimersByTimeAsync(60_000); }); vi.useRealTimers();
   await waitFor(() => expect(f.onResult).toHaveBeenCalledWith('合成识别文本', true));

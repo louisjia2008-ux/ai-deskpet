@@ -186,6 +186,7 @@ test('uses the real desktop UI for provider setup, memory, streamed conversation
   expect(provider).toMatchObject({ kind: 'ollama', supportsTools: true });
 
   await navigate('Memory');
+  await page.getByText('Add a memory yourself', { exact: true }).click();
   await page.getByLabel('Text', { exact: true }).fill('I prefer jasmine tea.');
   await page.getByLabel('Tags, separated by commas', { exact: true }).fill('preference');
   await page.getByRole('button', { name: 'Add memory', exact: true }).click();

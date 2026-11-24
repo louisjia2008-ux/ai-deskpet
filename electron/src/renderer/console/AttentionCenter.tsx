@@ -6,7 +6,7 @@ import './attention-center.css';
 const copy = {
   en: {
     title: 'Needs your attention', intro: 'Results to read, memory candidates to review, and work that needs a decision.',
-    refresh: 'Refresh', loading: 'Reading saved work…', readFailed: 'Could not refresh. Previously shown work is retained; refresh to confirm the latest state.',
+    refresh: 'Retry', loading: 'Reading saved work…', readFailed: 'Could not read the latest state; the items below are from before.',
     all: 'All', action: 'Needs a decision', review: 'Ready for review', result: 'Results to read',
     notice: 'Automatic notices', proactive: 'Automatic check-in unavailable',
     optional: 'Optional check-ins need no reply or approval. Repeated failures are combined here; a later successful check-in clears this notice.',
@@ -22,8 +22,8 @@ const copy = {
     childProgress: 'Child results ready', sourceRecords: 'Saved sources',
   },
   'zh-CN': {
-    title: '待处理中心', intro: '集中查看待阅读的结果、待审核的记忆候选，以及需要你决定的事项。',
-    refresh: '刷新', loading: '正在读取已保存的任务…', readFailed: '刷新未成功，之前显示的事项已保留。请刷新核对最新状态。',
+    title: '待处理', intro: '集中查看待阅读的结果、待审核的记忆候选，以及需要你决定的事项。',
+    refresh: '重试', loading: '正在读取已保存的任务…', readFailed: '没读到最新状态，下面仍是之前的事项。',
     all: '全部', action: '需要处理', review: '待审核', result: '结果待查看',
     notice: '自动消息提示', proactive: '主动问候暂时未成功',
     optional: '这是可选问候，无需回复或批准。同类失败合并提示；后续问候成功后自动收起。',
@@ -69,15 +69,15 @@ export const AttentionCenter = ({ api, locale, onOpen }: { api: AttentionAPI; lo
   const visible = snapshot?.items.filter(item => filter === 'all' || item.kind === filter) ?? [];
   const status = (item: AttentionItem): string => item.status === 'review' ? text.reviewStatus : text[item.status];
   return <section className="attention-center" aria-label={text.title}>
-    <header className="page-header"><div><h1>{text.title}</h1><p>{text.intro}</p></div><button type="button" className="secondary" onClick={() => void refresh()}>{text.refresh}</button></header>
-    {readFailed && <p role="alert">{text.readFailed}</p>}{actionError && <p role="alert">{actionError === 'stale' ? text.stale : text.ackFailed}</p>}
+    <header className="page-header"><div><h1>{text.title}</h1><p>{text.intro}</p></div></header>
+    {readFailed && <p role="alert">{text.readFailed} <button type="button" className="secondary" onClick={() => void refresh()}>{text.refresh}</button></p>}{actionError && <p role="alert">{actionError === 'stale' ? text.stale : text.ackFailed}</p>}
     {snapshot === null && !readFailed && <p role="status">{text.loading}</p>}
     {snapshot !== null && <>
-      <div className="attention-overview" aria-label={text.running}><span>{text.running}</span><strong>{snapshot.runningCount}</strong></div>
+      {snapshot.runningCount > 0 && <div className="attention-overview" aria-label={text.running}><span>{text.running}</span><strong>{snapshot.runningCount}</strong></div>}
       <div className="attention-filters" role="group" aria-label={text.title}>{(['all', 'action', 'review', 'result', 'notice'] as const).map(value => <button type="button" aria-pressed={filter === value} key={value} onClick={() => { setFilter(value); setShownCount(50); }}>
         {text[value]} <span>{value === 'all' ? snapshot.items.length : snapshot.counts[value] ?? 0}</span>
       </button>)}</div>
-      <p className="attention-note">{text.ackNote}</p>
+      {visible.length > 0 && <p className="attention-note">{text.ackNote}</p>}
       {visible.length === 0 ? <div className="attention-empty">{filter === 'all' ? text.empty : text.filteredEmpty}</div> : <div className="attention-list">
         {visible.slice(0, shownCount).map(item => <article className={`attention-card attention-${item.kind}`} key={item.id} data-attention-id={item.id} aria-label={item.title || text[item.source]}>
           <div className="attention-card-heading"><span className="attention-kind">{text[item.kind]}</span><span>{text[item.source]}</span><time dateTime={item.updatedAt}>{new Date(item.updatedAt).toLocaleString(locale)}</time></div>
@@ -95,7 +95,7 @@ export const AttentionCenter = ({ api, locale, onOpen }: { api: AttentionAPI; lo
         </article>)}
       </div>}
       {visible.length > shownCount && <button type="button" className="secondary attention-more" onClick={() => setShownCount(current => current + 50)}>{text.more}</button>}
-      <footer className="attention-note"><p>{text.sourceRecords}: {text['background-job']} {snapshot.sourceCounts.backgroundJobs} · {text.delegation} {snapshot.sourceCounts.delegations} · {text.consolidation} {snapshot.sourceCounts.consolidations}</p>{snapshot.olderResults > 0 && <p>{text.older}</p>}</footer>
+      {snapshot.olderResults > 0 && <footer className="attention-note"><p>{text.older}</p></footer>}
     </>}
   </section>;
 };

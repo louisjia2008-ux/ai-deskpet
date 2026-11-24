@@ -1,11 +1,12 @@
 import { useEffect, useId, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
+import { ConfirmButton } from './ConfirmButton';
 import type { ResolvedLocale } from '../../shared';
 import type { WeChatInboxAPI, WeChatInboxItem } from '../../shared/wechat-inbox';
 
 const copy = {
   en: {
-    title: 'Inbox', query: 'Search inbox', search: 'Search', delete: 'Delete', previous: 'Previous', next: 'Next',
+    title: 'Inbox', query: 'Search inbox', search: 'Search', delete: 'Remove from inbox', deleteConfirm: 'Confirm (the WeChat message is not affected)', cancel: 'Cancel', previous: 'Previous', next: 'Next',
     empty: 'Your inbox is empty. Reply “存一下” in the owner’s WeChat chat to save a forwarded item.',
     noMatch: 'Nothing matches this search.', loading: 'Reading inbox…', readError: 'Could not read the inbox.',
     deleteError: 'Could not delete the item.',
@@ -17,7 +18,7 @@ const copy = {
     vaultRequired: 'Select a notes vault in Settings before enabling export.',
   },
   'zh-CN': {
-    title: '收件箱', query: '搜索收件箱', search: '搜索', delete: '删除', previous: '上一页', next: '下一页',
+    title: '收件箱', query: '搜索收件箱', search: '搜索', delete: '从收件箱移除', deleteConfirm: '确认移除（微信里的原消息不受影响）', cancel: '取消', previous: '上一页', next: '下一页',
     empty: '收件箱是空的。在微信主人私聊里回复「存一下」就能保存转发的内容。',
     noMatch: '没有匹配的条目。', loading: '正在读取收件箱…', readError: '未能读取收件箱。',
     deleteError: '未能删除这条内容。',
@@ -92,8 +93,7 @@ export function WeChatInboxPanel({ api, locale }: { api: Pick<WeChatInboxAPI, 'l
         <small className="muted">{[t.kinds[item.kind], item.source, item.at ? date.format(item.at) : ''].filter(Boolean).join(' · ')}</small>
         {item.summary && <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{item.summary}</p>}
         {item.url && <p className="muted" style={{ overflowWrap: 'anywhere' }}>{item.url}</p>}
-        <button type="button" className="text-button" aria-label={`${t.delete} ${item.title}`} disabled={deleting !== null}
-          onClick={() => void remove(item.id)}>{t.delete}</button>
+        <ConfirmButton label={t.delete} ariaLabel={`${t.delete} ${item.title}`} confirmLabel={t.deleteConfirm} cancelLabel={t.cancel} disabled={deleting !== null} onConfirm={() => void remove(item.id)} />
       </article>)}
     </div>
     {lastPage > 0 && <div className="button-row">

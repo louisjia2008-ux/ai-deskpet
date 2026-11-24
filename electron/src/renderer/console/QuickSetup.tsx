@@ -8,23 +8,24 @@ import './quick-setup.css';
 const copy = {
   en: {
     title: 'Connect a model to get started', detail: 'Choose one. You can add others in Settings at any time.',
-    local: 'On this computer', localDetail: 'Private and free. Uses Ollama.', localLoading: 'Looking for Ollama…', localMissing: 'Ollama was not found. Start it and try again, or use a cloud model.', retry: 'Look again',
+    local: 'On this computer', localDetail: 'Private and free. Uses Ollama.', localLoading: 'Looking for Ollama…', localMissing: 'Could not reach Ollama. Start it and try again, or use a cloud model.', localEmpty: 'Ollama is running but has no chat model yet. Download one in Ollama (for example qwen3), then look again.', retry: 'Look again',
     cloud: 'Cloud model', cloudDetail: 'Faster, and needs an API key.', key: 'API key', connect: 'Connect', connecting: 'Connecting…', model: 'Model', start: 'Start chatting', failed: 'That did not work. Check the key and your network, then try again.',
   },
   'zh-CN': {
     title: '连接一个模型就能开始', detail: '选一个就行，之后可以在设置里随时添加别的。',
-    local: '用这台电脑', localDetail: '隐私、免费，使用 Ollama。', localLoading: '正在查找 Ollama…', localMissing: '没有找到 Ollama。请启动后重试，或者用云端模型。', retry: '重新查找',
+    local: '用这台电脑', localDetail: '隐私、免费，使用 Ollama。', localLoading: '正在查找 Ollama…', localMissing: '还没连上 Ollama。请启动它后重试，或者用云端模型。', localEmpty: 'Ollama 已连上，但还没有能聊天的模型。先在 Ollama 里下载一个（比如 qwen3），再重新查找。', retry: '重新查找',
     cloud: '用云端模型', cloudDetail: '更快，需要 API Key。', key: 'API Key', connect: '连接', connecting: '正在连接…', model: '模型', start: '开始聊天', failed: '没有连上。请检查 Key 和网络后重试。',
   },
 } as const;
 
 const cloudKinds = providerDefinitions.filter((item) => !item.local && item.kind !== 'openai-compatible');
 const ollama = providerDefinitions.find((item) => item.kind === 'ollama')!;
-const notEmbedding = (id: string): boolean => !/embed/iu.test(id);
+// Embedding and reranker models cannot chat, so they never become the default.
+const notEmbedding = (id: string): boolean => !/embed|bge-|rerank|minilm|(^|[/:-])e5-|gte-/iu.test(id);
 
 export const QuickSetup = ({ locale, refresh }: { locale: 'en' | 'zh-CN'; refresh(): Promise<void> }): JSX.Element => {
   const t = copy[locale];
-  const [local, setLocal] = useState<string[] | 'loading' | 'missing'>('loading');
+  const [local, setLocal] = useState<string[] | 'loading' | 'missing' | 'empty'>('loading');
   const [localModel, setLocalModel] = useState('');
   const [kind, setKind] = useState<ProviderConfig['kind']>(cloudKinds[0]!.kind);
   const [apiKey, setApiKey] = useState('');
@@ -38,7 +39,7 @@ export const QuickSetup = ({ locale, refresh }: { locale: 'en' | 'zh-CN'; refres
     setLocal('loading');
     try {
       const models = (await window.deskpet.providers.discoverModels({ kind: 'ollama', baseUrl: ollama.defaultBaseUrl })).map((item) => item.id).filter(notEmbedding);
-      setLocal(models.length > 0 ? models : 'missing'); setLocalModel(models[0] ?? '');
+      setLocal(models.length > 0 ? models : 'empty'); setLocalModel(models[0] ?? '');
     } catch { setLocal('missing'); }
   };
   useEffect(() => { void findLocal(); }, []);
@@ -69,7 +70,7 @@ export const QuickSetup = ({ locale, refresh }: { locale: 'en' | 'zh-CN'; refres
     <div className="quick-setup-options">
       <article><Cpu size={22} aria-hidden="true" /><h3>{t.local}</h3><p>{t.localDetail}</p>
         {local === 'loading' && <p role="status" className="muted">{t.localLoading}</p>}
-        {local === 'missing' && <><p role="status" className="muted">{t.localMissing}</p><button type="button" className="secondary" onClick={() => void findLocal()}>{t.retry}</button></>}
+        {(local === 'missing' || local === 'empty') && <><p role="status" className="muted">{local === 'empty' ? t.localEmpty : t.localMissing}</p><button type="button" className="secondary" onClick={() => void findLocal()}>{t.retry}</button></>}
         {Array.isArray(local) && <>
           <label>{t.model}<select value={localModel} disabled={busy} onChange={(event) => setLocalModel(event.target.value)}>{local.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>
           <button type="button" disabled={busy || !localModel} onClick={() => void start({ kind: 'ollama', name: ollama.label, baseUrl: ollama.defaultBaseUrl, model: localModel, localExecutionConfirmed: true })}>{t.start}</button>

@@ -10,7 +10,7 @@ type Locale = 'en' | 'zh-CN';
 const copy = {
   en: {
     title: 'Background status', intro: 'Features that run while you are not watching. A failure here would otherwise go unnoticed.',
-    refresh: 'Refresh', loading: 'Checking…', readFailed: 'Could not read the status. Refresh to try again.',
+    refresh: 'Retry', loading: 'Checking…', readFailed: 'Could not read the status.',
     allGood: 'Everything that is turned on is working.', issues: (n: number) => `${n} not working`,
     onlyAcknowledged: (n: number) => `No new problems. You have already seen ${n}.`,
     vaultDetached: 'No vault linked', open: 'Open settings', lastSuccess: 'Last worked: ', lastFailure: 'Last failed: ', reason: 'Reason: ', never: 'not yet',
@@ -115,7 +115,7 @@ const copy = {
   },
   'zh-CN': {
     title: '运行状态', intro: '这些功能在你不看的时候自己运行。出了问题，平时很难察觉，这里会写明。',
-    refresh: '刷新', loading: '正在检查…', readFailed: '读取状态失败，请刷新重试。',
+    refresh: '重试', loading: '正在检查…', readFailed: '没读到最新状态。',
     allGood: '已开启的功能都在正常工作。', issues: (n: number) => `${n} 项没有正常工作`,
     onlyAcknowledged: (n: number) => `没有新问题。有 ${n} 项你已经知道了。`,
     vaultDetached: '未关联', open: '去设置', lastSuccess: '上次成功：', lastFailure: '上次失败：', reason: '原因：', never: '还没有',
@@ -128,7 +128,7 @@ const copy = {
     sinceLaunch: '时间只统计本次启动以来。',
     remaining: '今日还可发：',
     state: { ok: '正常', failing: '异常', waiting: '尚未运行', off: '未开启' } satisfies Record<HealthState, string>,
-    feature: { asr: '本地语音识别', diary: '日记', knowledge: '知识库', proactive: '主动消息', 'wechat-moments': '朋友圈', 'wechat-cron': '微信定时投递', 'wechat-group-digest': '群聊每日精华', 'wechat-followup': '等你处理', 'wechat-official-brief': '公众号简报', 'wechat-friends-moments': '好友朋友圈摘要', 'wechat-friend-reply': '好友回复', 'auto-memory': '自动记忆', 'companion-recent': '最近对话摘要', 'memory-sleep': '夜间记忆整理', schedules: '定时任务', wechat: '微信', qq: 'QQ', telegram: 'Telegram' } satisfies Record<HealthFeature, string>,
+    feature: { asr: '本地语音识别', diary: '日记', knowledge: '知识库', proactive: '主动消息', 'wechat-moments': '朋友圈', 'wechat-cron': '微信定时投递', 'wechat-group-digest': '群聊每日精华', 'wechat-followup': '群里 @ 你', 'wechat-official-brief': '公众号简报', 'wechat-friends-moments': '好友朋友圈摘要', 'wechat-friend-reply': '好友回复', 'auto-memory': '自动记忆', 'companion-recent': '最近对话摘要', 'memory-sleep': '夜间记忆整理', schedules: '定时任务', wechat: '微信', qq: 'QQ', telegram: 'Telegram' } satisfies Record<HealthFeature, string>,
     about: {
       asr: '麦克风录音只在本机识别，不上传。', diary: '夜间整理后写一篇加密日记，只用允许云端处理的主人私聊。', proactive: '沿用事件策略、安静时段和持久化的每日限额。',
       'wechat-moments': '草稿预览和确认后的发布，失败或不确定时会写在这里。',
@@ -354,7 +354,7 @@ export const HealthPanel = ({ api, locale, onOpen, onIssues, children }: {
   }, [api, refresh]);
   const time = (value: string | null): string => value ? new Intl.DateTimeFormat(lang, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : text.never;
   const card = (item: HealthItem): JSX.Element => <article key={`${item.feature}:${item.ordinal ?? 0}`} className="attention-card" data-state={item.state}>
-    <div className="attention-card-heading"><span className={`status-pill ${item.acknowledged ? '' : pill[item.state]}`}>{item.acknowledged ? text.acknowledged : item.feature === 'knowledge' && item.state === 'off' ? text.vaultDetached : text.state[item.state]}</span></div>
+    <div className="attention-card-heading"><span className={`status-pill ${item.acknowledged ? '' : pill[item.state]}`}>{item.acknowledged ? (item.state === 'failing' ? `${text.state.failing} · ${text.acknowledged}` : text.acknowledged) : item.feature === 'knowledge' && item.state === 'off' ? text.vaultDetached : text.state[item.state]}</span></div>
     <h2>{item.ordinal === undefined ? text.feature[item.feature] : `${lang === 'zh-CN' ? '好友' : 'Friend'} ${item.ordinal}`}</h2>
     <p className="attention-note">{text.about[item.feature]}</p>
     {item.remainingToday !== undefined && <p>{text.remaining}{item.remainingToday}</p>}
@@ -380,8 +380,9 @@ export const HealthPanel = ({ api, locale, onOpen, onIssues, children }: {
       {item.lastFailureAt && <>{(item.lastSuccessAt || successTracked.has(item.feature)) && ' · '}{text.lastFailure}{time(item.lastFailureAt)}</>}
       {item.sinceLaunch && <><br />{text.sinceLaunch}</>}
     </p>}
-    {item.state !== 'ok' && <div className="attention-actions">
-      <button type="button" onClick={() => onOpen(item.feature)}>{text.open}</button>
+    {/* A feature that is on but simply has not run yet needs nothing from the owner. */}
+    {item.state !== 'ok' && item.state !== 'waiting' && <div className="attention-actions">
+      <button type="button" className={item.state === 'failing' ? undefined : 'secondary'} onClick={() => onOpen(item.feature)}>{text.open}</button>
       {item.state === 'failing' && !item.acknowledged && item.fingerprint && api.acknowledgeHealth
         && <button type="button" className="secondary" disabled={busy} onClick={() => void acknowledge(item)}>{text.acknowledge}</button>}
     </div>}
@@ -389,8 +390,8 @@ export const HealthPanel = ({ api, locale, onOpen, onIssues, children }: {
   const items = snapshot ? [...snapshot.items].sort((a, b) => rank(a) - rank(b)) : [];
   const seen = items.filter(item => item.acknowledged).length;
   return <section className="attention-center health-panel">
-    <header className="page-header"><div><h1>{text.title}</h1><p>{text.intro}</p></div><button type="button" disabled={busy} onClick={() => void refresh()}>{text.refresh}</button></header>
-    {readFailed && <p role="alert">{text.readFailed}</p>}
+    <header className="page-header"><div><h1>{text.title}</h1><p>{text.intro}</p></div></header>
+    {readFailed && <p role="alert">{text.readFailed} <button type="button" className="secondary" disabled={busy} onClick={() => void refresh()}>{text.refresh}</button></p>}
     {ackFailed && <p role="alert">{text.acknowledgeFailed}</p>}
     {children}
     {snapshot === null ? <p>{text.loading}</p> : <>

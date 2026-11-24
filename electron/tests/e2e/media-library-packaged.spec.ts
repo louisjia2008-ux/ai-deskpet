@@ -57,7 +57,7 @@ test('signed packaged app imports, renders and reloads a managed attachment in i
     };
     await rendered('.media-card img'); checks.push('native-dialog-import-and-protocol-image-decode');
     await page.screenshot({ path: join(evidence, 'packaged-library.png'), scale: 'css' });
-    await page.getByRole('article', { name: '合成收到', exact: true }).getByRole('button', { name: '放入当前对话' }).click();
+    await page.getByRole('article', { name: '合成收到', exact: true }).getByRole('button', { name: '放入新对话' }).click();
     await rendered('.message.user .chat-images img'); checks.push('manual-chat-attachment-render');
     const sessions = await page.evaluate(() => window.deskpet.chat.listSessions()), session = sessions.find(item => item.title === '图片对话'); expect(session).toBeTruthy();
     const messages = await page.evaluate(id => window.deskpet.chat.listMessages(id), session!.id);

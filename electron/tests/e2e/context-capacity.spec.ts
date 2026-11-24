@@ -135,7 +135,7 @@ test('unconfigured capacity carries a full tool result and long job, preserves a
     await expect(page!.getByRole('button', { name: /Save daily budget|Save entered prices/ })).toHaveCount(0);
     await expect(page!.getByText(/^\$0\.0007(?:0*)$/u).first()).toBeVisible();
     await page!.screenshot({ path: info.outputPath('token-accounting.png'), fullPage: true });
-    await page!.locator('nav').getByRole('button', { name: 'Updates', exact: true }).click(); await page!.getByRole('tab', { name: 'Attention center', exact: true }).click();
+    await page!.locator('nav').getByRole('button', { name: 'Updates', exact: true }).click(); await page!.getByRole('tab', { name: 'To do', exact: true }).click();
     const attention = await page!.evaluate(() => window.deskpet.attention.snapshot());
     expect(attention.items).toHaveLength(1);
     expect(attention.items[0]).toMatchObject({ id: `background-job:${job.id}`, kind: 'result' });
@@ -145,7 +145,7 @@ test('unconfigured capacity carries a full tool result and long job, preserves a
     await card.getByRole('button', { name: 'View result', exact: true }).click();
     await expect(page!.locator(`[data-opened-job-id="${job.id}"]`)).toContainText('SYNTHETIC_LONG_JOB_COMPLETE');
     expect((await page!.evaluate(() => window.deskpet.attention.snapshot())).items).toHaveLength(1);
-    await page!.locator('nav').getByRole('button', { name: 'Updates', exact: true }).click(); await page!.getByRole('tab', { name: 'Attention center', exact: true }).click();
+    await page!.locator('nav').getByRole('button', { name: 'Updates', exact: true }).click(); await page!.getByRole('tab', { name: 'To do', exact: true }).click();
     await page!.locator(`[data-attention-id="background-job:${job.id}"]`).getByRole('button', { name: 'Mark viewed', exact: true }).click();
     await expect.poll(async () => (await page!.evaluate(() => window.deskpet.attention.snapshot())).items.length).toBe(0);
     const observationOperation = randomUUID();

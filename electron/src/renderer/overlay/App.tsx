@@ -264,7 +264,7 @@ export const OverlayApp = (): JSX.Element => {
       }}><i /></button>
       {state?.bubble === null || state?.bubble === undefined ? null : <SpeechBubble key={state.bubbleRevision ?? state.bubble} text={state.bubble} revision={state.bubbleRevision ?? 0} expiresAt={state.bubbleExpiresAt} closeLabel={t('companion.closeBubble')} sessionId={state.bubbleSessionId} replyLabel={t('proactive.reply')} model={modelLoaded ? modelBox : null} onDismiss={releaseBubble} />}
       <canvas key={modelKey ?? 'empty'} ref={canvas} onPointerDown={beginModelDrag} data-hops={hops} onAnimationEnd={() => setHops(0)} className={`${ready ? 'live2d-canvas visible' : 'live2d-canvas'}${hops > 0 ? ' is-hopping' : ''}`} aria-label={state?.modelName ?? t('nav.companion')} />
-      {!ready || loadError ? <button type="button" className="setup-card" onClick={() => void window.deskpet.app.showConsole()}><span>✦</span><strong>{loadError ? t('common.error') : state?.coreState !== 'ready' ? t('setup.missingCore') : t('setup.missingModel')}</strong><small>{t('setup.title')}</small></button> : null}
+      {!ready || loadError ? <button type="button" className="setup-card" onClick={() => void window.deskpet.app.showConsole()}><span>✦</span><strong>{loadError ? t('setup.overlayLoadFailed') : t('setup.notSet')}</strong><small>{t('setup.openSettings')}</small></button> : null}
     </main>
   );
 };

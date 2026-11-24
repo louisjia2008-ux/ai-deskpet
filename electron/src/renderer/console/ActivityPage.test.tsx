@@ -18,7 +18,7 @@ it('loads only a bounded first page, loads older rows on demand and resets on re
   await screen.findByText('EVENT_0');
   expect(listRunEvents).toHaveBeenLastCalledWith({ limit: 100, beforeId: 'id-1' });
   expect(screen.queryByRole('button', { name: 'Load older events' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  fireEvent.focus(window);
   await screen.findByText('EVENT_101');
   expect(screen.queryByText('EVENT_0')).toBeNull();
 });
@@ -30,7 +30,7 @@ it('shows read failures and ignores a response after unmount', async () => {
   Object.defineProperty(window, 'deskpet', { value: { tasks: { listRunEvents } }, configurable: true });
   const { unmount } = render(<ActivityPage locale="en" t={key => key} />);
   await screen.findByRole('alert');
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  fireEvent.click(screen.getByRole('button', { name: 'common.retry' }));
   unmount();
   await act(async () => { resolve([event(0)]); });
   expect(screen.queryByText('EVENT_0')).toBeNull();

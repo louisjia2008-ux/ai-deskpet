@@ -121,7 +121,7 @@ const ChatWorkPanelBody = ({ sessionId, api, locale, onOpenSession, onContinueAr
   };
 
   return <details className="chat-work-panel" data-testid="chat-work-panel">
-    <summary><span className="chat-work-summary"><span>{copy.title}</span><small>{tasks.length} {copy.tasks} · {schedules.filter((item) => !item.cancelledAt).length} {copy.schedules}</small></span></summary>
+    <summary><span className="chat-work-summary"><span>{copy.title}</span><small>{[tasks.length > 0 ? `${tasks.length} ${copy.tasks}` : '', schedules.some((item) => !item.cancelledAt) ? `${schedules.filter((item) => !item.cancelledAt).length} ${copy.schedules}` : ''].filter(Boolean).join(' · ')}</small></span></summary>
     <div className="chat-work-content">
       <div className="chat-work-toolbar"><span className="chat-work-muted">{loading ? copy.loading : ''}</span><button type="button" className="secondary" disabled={busy} onClick={() => void perform(refresh)}>{copy.refresh}</button></div>
       {error && <p className="chat-work-error" role="alert">{copy.failure}</p>}

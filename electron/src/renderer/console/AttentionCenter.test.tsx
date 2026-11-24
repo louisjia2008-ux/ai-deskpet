@@ -68,8 +68,11 @@ describe('attention center', () => {
     const unsafe = { ...item(), title: '<img src=x onerror="window.syntheticAttack=true">' }, f = fixture([unsafe]);
     render(<AttentionCenter api={f.api} locale="en" onOpen={f.onOpen} />);
     const card = await screen.findByRole('article', { name: unsafe.title }); expect(card.querySelector('img')).toBeNull();
-    f.snapshot.mockRejectedValueOnce(new Error('repository.commitUncertain')); fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Previously shown work is retained'); expect(card).toBeVisible();
+    f.snapshot.mockRejectedValueOnce(new Error('repository.commitUncertain')); act(() => f.replace([unsafe]));
+    expect(await screen.findByRole('alert')).toHaveTextContent('the items below are from before'); expect(card).toBeVisible();
+    // The failed read offers its own retry; there is no standing refresh button.
+    fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   });
 
   it('limits the initial list to fifty cards and permits deliberate expansion', async () => {

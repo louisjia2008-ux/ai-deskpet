@@ -155,7 +155,7 @@ export interface DoctorStatus {
 }
 
 export const DOCTOR_FEATURES: Record<string, string> = {
-  asr: '本地语音识别', diary: '日记', proactive: '主动消息', 'wechat-moments': '朋友圈', 'wechat-cron': '微信定时投递', 'wechat-group-digest': '群聊每日精华', 'wechat-followup': '等你处理', 'wechat-official-brief': '公众号简报', 'wechat-friends-moments': '好友朋友圈摘要', 'wechat-friend-reply': '微信好友回复',
+  asr: '本地语音识别', diary: '日记', proactive: '主动消息', 'wechat-moments': '朋友圈', 'wechat-cron': '微信定时投递', 'wechat-group-digest': '群聊每日精华', 'wechat-followup': '群里 @ 你', 'wechat-official-brief': '公众号简报', 'wechat-friends-moments': '好友朋友圈摘要', 'wechat-friend-reply': '微信好友回复',
   'auto-memory': '自动记忆', 'companion-recent': '最近对话摘要', 'memory-sleep': '夜间记忆整理', schedules: '定时任务', wechat: '微信', qq: 'QQ', telegram: 'Telegram',
   knowledge: '知识库', minecraft: 'Minecraft 专用服', system: '系统', app: '桌宠', provider: '聊天模型',
 };

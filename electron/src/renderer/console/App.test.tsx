@@ -164,6 +164,10 @@ it('shows an active WeChat transcript as plain text and refreshes it without a d
   });
   f.persisted.push({ ...chatMessage('user', 'Message from WeChat'), wechatSender: 'Fixture member' });
   await openChat();
+  // Channel conversations open only when chosen; they never become the default chat.
+  expect(screen.queryByRole('heading', { name: 'WeChat group · Fixture group' })).toBeNull();
+  fireEvent.click(await screen.findByRole('button', { name: /Channels/u }));
+  fireEvent.click(await screen.findByRole('button', { name: 'WeChat group · Fixture group' }));
   await screen.findByRole('heading', { name: 'WeChat group · Fixture group' });
   expect(await screen.findByText('Fixture member')).toBeVisible();
   expect(screen.getByText('This is a read-only copy of the WeChat conversation.')).toBeVisible();

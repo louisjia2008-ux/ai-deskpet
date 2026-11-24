@@ -6,7 +6,7 @@ import type { WeChatChannelAPI, WeChatChannelState } from '../../shared/wechat-c
 import { localMediaUrl } from './ChatImages';
 import './media-library.css';
 
-interface Props { api: MediaAPI | undefined; wechat?: Pick<WeChatChannelAPI, 'getState'>; providers: ProviderConfig[]; locale: string; sessionId: string; onAttached(): void }
+interface Props { api: MediaAPI | undefined; wechat?: Pick<WeChatChannelAPI, 'getState'>; providers: ProviderConfig[]; locale: string; sessionId: string; onAttached(): void; createSession?: (() => Promise<string>) | undefined }
 interface EditDraft { id: string; title: string; tags: string; enabled: boolean; allowQq: boolean; allowWechat: boolean; allowWechatGroups: string[] }
 interface BatchDraft { enabled: boolean; allowQq: boolean; allowWechat: boolean; groups: string[]; tags: string }
 const emptyBatch = (): BatchDraft => ({ enabled: false, allowQq: false, allowWechat: false, groups: [], tags: '' });
@@ -31,7 +31,7 @@ const errorText = (value: unknown): string => {
   return code && copy[code] ? copy[code] : '操作未完成，请刷新核对已保存状态后重试。';
 };
 
-export const MediaLibraryPage = ({ api, wechat, providers, locale, sessionId, onAttached }: Props): JSX.Element => {
+export const MediaLibraryPage = ({ api, wechat, providers, locale, sessionId, onAttached, createSession }: Props): JSX.Element => {
   const [snapshot, setSnapshot] = useState<MediaSnapshot | null>(null), [settings, setSettings] = useState<MediaSettings | null>(null);
   const [search, setSearch] = useState(''), [trash, setTrash] = useState(false), [editor, setEditor] = useState<EditDraft | null>(null);
   const [prompt, setPrompt] = useState(''), [busy, setBusy] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -148,7 +148,7 @@ export const MediaLibraryPage = ({ api, wechat, providers, locale, sessionId, on
         {!asset.deletedAt && <p className="media-card-meta">{asset.enabled ? '自动配图已开' : '仅手动选择'} · {asset.allowQq ? '允许 QQ 使用' : 'QQ 未授权'}
           {asset.allowWechat && ' · 允许微信主号私聊'}{Boolean(asset.allowWechatGroups?.length) && ` · 允许 ${asset.allowWechatGroups!.length} 个微信群`}</p>}
         <div className="media-card-actions">{asset.deletedAt ? <button type="button" disabled={busy !== null} onClick={() => void perform('restore', async () => { await api.restore(asset.id); return '图片已恢复到图库。'; })}>恢复图片</button> : <>
-          <button type="button" disabled={busy !== null || !sessionId} onClick={() => void perform('attach', async () => { await api.attach({ sessionId, assetId: asset.id }); onAttached(); })}>放入当前对话</button>
+          <button type="button" disabled={busy !== null || (!sessionId && !createSession)} onClick={() => void perform('attach', async () => { const target = sessionId || await createSession!(); await api.attach({ sessionId: target, assetId: asset.id }); onAttached(); })}>{sessionId ? '放入当前对话' : '放入新对话'}</button>
           <button type="button" className="secondary" disabled={busy !== null} onClick={() => edit(asset)}>编辑图片信息</button>
           <button type="button" className="secondary" disabled={busy !== null} onClick={() => void perform('remove', async () => { await api.remove(asset.id); if (editor?.id === asset.id) setEditor(null); return '已移入回收站，可随时恢复。'; })}>移入回收站</button>
         </>}</div>

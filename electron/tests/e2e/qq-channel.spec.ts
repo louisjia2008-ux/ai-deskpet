@@ -169,8 +169,8 @@ test('isolated QQ settings, desktop pairing, confirmed Cron and emergency stop u
     await inbound(command!);
     await expect.poll(() => page!.evaluate(() => window.deskpet.qq.getState())).toMatchObject({ bound: false, pairingCandidate: { senderId: 'fixture-owner' } });
     await inbound('hello before desktop confirmation'); expect(wires).toHaveLength(0);
-    await page!.getByRole('button', { name: 'Refresh QQ status', exact: true }).click();
-    await expect(page!.getByText('fixture-owner', { exact: true })).toBeVisible();
+    // The QQ page refreshes its status by itself.
+    await expect(page!.getByText('fixture-owner', { exact: true })).toBeVisible({ timeout: 10_000 });
     await page!.getByRole('button', { name: 'Confirm this QQ identity', exact: true }).click();
     await expect.poll(() => page!.evaluate(() => window.deskpet.qq.getState())).toMatchObject({ bound: true, pairingCandidate: null });
     const sessions = await page!.evaluate(() => window.deskpet.chat.listSessions());

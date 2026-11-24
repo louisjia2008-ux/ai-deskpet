@@ -85,9 +85,9 @@ export const EventProactiveSettings = ({ api, providers, locale }: AutomationUIP
           : zh ? '关闭后不收集新的事件，也不执行问候。' : 'Off collects no new events and does not run check-ins.'}</p>
       <fieldset disabled={busy}><legend>{zh ? '选择事件' : 'Selected events'}</legend>{eventKinds.map((kind) => <label key={kind}><input type="checkbox" checked={form.eventKinds.includes(kind)} onChange={() => toggleEvent(kind)} />{eventTitle(kind, zh)}</label>)}</fieldset>
       {draftMode === 'auto' && <>
-        <label>{zh ? '服务提供方' : 'Provider'}<select value={form.providerId ?? ''} disabled={busy} onChange={(event) => {
+        <label>{zh ? '模型服务' : 'Provider'}<select value={form.providerId ?? ''} disabled={busy} onChange={(event) => {
           const provider = providerOptions.find((item) => item.id === event.target.value); setForm({ ...form, providerId: provider?.id ?? null, model: provider ? null : '' });
-        }}><option value="">{zh ? '选择服务提供方' : 'Choose provider'}</option>{providerOptions.map((provider) => <option value={provider.id} key={provider.id}>{provider.name}</option>)}</select></label>
+        }}><option value="">{zh ? '选择模型服务' : 'Choose provider'}</option>{providerOptions.map((provider) => <option value={provider.id} key={provider.id}>{provider.name}</option>)}</select></label>
         <label>{zh ? '模型' : 'Model'}<input value={form.model ?? ''} disabled={busy} maxLength={240}
           placeholder={selectedProvider ? `${zh ? '跟随服务默认模型' : 'Follow service default'} (${selectedProvider.model})` : undefined}
           onChange={(event) => setForm({ ...form, model: event.target.value || null })} /></label>

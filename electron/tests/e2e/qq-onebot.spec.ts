@@ -125,8 +125,8 @@ data: [DONE]
     await save('wrong-token');
     await page.getByRole('button', { name: 'Generate pairing code', exact: true }).click();
     await expect.poll(state).toMatchObject({ lastError: 'qq.onebotAuthFailed' });
-    await page.getByRole('button', { name: 'Refresh QQ status', exact: true }).click();
-    await expect(page.getByText(/NapCat rejected the access token/u)).toBeVisible();
+    // The QQ page refreshes its status by itself.
+    await expect(page.getByText(/NapCat rejected the access token/u)).toBeVisible({ timeout: 10_000 });
     expect(clients.size).toBe(0);
 
     await save(token);
@@ -139,8 +139,8 @@ data: [DONE]
     expect((await state()).pairingCandidate).toBeNull();
     event(command!);
     await expect.poll(state).toMatchObject({ bound: false, pairingCandidate: { senderId: String(OWNER) } });
-    await page.getByRole('button', { name: 'Refresh QQ status', exact: true }).click();
-    await expect(page.getByText('Verify that this is your own QQ number before approving.')).toBeVisible();
+    // The QQ page refreshes its status by itself.
+    await expect(page.getByText('Verify that this is your own QQ number before approving.')).toBeVisible({ timeout: 10_000 });
     event('hello before desktop confirmation'); await page.waitForTimeout(300); expect(wires).toHaveLength(0);
     await page.getByRole('button', { name: 'Confirm this QQ identity', exact: true }).click();
     await expect.poll(state).toMatchObject({ bound: true, pairingCandidate: null });
@@ -172,8 +172,8 @@ data: [DONE]
     const groupCommand = (await page.locator('.qq-groups .qq-pairing code').first().textContent())!;
     mention(groupCommand);
     await expect.poll(state).toMatchObject({ groupCandidate: { groupId: String(GROUP) } });
-    await page.getByRole('button', { name: 'Refresh QQ status', exact: true }).click();
-    await page.getByRole('button', { name: 'Allow this group', exact: true }).click();
+    // The QQ page refreshes its status by itself.
+    await page.getByRole('button', { name: 'Allow this group', exact: true }).click({ timeout: 10_000 });
     await expect.poll(state).toMatchObject({ groupCandidate: null, groups: [{ groupId: String(GROUP), openToMembers: true }] });
     const titles = await page.evaluate(async () => (await window.deskpet.chat.listSessions()).map(item => item.title));
     expect(titles).toContain('QQ'); expect(titles).toContain(`QQ group · ${GROUP}`);

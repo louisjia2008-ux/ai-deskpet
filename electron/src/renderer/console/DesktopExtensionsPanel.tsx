@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
+import { ConfirmButton } from './ConfirmButton';
 import type { ProviderConfig } from '../../shared';
 import type { DesktopExtensionsAPI, DesktopExtensionsState, ManifestPreview, McpResult, McpTool, RecommendedExtensionsCatalog, RecommendedInstall } from '../../shared/desktop-extensions';
 import { recommendedServerIds, recommendedSkillIds } from '../../shared/desktop-extensions';
@@ -189,7 +190,7 @@ export const DesktopExtensionsPanel = ({ api, providers, zh, section }: Props): 
           const token=tokens[server.id]!.trim();setTokens(previous=>({...previous,[server.id]:''}));setCatalog(null);setResult(null);setAnswer(null);
           setState(await api.configureToken(server.id,token));setNotice(zh?'令牌已加密保存。':'Token saved securely.');
         })}>{zh?'保存令牌':'Save token'}</button>
-        {server.authConfigured && <button type="button" className="secondary" onClick={()=>void perform(async()=>{setCatalog(null);setResult(null);setAnswer(null);setState(await api.configureToken(server.id,null));setNotice(zh?'已移除保存的令牌。':'Saved token removed.');})}>{zh?'移除令牌':'Remove token'}</button>}</div>
+        {server.authConfigured && <ConfirmButton label={zh?'移除令牌':'Remove token'} confirmLabel={zh?'确认移除（之后需要重新填写）':'Remove (you will need to enter it again)'} cancelLabel={zh?'取消':'Cancel'} onConfirm={()=>void perform(async()=>{setCatalog(null);setResult(null);setAnswer(null);setState(await api.configureToken(server.id,null));setNotice(zh?'已移除保存的令牌。':'Saved token removed.');})} />}</div>
       </details>}
     </section>)}
     <div className="extension-add-server">

@@ -3,6 +3,7 @@ import type { FormEvent, JSX } from 'react';
 import type { ProviderConfig } from '../../shared';
 import type { ResearchTask, ResearchTaskInput, ResearchTasksApi, ResearchTaskStatus } from '../../shared/research-tasks';
 import './background-jobs.css';
+import { providerIsLocal } from './provider-locality';
 
 const copy = {
   en: {
@@ -15,7 +16,7 @@ const copy = {
     run: 'Start background research', saving: 'Saving task…', recover: 'Recover this submission', preview: 'Review selected scope',
     output: 'Report location', location: 'A dedicated research/<task>/report.md in the workspace',
     lifecycle: 'Research continues while you switch chats or hide the window. Quitting stops execution. After restart, an interrupted attempt is not replayed automatically; choose Continue unfinished work to start a new bounded attempt.',
-    empty: 'No research tasks yet.', refresh: 'Refresh tasks', loadError: 'Unable to read saved research tasks.',
+    empty: 'No research tasks yet.', refresh: 'Retry', loadError: 'Unable to read saved research tasks.',
     uncertain: 'Submission not confirmed. Recover the same submission before changing its input or starting another.',
     rejected: 'The task was not accepted. Check the selected model, permissions, input and limits.',
     actionError: 'The operation was not confirmed. Refresh the saved status before trying again.',
@@ -28,7 +29,7 @@ const copy = {
     statuses: { queued: 'Queued', running: 'Running', completed: 'Completed', failed: 'Failed', interrupted: 'Interrupted', cancelled: 'Cancelled', partial: 'Partially completed' } satisfies Record<ResearchTaskStatus, string>,
   },
   'zh-CN': {
-    title: '后台研究', goal: '研究目标', material: '选入的公开材料', provider: 'Provider', model: '模型',
+    title: '后台研究', goal: '研究目标', material: '选入的公开材料', provider: '模型服务', model: '模型',
     minutes: '每次执行最多分钟', calls: '每次执行最多工具调用',
     scope: '查找公开资料、比较证据，并把 Markdown 报告保存到这项任务自己的目录。只选入你填写的目标与材料，不自动选入其他聊天或记忆。',
     limits: '可搜索和读取公开网页、计算、查看时间、更新自己的计划和文件。不执行命令、不修改设置、不发送消息。',
@@ -37,7 +38,7 @@ const copy = {
     run: '开始后台研究', saving: '正在保存任务…', recover: '恢复本次提交', preview: '确认本次研究范围',
     output: '报告位置', location: '工作区内独立的 research/<任务>/report.md',
     lifecycle: '切换聊天或隐藏窗口后仍会继续；退出应用会停止执行。重启后不会自动重跑中断的任务，可选择“继续未完成部分”，按设定上限开始新一次执行。',
-    empty: '暂无后台研究任务。', refresh: '刷新任务', loadError: '无法读取已保存的研究任务。',
+    empty: '暂无后台研究任务。', refresh: '重试', loadError: '无法读取已保存的研究任务。',
     uncertain: '本次提交尚未确认。请恢复同一次提交，再修改输入或新建任务。',
     rejected: '任务未获接收，请检查所选模型、权限、输入和执行上限。',
     actionError: '操作尚未确认，请先刷新已保存状态再重试。',
@@ -46,7 +47,7 @@ const copy = {
     cancel: '取消任务', resume: '继续未完成部分', resumeRecover: '恢复本次续做',
     resumeHelp: '续做沿用同一任务和会话，复用已保存证据并保留原有成果，按所选上限开始新一次执行。',
     conversation: '打开任务会话', report: '打开已保存报告', sources: '资料来源', history: '历次执行',
-    noProvider: '请先配置已启用的 Provider。', noSources: '尚无已保存的来源。',
+    noProvider: '请先配置已启用的模型服务。', noSources: '尚无已保存的来源。',
     statuses: { queued: '排队中', running: '执行中', completed: '已完成', failed: '失败', interrupted: '已中断', cancelled: '已取消', partial: '部分完成' } satisfies Record<ResearchTaskStatus, string>,
   },
 };
@@ -62,6 +63,8 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
   const [providerId, setProviderId] = useState(enabled[0]?.id ?? ''), [model, setModel] = useState('');
   const [allowRemote, setAllowRemote] = useState(false), [maxMinutes, setMaxMinutes] = useState(10), [maxToolCalls, setMaxToolCalls] = useState(20);
   const [tasks, setTasks] = useState<ResearchTask[]>([]), [loadError, setLoadError] = useState(false);
+  // DeskPet asks about sending to a remote model only for cloud services, or after it refused a local-only run.
+  const [remoteAsked, setRemoteAsked] = useState(false);
   const [busy, setBusy] = useState(false), [submissionError, setSubmissionError] = useState<'uncertain' | 'rejected' | null>(null);
   const [actionError, setActionError] = useState('');
   const submission = useRef<ResearchTaskInput | null>(null), submitting = useRef(false);
@@ -97,7 +100,7 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
     } catch (cause) {
       const rejected = definiteRejection(cause);
       if (rejected) submission.current = null;
-      if (mounted.current) { setSubmissionError(rejected ? 'rejected' : 'uncertain'); if (rejected) setActionError(explain(cause)); }
+      if (mounted.current) { setSubmissionError(rejected ? 'rejected' : 'uncertain'); if (rejected) setActionError(explain(cause)); if (String(cause).includes('research.privacyBlocked')) setRemoteAsked(true); }
     } finally { submitting.current = false; if (mounted.current) setBusy(false); }
   };
   const act = async (operation: () => Promise<unknown>): Promise<void> => {
@@ -121,9 +124,10 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
       <form className="background-job-form" onSubmit={event => void submit(event)}>
         <label>{text.goal}<textarea required maxLength={8000} value={goal} disabled={frozen} onChange={event => setGoal(event.target.value)} /></label>
         <label>{text.material}<textarea maxLength={64000} value={material} disabled={frozen} onChange={event => setMaterial(event.target.value)} /></label>
+        <details className="settings-more"><summary>{locale === 'zh-CN' ? `模型与上限：${provider?.name ?? text.noProvider} · ${maxMinutes} 分钟 · ${maxToolCalls} 次工具` : `Model and limits: ${provider?.name ?? text.noProvider} · ${maxMinutes} min · ${maxToolCalls} tool calls`}</summary>
         <div className="background-job-binding">
           <label>{text.provider}<select value={providerId} disabled={frozen} onChange={event => {
-            setProviderId(event.target.value); setModel(''); setAllowRemote(false);
+            setProviderId(event.target.value); setModel(''); setAllowRemote(false); setRemoteAsked(false);
           }}>{!enabled.length && <option value="">{text.noProvider}</option>}{enabled.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <label>{text.model}<input value={model} maxLength={240}
             placeholder={locale === 'zh-CN' ? '跟随服务默认模型' : 'Follow provider default'} disabled={frozen} onChange={event => setModel(event.target.value)} /></label>
@@ -132,9 +136,9 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
           <label>{text.minutes}<input type="number" min={2} max={30} step={1} required value={maxMinutes} disabled={frozen} onChange={event => setMaxMinutes(Number(event.target.value))} /></label>
           <label>{text.calls}<input type="number" min={4} max={40} step={1} required value={maxToolCalls} disabled={frozen} onChange={event => setMaxToolCalls(Number(event.target.value))} /></label>
         </div>
-        <label className="background-job-privacy"><input type="checkbox" checked={allowRemote} disabled={frozen} onChange={event => setAllowRemote(event.target.checked)} />{text.remote}</label>
-        <p className="background-job-note">{text.local}</p>
-        <details className="background-job-preview" open><summary>{text.preview}</summary><dl>
+        </details>
+        {provider && (!providerIsLocal(provider) || remoteAsked) && <label className="background-job-privacy"><input type="checkbox" checked={allowRemote} disabled={frozen} onChange={event => setAllowRemote(event.target.checked)} />{text.remote}</label>}
+        <details className="background-job-preview"><summary>{text.preview}</summary><dl>
           <dt>{text.provider}</dt><dd>{provider?.name ?? text.noProvider}</dd><dt>{text.model}</dt><dd>{model.trim() || provider?.model}</dd>
           <dt>{text.minutes}</dt><dd>{maxMinutes}</dd><dt>{text.calls}</dt><dd>{maxToolCalls}</dd><dt>{text.output}</dt><dd>{text.location}</dd>
         </dl><pre>{goal}{material ? `\n\n${material}` : ''}</pre></details>
@@ -145,8 +149,7 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
       {submissionError && <p role="alert">{text[submissionError]}</p>}
       {actionError && <p role="alert">{actionError}</p>}
     </section>
-    <div className="background-job-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void refresh()}>{text.refresh}</button></div>
-    {loadError && <p role="alert">{text.loadError}</p>}
+    {loadError && <p role="alert">{text.loadError} <button type="button" className="secondary" disabled={busy} onClick={() => void refresh()}>{text.refresh}</button></p>}
     <div className="background-job-list">
       {!tasks.length && !loadError && <p>{text.empty}</p>}
       {tasks.map(task => <article className="panel" key={task.id} aria-label={task.input.goal}>

@@ -1774,7 +1774,7 @@ export class AppController {
       deliverOwner: input => wechat.deliverOwner({ ...input, recordTranscript: false }),
     });
     digestSelections.push({
-      id: 'followup', label: ['等你处理', 'Waiting for you'], read: () => followup.modelRoute(),
+      id: 'followup', label: ['群里 @ 你', 'Group mentions'], read: () => followup.modelRoute(),
       follow: async expected => {
         if (configuringFollowup) return false;
         configuringFollowup = true;

@@ -46,7 +46,8 @@ describe('background status page', () => {
     expect(await screen.findByText('没有新问题。有 1 项你已经知道了。')).toBeVisible();
     expect(acknowledgeHealth).toHaveBeenCalledWith({ key: 'wechat:0', fingerprint: 'a'.repeat(64) });
     expect(onIssues).toHaveBeenLastCalledWith(0);
-    expect(within(screen.getByRole('article')).getByText('已知道')).toBeVisible();
+    // Seen, but still failing: the badge keeps saying so.
+    expect(within(screen.getByRole('article')).getByText('异常 · 已知道')).toBeVisible();
     expect(within(screen.getByRole('article')).queryByRole('button', { name: '知道了' })).toBeNull();
     expect(within(screen.getByRole('article')).getByRole('button', { name: '去设置' })).toBeVisible();
   });

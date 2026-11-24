@@ -67,6 +67,8 @@ it('saves a service token without redisplaying it and offers explicit removal',a
   expect(input).toHaveValue('');
   expect(within(card).queryByText('synthetic-bearer')).not.toBeInTheDocument();
   fireEvent.click(within(card).getByRole('button',{name:'Remove token'}));
+  expect(api.configureToken).toHaveBeenCalledTimes(1);
+  fireEvent.click(within(card).getByRole('button',{name:'Remove (you will need to enter it again)'}));
   await screen.findByText('Saved token removed.');
   expect(api.configureToken).toHaveBeenLastCalledWith(github.id,null);
 });

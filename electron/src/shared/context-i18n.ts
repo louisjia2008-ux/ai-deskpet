@@ -121,7 +121,7 @@ export const contextZhCN: Record<keyof typeof contextEn, string> = {
   'chat.contextEstimate': '输入估算／允许估算上限',
   'chat.contextApplicationEstimate': '输入估算 / 应用请求大小上限',
   'chat.contextProviderManaged': '实际上下文容量由模型服务处理；此处的应用上限不代表服务端已分配的容量。',
-  'chat.contextActual': 'Provider 报告的输入／输出 tokens',
+  'chat.contextActual': '模型服务报告的输入／输出 tokens',
   'chat.contextUnknown': '未知',
   'chat.error.contextBudget': '当前输入或完整工具结果超过已设置的上下文或请求大小上限。请核对提供商的上下文设置，或选择较小的资料。',
   'chat.error.invalidRequestBudget': '上下文上限不足以容纳已设置的输出预留和安全余量，请核对提供商的上下文与输出设置。',

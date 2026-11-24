@@ -45,7 +45,8 @@ const fill = () => {
 describe('background research UI', () => {
   it('shows and submits the explicit scope, fixed report location and bounded settings with remote disclosure off by default', async () => {
     const f = fixture(); render(<ResearchTasks api={f.api} providers={[provider]} locale="en" />); fill();
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    // A verified local model needs no remote consent, so none is asked.
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.getByRole('spinbutton', { name: 'Minutes per attempt' })).toHaveValue(10);
     expect(screen.getByRole('spinbutton', { name: 'Maximum tool calls per attempt' })).toHaveValue(20);
     const preview = screen.getByText('Review selected scope').parentElement!;

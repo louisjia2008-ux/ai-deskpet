@@ -27,7 +27,7 @@ const en = {
   groupTitle: 'Group chats', groupHelp: 'After pairing, the bot replies when someone @-mentions it in that group. Each group has its own conversation and can only look things up on the web: it never sees your private chats, memories, tasks or files. Your character settings do apply.',
   groupPair: 'Generate group pairing code', groupPairHelp: 'In the group, @-mention the bot and send this command. This page updates by itself:', gatewayDelivered: 'handled', gatewayLowSequence: 'lower sequence', gatewayDropped: 'last dropped:', gatewayEvents: 'Connection check', gatewayHelp: 'What QQ has actually sent to DeskPet since it started. Send the bot a private message, then @-mention it in the group. If no event starting with GROUP_ appears, QQ is not sending this group\'s messages to DeskPet.', gatewayNone: 'Nothing received yet.', groupPairWaiting: 'If nothing changes after you send it, the message did not reach DeskPet. Check that the bot is in this group. If sandbox mode is on in the QQ open platform, only groups listed in its sandbox settings may receive messages.', groupConfirm: 'Allow this group', groupCandidate: 'Group waiting for approval',
   groupOpen: 'Everyone in the group can use it', groupRemove: 'Remove', groupUsage: 'Group requests today',
-  refresh: 'Refresh QQ status', pairing: 'Generate pairing code', pairHelp: 'Send this command in a private chat with your bot, then refresh this page. The desktop must approve the candidate before any conversation is allowed.',
+  refresh: 'Retry', pairing: 'Generate pairing code', pairHelp: 'Send this command in a private chat with your bot; the candidate appears here by itself. The desktop must approve the candidate before any conversation is allowed.',
   expires: 'Expires', candidate: 'Candidate QQ identity', confirm: 'Confirm this QQ identity', verify: 'Verify that this is your own account before approving. This platform OpenID is not a QQ number.',
   bound: 'Bound', unbound: 'Not bound', unbind: 'Unbind and stop', clear: 'Clear saved AppSecret and stop', retry: 'Retry failed deliveries',
   retryHelp: 'Unknown delivery outcomes are never retried automatically or by this button.',
@@ -63,18 +63,18 @@ const en = {
 const zh: typeof en = {
   title: 'QQ 通道 · 实验功能',
   boundary: '配对后的私聊和群聊可以查询公开网页。QQ 不能执行命令、操作电脑、访问文件、修改权限或读取桌面对话。记忆默认不共享。',
-  pending: '已在真实 QQ 上验证群聊配对和回复，定时推送仍待验证。QQ Cron 创建、修改和恢复须先收到独立的完整宿主摘要，再由本人直接发送 /confirm 确认；暂停和取消无需确认。仅在桌宠运行时执行，错过不补跑。重启后 QQ 任务暂停，须重新确认恢复；桌面 Cron 不受影响。',
+  pending: '已在真实 QQ 上验证群聊配对和回复，定时推送仍待验证。QQ Cron 创建、修改和恢复须先收到独立的完整摘要，再由本人直接发送 /confirm 确认；暂停和取消无需确认。仅在桌宠运行时执行，错过不补跑。重启后 QQ 任务暂停，须重新确认恢复；桌面 Cron 不受影响。',
   cronLimits: 'QQ Cron 限额：最多 10 个未取消任务（含暂停任务），同一任务实际执行至少间隔 15 分钟，每轮最多 4 次模型请求，每请求最多输出 2048 tokens，执行时限 120 秒。聊天与 Cron 共用每日请求限额。不写文件、不操作电脑、不创建嵌套任务。',
   loading: '正在读取 QQ 设置…', failure: '无法更新 QQ 设置，请检查配置后重试。',
   appId: 'QQ AppID', secret: 'AppSecret（留空保留已保存密钥）', savedSecret: 'AppSecret 已安全保存', noSecret: '尚未保存 AppSecret',
-  provider: 'QQ 使用的 Provider', choose: '选择 Provider', model: 'QQ 使用的模型', followDefault: '跟随服务默认模型', daily: '每日请求上限', web: '私聊联网次数（追加前）',
+  provider: 'QQ 使用的模型服务', choose: '选择模型服务', model: 'QQ 使用的模型', followDefault: '跟随服务默认模型', daily: '每日请求上限', web: '私聊联网次数（追加前）',
   save: '保存 QQ 设置', enable: '启用实验性 QQ 通道', disable: '停用 QQ', stop: '紧急停止 QQ',
   'pairing:no-active-code': '收到了消息，但当前没有有效的配对码。请重新生成，并在 5 分钟内发送。', 'pairing:wrong-format': '收到了消息，但格式不对。请发送 /pair 加 6 位数字。', 'pairing:wrong-code': '收到了配对命令，但配对码不匹配。请核对数字后重发。', 'pairing:attempts-exhausted': '配对码错误次数过多，请重新生成。',
   errorUnreadable: 'QQ 发来一条 DeskPet 读不懂的消息，已被忽略。',
   groupTitle: '群聊', groupHelp: '配对后，有人在群里 @ 机器人时它才会回复。每个群是独立对话，只能联网查资料，看不到你的私聊、记忆、任务和文件。人格设定会在群里生效。',
   groupPair: '生成群配对码', groupPairHelp: '在群里 @ 机器人并发送这条命令，本页会自动更新：', gatewayDelivered: '已处理', gatewayLowSequence: '序号回退', gatewayDropped: '最近丢弃:', gatewayEvents: '连接检查', gatewayHelp: '这里显示桌宠启动后 QQ 实际发来的事件。先私聊机器人发一条，再去群里 @ 它一次。如果没有出现 GROUP_ 开头的事件，说明 QQ 没有把这个群的消息发给桌宠。', gatewayNone: '还没有收到任何事件。', groupPairWaiting: '如果发送后这里没有变化，说明消息没有到达桌宠。请确认机器人已经进群；如果开放平台开了沙箱，可能只有沙箱配置里的群才收得到消息。', groupConfirm: '允许这个群', groupCandidate: '等待确认的群',
   groupOpen: '群里所有人都能用', groupRemove: '移除', groupUsage: '群聊今日请求',
-  refresh: '刷新 QQ 状态', pairing: '生成配对码', pairHelp: '在与机器人的私聊中发送此命令，再刷新本页。桌面确认候选身份前，不会允许任何对话。',
+  refresh: '重试', pairing: '生成配对码', pairHelp: '在与机器人的私聊中发送此命令，这里会自动出现待确认的身份。确认前不会允许任何对话。',
   expires: '有效期至', candidate: '候选 QQ 身份', confirm: '确认这是我的 QQ 身份', verify: '请核实是你本人的账号后再确认。此平台 OpenID 不是 QQ 号码。',
   bound: '已绑定', unbound: '未绑定', unbind: '解绑并停止', clear: '清除已保存 AppSecret 并停止', retry: '重试明确失败的投递',
   retryHelp: '结果未知的投递不会自动重发，此按钮也不会重发它们。',
@@ -149,6 +149,12 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
     return () => { request.current += 1; };
   }, []);
 
+  // Keep the status current while this page is open, so pairing and connection changes appear by themselves.
+  useEffect(() => {
+    const timer = window.setInterval(() => { void window.deskpet.qq.getState().then(setState).catch(() => undefined); }, 3_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     if (!groupPairing) return;
     const timer = window.setInterval(() => {
@@ -189,12 +195,13 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
     : code === 'qq.messageUnreadable' ? copy.errorUnreadable : code === 'qq.onebotAuthFailed' ? copy.errorToken : code === 'qq.accountOffline' ? copy.errorOffline
     : ['qq.socketError', 'qq.socketClosed', 'qq.handshakeTimeout', 'qq.heartbeatTimeout'].includes(code) && state?.transport === 'onebot' ? copy.errorConnect : code;
   return <section className="qq-settings" aria-label={copy.title}>
-    <h2>{copy.title}</h2><p>{copy.boundary}</p><p className="qq-warning">{copy.pending}</p><p>{copy.cronLimits}</p>
-    {error && <p role="alert">{copy.failure}</p>}
-    <div className="qq-actions">
+    <h2>{copy.title}</h2><p>{copy.boundary}</p>
+    <details className="settings-more"><summary>{locale === 'zh-CN' ? '定时任务规则与限额' : 'Scheduled task rules and limits'}</summary><p className="qq-warning">{copy.pending}</p><p>{copy.cronLimits}</p></details>
+    {error && <p role="alert">{copy.failure} <button type="button" className="secondary" disabled={busy} onClick={() => void perform(() => window.deskpet.qq.getState())}>{copy.refresh}</button></p>}
+    {/* The emergency stop only exists while QQ is actually running. */}
+    {state && !state.stopped && (state.enabled || state.connection !== 'disabled') && <div className="qq-actions">
       <button type="button" className="danger" onClick={() => { setPairing(null); void perform(() => window.deskpet.qq.stop()); }}>{copy.stop}</button>
-      <button type="button" disabled={busy} onClick={() => void perform(() => window.deskpet.qq.getState())}>{copy.refresh}</button>
-    </div>
+    </div>}
     {!state ? <p role="status">{copy.loading}</p> : <>
       <dl className="qq-status"><dt>{copy.status}</dt><dd>{state.stopped ? copy.stopped : copy[state.connection]}</dd>
         <dt>{state.bound ? copy.bound : copy.unbound}</dt><dd>{state.bindingDisplayName ?? '—'}</dd>

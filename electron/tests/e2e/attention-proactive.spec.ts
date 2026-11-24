@@ -53,7 +53,7 @@ test('optional check-in failures combine without a badge, open usable diagnostic
       await expect.poll(async () => (await page.evaluate(() => window.deskpet.automation.snapshot())).automationTriggers.filter(t => t.status === 'failed').length).toBe(i);
     }
     await page.locator('nav').getByRole('button', { name: '动态', exact: true }).click();
-    await page.getByRole('tab', { name: '待处理中心', exact: true }).click();
+    await page.getByRole('tab', { name: '待处理', exact: true }).click();
     await expect(page.getByRole('article', { name: '主动问候暂时未成功' })).toHaveCount(1);
     await expect(page.getByRole('button', { name: '需要处理 0', exact: true })).toBeVisible();
     await expect(page.getByText('近期失败次数: 2')).toBeVisible();

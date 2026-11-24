@@ -277,7 +277,7 @@ describe('Live2D overlay lifecycle', () => {
 
   it('leaves the setup card clickable while no model is available', async () => {
     const api = install({ ...character, coreState: 'missing', coreUrl: null, modelState: 'missing', modelUrl: null }); render(<OverlayApp />);
-    const setup = await screen.findByRole('button', { name: /Cubism Core/i });
+    const setup = await screen.findByRole('button', { name: /no look yet/i });
     fireEvent.pointerDown(setup, { pointerId: 11, button: 0 });
     fireEvent.pointerMove(setup, { pointerId: 11, screenX: 200, screenY: 300 });
     fireEvent.click(setup);

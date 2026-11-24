@@ -350,9 +350,11 @@ function PlanProgress({ plan, t }: { plan: Plan; t: Translate }): JSX.Element {
   </div>;
 }
 
-export function MinecraftDedicatedStatus({ api, locale, onSettings }: { api: DedicatedAPI; locale: ResolvedLocale; onSettings(): void }): JSX.Element {
+export function MinecraftDedicatedStatus({ api, locale, onSettings }: { api: DedicatedAPI; locale: ResolvedLocale; onSettings(): void }): JSX.Element | null {
   const t = translate(locale);
   const { state, failed, refresh } = useDedicatedState(api);
+  // A world that is switched off or not part of this build has no status worth showing here.
+  if (state && (state.status === 'unpackaged' || !state.settings.enabled)) return null;
   return <article className="panel dedicated-status" aria-labelledby="dedicated-status-title">
     <div className="dedicated-heading"><h2 id="dedicated-status-title">{t(copy.world)}</h2>
       <button type="button" className="secondary" onClick={onSettings}>{t(copy.statusSettings)}</button>

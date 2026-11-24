@@ -3,6 +3,7 @@ import type { FormEvent, JSX } from 'react';
 import type { ProviderConfig } from '../../shared';
 import type { BackgroundJob, BackgroundJobInput, BackgroundJobStatus } from '../../shared/background-jobs';
 import './background-jobs.css';
+import { providerIsLocal } from './provider-locality';
 
 const copy = {
   en: {
@@ -11,7 +12,7 @@ const copy = {
     privacy: 'Local only is the default. Local-only input requires a provider explicitly confirmed to execute locally. Pasting text is an explicit new input; this page does not select chat history or memory.',
     run: 'Run in background', submitting: 'Saving job…', retry: 'Recover this submission', preview: 'Submission preview',
     empty: 'No background jobs yet.', cancel: 'Cancel job', view: 'View result', close: 'Close result', result: 'Saved result',
-    loadFailed: 'Unable to read the authoritative job state. Retry after storage recovers.', refresh: 'Refresh jobs',
+    loadFailed: 'Could not read the task list.', refresh: 'Retry',
     rejected: 'The host rejected this submission before accepting a job. Check the input, privacy choice, provider and request settings, then submit a new job.',
     submitFailed: 'The submission could not be confirmed. Keep this input and recover the same submission before starting another.',
     uncertain: 'Result unknown / waiting for storage recovery. The same submission ID will be reused; this page does not assume the job was accepted or start another generation.',
@@ -24,12 +25,12 @@ const copy = {
   },
   'zh-CN': {
     title: '后台文本任务', instruction: '任务指令', material: '选入材料（粘贴文本）',
-    provider: 'Provider', model: '模型', cloud: '允许将任务指令与选入材料发送到此 Provider，包括远端执行',
-    privacy: '默认仅限本机。仅限本机输入要求 Provider 已明确确认为本机执行。粘贴文本是一次明确的新输入；本页不会自动选入聊天历史或记忆。',
+    provider: '模型服务', model: '模型', cloud: '允许将任务指令与选入材料发送到此模型服务，包括远端执行',
+    privacy: '默认仅限本机。仅限本机输入要求模型服务已明确确认为本机执行。粘贴文本是一次明确的新输入；本页不会自动选入聊天历史或记忆。',
     run: '后台运行', submitting: '正在保存任务…', retry: '恢复本次提交', preview: '提交预览',
     empty: '暂无后台任务。', cancel: '取消任务', view: '查看结果', close: '关闭结果', result: '持久结果',
-    loadFailed: '无法读取权威任务状态。请在存储恢复后重试。', refresh: '刷新任务',
-    rejected: '宿主在接收任务前拒绝了本次提交。请检查输入、隐私选择、Provider 和请求设置，修改后可明确提交新任务。',
+    loadFailed: '没读到任务列表。', refresh: '重试',
+    rejected: 'DeskPet 在接收任务前拒绝了本次提交。请检查输入、隐私选择、模型服务和请求设置，修改后可明确提交新任务。',
     submitFailed: '本次提交未获确认。请保留这些输入并恢复同一次提交，再启动其他任务。',
     uncertain: '结果未知／等待存储恢复。恢复时复用同一个提交 ID；本页不会猜测任务已接收或发起另一轮生成。',
     cancelFailed: '取消尚未确认。请先读取已保存状态，不能据此认为取消已生效。',
@@ -37,12 +38,12 @@ const copy = {
     isolation: '每个任务仅一次文本生成，不具备工具能力。结果保留在此，需显式查看，不会自动进入聊天或记忆。代码、HTML 和命令均按正文展示。',
     cancelNotice: '取消会阻止新的本地动作，并请求客户端中止该请求。已经发出的 HTTP 仍可能在远端执行；取消不证明服务端已停止，也不证明用量为零。',
     owner: '保存在当前 profile · 固定任务结果区', created: '提交于', destination: '目的地', local: '仅限本机', remote: '允许云端',
-    waiting: '尚未配置可用的 Provider。', missing: '没有已提交的文本结果。',
+    waiting: '尚未配置可用的模型服务。', missing: '没有已提交的文本结果。',
   },
 };
 const statuses: Record<'en' | 'zh-CN', Record<BackgroundJobStatus, string>> = {
   en: { queued: 'Queued', dispatching: 'Dispatch intent saved', running: 'Running', succeeded: 'Completed', failed: 'Failed', cancelled: 'Cancelled locally', interrupted: 'Interrupted / result unknown', blocked: 'Blocked' },
-  'zh-CN': { queued: '排队中', dispatching: '派发意图已保存', running: '运行中', succeeded: '已完成', failed: '失败', cancelled: '已在本地取消', interrupted: '已中断／结果未知', blocked: '受阻' },
+  'zh-CN': { queued: '排队中', dispatching: '正在发出', running: '运行中', succeeded: '已完成', failed: '失败', cancelled: '已在本地取消', interrupted: '已中断／结果未知', blocked: '受阻' },
 };
 const cancellable = new Set<BackgroundJobStatus>(['queued', 'dispatching', 'running']);
 
@@ -55,6 +56,8 @@ export const BackgroundJobs = ({ providers, locale, openJobId = null }: { provid
   const [instruction, setInstruction] = useState('');
   const [material, setMaterial] = useState('');
   const [cloudAllowed, setCloudAllowed] = useState(false);
+  // Asked only for cloud services, or after DeskPet refused to run local-only input on this one.
+  const [remoteAsked, setRemoteAsked] = useState(false);
   const [jobs, setJobs] = useState<BackgroundJob[]>([]);
   const [loadingFailed, setLoadingFailed] = useState(false);
   const [submitError, setSubmitError] = useState<'uncertain' | 'failed' | 'rejected' | null>(null);
@@ -108,6 +111,7 @@ export const BackgroundJobs = ({ providers, locale, openJobId = null }: { provid
       const message = error instanceof Error ? error.message : '';
       const rejected = /(?:provider\.(?:unavailable|bindingMismatch|contextBudgetExceeded|invalidRequestBudget)|job\.(?:privacyBlocked|inputInvalid|operationConflict|maintenance|capacityExceeded))(?:\b|$)/u.test(message);
       if (rejected) submission.current = null;
+      if (mounted.current && message.includes('job.privacyBlocked')) setRemoteAsked(true);
       if (mounted.current) setSubmitError(rejected ? 'rejected' : message.includes('repository.commitUncertain') ? 'uncertain' : 'failed');
     } finally { submitting.current = false; if (mounted.current) setPending(false); }
   };
@@ -140,15 +144,14 @@ export const BackgroundJobs = ({ providers, locale, openJobId = null }: { provid
       <label>{text.instruction}<textarea aria-label={text.instruction} required maxLength={32_000} value={instruction} disabled={frozen} onChange={(event) => setInstruction(event.target.value)} /></label>
       <label>{text.material}<textarea aria-label={text.material} maxLength={32_000} value={material} disabled={frozen} onChange={(event) => setMaterial(event.target.value)} /></label>
       <div className="background-job-binding">
-        <label>{text.provider}<select aria-label={text.provider} value={providerId} disabled={frozen} onChange={(event) => { setProviderId(event.target.value); setModel(enabled.find((item) => item.id === event.target.value)?.model ?? ''); }}>
+        <label>{text.provider}<select aria-label={text.provider} value={providerId} disabled={frozen} onChange={(event) => { setRemoteAsked(false); setProviderId(event.target.value); setModel(enabled.find((item) => item.id === event.target.value)?.model ?? ''); }}>
           {enabled.length === 0 && <option value="">{text.waiting}</option>}
           {enabled.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
         </select></label>
         <label>{text.model}<input aria-label={text.model} required maxLength={240} value={model} disabled={frozen} onChange={(event) => setModel(event.target.value)} /></label>
       </div>
-      <label className="background-job-privacy"><input type="checkbox" checked={cloudAllowed} disabled={frozen} onChange={(event) => setCloudAllowed(event.target.checked)} />{text.cloud}</label>
-      <p className="background-job-note">{text.privacy}</p>
-      <details open className="background-job-preview"><summary>{text.preview}</summary>
+      {provider && (!providerIsLocal(provider) || remoteAsked) && <label className="background-job-privacy"><input type="checkbox" checked={cloudAllowed} disabled={frozen} onChange={(event) => setCloudAllowed(event.target.checked)} />{text.cloud}</label>}
+      <details className="background-job-preview"><summary>{text.preview}</summary>
         <dl><dt>{text.provider}</dt><dd>{provider?.name ?? '—'} · {provider?.baseUrl ?? '—'}</dd><dt>{text.model}</dt><dd>{model || '—'}</dd><dt>{text.destination}</dt><dd>{cloudAllowed ? text.remote : text.local}</dd></dl>
         <strong>{text.instruction}</strong><pre>{instruction || '—'}</pre><strong>{text.material}</strong><pre>{material || '—'}</pre>
       </details>
@@ -156,13 +159,11 @@ export const BackgroundJobs = ({ providers, locale, openJobId = null }: { provid
       <button type="submit" disabled={pending || (!submission.current && (!instruction.trim() || !provider || !model.trim()))}>{pending ? text.submitting : submitError && submitError !== 'rejected' ? text.retry : text.run}</button>
     </form>
     <p className="background-job-note">{text.lifecycle}</p><p className="background-job-note">{text.cancelNotice}</p>
-    {loadingFailed && <p role="alert">{text.loadFailed}</p>}
+    {loadingFailed && <p role="alert">{text.loadFailed} <button type="button" className="secondary" onClick={() => void refresh()}>{text.refresh}</button></p>}
     {actionError && <p role="alert">{actionError === 'cancel' ? text.cancelFailed : text.loadFailed}</p>}
-    <button type="button" className="secondary" onClick={() => void refresh()}>{text.refresh}</button>
     {jobs.length === 0 ? <p>{text.empty}</p> : <div className="background-job-list">{jobs.map((job) => <article className="panel" key={job.id} data-job-id={job.id} aria-label={job.instruction}>
       <div className="panel-heading"><h2>{job.instruction}</h2><span role="status" data-job-status={job.status}>{statuses[locale][job.status]}</span></div>
       <p>{job.binding.provider.name} · {job.binding.model}</p><small>{text.created} {new Date(job.createdAt).toLocaleString(locale)} · {text.owner}</small>
-      <code className="background-job-id">{job.id}</code>
       {job.completionReason && <p data-completion-reason={job.completionReason}>{job.completionReason}</p>}
       <div className="background-job-actions">{cancellable.has(job.status) && <button type="button" className="secondary" disabled={cancelling !== null} onClick={() => void cancel(job.id)}>{text.cancel}</button>}
       <button type="button" className="secondary" onClick={() => void view(job.id)}>{text.view}</button></div>

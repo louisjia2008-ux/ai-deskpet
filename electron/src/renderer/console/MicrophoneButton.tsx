@@ -1,6 +1,7 @@
 /* global MediaStream, AudioContext, ScriptProcessorNode, MediaStreamAudioSourceNode, GainNode */
 import { useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
+import { Microphone } from '@phosphor-icons/react';
 import type { SpeechInputSettings } from '../../shared/speech-input';
 
 export function pcm16(chunks: readonly Float32Array[], rate: number): string {
@@ -66,13 +67,13 @@ export const MicrophoneButton = ({ zh, disabled, onResult }: { zh: boolean; disa
     }
   };
   if (!api) return null;
-  const label = state === 'recording' ? (zh ? '结束录音（最长60秒）' : 'Finish recording (60s max)') : state === 'recognising' ? (zh ? '本地识别中…' : 'Transcribing locally…') : (zh ? '麦克风' : 'Microphone');
-  return <span><button type="button" disabled={disabled || state === 'recognising'} aria-label={label} aria-pressed={state === 'recording'}
+  const label = state === 'recording' ? (zh ? '结束录音（最长60秒）' : 'Finish recording (60s max)') : state === 'recognising' ? (zh ? '本地识别中…' : 'Transcribing locally…') : settings.mode === 'hold' ? (zh ? '按住说话' : 'Hold to talk') : (zh ? '说话' : 'Talk');
+  return <span className="microphone-control"><button type="button" className={state === 'recording' ? 'microphone-button recording' : 'secondary microphone-button'} disabled={disabled || state === 'recognising'} aria-label={label} aria-pressed={state === 'recording'}
     onPointerDown={e => { if (e.button === 0) { e.currentTarget.setPointerCapture(e.pointerId); if (settings.mode === 'hold') void start(); } }}
     onPointerUp={() => { if (settings.mode === 'hold') void stop(); }} onPointerCancel={() => { generation.current++; held.current = false; cleanup(); busy.current = false; setState('idle'); void api.cancel(); }}
     onClick={() => { if (settings.mode === 'toggle') { if (busy.current) void stop(); else void start(); } }}
     onKeyDown={e => { if (settings.mode === 'hold' && [' ', 'Enter'].includes(e.key) && !e.repeat) { e.preventDefault(); void start(); } }}
-    onKeyUp={e => { if (settings.mode === 'hold' && [' ', 'Enter'].includes(e.key)) { e.preventDefault(); void stop(); } }}>{label}</button>
-    {state === 'recognising' && <button type="button" onClick={() => { generation.current++; void api.cancel(); setState('idle'); busy.current = false; }}>{zh ? '取消识别' : 'Cancel transcription'}</button>}
+    onKeyUp={e => { if (settings.mode === 'hold' && [' ', 'Enter'].includes(e.key)) { e.preventDefault(); void stop(); } }}><Microphone size={15} weight={state === 'recording' ? 'fill' : 'regular'} />{label}</button>
+    {state === 'recognising' && <button type="button" className="secondary" onClick={() => { generation.current++; void api.cancel(); setState('idle'); busy.current = false; }}>{zh ? '取消识别' : 'Cancel transcription'}</button>}
     {error && <span role="alert">{error}</span>}</span>;
 };
