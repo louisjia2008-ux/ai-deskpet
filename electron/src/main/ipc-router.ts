@@ -28,7 +28,7 @@ export class IpcRouter {
         allowedRoles: roles,
         development: process.env.NODE_ENV === 'development',
       });
-      if (this.maintenance() && !channel.endsWith(':get-state') && channel !== 'character:get-preview' && channel !== 'backup:restart') throw new Error('backup.error.busy');
+      if (this.maintenance() && !channel.endsWith(':get-state') && channel !== 'character:get-preview' && channel !== 'backup:restart' && channel !== 'backup:cancel-restore') throw new Error('backup.error.busy');
       await this.beforeInvoke();
       return handler(payload, event);
     });

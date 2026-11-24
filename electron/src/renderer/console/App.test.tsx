@@ -71,7 +71,7 @@ const api = (locale: ResolvedLocale): DeskPetApi => ({
     getState: vi.fn(async () => appState(locale)), setLocale: vi.fn(), setTheme: vi.fn(), setHotkey: vi.fn(), setAutoLaunch: vi.fn(),
     showConsole: vi.fn(), setOverlayVisible: vi.fn(), getDiagnostics: vi.fn(), openLoginSettings: vi.fn(), onChanged: on,
   },
-  backup: { create: vi.fn(), restore: vi.fn(), restart: vi.fn() },
+  backup: { create: vi.fn(), restore: vi.fn(), restart: vi.fn(), cancelRestore: vi.fn() },
   recovery: { getState: vi.fn(async () => null), restoreSnapshot: vi.fn(), restoreBackup: vi.fn() },
   character: {
     modelLoadFailed: vi.fn(), tap: vi.fn(),

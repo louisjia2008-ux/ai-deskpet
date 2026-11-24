@@ -305,6 +305,7 @@ const api: DeskPetApi = {
     create: (password) => invoke('backup:create', { password }),
     restore: (password) => invoke('backup:restore', { password }),
     restart: () => invoke('backup:restart', {}),
+    cancelRestore: () => invoke('backup:cancel-restore', {}),
   },
   recovery: {
     getState: () => invoke('recovery:get-state', {}),

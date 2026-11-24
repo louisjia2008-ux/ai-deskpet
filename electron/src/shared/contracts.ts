@@ -676,6 +676,8 @@ export interface DeskPetApi {
     create(password: string): Promise<{ path: string; files: number; bytes: number } | null>;
     restore(password: string): Promise<{ sessions: number; messages: number; files: number; memoryProtection?: 'preserved' | 'unavailable' } | null>;
     restart(): Promise<void>;
+    /** Sets a prepared restore aside (nothing has moved yet) and reopens DeskPet with the current data. */
+    cancelRestore(): Promise<void>;
   };
   recovery: {
     getState(): Promise<StartupRecoveryState | null>;

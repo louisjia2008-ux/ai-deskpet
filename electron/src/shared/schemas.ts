@@ -281,6 +281,7 @@ export const invokePayloadSchemas = {
   'backup:create': z.object({ password: z.string().min(12).max(256) }).strict(),
   'backup:restore': z.object({ password: z.string().min(12).max(256) }).strict(),
   'backup:restart': emptySchema,
+  'backup:cancel-restore': emptySchema,
   'recovery:get-state': emptySchema,
   'recovery:restore-snapshot': z.object({ id: idSchema }).strict(),
   'recovery:restore-backup': z.object({ password: z.string().min(12).max(256) }).strict(),

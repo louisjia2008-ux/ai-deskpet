@@ -246,7 +246,8 @@ test('preserves readable newer deletion guards through Settings restore and excl
     await h.backup(); await h.newChat(); await h.send(`把“${a}”改成“${b}”`); await h.send(`忘记：${b}`);
     const deleted = await h.snapshot('newer-correction-and-deletion');
     expect(deleted.memories.some((memory) => memory.id === fact.id)).toBe(false);
-    await h.settings(); await h.page().getByLabel('Backup password', { exact: true }).fill(password);
+    await h.settings(); await h.page().getByText('Restore from a backup', { exact: true }).click();
+    await h.page().getByLabel('This backup’s password', { exact: true }).fill(password);
     await h.page().getByRole('button', { name: 'Restore backup', exact: true }).click();
     await expect(h.page().getByRole('alertdialog')).toContainText('Readable deletion and correction records'); await h.screenshot('settings-protection-preserved');
     const staged = await h.snapshot('prepared-readable-protection', true);
@@ -283,7 +284,8 @@ test('restoring a backup with a newer deletion never appends the older current c
     h.order.push({ action: 'restore-only-owned-current-encrypted-file-to-older-correction', encryptedSHA256: digest(olderCorrectionBytes) });
     await h.launch(); const olderCurrent = await h.snapshot('new-process-older-current-correction');
     expect(olderCurrent.memories.find((memory) => memory.id === fact.id)?.text).toBe(b);
-    await h.settings(); await h.page().getByLabel('Backup password', { exact: true }).fill(password);
+    await h.settings(); await h.page().getByText('Restore from a backup', { exact: true }).click();
+    await h.page().getByLabel('This backup’s password', { exact: true }).fill(password);
     await h.page().getByRole('button', { name: 'Restore backup', exact: true }).click();
     await expect(h.page().getByRole('alertdialog')).toContainText('Readable deletion and correction records');
     const staged = await h.snapshot('prepared-backup-newer-deletion', true);

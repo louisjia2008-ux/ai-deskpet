@@ -92,7 +92,7 @@ import type { MinecraftCompanionConfig, MinecraftCompanionTask } from '../shared
 import type { MinecraftDedicatedSnapshot, MinecraftSurveyPlanStatus } from '../shared/minecraft-dedicated';
 import { AppSettingsService } from './app-settings';
 import { AutoLaunchService } from './auto-launch';
-import { ProfileBackupService, refreshPendingRestoreProof } from './profile-backup';
+import { abandonPendingRestore, ProfileBackupService, refreshPendingRestoreProof } from './profile-backup';
 import { runtimeIdentity } from './runtime-identity';
 import { isIsolatedProfile, wechatWorkerSwitch } from './profile-location';
 import { WeChatChannel, type OwnerDeliveryOutcome } from './channels/wechat/wechat-channel';
@@ -2557,13 +2557,21 @@ export class AppController {
       if (selection.canceled || path === undefined) return null;
       const confirmation = await dialog.showMessageBox({ type: 'warning', title: this.#text('backup.restore'), message: this.#text('backup.confirm'), buttons: [this.#text('common.cancel'), this.#text('backup.restore')], defaultId: 0, cancelId: 0 });
       if (confirmation.response !== 1) return null;
-      this.#extensions.dispose();
-      await this.#playwrightMcp.stop();
-      await this.#qq.invalidateForRestore();
+      // Preparing only stages the restore. Live services keep running until the owner chooses
+      // "restart and restore", so "cancel" can still leave everything exactly as it was.
       return this.#backup.prepareRestore(path, password);
     }, true));
+    // Quitting with a prepared restore (by this button or any other way) applies it on the next launch;
+    // shutdown releases the live QQ binding first, so the restored profile never inherits it.
     this.#ipc.register('backup:restart', consoleOnly, () => {
       if (!this.#profileMaintenance) throw new Error('backup.error.pending');
+      setTimeout(() => { app.relaunch(); app.quit(); }, 250);
+    });
+    this.#ipc.register('backup:cancel-restore', consoleOnly, async () => {
+      if (!this.#profileMaintenance || !this.#restorePrepared) throw new Error('backup.error.pending');
+      // Only a restore still in its "prepared" phase can be set aside; nothing has moved then.
+      if (!(await abandonPendingRestore(this.#dataRoot))) throw new Error('backup.error.pending');
+      this.#restorePrepared = false;
       setTimeout(() => { app.relaunch(); app.quit(); }, 250);
     });
     this.#ipc.register('app:show-console', both, () => this.windows.showConsole());
@@ -5294,6 +5302,7 @@ export class AppController {
     const playwrightStop = this.#playwrightMcp.stop().then(()=>null,error=>error);
     this.#knowledge.dispose();
     this.#telegram.dispose();
+    if (this.#restorePrepared) await this.#qq.invalidateForRestore().catch(() => undefined);
     this.#qq.dispose();
     if (this.#chatCronTimer!==null) clearInterval(this.#chatCronTimer);
     await this.#chatCron.shutdown();
