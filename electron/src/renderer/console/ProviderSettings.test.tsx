@@ -60,7 +60,7 @@ it('keeps local setup keyless and offers an explicit manual fallback after disco
 
 it('uses an existing secret only for the unchanged endpoint and requires a new key after changing it', async () => {
   const api = setup([existing]); fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Load available models' }));
+  // The saved key at the official address is enough: the models load by themselves.
   await screen.findByRole('option', { name: /^Synthetic model/u });
   expect(api.discoverModels).toHaveBeenCalledExactlyOnceWith({ kind: existing.kind, baseUrl: existing.baseUrl, existingProviderId: existing.id });
   fireEvent.click(screen.getByText('Advanced connection settings'));
@@ -72,6 +72,17 @@ it('uses an existing secret only for the unchanged endpoint and requires a new k
   fireEvent.click(screen.getByRole('button', { name: 'Load available models' }));
   await waitFor(() => expect(api.discoverModels).toHaveBeenCalledTimes(2));
   expect(api.discoverModels.mock.calls[1]![0]).toEqual({ kind: 'openai', baseUrl: 'https://other.example.invalid/v1', apiKey: 'new-synthetic-key' });
+  // A custom address never triggers a lookup on its own while the key is typed.
+  expect(api.discoverModels).toHaveBeenCalledTimes(2);
+});
+
+it('looks models up by itself after the key is typed for an official address and picks a chat model', async () => {
+  const api = setup();
+  api.discoverModels.mockResolvedValueOnce([{ id: 'text-embedding-3-small' }, model] as ProviderModel[]);
+  fireEvent.change(within(form()).getByLabelText('API key'), { target: { value: 'typed-synthetic-key' } });
+  await waitFor(() => expect(api.discoverModels).toHaveBeenCalledOnce(), { timeout: 2_000 });
+  expect(api.discoverModels.mock.calls[0]![0]).toMatchObject({ apiKey: 'typed-synthetic-key' });
+  await waitFor(() => expect(within(form()).getByRole('combobox', { name: 'Model' })).toHaveValue(model.id));
 });
 
 it('drops a late draft catalog after the user changes the key and does not save or pick a stale model', async () => {

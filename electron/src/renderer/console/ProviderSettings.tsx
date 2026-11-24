@@ -127,10 +127,23 @@ export const ProviderSettings = ({ providers, activeId, t, refresh }: { provider
       if (revision !== discovery.current.revision) return;
       const currentModels = list ?? [];
       setModels(currentModels); setCatalogLoaded(true);
+      // With nothing chosen yet, pick the first model that can chat (embedding and reranker models cannot).
+      if (!model.trim()) { const first = currentModels.find(item => !/embed|bge-|rerank|minilm|(^|[/:-])e5-|gte-/iu.test(item.id)); if (first) setModel(first.id); }
       setModelUnverified(Boolean(model.trim()) && !currentModels.some((item) => item.id === model.trim()));
     } catch (cause) { if (revision === discovery.current.revision) { setCatalogError(providerSetupFailureText(cause, 'providers:discover-models', locale)); setModels([]); } }
     finally { if (revision === discovery.current.revision) setLoading(false); }
   };
+  // Look the models up by themselves once there is something to connect with: at once for a local
+  // service, after the key is typed for a cloud one. A custom address keeps the manual button, so a key
+  // is never sent to an address that is still being typed.
+  const formOpen = adding || editing !== null || providers.length === 0;
+  const autoDiscover = formOpen && credentialReady && baseUrl === providerDefinitions.find(item => item.kind === kind)?.defaultBaseUrl;
+  const discoverRef = useRef(discover); discoverRef.current = discover;
+  useEffect(() => {
+    if (!autoDiscover) return;
+    const timer = window.setTimeout(() => void discoverRef.current(), apiKey ? 800 : 0);
+    return () => window.clearTimeout(timer);
+  }, [autoDiscover, kind, baseUrl, apiKey]);
   const save = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     if (!credentialReady || !model.trim() || loading) return;
