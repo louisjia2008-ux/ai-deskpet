@@ -886,6 +886,8 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
 /** Everything about her in one place: look, persona, voice, diary and check-ins. */
 const CompanionPage = ({ initialTab, snapshot, name, t, refresh }: { initialTab: CompanionTab; snapshot: Snapshot; name: string; t: Translator; refresh: () => Promise<void> }): JSX.Element => {
   const [tab, setTab] = useState<CompanionTab>(initialTab);
+  // The check-in card and its advanced rules edit one policy; a save in either reloads the other.
+  const [careRevision, setCareRevision] = useState({ card: 0, advanced: 0 });
   const locale = snapshot.app.resolvedLocale, zh = locale === 'zh-CN';
   const tabs: Array<[CompanionTab, string]> = [['look', zh ? '形象' : 'Look'], ['persona', zh ? '人设' : 'Persona'], ['voice', zh ? '声音' : 'Voice'], ['diary', zh ? '日记' : 'Diary'], ['care', zh ? '主动关心' : 'Check-ins']];
   return <section><Header eyebrow={t('nav.companion')} title={name} />
@@ -895,9 +897,11 @@ const CompanionPage = ({ initialTab, snapshot, name, t, refresh }: { initialTab:
     {tab === 'voice' && <VoiceSettings locale={locale} />}
     {tab === 'diary' && <CompanionJournalSettings zh={zh} part="diary" />}
     {tab === 'care' && <>
-      <CareSettings api={window.deskpet.automation} providers={snapshot.providers} activeProviderId={snapshot.app.activeProviderId ?? null} locale={locale} requestPermission={() => window.deskpet.permissions.request({ capabilityId: 'automation.text', duration: 'always' })} />
+      <CareSettings api={window.deskpet.automation} providers={snapshot.providers} activeProviderId={snapshot.app.activeProviderId ?? null} locale={locale} requestPermission={() => window.deskpet.permissions.request({ capabilityId: 'automation.text', duration: 'always' })}
+        refreshKey={careRevision.advanced} onSaved={() => setCareRevision(current => ({ ...current, card: current.card + 1 }))} />
       <CompanionJournalSettings zh={zh} part="delivery" />
-      <details className="settings-more"><summary>{zh ? '高级：按事件问候的规则' : 'Advanced: event check-in rules'}</summary><EventProactiveSettings api={window.deskpet.automation} providers={snapshot.providers} locale={locale} /></details>
+      <details className="settings-more"><summary>{zh ? '高级：问候规则与记录' : 'Advanced: check-in rules and records'}</summary><EventProactiveSettings api={window.deskpet.automation} providers={snapshot.providers} locale={locale}
+        refreshKey={careRevision.card} onSaved={() => setCareRevision(current => ({ ...current, advanced: current.advanced + 1 }))} /></details>
     </>}
   </section>;
 };

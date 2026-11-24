@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { JSX } from 'react';
 import { proactiveMode } from '../../shared/automation';
-import type { AutomationAPI, ProactivePolicy } from '../../shared/automation';
+import type { AutomationAPI, ProactiveMode, ProactivePolicy } from '../../shared/automation';
 import { providerIsLocal } from './provider-locality';
 import type { ProviderConfig } from '../../shared';
 import './persona-settings.css';
@@ -27,28 +27,39 @@ const copy = {
 
 const frequencyOf = (policy: ProactivePolicy): Frequency => policy.dailyLimit <= 1 ? 'rare' : policy.dailyLimit >= 3 ? 'often' : 'normal';
 
-export const CareSettings = ({ api, providers, activeProviderId, locale, requestPermission }: {
+export const CareSettings = ({ api, providers, activeProviderId, locale, requestPermission, refreshKey = 0, onSaved }: {
   api: AutomationAPI; providers: readonly ProviderConfig[]; activeProviderId: string | null; locale: 'en' | 'zh-CN'; requestPermission(): Promise<unknown>;
+  /** Changes when the advanced rules were saved, so this card reads the policy again. */
+  refreshKey?: number; onSaved?: () => void;
 }): JSX.Element => {
   const t = copy[locale];
+  const zh = locale === 'zh-CN';
   const [policy, setPolicy] = useState<ProactivePolicy | null>(null);
   const [status, setStatus] = useState<'sent' | 'failed' | null>(null);
   const [busy, setBusy] = useState(false);
   const usable = providers.filter((provider) => provider.enabled);
   const provider = usable.find((item) => item.id === policy?.providerId) ?? usable.find((item) => item.id === activeProviderId) ?? usable[0];
-  useEffect(() => { void api.snapshot().then((snapshot) => setPolicy(snapshot.proactivePolicy)).catch(() => setStatus('failed')); }, [api]);
-  const on = policy !== null && proactiveMode(policy) === 'auto';
-  const apply = async (enabled: boolean, frequency: Frequency, chosen = provider, privacy = policy?.privacy,
-    model = chosen?.id === policy?.providerId ? policy?.model || null : null): Promise<void> => {
-    if (policy === null || (enabled && chosen === undefined)) return;
+  useEffect(() => { void api.snapshot().then((snapshot) => setPolicy(snapshot.proactivePolicy)).catch(() => setStatus('failed')); }, [api, refreshKey]);
+  const mode: ProactiveMode = policy === null ? 'off' : proactiveMode(policy);
+  const on = mode === 'auto';
+  // Each control changes only its own fields; events, quiet hours, topics and time zone stay as saved.
+  const apply = async (patch: { mode?: ProactiveMode; frequency?: Frequency; provider?: ProviderConfig | undefined; privacy?: ProactivePolicy['privacy']; model?: string | null }): Promise<void> => {
+    if (policy === null) return;
+    const nextMode = patch.mode ?? mode;
+    const chosen = 'provider' in patch ? patch.provider : provider;
+    if (nextMode === 'auto' && chosen === undefined) return;
     setBusy(true); setStatus(null);
     try {
-      if (enabled) await requestPermission();
+      if (nextMode === 'auto' && mode !== 'auto') await requestPermission();
       const { revision, ...input } = policy; void revision;
-      setPolicy(await api.configureProactive({ ...input, enabled, mode: enabled ? 'auto' : 'off', eventKinds: ['task-completed', 'focus-completed', 'explicit-check-in'],
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...FREQUENCIES[frequency],
-        privacy: privacy ?? input.privacy,
+      const model = 'model' in patch ? patch.model ?? null : chosen?.id === policy.providerId ? policy.model : null;
+      setPolicy(await api.configureProactive({ ...input, enabled: nextMode === 'auto', mode: nextMode,
+        eventKinds: input.eventKinds.length ? input.eventKinds : ['task-completed', 'focus-completed', 'explicit-check-in'],
+        timezone: input.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+        ...(patch.frequency ? FREQUENCIES[patch.frequency] : {}),
+        privacy: patch.privacy ?? input.privacy,
         providerId: chosen?.id ?? input.providerId, model }));
+      onSaved?.();
     } catch { setStatus('failed'); }
     finally { setBusy(false); }
   };
@@ -58,20 +69,24 @@ export const CareSettings = ({ api, providers, activeProviderId, locale, request
     catch { setStatus('failed'); }
     finally { setBusy(false); }
   };
+  const modes: Array<[ProactiveMode, string]> = [['off', zh ? '关闭' : 'Off'], ['auto', zh ? '主动问候' : 'Check in on me'], ['observe', zh ? '只记录，不打扰' : 'Record only, never interrupt']];
   return <section className="panel persona-settings" aria-label={t.title}>
     <div><h2>{t.title}</h2><p>{t.intro}</p></div>
     <p className="muted">{t.detail}</p>
-    {usable.length === 0 && <p role="status">{t.noProvider}</p>}
-    <label className="check-row"><input type="checkbox" checked={on} disabled={busy || policy === null || (!on && usable.length === 0)} onChange={(event) => void apply(event.target.checked, policy ? frequencyOf(policy) : 'normal')} />{t.toggle}</label>
-    {on && policy && provider && !providerIsLocal(provider) && <label className="check-row"><input type="checkbox" checked={policy.privacy === 'cloud-allowed'} disabled={busy} onChange={e => void apply(on, frequencyOf(policy), provider, e.target.checked ? 'cloud-allowed' : 'local-only')} />{t.cloud}</label>}
+    {usable.length === 0 && mode !== 'auto' && <p role="status">{t.noProvider}</p>}
+    <div className="memory-tabs" role="radiogroup" aria-label={t.toggle}>{modes.map(([value, label]) => <button key={value} type="button" role="radio" aria-checked={mode === value}
+      disabled={busy || policy === null || (value === 'auto' && mode !== 'auto' && usable.length === 0)}
+      onClick={() => { if (value !== mode) void apply({ mode: value }); }}>{label}</button>)}</div>
+    {mode === 'observe' && <p className="muted">{zh ? '只在本机记下“本来会在什么时候问候、为什么”，不调用模型，也不会出现在桌面。记录在下方「高级」里。' : 'Only records locally when and why a check-in would have happened. No model calls, nothing on screen. Records are under Advanced below.'}</p>}
+    {on && policy && provider && !providerIsLocal(provider) && <label className="check-row"><input type="checkbox" checked={policy.privacy === 'cloud-allowed'} disabled={busy} onChange={e => void apply({ privacy: e.target.checked ? 'cloud-allowed' : 'local-only' })} />{t.cloud}</label>}
     {on && policy && <div className="persona-row">
-      <label>{t.frequency}<select value={frequencyOf(policy)} disabled={busy} onChange={(event) => void apply(true, event.target.value as Frequency)}>
+      <label>{t.frequency}<select value={frequencyOf(policy)} disabled={busy} onChange={(event) => void apply({ frequency: event.target.value as Frequency })}>
         {(['rare', 'normal', 'often'] as const).map((value) => <option key={value} value={value}>{t[value]}</option>)}</select></label>
-      <label>{t.model}<select value={provider?.id ?? ''} disabled={busy} onChange={(event) => void apply(true, frequencyOf(policy), usable.find((item) => item.id === event.target.value))}>
+      <label>{t.model}<select value={provider?.id ?? ''} disabled={busy} onChange={(event) => void apply({ provider: usable.find((item) => item.id === event.target.value) })}>
         {usable.map((item) => <option key={item.id} value={item.id}>{item.name} · {(item.id === policy.providerId && policy.model) || item.model}</option>)}</select></label>
       {provider && policy.model && <button type="button" className="secondary" disabled={busy}
-        onClick={() => void apply(true, frequencyOf(policy), provider, policy.privacy, null)}>
-        {locale === 'zh-CN' ? '跟随服务默认模型' : 'Follow service default'} ({provider.model})
+        onClick={() => void apply({ model: null })}>
+        {zh ? '跟随服务默认模型' : 'Follow service default'} ({provider.model})
       </button>}
     </div>}
     {on && <div className="persona-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void checkInNow()}>{t.now}</button></div>}

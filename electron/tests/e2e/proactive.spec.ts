@@ -42,7 +42,7 @@ test('one setting turns on check-ins, which use the character and reach the desk
     await expect(page.getByText('已保存，新的回复会使用这个人格。')).toBeVisible();
     await page.getByRole('tab', { name: '主动关心', exact: true }).click();
     expect(requests).toHaveLength(0);
-    await page.getByRole('checkbox', { name: '让她主动关心我' }).click();
+    await page.getByRole('radio', { name: '主动问候', exact: true }).click();
     await page.getByRole('button', { name: '现在问候一次', exact: true }).click();
     const overlay = application.windows().find((window) => window.url().includes('/overlay_window/'))!;
     await expect(overlay.getByText('今天也辛苦啦，要不要歇一会儿？', { exact: true })).toBeVisible({ timeout: 30_000 });

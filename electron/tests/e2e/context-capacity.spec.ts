@@ -162,9 +162,9 @@ test('unconfigured capacity carries a full tool result and long job, preserves a
     expect(wires).toHaveLength(3);
     await page!.locator('nav').getByRole('button', { name: 'Companion', exact: true }).click();
     await page!.getByRole('tab', { name: 'Check-ins', exact: true }).click();
-    await page!.getByText('Advanced: event check-in rules').click();
-    await expect(page!.getByRole('combobox', { name: 'Mode', exact: true })).toHaveValue('observe');
-    await expect(page!.getByRole('region', { name: 'Event observation and check-ins', exact: true })).toContainText('Observe only');
+    await expect(page!.getByRole('radio', { name: 'Record only, never interrupt', exact: true })).toHaveAttribute('aria-checked', 'true');
+    await page!.getByText('Advanced: check-in rules and records').click();
+    await expect(page!.getByRole('region', { name: 'Event observation and check-ins', exact: true })).toBeVisible();
     await page!.screenshot({ path: info.outputPath('observation-mode.png'), fullPage: true });
     await page!.evaluate(async provider => {
       const { secretState: _secretState, ...input } = provider;

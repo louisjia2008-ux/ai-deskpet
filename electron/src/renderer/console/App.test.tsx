@@ -228,7 +228,7 @@ describe('memory search conversation bridge', () => {
     await openChat();
     if (kind === 'channel') { fireEvent.click(await screen.findByRole('button', { name: /Channels/u })); fireEvent.click(await screen.findByRole('button', { name: 'Unsuitable session' })); }
     await searchMemory();
-    expect(f.api.memoryRecall!.search.mock.calls[0]![0]).not.toHaveProperty('sessionId');
+    expect(vi.mocked(f.api.memoryRecall!.search).mock.calls[0]![0]).not.toHaveProperty('sessionId');
     expect(screen.queryByRole('button', { name: 'Continue with this question' })).toBeNull();
   });
 
@@ -236,7 +236,7 @@ describe('memory search conversation bridge', () => {
     const f = withRecall(); vi.mocked(f.api.chat.listSessions).mockResolvedValue([]);
     await openChat(); await searchMemory();
     expect(f.api.chat.createSession).not.toHaveBeenCalled();
-    expect(f.api.memoryRecall!.search.mock.calls[0]![0]).not.toHaveProperty('sessionId');
+    expect(vi.mocked(f.api.memoryRecall!.search).mock.calls[0]![0]).not.toHaveProperty('sessionId');
   });
 
   it('keeps the search-to-chat action disabled while a conversation is running', async () => {
@@ -810,6 +810,6 @@ describe('console layout', () => {
     fireEvent.click(within(navigation).getByRole('button', { name: 'Companion' }));
     expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Look', 'Persona', 'Voice', 'Diary', 'Check-ins']);
     fireEvent.click(screen.getByRole('tab', { name: 'Check-ins' }));
-    expect(screen.getAllByText('Advanced: event check-in rules')).toHaveLength(1);
+    expect(screen.getAllByText('Advanced: check-in rules and records')).toHaveLength(1);
   });
 });

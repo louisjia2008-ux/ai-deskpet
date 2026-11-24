@@ -15,21 +15,21 @@ const apiFor = (state: AutomationSnapshot): AutomationAPI => ({ snapshot: vi.fn(
 const providers = [{ id: 'provider', name: 'Synthetic local', model: 'synthetic', enabled: true }] as ProviderConfig[];
 afterEach(cleanup);
 
-it('keeps the displayed saved status until the one host policy save succeeds, with no hidden requests', async () => {
+it('saves only its own rules on top of the latest saved policy, after an explicit save', async () => {
   const state = fixture(), api = apiFor(state); let finish!: () => void;
+  state.proactivePolicy = { ...state.proactivePolicy, mode: 'auto', enabled: true, providerId: 'provider', privacy: 'cloud-allowed' };
   api.configureProactive = vi.fn(async (input) => { await new Promise<void>((resolve) => { finish = resolve; });
     state.proactivePolicy = { ...input, revision: 2 }; return state.proactivePolicy; });
   render(<EventProactiveSettings api={api} providers={providers} locale="en" />);
-  await screen.findByText('Saved policy: Off');
-  fireEvent.change(screen.getByLabelText('Mode'), { target: { value: 'auto' } });
-  fireEvent.click(screen.getByLabelText('App task completed'));
-  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'provider' } });
+  fireEvent.click(await screen.findByLabelText('App task completed'));
   fireEvent.change(screen.getByLabelText('Optional preferred topics, one per line'), { target: { value: 'reading\nsmall victories' } });
+  expect(screen.queryByLabelText('Mode')).toBeNull(); expect(screen.queryByLabelText('Provider')).toBeNull();
   expect(api.configureProactive).not.toHaveBeenCalled(); expect(api.explicitCheckIn).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Save check-in policy' }));
-  expect(screen.getByText('Saved policy: Off')).toBeVisible(); expect(screen.getByRole('button', { name: 'Save check-in policy' })).toBeDisabled();
-  expect(api.configureProactive).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, eventKinds: ['task-completed'], topics: ['reading', 'small victories'], privacy: 'local-only', providerId: 'provider', model: null }));
-  finish(); await screen.findByText('Saved policy: Automatic check-ins');
+  fireEvent.click(screen.getByRole('button', { name: 'Save these rules' }));
+  await waitFor(() => expect(api.configureProactive).toHaveBeenCalled());
+  expect(screen.getByRole('button', { name: 'Save these rules' })).toBeDisabled();
+  expect(api.configureProactive).toHaveBeenCalledWith(expect.objectContaining({ mode: 'auto', enabled: true, providerId: 'provider', privacy: 'cloud-allowed', topics: ['reading', 'small victories'] }));
+  finish(); await waitFor(() => expect(screen.getByRole('button', { name: 'Save these rules' })).toBeEnabled());
 });
 
 it('does not reveal job result bodies until an explicit result action and targets cancellation by trigger id', async () => {
@@ -43,29 +43,21 @@ it('does not reveal job result bodies until an explicit result action and target
   fireEvent.click(screen.getByRole('button', { name: 'Cancel this trigger' })); await waitFor(() => expect(api.cancelTrigger).toHaveBeenCalledWith('trigger-one'));
 });
 
-it('requires the persisted explicit-check-in preference and preserves saved state on failure', async () => {
+it('keeps the one-check-in request unavailable while check-ins are off and reports a failed save', async () => {
   const state = fixture(), api = apiFor(state);
   render(<EventProactiveSettings api={api} providers={providers} locale="en" />);
   const action = await screen.findByRole('button', { name: 'Request one check-in' }); expect(action).toBeDisabled();
   api.configureProactive = vi.fn(async () => { throw new Error('SYNTHETIC_BACKEND_FAILURE'); });
-  fireEvent.change(screen.getByLabelText('Mode'), { target: { value: 'auto' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save check-in policy' })); await screen.findByRole('alert');
-  expect(screen.getByText('Saved policy: Off')).toBeVisible(); expect(api.explicitCheckIn).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Save these rules' })); await screen.findByRole('alert');
+  expect(api.explicitCheckIn).not.toHaveBeenCalled();
 });
 
-it('saves observe only without a provider and displays local records without requesting model results', async () => {
+it('shows local observation records without requesting model results', async () => {
   const state = fixture(), api = apiFor(state);
+  state.proactivePolicy = { ...state.proactivePolicy, mode: 'observe', enabled: false };
   state.proactiveObservations = [{ id: 'observation:one', eventId: 'one', kind: 'task-completed', summary: 'Synthetic selected task',
     occurredAt: '2026-11-01T12:00:00.000Z', observedAt: '2026-11-01T12:00:00.000Z', policyRevision: 2, decision: 'would-act', reason: 'rules-matched' }];
   render(<EventProactiveSettings api={api} providers={[]} locale="en" />);
-  await screen.findByText('Saved policy: Off');
-  fireEvent.change(screen.getByLabelText('Mode'), { target: { value: 'observe' } });
-  fireEvent.click(screen.getByLabelText('App task completed'));
-  expect(screen.queryByLabelText('Provider')).toBeNull();
-  expect(screen.getByText(/No model calls, jobs, chat or system notifications/)).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: 'Save check-in policy' }));
-  await screen.findByText('Saved policy: Observe only');
-  expect(api.configureProactive).toHaveBeenCalledWith(expect.objectContaining({ mode: 'observe', enabled: false, providerId: null, model: '' }));
-  expect(screen.getByText('Would act · not executed')).toBeVisible();
+  expect(await screen.findByText('Would act · not executed')).toBeVisible();
   expect(api.explicitCheckIn).not.toHaveBeenCalled(); expect(api.triggerResult).not.toHaveBeenCalled();
 });
