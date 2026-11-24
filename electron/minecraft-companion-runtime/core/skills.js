@@ -1219,5 +1219,5 @@ async function useBed(bot, ctx, { position }) {
 
 const skills = { gatherOne, craft, placeAt, clearCoverAt, pourLiquid, scoopLiquid, smelt, huntOne, pickBerries, explore, useChest,
   storeItems, storeInChest, takeItems, fillBucket, useBed, digIn, digOut, enclose, openEnclosure, prepareShelterSeal, tossStacks };
-module.exports = { isFluidSource, sheepWool, shelterSealCount, inventoryCounts, entityInside, aimAtFace, bunkerOccupied, enclosureOccupied };
+module.exports = { isFluidSource, sheepWool, shelterSealCount, inventoryCounts, entityInside, aimAtFace, bunkerOccupied, enclosureOccupied, shelterSolid };
 for (const [name, execute] of Object.entries(skills)) module.exports[name] = settleAction(execute, name === 'digOut' ? 'surface' : undefined);

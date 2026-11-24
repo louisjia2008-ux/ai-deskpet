@@ -75,6 +75,26 @@ test('empty hands clear three sandstone steps after the bunker lid opens', async
   assert.ok(!logs.some(e => e.type === 'pit_rescue_alert'));
 });
 
+test('a stair reaching the exit height waits for native landing before exhaustion', async () => {
+  const { bot, top } = sandstoneShaft();
+  const goto = bot.pathfinder.goto;
+  const logs = [];
+  bot.pathfinder.goto = async goal => {
+    await goto(goal);
+    if (goal.y === top.y) {
+      bot.entity.position.y += 0.024;
+      bot.entity.onGround = false;
+      setTimeout(() => { bot.entity.position.y = top.y; bot.entity.onGround = true; }, 125);
+    }
+  };
+  const result = await actions.surface(bot, {
+    record: (type, fields) => logs.push({ type, ...fields }),
+  }, { targetY: top.y, bunker: true });
+  assert.equal(result.ok, true);
+  assert.equal(bot.entity.onGround, true);
+  assert.ok(!logs.some(e => e.type === 'pit_rescue_alert'));
+});
+
 test('a blocked pit issues D12 and restarts at the pathfinder after its own delay', async t => {
   const { bot, top, moves } = sandstoneShaft();
   let clock = 10;
@@ -118,4 +138,37 @@ test('two inward steps below the opening do not release a still-trapped tracker'
   const outcome = await escape.run({ record: type => assert.notEqual(type, 'self_stuck_escaped') });
   assert.equal(outcome.reason, 'still_below_surface');
   assert.ok(tracker.state());
+});
+
+test('consecutive dry nudges are measured from the held episode origin', async () => {
+  for (const geometry of ['surface', 'water', 'covered', 'lower_trench']) {
+    const { bot } = sandstoneShaft();
+    bot.entity.position = new Vec3(1.5, 270, -1.493);
+    bot.companionSurfaceY = 270;
+    const stone = registry.blocksByName.stone.minStateId;
+    const air = registry.blocksByName.air.minStateId;
+    const water = registry.blocksByName.water.minStateId;
+    bot.blockAt = p => {
+      const cell = p.floored();
+      const ground = geometry === 'lower_trench' && cell.x >= 3 ? 269 : 270;
+      const state = cell.y < ground || (geometry === 'covered' && cell.y === ground + 2) ? stone
+        : geometry === 'water' && cell.x >= 3 && cell.y === 270 ? water : air;
+      return Object.assign(Block.fromStateId(state, 0), { position: cell });
+    };
+    const tracker = createSelfStuck(bot);
+    tracker.force('different_targets_same_origin');
+    const method = createHomeEscape({ bot, tracker, home: () => null, actions: {
+      async unstick() {
+        bot.entity.position.x += 0.9;
+        if (geometry === 'lower_trench' && bot.entity.position.x >= 3) bot.entity.position.y = 269;
+        return { ok: true, moved: 'nudged' };
+      },
+    } });
+    const trace = [];
+    const ctx = { record: type => trace.push(type) };
+    for (let attempt = 0; attempt < 2; attempt++) assert.equal((await method.run(ctx)).ok, false);
+    assert.equal((await method.run(ctx)).ok, geometry === 'surface');
+    assert.equal(trace.includes('self_stuck_escaped'), geometry === 'surface');
+    assert.equal(Boolean(tracker.state()), geometry !== 'surface');
+  }
 });

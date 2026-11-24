@@ -121,8 +121,14 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
       }
       const before = bot.entity.position.clone();
       const walked = await actions.unstick(bot, rescue);
-      const escaped = result => bot.entity.position.distanceTo(before) >= 2 && !result?.wait && result?.reason !== 'still_below_surface'
-        && factsOf(result).surfaced !== false;
+      const origin = tracker.state()?.position ?? before;
+      const outside = () => {
+        const p = bot.entity.position;
+        return p.y >= origin.y - 0.1 && Math.hypot(p.x - origin.x, p.z - origin.z) >= 2
+          && !bot.companionSheltered && !defaultActions.underground(bot);
+      };
+      const escaped = result => !result?.wait && result?.reason !== 'still_below_surface' && factsOf(result).surfaced !== false
+        && defaultActions.dryLanding(bot, true) && (bot.entity.position.distanceTo(before) >= 2 || outside());
       const climbed = !escaped(walked) && !walked.wait && await actions.surface?.(bot, rescue);
       return escaped(climbed || walked) ? finish(ctx, 'natural_route') : climbed?.wait ? climbed : walked.wait ? walked
         : fail(walked.reason || 'self_escape_unconfirmed', { objective: 'dry_ground', position: bot.entity.position, attempted: climbed ? ['unstick', 'surface'] : ['unstick'] });

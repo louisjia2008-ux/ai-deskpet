@@ -1852,7 +1852,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const at = bot.entity.position;
       return { house, inside: at.y >= house.anchor.y - 0.05 && insideRoom(at.floored()),
         covered: () => doorOpen() === false && house.blocks.every(b =>
-          !['walls', 'roof'].includes(b.phase) || matchesBuilding(b, nameAt(b.position), blockAt(b.position))) };
+          !['walls', 'roof'].includes(b.phase) || defaultSkills.shelterSolid(blockAt(b.position))) };
     },
     shelterDoor: (ctx, open) => {
       if (!memory.house || !insideRoom(bot.entity.position.floored())) return null;

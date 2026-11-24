@@ -1,6 +1,7 @@
 'use strict';
 
 const { Vec3 } = require('vec3');
+const { goals } = require('mineflayer-pathfinder');
 const { sleep, waitUntil } = require('../confirm');
 
 const DAY_TICKS = 24_000;
@@ -58,10 +59,13 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
   const { BAND } = require('../brain');
   const { bunkerOccupied, enclosureOccupied, shelterSealCount } = require('../skills');
   const { boundedWork } = require('../work-budget');
+  const { withoutDigging } = require('../target-recovery');
+  const { ledgerFor, ledgerTarget } = require('../failure-ledger');
   const { leaveMine, mineExit } = require('../mining');
+  const ledger = ledgerFor(bot, { rescue: 'surface' });
   let shelter = null, enclosure = null, missedReturn = false, missedDig = false, retryShelterAt = 0;
   let returnUntil = null, bedRefusedUntil = 0;
-  let lostShelter = false;
+  let lostShelter = false, closingHome = false, missedCover = false;
   const occupied = () => {
     if (shelter === HOME_SHELTER) {
       const site = home();
@@ -75,13 +79,13 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
     shelter = null;
     if (!enclosure?.placed.length) enclosure = null;
     lostShelter = false;
-    missedReturn = missedDig = false;
+    missedReturn = missedDig = missedCover = false;
     retryShelterAt = 0;
     returnUntil = null;
     bedRefusedUntil = 0;
   };
   const verify = state => {
-    if (shelter && (shelter === HOME_SHELTER ? home()?.inside !== true : !occupied()) && late(timing(state, home()))) {
+    if (shelter && !closingHome && !occupied() && late(timing(state, home()))) {
       reset();
       lostShelter = true;
     }
@@ -95,6 +99,29 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
     && !state.sheltered && !state.inWater && state.onGround !== false && !state.hostiles?.some(e => e.distance <= 8)
     && prepareSeals() && shelterSealCount(state.inventory) < 2 && !actions.underground?.(bot);
   const wait = ({ signal }) => sleep(3_000, signal).then(() => waiting('sheltering_until_daylight'));
+  const interrupted = (ctx, result) => ctx.signal?.aborted || result?.wait || result?.kind === 'interrupted';
+  const cleanupTarget = () => ledgerTarget(bot, 'legacy_60000', enclosure.placed[0].position,
+    { entity: `shelter_cleanup:${enclosure.top.toArray().join(',')}` });
+  const cleanupDue = () => enclosure?.placed.length && !ledger.skip(cleanupTarget());
+  const walk = (ctx, goal) => withoutDigging(bot.pathfinder?.movements, () => actions.goTo(bot,
+    { ...ctx, dryRoute: true }, goal, { timeoutMs: 5000, retryNoProgress: false }));
+
+  async function cleanEnclosure(ctx) {
+    if (actions.withinReach && actions.goTo && enclosure.placed.some(({ position }) => !actions.withinReach(bot, position))) {
+      const { x, y, z } = enclosure.top;
+      const moved = await walk(ctx, new goals.GoalNear(x, y, z, 2));
+      if (!isComplete(moved)) return moved;
+    }
+    const result = await skills.openEnclosure?.(bot, ctx, enclosure) ?? complete();
+    if (isComplete(result) && enclosure.placed.length) ledger.clearOnSuccess(cleanupTarget());
+    return result;
+  }
+
+  function retryShelter(ctx, result) {
+    retryShelterAt = now() + 10_000;
+    ctx.record('night_rest', { action: 'shelter_exhausted', result, position: enclosure.top });
+    return wait(ctx);
+  }
 
   async function shelterLocally(ctx, budget) {
     if (retryShelterAt) {
@@ -110,6 +137,18 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
       if (!grounded() && !await waitUntil(grounded, { timeoutMs: 2000, signal: ctx.signal })) {
         return failure('shelter_not_entered', { objective: bot.entity.position.floored(), attempted: ['wait_for_landing'] }, ctx, bot);
       }
+      const feet = bot.entity.position.floored();
+      if (enclosure?.placed.length && (feet.x !== enclosure.top.x || feet.z !== enclosure.top.z)) {
+        const { x, y, z } = enclosure.top;
+        const moved = await walk(ctx, new goals.GoalBlock(x, y, z));
+        if (interrupted(ctx, moved)) return moved;
+        if (!bot.entity.position.floored().equals(enclosure.top)) {
+          const cleared = await cleanEnclosure(ctx);
+          if (interrupted(ctx, cleared)) return cleared;
+          if (!isComplete(cleared)) return retryShelter(ctx, cleared);
+          enclosure = null;
+        }
+      }
       enclosure ||= { top: bot.entity.position.floored(), placed: [] };
     }
     const result = shaft ? await skills.digIn(bot, { ...ctx, dryRoute: true }, {
@@ -120,23 +159,20 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
     const room = bunker || (!shaft && enclosure);
     if (room && isComplete(result) && (bunker ? bunkerOccupied : enclosureOccupied)(bot, room)) {
       shelter = room;
-      if (bunker) enclosure = null;
+      if (bunker && !shaft) enclosure = null;
       ctx.record('night_rest', bunker ? { action: 'dug_in', top: room.top, ...(room.depth && { depth: room.depth, cover: room.cover }) }
         : { action: 'enclosed', position: room.top, placed: room.placed.map(b => b.position) });
       return result;
     }
-    const interrupted = ctx.signal?.aborted || result?.wait || result?.kind === 'interrupted';
     if (shaft) {
-      if (!interrupted) missedDig = true;
+      if (!interrupted(ctx, result)) missedDig = true;
       return room ? failure('shelter_not_entered', { objective: room.top, attempted: ['dig_in'] }, ctx, bot) : result;
     }
-    if (interrupted || result?.kind === 'start' || result?.reason === 'shelter_not_entered') {
+    if (interrupted(ctx, result) || result?.kind === 'start' || result?.reason === 'shelter_not_entered') {
       if (!enclosure.placed.length) enclosure = null;
       return result;
     }
-    retryShelterAt = now() + 10_000;
-    ctx.record('night_rest', { action: 'shelter_exhausted', result, position: enclosure.top });
-    return wait(ctx);
+    return retryShelter(ctx, result);
   }
 
   function undergroundExit(spot) {
@@ -175,12 +211,12 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
     band: BAND.MAINTENANCE,
     taskAllowed(state, goal) {
       verify(state);
-      return !overworld(bot.game?.dimension) || (!shelter && !enclosure?.placed.length && !late(timing(state, home()), goal));
+      return !overworld(bot.game?.dimension) || (!shelter && !cleanupDue() && !late(timing(state, home()), goal));
     },
     want(state) {
       verify(state);
       if (!overworld(bot.game?.dimension)) return 0;
-      if (shelter || enclosure?.placed.length) return 0.8;
+      if (shelter || cleanupDue()) return 0.8;
       const spot = home(), budget = timing(state, spot);
       if (needsSeal(state, budget)) return 0.5;
       if (spot && late(budget)) return 0.8;
@@ -196,13 +232,13 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
       }
       const spot = home(), budget = timing(state, spot);
       const hold = spot && late(budget), bunker = shelter === HOME_SHELTER ? null : shelter;
-      if (!hold && (shelter || enclosure)) {
+      if (!hold && (shelter || cleanupDue())) {
         const shaft = bunker && bunker !== enclosure;
         if (shaft) ctx.record('night_rest', { action: 'dig_out' });
         const result = shaft
           ? await skills.digOut(bot, { ...ctx, rescue: 'surface', adapt: ctx.adapt ?? adaptation?.scope(() => !ctx.signal?.aborted) }, bunker)
           : shelter === HOME_SHELTER ? await shelterDoor?.(ctx, true) ?? complete()
-            : await skills.openEnclosure?.(bot, ctx, enclosure) ?? complete();
+            : await cleanEnclosure(ctx);
         if (isComplete(result)) {
           if (shaft) ctx.record('night_rest', { action: 'dug_out' });
           else if (enclosure && shelter !== HOME_SHELTER) {
@@ -210,6 +246,9 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
             enclosure = null;
           }
           reset();
+        } else if (!shaft && shelter !== HOME_SHELTER && enclosure?.placed.length && !interrupted(ctx, result) && !occupied()) {
+          shelter = null;
+          ledger.record(failure('target_unreachable', { cause: result.reason }), cleanupTarget());
         }
         return result;
       }
@@ -229,13 +268,19 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
           ? goHome(ctx, spot, budget, exit) : shelterLocally(ctx, budget);
       }
 
-      if (shelterDoor && !shelter) {
+      if (shelterDoor && !shelter && !missedCover) {
         // The server may close the door just before we are preempted.
         shelter = HOME_SHELTER;
-        const shut = await shelterDoor(ctx, false);
-        if (!ctx.signal?.aborted && (shut != null && !isComplete(shut) || home()?.inside !== true)) shelter = null;
+        closingHome = true;
+        let shut;
+        try { shut = await shelterDoor(ctx, false); } finally { closingHome = false; }
+        if (!ctx.signal?.aborted && (shut != null && !isComplete(shut) || !occupied())) {
+          shelter = null;
+          missedCover = home()?.covered?.() === false;
+        }
         if (shut != null) return shut;
       }
+      if (missedCover || !shelterDoor && spot.covered?.() === false) return shelterLocally(ctx, budget);
       if (budget.dark && spot.bed && now() >= bedRefusedUntil) {
         ctx.record('night_rest', { action: 'sleep' });
         const slept = await skills.useBed(bot, ctx, { position: spot.bed });

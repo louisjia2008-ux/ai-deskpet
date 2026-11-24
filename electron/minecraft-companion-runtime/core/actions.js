@@ -1497,6 +1497,9 @@ async function surface(bot, ctx, { targetY, bunker = false } = {}) {
   await climbPath(bot, { ...ctx, nearDestination: true }, target, { timeoutMs, arrived: () => true });
   if (!reached() && rim) await climbPitDirectly(bot, ctx, Math.min(rim, target));
   if (!reached()) await digStairsUp(bot, ctx, target, { maxSteps: Math.min(24, target - Math.floor(bot.entity.position.y) + 4), stop: reached });
+  if (rim && bot.entity.position.y >= target - 0.1 && bot.entity.onGround !== true) {
+    await waitUntil(reached, { timeoutMs: 2000, signal: ctx.signal });
+  }
   if (reached()) {
     if (pitRetryAt.delete(bot)) ctx.record?.('pit_rescue_escaped', { position: bot.entity.position.floored() });
     return { ok: true, surfaced: true };
