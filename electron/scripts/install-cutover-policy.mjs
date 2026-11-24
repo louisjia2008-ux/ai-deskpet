@@ -418,6 +418,11 @@ const uxPrinciplesRuntime = {
   mainSHA256: 'ef380d45eaea898f4b2305762db854a8412dd772dcecfec7f156ce2eae099045',
   asarSHA256: '7737a63d3316cba3dbbd7b9619faebdba1129076bdc3220d1dbe1a094c357456',
 };
+const uxDeferredRuntime = {
+  sourceSHA256: 'd733ce6782f929dca571508fbb39d57459097461a82eba1c8f29db3767ada402',
+  mainSHA256: '6d114d68f85ab3cbdf6bbd683b9ddfc89d3f2ed3d245cfe53d0844c79d04b11a',
+  asarSHA256: 'c5d074ce3cb2256670cb97f46696224ec8db28c17f4bea1f289ec17654386f39',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -543,6 +548,8 @@ const reviewedRuntimeManifest = [
   { runtime: wechatOwnerTextRuntime, previous: groupDigestDeliveryRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   // Owner-first UX round plus the committed owner-text and drawer work, over the installed group digest build, diary still on (2026-11-24).
   { runtime: uxPrinciplesRuntime, previous: groupDigestDeliveryRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Deferred owner-first items (memory search, one check-in control, schedules, backup cancel, consolidation list) over the installed UX build, diary still on (2026-11-25).
+  { runtime: uxDeferredRuntime, previous: uxPrinciplesRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
