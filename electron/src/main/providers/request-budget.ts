@@ -22,6 +22,12 @@ export class ProviderRequestBudgetError extends Error {
   }
 }
 
+/** Whether a provider still points at the address consent was given for (normalized the same way as requests). */
+export const sameProviderEndpoint = (config: ProviderConfig, expectedBaseUrl: string): boolean => {
+  try { return normalizedProviderBaseUrl(config).toString() === normalizedProviderBaseUrl({ ...config, baseUrl: new URL(expectedBaseUrl).toString() }).toString(); }
+  catch { return false; }
+};
+
 export const normalizedProviderBaseUrl = (config: ProviderConfig): URL => {
   const url = new URL(config.baseUrl);
   const hostname = url.hostname.replace(/^\[|\]$/gu, '').toLowerCase();

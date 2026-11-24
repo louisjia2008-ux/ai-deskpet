@@ -13,7 +13,7 @@ import type { DomainRepository } from './repository';
 import type { PersistentState } from './schemas';
 import type { ProviderService, CapturedProviderBinding } from '../providers/provider-service';
 import type { ProviderChatRequest } from '../providers/types';
-import { providerBindingFingerprint, prepareProviderChatRequest } from '../providers/request-budget';
+import { providerBindingFingerprint, prepareProviderChatRequest, sameProviderEndpoint } from '../providers/request-budget';
 import { chatRequestLimits } from '../providers/chat-request-policy';
 import { contextPrivacyAllows, resolveContextDestination } from './chat-context-policy';
 
@@ -102,12 +102,12 @@ export class BackgroundJobService {
     return job;
   }
 
-  async submit(raw: BackgroundJobInput, automaticTriggerId?: string, skillId?: string): Promise<BackgroundJob> {
+  async submit(raw: BackgroundJobInput, automaticTriggerId?: string, skillId?: string, consentedBaseUrl?: string): Promise<BackgroundJob> {
     this.#submissions += 1;
-    try { return await this.#submit(raw, automaticTriggerId, skillId); }
+    try { return await this.#submit(raw, automaticTriggerId, skillId, consentedBaseUrl); }
     finally { this.#submissions -= 1; }
   }
-  async #submit(raw: BackgroundJobInput, automaticTriggerId?: string, skillId?: string): Promise<BackgroundJob> {
+  async #submit(raw: BackgroundJobInput, automaticTriggerId?: string, skillId?: string, consentedBaseUrl?: string): Promise<BackgroundJob> {
     if (!this.available()) throw new Error('job.maintenance');
     if (this.#closing) throw new Error('job.closing');
     const input = invokePayloadSchemas['jobs:submit'].parse(raw);
@@ -132,6 +132,8 @@ export class BackgroundJobService {
     }
     const specDigest = digest(input, frozenSkill);
     const binding = await this.providers.captureBinding(input.providerId, input.model);
+    // Cloud consent covers the address it was given for, compared at the moment the connection is captured.
+    if (consentedBaseUrl !== undefined && !sameProviderEndpoint(binding.provider, consentedBaseUrl)) throw new Error('provider.bindingMismatch');
     const destination = this.#destination(binding);
     if (skillId) this.#assertLocalSkillModel(binding);
     if (!contextPrivacyAllows(input.privacy, destination)) throw new Error('job.privacyBlocked');

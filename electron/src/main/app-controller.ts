@@ -79,7 +79,7 @@ import { AutomaticTaskCoordinator } from './domain/automatic-task-coordinator';
 import { UsageLedger } from './domain/usage-ledger';
 import { referenceUsagePrice, usageRatesFromModels } from './providers/usage-pricing';
 import { CatalogPriceRefresh } from './providers/catalog-price-refresh';
-import { canReleaseOllamaForVaultTools, normalizedProviderBaseUrl, providerBindingFingerprint } from './providers/request-budget';
+import { canReleaseOllamaForVaultTools, normalizedProviderBaseUrl, providerBindingFingerprint, sameProviderEndpoint } from './providers/request-budget';
 import { AttentionService } from './domain/attention-service';
 import { buildHealth, proactiveHealth } from './domain/health';
 import { HealthReceipts } from './domain/health-receipts';
@@ -363,6 +363,8 @@ export class AppController {
   readonly #wechatHandled = new Set<string>();
   #wechatOwnerTarget: { binding(): Promise<string | null>; stickers(): Promise<boolean>; deliver(input: { binding: string; deliveryId: string; text: string; stickerAsset?: string; voice?: boolean }): Promise<OwnerDeliveryOutcome> } | null = null;
   #restorePrepared = false;
+  /** Address each remote-consented research submission was consented for, while it is being bound. */
+  readonly #researchConsent = new Map<string, string>();
   #qqRevokePending = false;
   readonly #character: CharacterService;
   readonly #vault: SafeStorageVault;
@@ -2698,9 +2700,12 @@ export class AppController {
     this.#ipc.register('memory-recall:cancel', consoleOnly, input => this.#memoryRecallService.cancel(input));
     this.#ipc.register('research:list', consoleOnly, () => this.#research.list());
     this.#ipc.register('research:get', consoleOnly, ({id}) => this.#research.get(id));
-    this.#ipc.register('research:submit', consoleOnly, ({ expectedBaseUrl, ...input }) => {
-      this.#assertConsentedEndpoint(input.providerId, input.allowRemote ? expectedBaseUrl : undefined, 'research.bindingChanged');
-      return this.#research.submit(input);
+    this.#ipc.register('research:submit', consoleOnly, async ({ expectedBaseUrl, ...input }) => {
+      // Remote consent from the console always names its address; the binding is compared when captured.
+      if (input.allowRemote && expectedBaseUrl === undefined) throw new Error('research.bindingChanged');
+      if (input.allowRemote) this.#researchConsent.set(input.operationId, expectedBaseUrl!);
+      try { return await this.#research.submit(input); }
+      finally { this.#researchConsent.delete(input.operationId); }
     });
     this.#ipc.register('research:resume', consoleOnly, input => this.#research.resume(input));
     this.#ipc.register('research:cancel', consoleOnly, ({id}) => this.#research.cancel(id));
@@ -2759,8 +2764,8 @@ export class AppController {
     this.#ipc.register('consolidation:disable', consoleOnly, (payload) => this.#consolidation.disable(payload));
     this.#ipc.register('consolidation:cancel', consoleOnly, (payload) => this.#consolidation.cancel(payload));
     this.#ipc.register('jobs:submit', consoleOnly, ({ expectedBaseUrl, ...payload }) => {
-      this.#assertConsentedEndpoint(payload.providerId, payload.privacy === 'cloud-allowed' ? expectedBaseUrl : undefined, 'provider.bindingMismatch');
-      return this.#jobs.submit(payload);
+      if (payload.privacy === 'cloud-allowed' && expectedBaseUrl === undefined) throw new Error('provider.bindingMismatch');
+      return this.#jobs.submit(payload, undefined, undefined, payload.privacy === 'cloud-allowed' ? expectedBaseUrl : undefined);
     });
     this.#ipc.register('jobs:list', consoleOnly, async () => (await this.#jobs.list()).filter((job) => job.automaticTriggerId === undefined));
     this.#ipc.register('jobs:get', consoleOnly, async ({ id }) => { const job = await this.#jobs.get(id); if (job.automaticTriggerId) throw new Error('automation.useHistoryEntry'); return job; });
@@ -4065,15 +4070,6 @@ export class AppController {
     await this.#repository.transaction(state => { state.researchPermissionRevision++; });
   }
 
-  /** Cloud consent names the address it was given for; a service whose address changed since then is refused. */
-  #assertConsentedEndpoint(providerId: string, expectedBaseUrl: string | undefined, code: string): void {
-    if (expectedBaseUrl === undefined) return;
-    const provider = this.#providers.list().find(item => item.id === providerId);
-    let expected: string;
-    try { expected = new URL(expectedBaseUrl).toString(); } catch { throw new Error(code); }
-    if (!provider || normalizedProviderBaseUrl(provider).toString() !== normalizedProviderBaseUrl({ ...provider, baseUrl: expected }).toString()) throw new Error(code);
-  }
-
   #researchFingerprint(input: ResearchTaskInput, state: PersistentState = this.#repository.snapshot()): string {
     const provider = state.providers.find(item => item.id === input.providerId && item.enabled && item.supportsTools);
     if (!provider || !state.providerCredentialRefs[input.providerId]) throw new Error('provider.unavailable');
@@ -4087,6 +4083,8 @@ export class AppController {
 
   async #researchBinding(input: ResearchTaskInput): Promise<ResearchBinding> {
     const binding = await this.#providers.captureBinding(input.providerId,input.model ?? undefined);
+    const consented = this.#researchConsent.get(input.operationId);
+    if (consented !== undefined && !sameProviderEndpoint(binding.provider, consented)) throw new Error('research.bindingChanged');
     if (!binding.provider.supportsTools) throw new Error('research.toolsUnavailable');
     const destination = resolveContextDestination({providerId:binding.provider.id,kind:binding.provider.kind,baseUrl:binding.provider.baseUrl,
       model:binding.model,localExecutionConfirmed:binding.provider.localExecutionConfirmed === true,serviceExecution:binding.inspection.executionDestination});

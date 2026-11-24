@@ -95,6 +95,16 @@ afterEach(async () => {
 });
 
 describe('durable no-tool background text job service', () => {
+  it('refuses cloud consent given for another address, checked when the connection is captured', async () => {
+    const f = await fixture('consented-endpoint');
+    await f.repo.transaction(state => { state.providers[0] = { ...config, kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-6.1-sol' }; });
+    const fetcher = vi.fn<typeof fetch>(); vi.stubGlobal('fetch', fetcher);
+    await expect(f.service.submit({ ...input('Consent for A'), model: 'gpt-6.1-sol', privacy: 'cloud-allowed' }, undefined, undefined, 'https://gateway.example.invalid/v1'))
+      .rejects.toThrow('provider.bindingMismatch');
+    expect(f.repo.snapshot().backgroundJobs).toEqual([]);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it('completes an OpenAI Responses background job without unsupported sampling parameters and preserves exact request accounting', async () => {
     const f = await fixture('responses-reasoning');
     await f.repo.transaction(state => { state.providers[0] = { ...config, kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-6.1-sol' }; });
