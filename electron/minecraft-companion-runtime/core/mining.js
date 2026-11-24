@@ -195,10 +195,10 @@ async function tossRubble(bot, ctx) {
  * walk back to the tunnel front, or dig one more block of tunnel.
  */
 async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, closed = false,
-  actions = defaultActions, skills = defaultSkills, observeDestination }) {
+  actions = defaultActions, skills = defaultSkills, observeDestination, maxSearchSteps }) {
   const feet = bot.entity.position.floored();
   if (memory.mine?.floorRepair) return repairFloor(bot, ctx, memory.mine, skills);
-  if (memory.mine?.retiring) {
+  if (memory.mine?.retiring || memory.mine?.exhausted) {
     const old = memory.mine;
     const out = await leaveMine(bot, ctx, memory, actions);
     if (out) {
@@ -213,6 +213,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
       const targetY = out ? old.surfaceY : Math.min(old.surfaceY, actions.localSurfaceY?.(bot) ?? old.surfaceY);
       return (await actions.surface?.(bot, ctx, { targetY })) || fail('mine_exit_blocked');
     }
+    coolEntrance(bot, ctx, old.entrance, old.safetyRetreat ? 'mine_hazard' : 'retired');
     memory.mineDir = (old.dir + 1) % 4;
     memory.mine = null;
     return fail('mine_exhausted');
@@ -261,6 +262,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
       memory.mine.open ||= {};
       memory.mine.open[posKey(ore.position)] = true;
       const collected = await actions.collectDrops(bot, ctx, ore.position.offset(0.5, 0.5, 0.5), (n) => dropMatch(n) || loot(ore.name)?.[0] === n);
+      if (maxSearchSteps && blocks(ore.name) && collected.ok) memory.mine.lastOreStep = memory.mine.steps;
       if (routeFloor) {
         const repaired = await repairFloor(bot, ctx, memory.mine, skills);
         if (!repaired.ok) return repaired;
@@ -268,6 +270,11 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
       return collected;
     });
     if (ore) return blocks(ore.name) ? takeOre(ctx) : localOpportunity(bot, ctx, 'mine', ore.position, takeOre);
+    if (maxSearchSteps && memory.mine.steps - (memory.mine.lastOreStep ?? 0) >= maxSearchSteps) {
+      memory.mine.retiring = true;
+      ctx.record('mine_search_limit', { entrance: posKey(memory.mine.entrance), limit: maxSearchSteps });
+      return { ok: true, progress: false, transit: true };
+    }
   }
   if (typeof bot.inventory.emptySlotCount === 'function' && bot.inventory.emptySlotCount() <= 3) {
     ctx.record('mine_toss_rubble', {});
@@ -284,15 +291,6 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
   const mine = memory.mine;
   if (closed) mine.closed = true;
   if (ctx.adapt) bot.companionMineRoute = mine;
-  if (mine.exhausted) {
-    const out = await leaveMine(bot, ctx, memory, actions);
-    if (out?.ok) { mine.exitFailures = 0; return out; }
-    if (out && (mine.exitFailures = (mine.exitFailures || 0) + 1) < 3) return out;
-    coolEntrance(bot, ctx, mine.entrance, out || 'exhausted');
-    memory.mineDir = (mine.dir + 1) % 4;
-    memory.mine = null;
-    return fail('mine_exhausted');
-  }
   if (retarget(mine, y)) ctx.record('mine_deeper', { from: posKey(mine.front), y });
   // Back to the front first (after a trip home, a death, a fight).
   if (!feet.equals(new Vec3(mine.front.x, mine.front.y, mine.front.z))) {
@@ -336,7 +334,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
     if (!memory.mine) {
       // Re-use the known route, but only to reach an exit that has not been
       // attempted. Walking old cells is transit, never new excavation.
-      const frontier = mine.phase === 'descend' && mine.steps < 8 ? null : findFrontier(bot, mine);
+      const frontier = maxSearchSteps || (mine.phase === 'descend' && mine.steps < 8) ? null : findFrontier(bot, mine);
       memory.mine = mine;
       mine.turns = 0;
       mine.restarts = 0;
@@ -348,8 +346,9 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
         ctx.record('mine_frontier', { at: posKey(mine.front), dir: mine.dir });
         return { ok: true, progress: false };
       }
-      mine.exhausted = true;
+      mine.retiring = true;
       ctx.record('mine_exhausted', { cells: Object.keys(mine.cells).length });
+      if (maxSearchSteps) return { ok: true, progress: false, transit: true };
     }
     return { ...result, progress: false };
   };

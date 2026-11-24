@@ -18,6 +18,8 @@ async function runPlanned(ctx, step, execute) {
   const until = stepRetryAt(step, ctx.planning);
   if (until) return waiting('planning_source_blocked', until);
   ctx = createAttempt(ctx);
+  ctx.record?.('plan_step', { kind: step.kind, key: step.key, for: step.for, item: step.item,
+    count: step.count ?? step.times, station: step.station, position: step.position });
   const raw = await execute(ctx);
   const result = resultFrom(raw, ctx);
   const data = factsOf(raw);
@@ -29,6 +31,13 @@ async function runPlanned(ctx, step, execute) {
 function* ring(radius) {
   for (let dx = -radius; dx <= radius; dx++) {
     for (let dz = -radius; dz <= radius; dz++) if (Math.max(Math.abs(dx), Math.abs(dz)) === radius) yield [dx, dz];
+  }
+}
+
+function rememberShortfall(memory, kb, result) {
+  for (const { name, short } of factsOf(result).missing || []) {
+    const family = familyOf(name, kb);
+    if (family) memory.shortfall[family] = { extra: short, until: Date.now() + 120000 };
   }
 }
 
@@ -48,7 +57,8 @@ async function placeStation(bot, ctx, { skills, station = 'crafting_table', avoi
   return { ok: false, reason: `no_${station === 'crafting_table' ? 'table' : station}_spot` };
 }
 
-function createPlannerRunner({ bot, skills, kb, memory, purpose = 'gather', avoid = () => false }) {
+function createPlannerRunner({ bot, skills, kb, memory, purpose = 'gather', avoid = () => false,
+  explore = ctx => skills.explore(bot, ctx, memory) }) {
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   memory.shortfall = memory.shortfall || {};
 
@@ -84,20 +94,16 @@ function createPlannerRunner({ bot, skills, kb, memory, purpose = 'gather', avoi
   const step = (ctx, planned) => runPlanned(ctx, planned, attempt => executeStep(attempt, planned));
 
   async function executeStep(ctx, planned) {
-    ctx.record('plan_step', { kind: planned.kind, key: planned.key, for: planned.for, item: planned.item });
     switch (planned.kind) {
       case 'gather': {
         const result = await skills.gatherOne(bot, ctx, { blocks: planned.blocks, dropMatch: kb[planned.key].match, purpose, exclude: avoid });
-        if (result.reason === 'no_target_in_range') return skills.explore(bot, ctx, memory);
+        if (result.reason === 'no_target_in_range') return explore(ctx, planned.key);
         return result;
       }
       case 'craft': {
         const result = await skills.craft(bot, ctx, { item: planned.item, times: planned.times,
           tablePosition: planned.table ? memory.table : null });
-        for (const m of factsOf(result).missing || []) {
-          const family = familyOf(m.name, kb);
-          if (family) memory.shortfall[family] = { extra: m.short, until: Date.now() + 120000 };
-        }
+        rememberShortfall(memory, kb, result);
         return result;
       }
       case 'place_station':
@@ -133,4 +139,4 @@ function furnaceStock(inventory, furnace) {
   return inventory;
 }
 
-module.exports = { createPlannerRunner, exploreFor, furnaceStock, placeStation, runPlanned, DOWN };
+module.exports = { createPlannerRunner, exploreFor, furnaceStock, rememberShortfall, placeStation, runPlanned, DOWN };

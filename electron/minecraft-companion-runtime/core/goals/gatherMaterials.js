@@ -23,7 +23,7 @@ const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const { planNext } = require('../planner');
-const { KNOWLEDGE, countKey, familyOf } = require('../knowledge');
+const { KNOWLEDGE, countKey } = require('../knowledge');
 const { materialsFor } = require('../materials');
 const { posKey } = require('../blacklist');
 const { ledgerFor, ledgerTarget, recordTarget } = require('../failure-ledger');
@@ -33,7 +33,7 @@ const nether = require('../nether');
 const { quartzToolReserve } = require('../quartzTools');
 const { blockTarget } = require('../target-recovery');
 const { createNetherQuartzGoal, QUARTZ_MIN_FOOD, quartzFoodMatch, quartzFoodCount, quartzProtection } = require('./netherQuartz');
-const { createPlannerRunner, exploreFor, furnaceStock, runPlanned } = require('./common');
+const { createPlannerRunner, exploreFor, furnaceStock, rememberShortfall, runPlanned } = require('./common');
 
 const DOWN = [new Vec3(0, -1, 0)];
 // Out on the surface only after dark: string waits for night, not for a cave.
@@ -60,6 +60,7 @@ const KEEP_PICKS = 3;
 const DEPOT_CRAFT = 6;
 const SIDES = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 const SPARE_PICKAXES = 3;
+const IRON_TUNNEL_LIMIT = 64;
 // Casting obsidian floods the ground around the pit for a moment: not by the chest.
 const MOLD_FROM_HOME = 5;
 // A portal frame: ten obsidian, the four corners anything solid.
@@ -186,22 +187,15 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
 
   async function mineOnce(ctx, step, dropMatch, { method = 'current_mine', closed = false, distance = 0, observeDestination } = {}) {
     let start = null;
-    if (memory.mine) {
-      if (bot.entity.position.y >= memory.mine.surfaceY - 1 && memory.mine.safetyRetreat) {
-        if (memory.mine.retiring) {
-          mining.coolEntrance(bot, ctx, memory.mine.entrance, 'mine_hazard');
-          memory.mine = null;
-          return { ok: true, progress: false };
-        }
-        const state = ctx.perceive();
-        if (state.health < (closed ? 17 : 13) || state.food < 8) return waiting('recover_before_mining', Date.now() + 30_000);
-        memory.mine.safetyRetreat = null;
-      }
+    const prior = memory.mine;
+    if (prior?.safetyRetreat && !prior.retiring && bot.entity.position.y >= prior.surfaceY - 1) {
+      const state = ctx.perceive();
+      if (state.health < (closed ? 17 : 13) || state.food < 8) return waiting('recover_before_mining', Date.now() + 30_000);
+      prior.safetyRetreat = null;
     }
     if (!memory.mine) {
       const at = bot.entity.position.floored();
-      const allowed = (p) => Math.hypot(p.x - chest.x, p.z - chest.z) >= MINE_FROM_HOME
-        && Math.hypot(p.x - chest.x, p.z - chest.z) >= distance
+      const allowed = (p) => Math.hypot(p.x - chest.x, p.z - chest.z) >= Math.max(MINE_FROM_HOME, distance)
         && !bot.companionNearPlayerBuild?.(p) && !bot.companionHomeSite?.(p) && !mining.entranceCooling(bot, p)
         && !ctx.adapt?.avoids('mine_danger', p) && !ctx.adapt?.avoids('hard_route', p)
         && (!observeDestination || !ctx.adapt.targets.avoid(entranceTarget(p)));
@@ -239,11 +233,14 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     if (m && ctx.adapt) bot.companionMineRoute = m;
     if (m?.junction && !m.depot && m.y === step.mineY && step.mineY <= DEPOT_BELOW) return buildDepot(ctx);
     const result = await mining.mineStep(bot, ctx, memory, { blocks: step.blocks, dropMatch, y: step.mineY, start, actions, skills, closed,
-      observeDestination });
+      observeDestination, maxSearchSteps: step.key === 'raw_iron' ? IRON_TUNNEL_LIMIT : undefined });
     if (memory.mine && !memory.mine.adaptMethod && method !== 'current_mine') ctx.record('adaptation_use', {
       task: 'diamond', method, position: memory.mine.entrance,
     });
-    if (result.reason === 'mine_exhausted') memory.barrenMines = (memory.barrenMines || 0) + 1;
+    if (result.reason === 'mine_exhausted') {
+      memory.barrenMines = (memory.barrenMines || 0) + 1;
+      if (step.key === 'raw_iron') return { ok: true, progress: false, transit: true };
+    }
     return result;
   }
 
@@ -355,7 +352,6 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
   const runStep = (ctx, step) => runPlanned(ctx, step, attempt => executeStep(attempt, step));
 
   async function executeStep(ctx, step) {
-    ctx.record('plan_step', { kind: step.kind, key: step.key, for: step.for, item: step.item, count: step.count ?? step.times });
     // Night rest stays out of the way while a night mob is hunted (companion.js).
     bot.companionNightHunt = step.kind === 'hunt' && (step.mobs || []).some((m) => NIGHT_MOBS.has(m))
       ? { key: step.key, at: Date.now() } : null;
@@ -386,11 +382,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         // at home: make spares while here if the bag has enough for them.
         let result = step.item === 'stone_pickaxe' && step.times < SPARE_PICKAXES ? await craft(SPARE_PICKAXES) : null;
         if (!result?.ok) result = await craft(step.times);
-        // Short of something the plan thought was there: plan for it explicitly for a while.
-        for (const m of factsOf(result).missing || []) {
-          const family = familyOf(m.name, kb);
-          if (family) memory.shortfall[family] = { extra: m.short, until: Date.now() + 120000 };
-        }
+        rememberShortfall(memory, kb, result);
         return result;
       }
       case 'cast':
@@ -407,7 +399,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
         if (deep && memory.mine) return mine(ctx, step, dropMatch);
         // Elsewhere only ore in the open (surface, cave mouths): never a
         // pathfinder tunnel straight down to buried ore.
-        const exclude = deep ? (p) => !mining.exposed(bot, p) : undefined;
+        const exclude = deep && step.key !== 'raw_iron' ? (p) => !mining.exposed(bot, p) : undefined;
         let result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch, exclude });
         if (result.reason === 'no_target_in_range') {
           result = await skills.gatherOne(bot, ctx, { blocks: step.blocks, dropMatch, exclude, radius: 128 });
@@ -596,7 +588,7 @@ function createGatherMaterialsGoal({ bot, chest, requirements = null, blueprint 
     // Down there, running out of stone pickaxes sends the bot to the depot,
     // and only up for more when the depot cannot help.
     const belowSurface = memory.mine && bot.entity.position.y < memory.mine.surfaceY - 1;
-    if (step?.kind === 'gather' && Number.isFinite(step.mineY)) {
+    if (step?.kind === 'gather' && Number.isFinite(step.mineY) && (step.key !== 'raw_iron' || memory.mine)) {
       if (!belowSurface && memory.mine?.depot) memory.mine.depot.dry = false;
       const outOfPicks = countKey('stone_pickaxe', inventory, kb) < 1;
       if (belowSurface && outOfPicks) {

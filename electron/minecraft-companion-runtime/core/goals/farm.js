@@ -19,6 +19,7 @@ const { sleep } = require('../confirm');
 const { createPlannerRunner } = require('./common');
 const { targetsFor } = require('../failure-ledger');
 const { blockTarget, alternateStand } = require('../target-recovery');
+const { runSearchLeg } = require('../adaptation-strategies');
 
 // Farther than this from the centre, the farm's ground may be out of view.
 const FAR_FROM_FARM = 48;
@@ -26,14 +27,26 @@ const FAR_FROM_FARM = 48;
 function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = null,
   skills = defaultSkills, farming = defaultFarming, actions = defaultActions, kb = KNOWLEDGE, exclude = () => false, waitMs = 3000,
   mode = 'bread', sharedMemory = null, minRipe = 3 } = {}) {
-  const memory = sharedMemory || { center: center || null, barren: false, plots: null, table: home?.table || null, steps: 0, harvested: 0, shortfall: {} };
+  const memory = sharedMemory || { center: center || null, plots: null, table: home?.table || null, harvested: 0 };
+  const homestead = () => bot.companionHomestead?.()?.memory;
+  const anchor = () => home?.anchor || homestead()?.house?.interiorCenter || homestead()?.searchOrigin || center
+    || (memory.anchor ||= bot.entity?.position.floored());
+  const distance = (p, c = anchor()) => c ? Math.hypot(p.x - c.x, p.z - c.z) : 0;
+  const outside = p => distance(p) > FAR_FROM_FARM;
   const stateAt = (p) => farming.plotState(bot, p);
-  const count = (states) => (memory.plots || []).filter((p) => states.includes(stateAt(p))).length;
+  const count = (states) => (memory.plots || []).filter(p => !outside(p) && states.includes(stateAt(p))).length;
   const blockAt = (p) => bot.blockAt(new Vec3(p.x, p.y, p.z));
   // Never put the crafting table on a plot.
   const onPlot = (p) => (memory.plots || []).some((q) => q.x === p.x && q.z === p.z);
+  const explore = (ctx, kind) => {
+    const search = (memory.search ||= {})[kind] ||= {};
+    const { x, z } = anchor();
+    search.around = { x, z, radius: FAR_FROM_FARM };
+    return runSearchLeg(ctx, search, () => skills.explore(bot, ctx, search),
+      { reason: 'no_farmland_near_home', observe: () => bot.entity.position });
+  };
   const { step, inventoryFor, tableHere } = createPlannerRunner({ bot, skills, kb, memory, purpose: 'farm_gather',
-    avoid: (p) => onPlot(p) || exclude(p) });
+    avoid: (p) => onPlot(p) || outside(p) || exclude(p), explore });
 
   const operation = { ripe: 'harvest', empty: 'plant', untilled: 'till' };
   const spec = (p, step) => blockTarget(bot, 'farm', step, p, {
@@ -44,22 +57,31 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     return step && (allowHarvest || step !== 'harvest') && targets.excluded(spec(p, step));
   };
 
-  function plots(ctx, targets) {
-    if (!memory.center) memory.center = bot.entity.position.floored();
+  const choose = (targets, center, count, keep = []) => farming.choosePlots(blockAt, center, {
+    count, exclude: p => outside(p) || exclude(p) || keep.some(q => q.x === p.x && q.z === p.z) || unavailable(p, targets, false),
+    findWater: (c, r) => farming.findWater(bot, c, r),
+  });
+  function plots(ctx, targets, budget, enough) {
+    if (!memory.center || outside(memory.center)) memory.center = anchor();
     const prior = memory.plots || [];
-    const keep = prior.filter(p => {
-      const state = stateAt(p);
-      if (p.hydrated === false && ['empty', 'untilled'].includes(state)) return false;
-      return !['lost', 'blocked'].includes(state) && !unavailable(p, targets, false);
-    });
-    if (keep.length < plotCount) {
-      const picks = farming.choosePlots(blockAt, memory.center, {
-        count: plotCount - keep.length,
-        exclude: p => exclude(p) || keep.some(q => q.x === p.x && q.z === p.z) || unavailable(p, targets, false),
-        findWater: (c, r) => farming.findWater(bot, c, r),
-      });
+    const keep = prior.filter(p => !outside(p) && !['lost', 'blocked'].includes(stateAt(p)) && !unavailable(p, targets, false)
+      && (stateAt(p) === 'unknown' || !farming.litPlot || farming.litPlot(blockAt, p)));
+    const missing = plotCount - keep.length;
+    if (missing > 0) {
+      let picks = choose(targets, memory.center, missing, keep);
+      if (picks.length < enough - keep.length && farming.findGround) {
+        const fits = p => distance(p) <= Math.min(FAR_FROM_FARM, budget.maxOutingDistance)
+          && choose(targets, p, missing, keep).length >= enough - keep.length;
+        const ground = farming.findGround(bot, anchor(), FAR_FROM_FARM, { fits });
+        if (ground) {
+          memory.center = ground;
+          picks = choose(targets, ground, missing, keep);
+        }
+      }
       memory.plots = [...keep, ...picks];
       if (keep.length < prior.length) ctx.record('farm_replaced_plots', { removed: prior.filter(p => !keep.includes(p)).map(posKey), added: picks.map(posKey) });
+      if (picks.length) ctx.record('farm_plots', { total: memory.plots.length, plotKeys: memory.plots.map(posKey),
+        dry: memory.plots.filter(p => p.hydrated === false).length });
     }
     return memory.plots;
   }
@@ -67,44 +89,18 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
   async function runOnce(ctx) {
     const state = ctx.perceive();
     const targets = targetsFor(bot, ctx);
-    // Asked for from far off (a hunt that wandered 900 blocks away): plots
-    // chosen there were none, and the goal explored for an hour and a half
-    // instead of going back. Walk back to the farm first.
-    const c = memory.center;
     const at = bot.entity.position;
-    const budget = nightBudget(state, bot.companionHomestead?.()?.memory.house?.interiorCenter);
+    const c = anchor();
+    const budget = nightBudget(state, c);
     if (budget.maxOutingDistance <= 0) return waiting('waiting_for_safe_daylight');
+    if (outside(at)) return actions.goNear(bot, { ...ctx, dryRoute: true }, new Vec3(c.x, c.y, c.z), 6, { timeoutMs: 60000 });
+    const { workArea } = ctx;
+    ctx = { ...ctx, dryRoute: true, pathArea: p => distance(p) <= FAR_FROM_FARM - 1,
+      workArea: p => distance(p) <= FAR_FROM_FARM - 4 && (!workArea || workArea(p)) };
     const enough = mode === 'sow' ? plotCount : Math.min(4, plotCount);
-    const fits = (p) => Math.hypot(p.x - at.x, p.z - at.z) <= budget.maxOutingDistance
-      && farming.choosePlots(blockAt, p, { count: plotCount, exclude: (q) => exclude(q) || unavailable(q, targets, false),
-      findWater: (w, r) => farming.findWater(bot, w, r) }).length >= enough;
-    const moveTo = (ground) => {
-      ctx.record('farm', { action: 'move', from: posKey(memory.center), to: posKey(ground) });
-      memory.center = ground;
-      memory.plots = null;
-      memory.barren = false;
-      return farming.returnTo(bot, ctx, ground);
-    };
-    if (mode === 'harvest' && !memory.plots?.length) return { ok: true };
-    if (mode !== 'harvest' && c && Math.hypot(at.x - c.x, at.z - c.z) > FAR_FROM_FARM) {
-      // Out looking for soil, the old centre has none to go back to: the
-      // nearest soil here that holds a farm, or further on.
-      if (memory.barren && farming.findGround) {
-        const ground = farming.findGround(bot, at.floored(), FAR_FROM_FARM, { fits });
-        return ground ? moveTo(ground) : skills.explore(bot, ctx, memory);
-      }
-      ctx.record('farm', { action: 'return', distance: Math.round(Math.hypot(at.x - c.x, at.z - c.z)) });
-      return farming.returnTo(bot, ctx, c);
-    }
-    const list = mode === 'harvest' ? memory.plots : plots(ctx, targets);
-    if (mode !== 'harvest' && list.length < enough && farming.findGround) {
-      // No soil around the centre (sand, stone): move the farm to the nearest soil that holds one.
-      const ground = farming.findGround(bot, memory.center, FAR_FROM_FARM, { fits });
-      if (ground) return moveTo(ground);
-      memory.barren = true;
-      return skills.explore(bot, ctx, memory);
-    }
-    if (!list.length) return skills.explore(bot, ctx, memory);
+    const list = mode === 'harvest' ? (memory.plots || []).filter(p => !outside(p)) : plots(ctx, targets, budget, enough);
+    if (!list.length) return mode === 'harvest' ? { ok: true } : explore(ctx, 'ground');
+    if (list.length >= enough && memory.search) delete memory.search.ground;
     // A seed search can wander out of view of the farm. Its plots then read
     // as unknown, never ripe or empty, and the goal would wait there forever.
     const unseen = list.find((p) => farming.plotState(bot, p) === 'unknown');
@@ -113,12 +109,25 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
       return farming.returnTo(bot, ctx, unseen);
     }
     const byState = (s) => list.filter((p) => stateAt(p) === s && !unavailable(p, targets));
-    const work = (step, p) => targets.run(spec(p, step), () => farming[step](bot, ctx, p), async (reason) => {
-      const moved = await alternateStand(bot, ctx, actions, { ...p, y: p.y + 1 }, { avoid: onPlot });
-      return moved.ok ? farming[step](bot, ctx, p) : { ok: false, reason };
-    });
+    const work = (step, p) => {
+      ctx.record('farm', { action: step, plot: posKey(p) });
+      return targets.run(spec(p, step), () => farming[step](bot, ctx, p), async (reason) => {
+        const moved = await alternateStand(bot, ctx, actions, { ...p, y: p.y + 1 }, { avoid: onPlot });
+        return moved.ok ? farming[step](bot, ctx, p) : { ok: false, reason };
+      });
+    };
     const stations = { crafting_table: tableHere() };
     const inventory = inventoryFor(state);
+    if (mode !== 'harvest' && inventory.water_bucket && farming.irrigate && !memory.irrigationTried
+      && list.some(p => !p.hydrated) && !farming.findWater(bot, c, FAR_FROM_FARM, false).length) {
+      const result = await farming.irrigate(bot, ctx, list);
+      if (result?.kind === 'interrupted' || result?.kind === 'start' || result?.wait) return result;
+      memory.irrigationTried = true;
+      if (isComplete(result)) {
+        memory.plots = list.filter(p => p.hydrated || ['growing', 'ripe'].includes(stateAt(p)));
+        return result;
+      }
+    }
 
     // Bread first whenever three wheat are in the bag: with a large farm
     // something is always ripe, and the harvest would never end.
@@ -129,34 +138,31 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
     }
     const ripe = mode !== 'sow' && byState('ripe')[0];
     if (ripe) {
-      ctx.record('farm', { action: 'harvest', plot: posKey(ripe) });
       if (mode === 'harvest') memory.harvestPending = true;
       const result = await work('harvest', ripe);
       if (isComplete(result)) memory.harvested += result.gained || 0;
       return result;
     }
     const empty = byState('empty')[0];
-    if (empty && (inventory.wheat_seeds || 0) > 0) {
-      ctx.record('farm', { action: 'plant', plot: posKey(empty) });
-      return work('plant', empty);
-    }
+    if (empty && inventory.wheat_seeds > 0) return work('plant', empty);
     // Tilled only with a seed to sow: bare farmland dries back to dirt, and a
     // farm short of seeds in the desert tilled the same plots 400 times.
     const untilled = byState('untilled')[0];
-    if (untilled && (inventory.wheat_seeds || 0) > 0) {
+    if (untilled && inventory.wheat_seeds > 0) {
       const hoeStep = planNext({ requirements: [{ key: 'hoe', count: 1 }], inventory, stations, kb, planning: ctx.planning });
       if (hoeStep) return step(ctx, { ...hoeStep, for: 'hoe' });
-      ctx.record('farm', { action: 'till', plot: posKey(untilled) });
       return work('till', untilled);
     }
     // Empty farmland and no seeds: break grass until some drop.
     if ((byState('empty').length || untilled) && !(inventory.wheat_seeds > 0)) {
       ctx.record('farm', { action: 'seeds' });
-      const result = await farming.gatherSeeds(bot, ctx, { exclude: (p) => list.some((q) => q.x === p.x && q.z === p.z) });
-      if (result.reason === 'no_grass') return skills.explore(bot, ctx, memory);
+      const result = await farming.gatherSeeds(bot, ctx, { exclude: onPlot });
+      if (result.reason === 'no_grass') return explore(ctx, 'seeds');
+      if (result.seeds > 0 && memory.search) delete memory.search.seeds;
       return result;
     }
     // Everything sown: the crops grow on their own.
+    if (mode !== 'harvest' && list.length < enough) return explore(ctx, 'ground');
     await sleep(waitMs, ctx.signal);
     return waiting(mode === 'bread' ? 'crops_growing' : 'no_available_plot');
   }
@@ -177,20 +183,18 @@ function createFarmGoal({ bot, center, plots: plotCount = 16, bread = 3, home = 
       return countKey('bread', state.inventory, kb) >= bread
         && (!(state.inventory.wheat_seeds > 0) || !count(['empty']));
     },
-    progress: () => memory.steps,
+    progress: state => mode === 'sow' ? count(['growing', 'ripe'])
+      : memory.harvested + countKey('bread', state.inventory, kb),
     work(state, inventory = state.inventory) {
-      if (mode !== 'sow') return null;
+      if (mode !== 'sow') return { remaining: 3 * count(['unknown', 'ripe']) + 2 * count(['untilled'])
+        + count(['empty']) + Math.floor((inventory.wheat || 0) / 3), position: memory.plots?.[0] ?? center };
       const remaining = plotCount - count(['growing', 'ripe']);
       const seeds = Math.min(remaining, inventory.wheat_seeds || 0);
       const hoe = Number(countKey('hoe', inventory, kb) > 0);
       return { remaining, ready: seeds === remaining && Boolean(hoe), readiness: (seeds + hoe) / (remaining + 1),
         progress: plotCount - remaining, position: memory.plots?.[0] ?? center };
     },
-    async run(ctx) {
-      const result = await runOnce(ctx);
-      if (isComplete(result)) memory.steps += 1;
-      return result;
-    },
+    run: runOnce,
   };
 }
 

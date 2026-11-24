@@ -69,9 +69,9 @@ const dimensionOf = (bot) => String(bot?.game?.dimension || 'overworld').replace
 const FIRE = new Set(['fire', 'soul_fire']);
 const FIRE_UNSAFE = /^(lava|water|bubble_column|magma_block|campfire|soul_campfire|cactus|powder_snow)$/;
 const fireKey = (p) => `${p.x},${p.y},${p.z}`;
-const fullFireFloor = (b) => b?.boundingBox === 'block' && !FIRE_UNSAFE.test(b.name)
-  && Array.isArray(b.shapes) && b.shapes.length === 1 && b.shapes[0].length === 6
+const fullCube = (b) => b?.boundingBox === 'block' && Array.isArray(b.shapes) && b.shapes.length === 1 && b.shapes[0].length === 6
   && b.shapes[0].every((v, i) => v === [0, 0, 0, 1, 1, 1][i]);
+const fullFireFloor = b => fullCube(b) && !FIRE_UNSAFE.test(b.name);
 
 // A standing body can touch the fire beside its dry feet cell. A burning
 // metadata flag alone is deliberately insufficient: moving again after the
@@ -194,7 +194,7 @@ function lavaShore(bot, radius = 16, usable = () => true, lip = 0) {
 function lavaStep(bot, radius = 40) {
   const feet = bot.entity.position.floored();
   const surface = lavaSurface(bot, feet);
-  const sides = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)];
+  const supports = [...SIDES, new Vec3(0, -1, 0)];
   let best = null;
   for (let dx = -radius; dx <= radius; dx += 1) {
     for (let dz = -radius; dz <= radius; dz += 1) {
@@ -210,7 +210,7 @@ function lavaStep(bot, radius = 40) {
       // The floor under a shallow sea is a wall too: out on a lava sea one
       // block deep, with no shore in 40 blocks, a pillar never got up (a jump
       // in lava is a swim stroke) and the bot spent the last half hour there.
-      const wall = [...sides, new Vec3(0, -1, 0)].map((f) => cell.plus(f)).find((p) => {
+      const wall = supports.map((f) => cell.plus(f)).find((p) => {
         const b = bot.blockAt(p);
         return b && b.boundingBox === 'block' && !/magma/.test(b.name);
       });
@@ -265,31 +265,21 @@ function coverSpot(bot, ghast) {
   return best?.p || null;
 }
 
-/** A ghast fireball within 6 blocks that is closing in. */
-function incomingFireball(bot) {
-  const head = bot.entity?.position?.offset(0, 1.6, 0);
+/** The first fireball of this kind closing in on the given height. */
+function closingFireball(bot, name, height, range) {
+  const head = bot.entity?.position?.offset(0, height, 0);
   if (!head) return null;
   return Object.values(bot.entities || {}).find((e) => {
-    if (e.name !== 'fireball' || !e.position) return false;
-    const distance = e.position.distanceTo(head);
-    if (distance > 6) return false;
-    const v = e.velocity;
-    return !v || v.norm() === 0 || e.position.plus(v).distanceTo(head) < distance;
-  }) || null;
-}
-
-/** A blaze's fireball flying at the bot, or null. */
-function incomingBlazeShot(bot, range = 10) {
-  const head = bot.entity?.position?.offset(0, 1.2, 0);
-  if (!head) return null;
-  return Object.values(bot.entities || {}).find((e) => {
-    if (e.name !== 'small_fireball' || !e.position) return false;
+    if (e.name !== name || !e.position) return false;
     const distance = e.position.distanceTo(head);
     if (distance > range) return false;
     const v = e.velocity;
     return !v || v.norm() === 0 || e.position.plus(v).distanceTo(head) < distance;
   }) || null;
 }
+
+const incomingFireball = bot => closingFireball(bot, 'fireball', 1.6, 6);
+const incomingBlazeShot = (bot, range = 10) => closingFireball(bot, 'small_fireball', 1.2, range);
 
 const { RISKY_FOODS } = defaultActions;
 const RANGED = new Set(['skeleton', 'stray', 'bogged']);
@@ -605,6 +595,16 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   };
 
   const quenchPotion = (item) => isFireResistancePotion(item) && (!surveyArea() || safeSurveyItem(item));
+  async function consumeForEffect(ctx, item, effect, unconfirmed) {
+    const confirmed = () => hasEffect(bot, effect);
+    try {
+      await bot.equip(item, 'hand');
+      if (surveyArea()) await actions.consumeHeldUntil(bot, ctx, confirmed, 2500);
+      else await bot.consume();
+    } catch (error) { if (ctx.signal?.aborted) throw error; /* confirmed by the effect below */ }
+    const ok = await waitUntil(confirmed, { timeoutMs: 2000, signal: ctx.signal });
+    return ok ? { ok: true } : { ok: false, reason: unconfirmed };
+  }
   // Burning (lava, a blaze's fireball): drink fire resistance if there is any.
   // Rides along with any other escape: it takes under two seconds.
   const quench = {
@@ -615,13 +615,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       const potion = bot.inventory.items().find(quenchPotion);
       if (!potion) return { ok: false, reason: 'no_potion' };
       ctx.record('quench', { inLava: bot.entity.isInLava === true });
-      try {
-        await bot.equip(potion, 'hand');
-        if (surveyArea()) await actions.consumeHeldUntil(bot, ctx, () => hasEffect(bot, 'FireResistance'), 2500);
-        else await bot.consume();
-      } catch (error) { if (ctx.signal?.aborted) throw error; /* confirmed by the effect below */ }
-      const ok = await waitUntil(() => hasEffect(bot, 'FireResistance'), { timeoutMs: 2000, signal: ctx.signal });
-      return ok ? { ok: true } : { ok: false, reason: 'drink_unconfirmed' };
+      return consumeForEffect(ctx, potion, 'FireResistance', 'drink_unconfirmed');
     },
   };
 
@@ -638,13 +632,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       const apple = apples.find((item) => item.name === 'enchanted_golden_apple') || apples[0];
       if (!apple) return { ok: false, reason: 'no_golden_apple' };
       ctx.record('heal', { item: apple.name, health: Math.round(bot.health) });
-      try {
-        await bot.equip(apple, 'hand');
-        if (surveyArea()) await actions.consumeHeldUntil(bot, ctx, () => hasEffect(bot, 'Regeneration'), 2500);
-        else await bot.consume();
-      } catch (error) { if (ctx.signal?.aborted) throw error; /* confirmed by the effect below */ }
-      const ok = await waitUntil(() => hasEffect(bot, 'Regeneration'), { timeoutMs: 2000, signal: ctx.signal });
-      return ok ? { ok: true } : { ok: false, reason: 'eat_unconfirmed' };
+      return consumeForEffect(ctx, apple, 'Regeneration', 'eat_unconfirmed');
     },
   };
 
@@ -706,24 +694,24 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   // run, respawned in the overworld. Bounded, and given up on abort.
   // Raced, not awaited: a stop does not settle it either.
   async function digNow(ctx, block) {
-    let timer = null;
-    let onAbort = null;
     const done = bot.dig(block, true);
-    done.catch(() => {});
+    const timer = new AbortController();
+    const signal = ctx.signal ? AbortSignal.any([ctx.signal, timer.signal]) : timer.signal;
+    const deadline = sleep(10000, signal).then(() => { throw new Error('dig_timeout'); });
     try {
-      await Promise.race([done, new Promise((resolve, reject) => {
-        timer = setTimeout(() => reject(new Error('dig_timeout')), 10000);
-        onAbort = () => reject(new Error('aborted'));
-        if (ctx.signal?.aborted) onAbort();
-        ctx.signal?.addEventListener('abort', onAbort, { once: true });
-      })]);
+      await Promise.race([done, deadline]);
     } catch (error) {
       try { bot.stopDigging(); } catch { /* not digging */ }
       throw error;
     } finally {
-      clearTimeout(timer);
-      if (onAbort) ctx.signal?.removeEventListener('abort', onAbort);
+      timer.abort();
     }
+  }
+  async function digLavaBlocks(ctx, blocks) {
+    if (!blocks.length) return;
+    const pick = bot.inventory.items().find(i => i.name.endsWith('_pickaxe'));
+    if (pick) await bot.equip(pick, 'hand');
+    for (const block of blocks) await digNow(ctx, block);
   }
   // Jump, and once clear of the floor put a block on it: one block higher
   // each round, until the head is out of the lava.
@@ -736,11 +724,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       .filter((b) => b && b.boundingBox === 'block' && b.diggable !== false && !/lava/.test(bot.blockAt(b.position.offset(0, 1, 0))?.name || ''));
     if (!roof.length) return false;
     ctx.record('leave_lava', { roof: roof.map((b) => `${b.name}@${b.position.y - feet.y}`) });
-    const pick = bot.inventory.items().find((i) => i.name.endsWith('_pickaxe'));
-    try {
-      if (pick) await bot.equip(pick, 'hand');
-      for (const b of roof) await digNow(ctx, b);
-    } catch { /* the next try looks again */ }
+    try { await digLavaBlocks(ctx, roof); } catch { /* the next try looks again */ }
     return true;
   }
   async function towerUp(ctx, block, out) {
@@ -787,8 +771,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
     // surface beside a cliff, could build no higher, and the bot sat on it
     // for a quarter of an hour until magma cubes killed it.
     if (surface - feet.y > 2) return false;
-    const sides = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)];
-    for (const side of sides) {
+    for (const side of SIDES) {
       const wall = new Vec3(feet.x, surface, feet.z).plus(side);
       const b = bot.blockAt(wall);
       if (!b || b.boundingBox !== 'block' || /magma/.test(b.name)) continue;
@@ -798,11 +781,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       const solid = above.filter((a) => a && a.boundingBox === 'block' && a.diggable !== false);
       if (!solid.length) continue;
       ctx.record('leave_lava', { dig: `${wall.x},${wall.y},${wall.z}`, blocks: solid.length });
-      const pick = bot.inventory.items().find((i) => i.name.endsWith('_pickaxe'));
-      try {
-        if (pick) await bot.equip(pick, 'hand');
-        for (const a of solid) await digNow(ctx, a);
-      } catch { return false; }
+      try { await digLavaBlocks(ctx, solid); } catch { return false; }
       await swimTo(ctx, wall.offset(0.5, 1.2, 0.5), () => !bot.entity.isInLava && bot.entity.onGround !== false, 80);
       return true;
     }
@@ -886,11 +865,7 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
         const solid = above.filter((a) => a && a.boundingBox === 'block' && a.diggable !== false);
         if (!out() && !above.some((a) => a?.name === 'lava')) {
           ctx.record('leave_lava', { dig: `${step.wall.x},${step.wall.y},${step.wall.z}`, blocks: solid.length, noBlocks: true });
-          const pick = bot.inventory.items().find((i) => i.name.endsWith('_pickaxe'));
-          try {
-            if (pick && solid.length) await bot.equip(pick, 'hand');
-            for (const a of solid) await digNow(ctx, a);
-          } catch { /* the next try looks again */ }
+          try { await digLavaBlocks(ctx, solid); } catch { /* the next try looks again */ }
           await swimTo(ctx, step.wall.offset(0.5, 1.2, 0.5), out, 80);
           return lavaResult(ctx, out());
         }
@@ -1131,8 +1106,6 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   // Buried (sand fell in on it on the climb out of a pit): eyes inside a full
   // block cost a heart every half second. Nothing else noticed: the bot ate,
   // then hiddenFor to heal in there, and suffocated. Dig the head free first.
-  const fullCube = (b) => b?.boundingBox === 'block' && Array.isArray(b.shapes) && b.shapes.length === 1
-    && b.shapes[0].join(',') === '0,0,0,1,1,1';
   const eyeBlock = () => (bot.entity?.position ? bot.blockAt(bot.entity.position.offset(0, 1.62, 0).floored()) : null);
   const unbury = {
     name: 'unbury',

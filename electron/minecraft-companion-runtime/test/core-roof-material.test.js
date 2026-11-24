@@ -410,3 +410,24 @@ test('the compact site crafts a stone sword outside and picks up the temporary t
   assert.equal(fixture.state.inventory.crafting_table, 1);
   assert.deepEqual(fixture.events.filter(e => e.type === 'portable_table').map(e => e.action), ['place', 'pick_up']);
 });
+
+
+test('R4 seed 2 switches to its carried masonry after ten minutes without a new roof cell', async (t) => {
+  let at = 0;
+  t.mock.method(Date, 'now', () => at);
+  const fixture = site({ materials: { sandstone: 25, cobblestone: 13, dirt: 0 } });
+  const home = fixture.newHome();
+  for (const p of fixture.roof.slice(0, 14)) fixture.setBlock(p, 'oak_planks');
+  await home.run(fixture.ctx);
+  at = 599_999;
+  await home.run(fixture.ctx);
+  assert.equal(fixture.events.some(e => e.type === 'home_roof_fallback'), false);
+  at++;
+  await home.run(fixture.ctx);
+  const record = fixture.events.find(e => e.type === 'home_roof_fallback');
+  assert.equal(record.reason, 'roof_work_stalled');
+  assert.equal(record.stalledMs, 600_000);
+  assert.equal(record.needed, 35);
+  assert.equal(record.carried, 37); // The earlier scaffold consumes one from the carried stock.
+  assert.ok(fixture.roof.slice(14).some(p => fixture.bot.blockAt(p).name === 'cobblestone'));
+});

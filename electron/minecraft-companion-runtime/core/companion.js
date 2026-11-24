@@ -121,17 +121,20 @@ function configureMovements(bot) {
   });
   const farmland = bot.registry.blocksByName.farmland;
   if (farmland) movements.blocksCantBreak.add(farmland.id);
-  // Native drop moves check the takeoff level, so inspect every landing cell.
-  const neighbors = movements.getNeighbors;
-  movements.getNeighbors = function (node) {
-    return neighbors.call(this, node).filter(move => bot.blockAt(move.offset(0, -1, 0))?.name !== 'farmland');
-  };
-  const withoutFarmland = movements.getNeighbors;
-  movements.getNeighbors = function (node) {
-    return withoutFarmland.call(this, node).filter(move => ![move, move.offset(0, 1, 0), move.offset(0, -1, 0)]
-      .some(p => contactBlock(bot.blockAt(p)))
-      && !bot.companionFailureLedger?.contactMargin(move, dimension(bot), bot.companionContactEscape));
-  };
+  for (const kind of ['Forward', 'JumpUp', 'Diagonal', 'DropDown', 'Down', 'Up', 'ParkourForward']) {
+    const method = `getMove${kind}`, native = movements[method];
+    movements[method] = function (...args) {
+      const neighbors = args.at(-1), i = neighbors.length;
+      native.apply(this, args);
+      const landing = neighbors[i];
+      if (!landing) return;
+      const floor = bot.blockAt(landing.offset(0, -1, 0)), feet = bot.blockAt(landing);
+      if (floor?.name === 'farmland' || this.exclusionStep(feet) > 100
+        || contactBlock(floor) || contactBlock(feet) || contactBlock(bot.blockAt(landing.offset(0, 1, 0)))
+        || bot.companionFailureLedger?.contactMargin(landing, dimension(bot), bot.companionContactEscape)) neighbors.pop();
+      else landing.companionMove = kind;
+    };
+  }
   trackReturnPositions(bot, movements);
   installOpenDoorPassage(bot, movements);
   const protection = (block) => bot.companionPlayerBlock?.(block?.position) ? 100 : 0;
@@ -375,7 +378,9 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
     const homeGoal = memory.homestead;
     if (dimension(bot) === 'overworld') homeGoal?.observeParts?.(state, at, (type, fields) => {
       const { running: behavior, goal } = brain.status();
-      onEvent({ type, ...fields, behavior, goal: goal?.name || null, at });
+      const event = { type, ...fields, behavior, goal: goal?.name || null, at };
+      director.handleEvent(event);
+      onEvent(event);
     });
     if (homeGoal && !homeGoal.memory.house && director.isEnabled() && !survey && !paused && (!goalOwner || director.ownsGoal())
       && dimension(bot) === 'overworld') {

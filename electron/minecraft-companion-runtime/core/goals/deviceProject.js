@@ -12,7 +12,7 @@
 // A death that loses the materials just makes step 1 come back for what is
 // missing; whatever is already built stays built and is not asked for again.
 
-const { factsOf, isComplete } = require('../action-result');
+const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -20,6 +20,7 @@ const { createGatherMaterialsGoal } = require('./gatherMaterials');
 const mining = require('../mining');
 const { KNOWLEDGE, countKey } = require('../knowledge');
 const { materialWork } = require('../materials');
+const { furnaceStock } = require('./common');
 
 // Spots tried for a site, around the house centre: 8 headings, 14 blocks out.
 const SITE_DISTANCE = 14;
@@ -30,7 +31,7 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
   if (!device || typeof device.needs !== 'function') throw new TypeError('device must be a goal with needs()');
   if (!home?.chest || !home.centre) throw new TypeError('home needs chest and centre');
   // The mine outlives each gather: the way back up is its own staircase.
-  const memory = { gather: null, mine: null, mineDir: undefined, steps: 0, siteTry: 0, done: false, building: false,
+  const memory = { gather: null, mine: null, mineDir: undefined, siteTry: 0, done: false, building: false,
     recovery: false, device: device.memory };
 
   // Killed down in the mine: monsters have the tunnel now. The next gather
@@ -94,23 +95,24 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
     return result;
   }
 
-  return {
-    name,
-    memory,
-    work(state, inventory = state.inventory) {
-      const observed = { ...inventory };
-      for (const [item, count] of Object.entries(memory.gather?.memory?.chest || {})) {
-        observed[item] = (state.inventory[item] || 0) + Math.max(count, (inventory[item] || 0) - (state.inventory[item] || 0));
-      }
-      return { ...materialWork(device.needs(), observed, kb), progress: device.progress(state),
-        position: memory.device?.device?.anchor ?? (device.name === 'kit' ? home.centre : siteSpot()) };
-    },
+  function work(state, inventory = state.inventory) {
+    const observed = { ...inventory };
+    for (const [item, count] of Object.entries(memory.gather?.memory?.chest || {})) {
+      observed[item] = (state.inventory[item] || 0) + Math.max(count, (inventory[item] || 0) - (state.inventory[item] || 0));
+    }
+    const progress = device.progress(state), material = materialWork(device.needs(), observed, kb);
+    const remaining = Math.round(material.remaining * (1 - material.readiness))
+      + (device.ironDebt?.(furnaceStock(observed, memory.gather?.memory?.furnace || {})) || 0);
+    return { ...material, remaining, progress, position: memory.device?.device?.anchor ?? (device.name === 'kit' ? home.centre : siteSpot()) };
+  }
+
+  return { name, memory, work,
     async dispose() {
       bot.removeListener?.('death', onDeath);
       observing = false;
       try { await memory.gather?.dispose?.(); } finally { await device.dispose?.(); }
     },
-    noProgressLimit: 40,
+    noProgressLimit: device.name === 'kit' ? 80 : 40,
     maxRecoveries: 6,
     recover() {
       if (memory.gather) memory.gather.recover?.();
@@ -122,9 +124,10 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
       if (!memory.done && device.isDone(state)) memory.done = true;
       return memory.done;
     },
-    // Gathering steps and the device's own progress both count, so the long
-    // gathering phase does not run out of budget while nothing is built yet.
-    progress: (state) => memory.steps + (memory.gather ? memory.gather.progress(state) : 0) + device.progress(state),
+    progress: (state) => {
+      const observed = work(state);
+      return observed.progress - observed.remaining;
+    },
     async run(ctx) {
       if (!observing) {
         bot.on?.('death', onDeath);
@@ -138,20 +141,9 @@ function createDeviceProjectGoal({ bot, name, device, home, skills = defaultSkil
       const lack = lacking(ctx.perceive());
       if (lack.length) {
         memory.building = false;
-        const gatherBefore = memory.gather;
-        const before = gatherBefore ? gatherBefore.progress() : 0;
-        const result = await bring(ctx, lack);
-        // A finished gather is dropped: keep its steps.
-        if (gatherBefore && memory.gather !== gatherBefore) memory.steps += before + Number(isComplete(result));
-        return result;
+        return bring(ctx, lack);
       }
-      // The last crafting step can put every needed part straight in the
-      // bag. Keep that completed gathering work when handing the body to
-      // construction; dropping its counter would put the device below the
-      // brain's historical best for the whole following build.
-      const gathered = memory.gather ? memory.gather.progress(ctx.perceive()) : 0;
       await releaseGather();
-      memory.steps += gathered;
       if (!memory.building) {
         const up = await climbOut(ctx);
         if (up) return up;

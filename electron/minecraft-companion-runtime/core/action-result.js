@@ -40,7 +40,10 @@ function startProblem(state) {
 
 function observeWater(route, state) {
   const position = (state?.bot ?? state)?.entity?.position ?? state?.position;
-  if (position && inWater(state)) route.entered ??= { position: { ...position }, at: Date.now(), start: route.start };
+  if (!position || !inWater(state) || route.entered) return;
+  const reached = route.activeNode && position.floored().xzDistanceTo(route.activeNode.floored()) === 0;
+  const movement = (reached ? route.activeNode : route.path?.[0] ?? route.activeNode)?.companionMove ?? 'unknown';
+  route.entered = { position: { ...position }, at: Date.now(), start: route.start, movement };
 }
 
 function clearWaterRoutes(bot) {
@@ -89,9 +92,11 @@ function failure(reason, facts = {}, ctx, state) {
       if (kind === 'start') kind = 'environment';
       facts = { ...facts, rescue: facts.rescue || rescue };
     } else if (!facts.rescue && kind === 'target' && route?.linked && source === 'water') {
-      facts = { ...facts, routeCaused: route.destination, waterPosition: route.linked.position, waterAt: route.linked.at, routeStart: route.linked.start };
+      facts = { ...facts, routeCaused: route.destination, waterPosition: route.linked.position, waterAt: route.linked.at,
+        routeStart: route.linked.start, waterMovement: route.linked.movement };
     } else if (!facts.rescue && kind === 'target' && !source && route?.entered) {
-      facts = { ...facts, enteredWater: true, waterPosition: route.entered.position, waterAt: route.entered.at, routeStart: route.entered.start };
+      facts = { ...facts, enteredWater: true, waterPosition: route.entered.position, waterAt: route.entered.at,
+        routeStart: route.entered.start, waterMovement: route.entered.movement };
     } else if (source || facts.rescue) kind = 'start';
     if (source) facts = { ...facts, source };
   }
@@ -141,6 +146,7 @@ async function settleRoute(bot, ctx, position, run, entity) {
     if (inWater(bot)) {
       if (!route.departure) observeWater(route, bot);
     } else if (bot.entity.onGround) route.linked = route.entered = null;
+    route.activeNode = route.path?.[0];
   };
   bot.on?.('physicsTick', sample);
   try {

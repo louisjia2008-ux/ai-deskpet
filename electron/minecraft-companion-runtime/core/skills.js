@@ -21,11 +21,7 @@ const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 const isAbort = (error) => error?.code === 'aborted';
 const v = (p) => new Vec3(p.x, p.y, p.z);
 
-function inventoryCounts(bot) {
-  const counts = {};
-  for (const item of ownedItems(bot)) counts[item.name] = (counts[item.name] || 0) + item.count;
-  return counts;
-}
+const inventoryCounts = bot => countInventory(ownedItems(bot));
 
 /** Breaks one matching block (nearest, cheapest first) and collects its drop. */
 async function gatherOne(bot, ctx, { blocks, dropMatch, purpose = 'gather', exclude = () => false, radius = 48,

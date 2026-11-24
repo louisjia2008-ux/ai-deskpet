@@ -9,14 +9,14 @@ const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
 const { planNext } = require('../planner');
-const { KNOWLEDGE, countKey, familyOf } = require('../knowledge');
+const { KNOWLEDGE, countKey } = require('../knowledge');
 const { createStarterHouse } = require('../blueprints/starterHouse');
 const { filler, pickItem, placedFor, matchesRoofWood, matchesRoofFallback, budget, supply, acquisition, setFallback, restoreFallbacks } = require('../materials');
 const { chooseSite, chooseHillside, evaluateSite, safeCaveDig, canClearTerrain, isSoft, siteWork } = require('../site');
 const { posKey } = require('../blacklist');
 const { ledgerFor, ledgerTarget } = require('../failure-ledger');
 const { waitUntil } = require('../confirm');
-const { exploreFor, furnaceStock, placeStation, runPlanned } = require('./common');
+const { exploreFor, furnaceStock, rememberShortfall, placeStation, runPlanned } = require('./common');
 const { outwardLeg, gatherWood, runSearchLeg, OUTWARD_HEADINGS } = require('../adaptation-strategies');
 const { alternateStand, clearTerrain } = require('../target-recovery');
 const { topology, safeStand, isBed, clear, supports, SIDES } = require('../home-topology');
@@ -378,9 +378,28 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const wood = supply('roof', budget(inventory), {}).primary;
     const furniture = woodForFurniture(hs, inventory);
     if (!needed || wood >= needed + furniture) return;
-    const alternative = supply('roof', materialStock(hs, inventory), { roof: true });
-    return allowFallback(ctx, 'roof', exhaustion.reason || 'wood_exhausted', { needed, furniture, wood,
-      material: alternative.item || alternative.conversion || 'cobblestone', carried: alternative.carried, method: exhaustion.method });
+    return enableRoofFallback(ctx, exhaustion.reason || 'wood_exhausted', needed, furniture, wood,
+      materialStock(hs, inventory), { method: exhaustion.method });
+  }
+
+  function enableRoofFallback(ctx, reason, needed, furniture, wood, stock, evidence) {
+    const { item, conversion, carried } = supply('roof', stock, {}, true);
+    if (reason === 'roof_work_stalled' && carried < Math.min(needed, BATCH)) return false;
+    return allowFallback(ctx, 'roof', reason, { needed, furniture, wood,
+      material: item || conversion || 'cobblestone', carried, ...evidence });
+  }
+
+  function checkRoofProgress(ctx, hs, inventory) {
+    if (memory.materialFallbacks.roof || memory.established || hs.missing.some(b => b.phase === 'walls')) return;
+    const needed = hs.missing.filter(b => b.phase === 'roof').length;
+    if (!needed) return;
+    const now = Date.now();
+    if (!memory.roofClock || needed < memory.roofClock.remaining) memory.roofClock = { remaining: needed, at: now };
+    const stalledMs = now - memory.roofClock.at;
+    if (stalledMs < 600_000) return;
+    const stock = materialStock(hs, inventory);
+    enableRoofFallback(ctx, 'roof_work_stalled', needed, woodForFurniture(hs, inventory),
+      supply('roof', stock, {}).primary, stock, { stalledMs });
   }
 
   async function materialStep(ctx, { purpose, batch }, hs) {
@@ -468,7 +487,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   const runPlannerStep = (ctx, step, requirement) => runPlanned(ctx, step, attempt => executePlannerStep(attempt, step, requirement));
 
   async function executePlannerStep(ctx, step, requirement) {
-    ctx.record('plan_step', { kind: step.kind, key: step.key, for: step.for, item: step.item, count: step.count ?? step.times });
     const house = memory.house;
     // A crafting table carried along: crafting happens where the bot is, down
     // in its quarry, rather than after a climb that can fail and a walk back.
@@ -505,11 +523,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           if (carried) await pickUpTable(ctx, carried);
         }
         if (result.ok && factsOf(result).usedTable && !carried) memory.verified.crafting_table = true;
-        // Short of something the plan thought was there: plan for it explicitly for a while.
-        for (const m of factsOf(result).missing || []) {
-          const family = familyOf(m.name, kb);
-          if (family) memory.shortfall[family] = { extra: m.short, until: Date.now() + 120000 };
-        }
+        rememberShortfall(memory, kb, result);
         return result;
       }
       case 'gather': {
@@ -740,7 +754,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     }
     const best = Object.keys(score).sort((a, b) => score[b] - score[a])[0];
     return {
-      accept: (e) => !fleece.get(e.id)?.sheared,
+      accept: e => !fleece.get(e.id)?.sheared && (!memory.house || e.position.distanceTo(v(memory.house.anchor)) <= searchRadius),
       penalty: (e) => (best && fleece.get(e.id)?.color !== best ? 200 : 0),
     };
   }
@@ -1937,6 +1951,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       reportedUpgradeBlocks.set(position, conflict.reason);
     }
     for (const position of reportedUpgradeBlocks.keys()) if (!blockedNow.has(position)) reportedUpgradeBlocks.delete(position);
+    checkRoofProgress(ctx, hs, state.inventory);
     memory.houseBuilt = memory.house.blocks.length - hs.missing.length;
     memory.houseBed = hs.placed.bed;
     // A full bag is emptied into the house chest rather than onto the ground.

@@ -31,6 +31,11 @@ function createKit({ bot, items, home, kb = KNOWLEDGE }) {
     // A device with no site: deviceProject walks to a site only while this is unset.
     memory: { device: { kind: 'kit' } },
     needs: () => gathered,
+    ironDebt(inventory) {
+      const need = gathered.reduce((total, item) => total + (item.count - carried({ inventory }, item))
+        * (kb[item.key].sources?.find(source => source.needs?.iron_ingot)?.needs.iron_ingot || 0), 0);
+      return Math.max(0, need - (inventory.raw_iron || 0) - (inventory.iron_ingot || 0));
+    },
     isDone: (state) => items.every((r) => carried(state, r) >= r.count) && upgrades(bot).length === 0,
     progress: (state) => items.reduce((n, r) => n + carried(state, r), 0) + (upgrades(bot).length === 0 ? 1 : 0),
     async run(ctx) {

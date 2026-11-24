@@ -6,8 +6,9 @@
 const { Vec3 } = require('vec3');
 const { isComplete } = require('./action-result');
 const actions = require('./actions');
-const { clearCoverAt } = require('./skills');
-const { naturalCover } = require('./natural-cover');
+const { clearCoverAt, pourLiquid } = require('./skills');
+const { naturalCover, isWaterlogged } = require('./natural-cover');
+const { SIDES, supports } = require('./home-topology');
 const { waitUntil } = require('./confirm');
 const { posKey } = require('./blacklist');
 const { ledgerFor, ledgerTarget, recordTarget } = require('./failure-ledger');
@@ -19,8 +20,18 @@ const TILLABLE = new Set(['grass_block', 'dirt', 'dirt_path', 'coarse_dirt', 'ro
 const RIPE = 7;
 
 const irrigates = (b) => b && (/^(water|bubble_column|kelp|kelp_plant|seagrass|tall_seagrass)$/.test(b.name)
-  || b.getProperties?.().waterlogged === true);
+  || isWaterlogged(b));
 const farmLevel = (waterY, centerY) => waterY >= centerY - 6 && waterY <= centerY + 2;
+const horizontal = (p, q) => Math.hypot(p.x - q.x, p.z - q.z);
+
+function litPlot(read, p, crop = read({ ...p, y: p.y + 1 })) {
+  if (!crop) return false;
+  if (crop.skyLight >= 9) return true;
+  for (let y = p.y + 2; y < 320; y++) {
+    if (read({ ...p, y })?.boundingBox === 'block') return false;
+  }
+  return true;
+}
 
 /**
  * Up to `count` ground cells to farm near `center`. Vanilla keeps farmland
@@ -30,16 +41,15 @@ const farmLevel = (waterY, centerY) => waterY >= centerY - 6 && waterY <= center
 function choosePlots(blockAt, center, { count = 16, radius = 24, exclude = () => false, findWater } = {}) {
   const c = { x: Math.floor(center.x), y: Math.floor(center.y), z: Math.floor(center.z) };
   const usable = (p) => {
+    if (distance(p) > radius) return false;
     const ground = blockAt(p);
+    if (!ground || (!TILLABLE.has(ground.name) && ground.name !== 'farmland') || exclude(p)) return false;
     const above = blockAt({ ...p, y: p.y + 1 });
-    // Farmland already tilled (a farm planted on an earlier trip) is the best plot of all.
-    return ground && (TILLABLE.has(ground.name) || ground.name === 'farmland')
-      && (naturalCover(above) || (ground.name === 'farmland' && above?.name === 'wheat'))
-      && !exclude(p);
+    return (naturalCover(above) || (ground.name === 'farmland' && above?.name === 'wheat')) && litPlot(blockAt, p, above);
   };
   const waters = (findWater?.(c, radius) ?? []).filter(w => farmLevel(w.y, c.y) && irrigates(blockAt(w)));
   const plots = new Map();
-  const distance = (p) => Math.hypot(p.x - c.x, p.z - c.z);
+  const distance = (p) => horizontal(p, c);
   // Wheat already growing there (a farm left on an earlier task).
   const sown = (p) => blockAt(p)?.name === 'farmland' && blockAt({ ...p, y: p.y + 1 })?.name === 'wheat';
   for (const w of waters.sort((a, b) => distance(a) - distance(b))) {
@@ -53,16 +63,22 @@ function choosePlots(blockAt, center, { count = 16, radius = 24, exclude = () =>
     }
     if (plots.size >= count) break;
   }
-  // Sown plots first: a new farm tilled four plots beside two ripe wheat and
-  // waited by them for the new ones to grow.
+  if (plots.size < count) {
+    for (let dx = -8; dx <= 8; dx++) for (let dz = -8; dz <= 8; dz++) for (let y = c.y - 6; y <= c.y + 1; y++) {
+      const p = { x: c.x + dx, y, z: c.z + dz };
+      if (!plots.has(posKey(p)) && usable(p)) plots.set(posKey(p), { ...p, hydrated: false });
+    }
+  }
+  const nearestWater = p => Math.min(...waters.map(w => horizontal(p, w)));
   return [...plots.values()]
-    .sort((a, b) => (sown(b) - sown(a)) || distance(a) - distance(b))
+    .sort((a, b) => (b.hydrated - a.hydrated) || (sown(b) - sown(a))
+      || (!a.hydrated && nearestWater(a) - nearestWater(b)) || distance(a) - distance(b))
     .slice(0, count);
 }
 
-function findWater(bot, center, radius) {
-  return bot.findBlocks({ matching: irrigates, point: v(center), maxDistance: radius, count: 64,
-    useExtraInfo: block => farmLevel(block.position.y, center.y) });
+function findWater(bot, center, radius, localLevel = true) {
+  return bot.findBlocks({ matching: irrigates, point: v(center), maxDistance: radius, count: localLevel ? 64 : 1,
+    useExtraInfo: block => !localLevel || farmLevel(block.position.y, center.y) });
 }
 
 /**
@@ -76,18 +92,14 @@ function findGround(bot, center, radius = 64, { fits = () => true } = {}) {
   if (!ids.length || typeof bot.findBlocks !== 'function') return null;
   const danger = bot.companionDanger || [];
   const c = v(center);
-  const found = bot.findBlocks({ matching: ids, point: c, maxDistance: radius, count: 256 })
-    .filter((p) => {
-      const above = bot.blockAt(p.offset(0, 1, 0));
-      return (naturalCover(above) || (above?.name === 'wheat' && bot.blockAt(p)?.name === 'farmland'))
-        && naturalCover(bot.blockAt(p.offset(0, 2, 0)));
-    })
-    .filter((p) => !danger.some((d) => Math.hypot(d.x - p.x, d.z - p.z) < 32))
-    .sort((a, b) => a.distanceTo(c) - b.distanceTo(c))
-    .map((p) => ({ x: p.x, y: p.y + 1, z: p.z }))
+  return bot.findBlocks({ matching: ids, point: c, maxDistance: radius, count: 256, useExtraInfo(block) {
+    const p = block.position, read = q => bot.blockAt(v(q)), above = read(p.offset(0, 1, 0));
+    return (naturalCover(above) || (above?.name === 'wheat' && block.name === 'farmland'))
+      && naturalCover(read(p.offset(0, 2, 0))) && litPlot(read, p, above) && !danger.some(d => horizontal(d, p) < 32);
+  } })
+    .map(p => p.offset(0, 1, 0))
     // A lone patch of grass in the sand holds no farm: the nearest that fits one.
-    .find((p) => fits(p));
-  return found || null;
+    .find(fits) || null;
 }
 
 /** What a plot needs next, read from the world. */
@@ -123,46 +135,39 @@ async function returnTo(bot, ctx, p) {
   return plotState(bot, p) === 'unknown' ? (moved.ok ? fail('farm_out_of_sight') : moved) : { ok: true };
 }
 
-async function useOn(bot, ctx, block) {
+async function irrigate(bot, ctx, plots) {
+  const edge = plots.find(p => !p.hydrated && plotState(bot, p) === 'untilled' && !bot.companionPlayerBlock?.(p)
+    && supports(bot.blockAt(v(p).offset(0, -1, 0))) && SIDES.every(([dx, dz]) => supports(bot.blockAt(v(p).offset(dx, 0, dz)))));
+  if (!edge) return null;
+  const approached = await reach(bot, ctx, edge);
+  if (!approached.ok) return approached;
+  const dug = await actions.digBlock(bot, ctx, bot.blockAt(v(edge)));
+  return dug.ok ? pourLiquid(bot, ctx, edge, 'water') : dug;
+}
+
+async function tend(bot, ctx, plot, seed) {
+  const ground = v(plot), crop = ground.offset(0, 1, 0);
+  const match = seed ? n => n === seed : n => n.endsWith('_hoe');
+  const missing = seed ? 'no_seeds' : 'no_hoe';
+  if (bot.companionPlayerBlock?.(ground)) return fail('protected_player_block');
+  const moved = await reach(bot, ctx, plot);
+  if (!moved.ok) return moved;
+  if (seed && !await equip(bot, match)) return fail(missing);
+  const cleared = await clearCoverAt(bot, ctx, crop, { clearReplaceable: !seed });
+  if (!cleared.ok) return cleared;
+  if ((!bot.heldItem || !match(bot.heldItem.name)) && !await equip(bot, match)) return fail(missing);
+  if (bot.companionPlayerBlock?.(ground)) return fail('protected_player_block');
   try {
-    await bot.lookAt(block.position.offset(0.5, 1, 0.5), true);
-    await bot.activateBlock(block, new Vec3(0, 1, 0));
-  } catch (error) {
-    if (isAbort(error)) throw error;
-  }
+    await bot.lookAt(ground.offset(0.5, 1, 0.5), true);
+    await bot.activateBlock(bot.blockAt(ground), new Vec3(0, 1, 0));
+  } catch (error) { if (isAbort(error)) throw error; }
+  const done = await waitUntil(() => bot.blockAt(seed ? crop : ground)?.name === (seed ? 'wheat' : 'farmland'),
+    { timeoutMs: 1500, signal: ctx.signal });
+  return done ? { ok: true } : fail(seed ? 'plant_unconfirmed' : 'till_unconfirmed');
 }
 
-/** Hoe a grass or dirt block into farmland; plants on top are cleared first. */
-async function till(bot, ctx, plot) {
-  if (bot.companionPlayerBlock?.(v(plot))) return fail('protected_player_block');
-  const moved = await reach(bot, ctx, plot);
-  if (!moved.ok) return moved;
-  // Hoeing needs air over the soil even when a block item could replace the plant.
-  const cleared = await clearCoverAt(bot, ctx, v(plot).offset(0, 1, 0), { clearReplaceable: true });
-  if (!cleared.ok) return cleared;
-  if (!await equip(bot, (n) => n.endsWith('_hoe'))) return fail('no_hoe');
-  if (bot.companionPlayerBlock?.(v(plot))) return fail('protected_player_block');
-  await useOn(bot, ctx, bot.blockAt(v(plot)));
-  const done = await waitUntil(() => bot.blockAt(v(plot))?.name === 'farmland', { timeoutMs: 1500, signal: ctx.signal });
-  return done ? { ok: true } : fail('till_unconfirmed');
-}
-
-async function plant(bot, ctx, plot, seed = 'wheat_seeds') {
-  if (bot.companionPlayerBlock?.(v(plot))) return fail('protected_player_block');
-  const moved = await reach(bot, ctx, plot);
-  if (!moved.ok) return moved;
-  if (!await equip(bot, (n) => n === seed)) return fail('no_seeds');
-  const cleared = await clearCoverAt(bot, ctx, v(plot).offset(0, 1, 0));
-  if (!cleared.ok) return cleared;
-  // Clearing can equip a tool; the interaction must still hold the seed.
-  if (!bot.heldItem || bot.heldItem.name !== seed) {
-    if (!await equip(bot, (n) => n === seed)) return fail('no_seeds');
-  }
-  if (bot.companionPlayerBlock?.(v(plot))) return fail('protected_player_block');
-  await useOn(bot, ctx, bot.blockAt(v(plot)));
-  const done = await waitUntil(() => bot.blockAt(v(plot).offset(0, 1, 0))?.name === 'wheat', { timeoutMs: 1500, signal: ctx.signal });
-  return done ? { ok: true } : fail('plant_unconfirmed');
-}
+const till = (bot, ctx, plot) => tend(bot, ctx, plot);
+const plant = (bot, ctx, plot, seed = 'wheat_seeds') => tend(bot, ctx, plot, seed);
 
 async function harvest(bot, ctx, plot) {
   const moved = await reach(bot, ctx, plot);
@@ -198,4 +203,4 @@ async function gatherSeeds(bot, ctx, { radius = 32, exclude = () => false } = {}
   return { ok: true, seeds: actions.countItems(bot, (n) => n === 'wheat_seeds') - before };
 }
 
-module.exports = { findGround, choosePlots, findWater, plotState, till, plant, harvest, gatherSeeds, returnTo, TILLABLE, RIPE };
+module.exports = { findGround, choosePlots, findWater, litPlot, plotState, till, plant, harvest, gatherSeeds, returnTo, irrigate, TILLABLE, RIPE };

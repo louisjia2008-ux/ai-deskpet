@@ -178,14 +178,15 @@ async function goTo(bot, ctx, goal, options = {}) {
 }
 
 async function goToRoute(bot, ctx, goal, options) {
-  const exclusions = bot.pathfinder?.movements?.exclusionAreasStep;
-  if (ctx.dryRoute && exclusions && !options.dryScoped) {
+  const movements = bot.pathfinder?.movements, exclusions = movements?.exclusionAreasStep;
+  if ((ctx.dryRoute || ctx.pathArea) && exclusions && !options.dryScoped) {
     const { wet } = require('./dry-route');
-    const avoidWater = b => wet(b) || (b?.position && wet(bot.blockAt(b.position.offset(0, 1, 0)))) ? 1000 : 0;
-    exclusions.push(avoidWater);
+    const exclude = b => b?.position && ((ctx.pathArea && !ctx.pathArea(b.position))
+      || (ctx.dryRoute && (wet(b) || wet(bot.blockAt(b.position.offset(0, 1, 0)))))) ? 1000 : 0;
+    exclusions.push(exclude);
     try { return await goToRoute(bot, ctx, goal, { ...options, dryScoped: true }); }
     finally {
-      const i = exclusions.indexOf(avoidWater);
+      const i = exclusions.indexOf(exclude);
       if (i >= 0) exclusions.splice(i, 1);
     }
   }
@@ -219,10 +220,13 @@ async function goToOnce(bot, ctx, goal, { timeoutMs = 30000, arrived } = {}) {
   let lastMoveAt = Date.now();
   let firstStepFailed = false;
   const atOrigin = () => bot.entity.position.floored().equals(start.floored());
+  if (ctx.route) ctx.route.path = ctx.route.activeNode = null;
   const onPlan = plan => {
+    if (ctx.route) ctx.route.path = plan.path;
     if (plan.status === 'noPath' && plan.visitedNodes === 1 && atOrigin()) firstStepFailed = true;
   };
   const onReset = reason => {
+    if (ctx.route) ctx.route.path = null;
     if (reason === 'stuck' && atOrigin()) firstStepFailed = true;
   };
   bot.on?.('path_update', onPlan);

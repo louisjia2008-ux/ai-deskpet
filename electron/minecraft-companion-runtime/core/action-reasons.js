@@ -72,8 +72,8 @@ const reasons = Object.freeze({
   material: `
     bed_materials_unavailable causeway_blocks end_departure_requirements few_blocks ledge_no_blocks missing_breach_repair_material
     missing_flint_and_steel missing_ingredients missing_obsidian needs_supplies needs_usable_pickaxe
-    nether_departure_requirements no_arrows no_bow no_bridge_blocks no_bucket no_diamond_pickaxe no_eye no_eyes no_food
-    no_farmland_near_home no_fuel no_gold no_gold_armour no_golden_apple no_hoe no_igniter no_material no_pearl no_pearls no_pickaxe no_potion
+    nether_departure_requirements no_arrows no_bow no_bridge_blocks no_bucket no_diamond_pickaxe no_eye no_eyes no_farmland_near_home no_food
+    no_fuel no_gold no_gold_armour no_golden_apple no_hoe no_igniter no_material no_pearl no_pearls no_pickaxe no_potion
     no_seal_block no_seeds no_shield no_spare_pickaxe no_step_block no_tool no_weapon not_enough_eyes
     roof_step_needs_filler route_floor_missing_material tower_blocks
   `,

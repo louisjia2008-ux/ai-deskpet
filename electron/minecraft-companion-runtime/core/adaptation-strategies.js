@@ -5,13 +5,18 @@ const { blockTarget } = require('./target-recovery');
 const { complete, resultFrom, failure, factsOf, isComplete } = require('./action-result');
 
 const OUTWARD_HEADINGS = Object.freeze([0, 1, -1, 2, -2, 3, -3, 4]);
-async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, timeoutMs = 15000, bearing } = {}) {
+async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, timeoutMs = 15000, bearing, around } = {}) {
   const from = bot.entity.position.clone();
   const base = bearing ?? Math.atan2(from.z - away.z, from.x - away.x);
   const turn = OUTWARD_HEADINGS[(memory.heading || 0) % OUTWARD_HEADINGS.length];
-  const angle = base + turn * Math.PI / 4;
-  const x = Math.round(from.x + Math.cos(angle) * distance);
-  const z = Math.round(from.z + Math.sin(angle) * distance);
+  let angle = base + turn * Math.PI / 4;
+  const point = a => ({ x: Math.round(from.x + Math.cos(a) * distance), z: Math.round(from.z + Math.sin(a) * distance) });
+  let end = point(angle);
+  if (around && !around(end)) {
+    angle = Math.atan2(away.z - from.z, away.x - from.x);
+    end = point(angle);
+  }
+  const { x, z } = end;
   ctx.record?.('adaptation_route', { x, z, heading: turn, bearing: angle });
   const goal = new goals.GoalNearXZ(x, z, 3);
   const result = resultFrom(await actions.goTo(bot, ctx, goal, { timeoutMs, retryNoProgress: false }), ctx, bot);
@@ -41,7 +46,8 @@ async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blocks, d
   const origin = anchor || (memory.woodOrigin ||= bot.entity.position.clone());
   const location = { position: origin, target: 'log' };
   const spec = (p) => blockTarget(bot, 'wood', 'gather_log', p, { cells: [p.offset(0, -1, 0)] });
-  const avoid = (p) => exclude?.(p) || ctx.adapt.avoids('hard_route', p) || ctx.adapt.targets.avoid(spec(p));
+  const around = p => Math.hypot(p.x - origin.x, p.z - origin.z) <= 128;
+  const avoid = p => !around(p) || exclude?.(p) || ctx.adapt.avoids('hard_route', p) || ctx.adapt.targets.avoid(spec(p));
   return ctx.adapt.run('wood', location, async (method, plan, observe) => {
     const near = method === 'near_tree';
     const found = resultFrom(await skills.gatherOne(bot, ctx, { blocks, dropMatch, exclude: avoid,
@@ -55,7 +61,7 @@ async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blocks, d
       memory.woodRoute = { id, heading: Math.max(0, heading) };
     }
     return runSearchLeg(ctx, memory.woodRoute,
-      () => outwardLeg(bot, ctx, actions, memory.woodRoute, origin, { distance: method === 'wider_heading' ? 20 : 28 }));
+      () => outwardLeg(bot, ctx, actions, memory.woodRoute, origin, { around, distance: method === 'wider_heading' ? 20 : 28 }));
   });
 }
 

@@ -45,8 +45,8 @@ function createProgression({ bot, kb, homeOf, avoidFor }) {
   const pearls = (s, m) => eyes(s) + total(s, m, 'ender_pearl');
   const range = (m) => RANGE[m.range] ?? RANGE.nether;
   const farmOptions = (m) => ({
-    bot, kb, center: homeOf(m).centre, plots: 9,
-    home: { table: homeOf(m).stations.crafting_table },
+    bot, kb, center: m.homestead?.memory?.house?.entrance ?? homeOf(m).centre, plots: 9,
+    home: { anchor: homeOf(m).centre, table: homeOf(m).stations.crafting_table },
     exclude: (p) => avoidFor(m, homeOf(m), 'wheatFarm')(p) || bot.companionNearPlayerBuild?.(p),
   });
   const farm = (m) => {
@@ -174,7 +174,8 @@ function createProgression({ bot, kb, homeOf, avoidFor }) {
   const finished = (s, m) => m.homestead?.status(s)?.finished === true;
   const readyToFinish = (s, m) => inOverworld() && holds(s, IRON_TOOLS) && m.wheatFarmDone;
   const cards = [
-    card('wheat_farm', 1, (s, m) => inOverworld() && holds(s, IRON_TOOLS) && !m.wheatFarmDone,
+    card('wheat_farm', 1, (s, m) => inOverworld() && m.homestead?.isDone(s)
+      && countKey('iron_pickaxe', s.inventory, kb) > 0 && !m.wheatFarmDone,
       (m) => farm(m), materials(key('wheat_seeds', 9), key('hoe'))),
     card('harvest_wheat', 1, (s, m) => inOverworld() && m.wheatFarmDone && homeOf(m) && farm(m).harvestNeeded(),
       (m) => harvest(m)),

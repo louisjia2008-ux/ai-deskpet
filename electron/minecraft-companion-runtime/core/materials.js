@@ -106,12 +106,12 @@ function budget(inventory, { wood = 0, stone = 0, canConvert = () => true } = {}
   return { carried, craftable, total };
 }
 
-function supply(purpose, stock, fallbacks) {
+function supply(purpose, stock, fallbacks, alternate = false) {
   const [preferred, fallback, source] = RULES[purpose];
   const sum = (names, count) => names.reduce((total, name) => total + count(name), 0);
   const primary = sum(preferred, stock.total);
-  // A new delivery of preferred supplies takes priority even after a fallback.
-  const group = !primary && fallbacks[purpose] ? fallback : preferred;
+  const mode = fallbacks[purpose];
+  const group = alternate || (mode && (!primary || mode.reason === 'roof_work_stalled')) ? fallback : preferred;
   return { primary, available: sum(group, stock.total),
     carried: sum(group, name => stock.carried[name] || 0), item: group.find(name => stock.carried[name] > 0),
     conversion: group.find(name => stock.craftable[name]?.count > 0), source };
