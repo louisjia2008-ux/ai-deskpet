@@ -81,7 +81,7 @@ test('packaged WeChat follow-ups preserve per-group consent and list controls', 
     await page.locator('nav').getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('tab', { name: '微信通道', exact: true }).click();
     await page.getByRole('tab', { name: '每日整理', exact: true }).click();
-    const settings = page.getByRole('region', { name: '等你处理', exact: true });
+    const settings = page.getByRole('region', { name: '群里 @ 你', exact: true });
     await expect(settings.getByLabel('每天发送时间（本机时间）')).toHaveValue('21:30');
     await settings.getByRole('spinbutton', { name: '等待回复（分钟）' }).fill('75');
     await settings.getByRole('checkbox', { name: group.title, exact: true }).check();
@@ -92,8 +92,8 @@ test('packaged WeChat follow-ups preserve per-group consent and list controls', 
       .toEqual({ time: '21:30', waitMinutes: 75, groups: [{ id: group.id, cloud: false }], provider: null });
 
     await page.locator('nav').getByRole('button', { name: '动态', exact: true }).click();
-    await page.getByRole('tab', { name: '等你处理', exact: true }).click();
-    const result = page.getByRole('tabpanel', { name: '等你处理', exact: true });
+    await page.getByRole('tab', { name: '群里 @ 你', exact: true }).click();
+    const result = page.getByRole('tabpanel', { name: '群里 @ 你', exact: true });
     await expect(result.getByText(item.summary)).toBeVisible();
     await expect(result.getByText(item.detail)).toBeHidden();
     await result.getByText('展开上下文', { exact: true }).click();

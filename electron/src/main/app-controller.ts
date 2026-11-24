@@ -2521,7 +2521,14 @@ export class AppController {
     this.#ipc.register('recovery:get-state', consoleOnly, () => null);
     this.#ipc.register('app:set-locale', consoleOnly, async ({ locale }) => { await this.#settings.update({ locale }); this.#emitApp(); return this.#appState(); });
     this.#ipc.register('app:set-theme', consoleOnly, async ({ theme }) => { await this.#settings.update({ theme }); this.#applyAppearance(); this.#emitApp(); return this.#appState(); });
-    this.#ipc.register('app:set-hotkey', consoleOnly, async ({ accelerator }) => { await this.#settings.update({ hotkey: accelerator }); this.#registerHotkey(accelerator); this.#emitApp(); return this.#appState(); });
+    this.#ipc.register('app:set-hotkey', consoleOnly, async ({ accelerator }) => {
+      // Register the new shortcut before saving it; if the system refuses it, the old one stays in place.
+      const previous = this.#settings.get().hotkey;
+      let registered = false;
+      try { this.#registerHotkey(accelerator); registered = this.#hotkeyRegistered; } catch { registered = false; }
+      if (!registered) { this.#registerHotkey(previous); this.#emitApp(); throw new Error('app.hotkeyUnavailable'); }
+      await this.#settings.update({ hotkey: accelerator }); this.#emitApp(); return this.#appState();
+    });
     this.#ipc.register('app:set-auto-launch', consoleOnly, async ({ enabled }) => { this.#autoLaunch.setEnabled(enabled); await this.#settings.update({ autoLaunch: enabled }); this.#emitApp(); return this.#appState(); });
     this.#ipc.register('app:open-login-settings', consoleOnly, async () => {
       if (process.platform === 'darwin') await shell.openExternal('x-apple.systempreferences:com.apple.LoginItems-Settings.extension');

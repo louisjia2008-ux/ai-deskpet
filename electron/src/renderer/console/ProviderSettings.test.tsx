@@ -47,14 +47,14 @@ it('keeps local setup keyless and offers an explicit manual fallback after disco
   fireEvent.click(within(form()).getByText('Enter a model ID'));
   fireEvent.change(within(form()).getByLabelText('Model Model ID'), { target: { value: 'manual-local' } });
   expect(api.upsert).not.toHaveBeenCalled(); fireEvent.click(within(form()).getByRole('button', { name: 'Use this model' }));
-  // The default loopback address answers "does it run here?", so the confirmation starts checked.
-  expect(within(form()).getByLabelText('This model runs on this device')).toBeChecked();
-  expect(within(form()).queryByText(/Device-only memories are withheld/u)).not.toBeInTheDocument();
+  // A loopback address can still forward elsewhere, so running locally stays an explicit confirmation.
+  expect(within(form()).getByText(/Device-only memories are withheld/u)).toBeInTheDocument();
+  expect(within(form()).getByLabelText('This model runs on this device')).not.toBeChecked();
   fireEvent.click(within(form()).getByText('Advanced connection settings'));
   fireEvent.change(within(form()).getByLabelText('Ollama context to load (tokens)'), { target: { value: '8192' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
   await waitFor(() => expect(api.upsert).toHaveBeenCalledOnce());
-  expect(api.upsert.mock.calls[0]![0]).toMatchObject({ kind: 'ollama', model: 'manual-local', ollamaNumCtx: 8192, localExecutionConfirmed: true });
+  expect(api.upsert.mock.calls[0]![0]).toMatchObject({ kind: 'ollama', model: 'manual-local', ollamaNumCtx: 8192 });
   expect(api.upsert.mock.calls[0]![0]).not.toHaveProperty('apiKey');
 });
 

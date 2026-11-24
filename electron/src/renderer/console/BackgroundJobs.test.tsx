@@ -39,7 +39,20 @@ const fill = () => {
 };
 afterEach(cleanup);
 
+const cloud: ProviderConfig = { ...provider, id: '0c1f3a3e-4d1b-4a8e-9a55-1d5c0b3e7f21', kind: 'openai', name: 'Synthetic cloud', baseUrl: 'https://api.openai.com/v1', localExecutionConfirmed: undefined, secretState: 'configured' };
+
 describe('background text job UI', () => {
+  it('asks for remote consent only for a cloud service and drops it when the service changes', async () => {
+    const f = fixture(); render(<BackgroundJobs providers={[cloud, provider]} locale="en" />); fill();
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(screen.getByRole('checkbox')).toBeChecked();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Provider' }), { target: { value: provider.id } });
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Run in background' }));
+    await waitFor(() => expect(f.submit).toHaveBeenCalledOnce());
+    expect(f.submit.mock.calls[0]![0].privacy).toBe('local-only');
+  });
+
   it('previews the exact explicit material and chosen binding before submitting, then keeps result separate', async () => {
     const f = fixture(); render(<BackgroundJobs providers={[provider]} locale="en" />); fill();
     const preview = screen.getByText('Submission preview').parentElement!;

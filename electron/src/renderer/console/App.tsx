@@ -159,7 +159,8 @@ const MainConsoleApp = (): JSX.Element => {
   const [wechatConfigured, setWechatConfigured] = useState(false);
   useEffect(() => {
     let live = true;
-    const read = (): void => { void window.deskpet.wechat?.getState().then(state => { if (live) setWechatConfigured(state.configured); }).catch(() => undefined); };
+    // Once seen as set up it stays shown this session: a failed probe must not make the WeChat pages vanish.
+    const read = (): void => { void window.deskpet.wechat?.getState().then(state => { if (live && state.configured) setWechatConfigured(true); }).catch(() => undefined); };
     read(); window.addEventListener('focus', read);
     return () => { live = false; window.removeEventListener('focus', read); };
   }, []);
@@ -299,7 +300,7 @@ const MainConsoleApp = (): JSX.Element => {
         {group && <header className="page-header"><h1>{[...primary, ...secondary].find(item => item.group === GROUPS[group])?.label}</h1></header>}
         {tabs && <div className="memory-tabs page-tabs" role="tablist">{tabs.map(tab => <button key={tab.id} type="button" role="tab" aria-selected={view === tab.id} onClick={() => go(tab.id)}>{tab.label}</button>)}</div>}
         {view === 'artifacts' && <ArtifactsPanel api={window.deskpet.chatWork} locale={locale} navigationBusy={conversationBusy} onOpenSession={selectChat} onContinue={continueArtifact} />}
-        {view === 'media' && <MediaLibraryPage api={window.deskpet.media} wechat={window.deskpet.wechat} providers={snapshot.providers} locale={locale} sessionId={activeSessionId} onAttached={() => setView('chat')} createSession={conversationBusy ? undefined : async () => { const session = await window.deskpet.chat.createSession({ title: zh ? '图片对话' : 'Image conversation', kind: 'normal' }); setSelectedChat(session.id); await refresh(); return session.id; }} />}
+        {view === 'media' && <MediaLibraryPage api={window.deskpet.media} wechat={window.deskpet.wechat} providers={snapshot.providers} locale={locale} sessionId={activeSessionId} onAttached={() => setView(current => current === 'media' ? 'chat' : current)} createSession={conversationBusy ? undefined : async () => { const session = await window.deskpet.chat.createSession({ title: zh ? '图片对话' : 'Image conversation', kind: 'normal' }); setSelectedChat(session.id); await refresh(); return session.id; }} />}
         {view === 'conversations' && <ConversationManager t={t} locale={locale} busy={conversationBusy} onSelect={selectChat} onAction={conversations.act} />}
         {view === 'companion' && <CompanionPage initialTab={companionTab} snapshot={snapshot} name={name} t={t} refresh={refresh} />}
         {view === 'minecraft' && <MinecraftPage locale={locale} t={t} onDedicatedSettings={openDedicatedSettings} />}
@@ -456,10 +457,12 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
   // Each conversation keeps its own unsent draft, so switching never carries text into another chat.
   const drafts = useRef(new Map<string, string>());
   const draftSession = useRef(sessionId);
+  const createdFromDraft = useRef<string | null>(null);
   useEffect(() => {
     if (draftSession.current === sessionId) return;
     const previous = draftSession.current;
     draftSession.current = sessionId;
+    if (previous === '' && createdFromDraft.current === sessionId) { createdFromDraft.current = null; return; }
     setDraft(current => {
       if (current.trim()) drafts.current.set(previous, current); else drafts.current.delete(previous);
       const restored = drafts.current.get(sessionId) ?? '';
@@ -489,6 +492,7 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
   const [running, setRunning] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [sendError, setSendError] = useState(false);
+  const [reloadFailed, setReloadFailed] = useState<string | null>(null);
   const [interaction, setInteraction] = useState<ChatInteractionState | null>(null);
   const [restoringInteraction, setRestoringInteraction] = useState(false);
   const [interactionLoadFailed, setInteractionLoadFailed] = useState(false);
@@ -688,6 +692,8 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
   const ensureSession = async (content: string): Promise<string> => {
     if (selectedSession.current.length > 0) return selectedSession.current;
     const session = await window.deskpet.chat.createSession({ title: content.replace(/\s+/gu, ' ').slice(0, 40), kind: 'normal' });
+    // The new chat's unsent draft moves with it when it gets its real id.
+    createdFromDraft.current = session.id;
     selectedSession.current = session.id;
     selectSession(session.id);
     void refresh();
@@ -763,8 +769,8 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
         const loaded = await window.deskpet.chat.listMessages(activeSession);
         if (selectedSession.current === activeSession) setMessages((current) => reconcileChatMessages(loaded, current));
       };
-      // The message is already accepted; a failed reload is retried quietly instead of offering a resend.
-      await reload().catch(() => new Promise<void>(resolve => window.setTimeout(resolve, 1_000)).then(reload)).catch(() => undefined);
+      // The message is already accepted; a failed reload is retried quietly, then offered as a reload, never as a resend.
+      await reload().catch(() => new Promise<void>(resolve => window.setTimeout(resolve, 1_000)).then(reload)).catch(() => setReloadFailed(activeSession));
     } catch {
       if (!submitted) {
         setSendError(true);
@@ -833,6 +839,7 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
         </div>}
         {archived && selectedConversation && !wechatTranscript && <div className="archived-conversation-note"><p>{t('conversation.archivedReadOnly')}</p><button type="button" className="secondary" disabled={conversationBusy} onClick={() => onConversationAction('unarchive', selectedConversation)}>{t('conversation.unarchive')}</button></div>}
         {sendError && <p className="inline-error" role="alert">{t('common.error')}</p>}
+        {reloadFailed === sessionId && <p className="inline-error" role="status">{snapshot.app.resolvedLocale === 'zh-CN' ? '消息已发出，但对话记录暂时没加载出来。' : 'Your message was sent, but the conversation did not reload.'} <button type="button" className="secondary" onClick={() => void window.deskpet.chat.listMessages(sessionId).then(loaded => { if (selectedSession.current === sessionId) setMessages(current => reconcileChatMessages(loaded, current)); setReloadFailed(null); }).catch(() => undefined)}>{snapshot.app.resolvedLocale === 'zh-CN' ? '重新加载对话' : 'Reload conversation'}</button></p>}
         {copyError && <p className="inline-error" role="alert">{t('ui.copyFailed')}</p>}
         {followupError && <p className="inline-error" role="alert">{t(followupError)}</p>}
         {restoringInteraction && <p className="chat-interaction-note" role="status">{t('chat.interaction.restoring')}</p>}

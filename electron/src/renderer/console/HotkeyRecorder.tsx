@@ -3,8 +3,10 @@ import type { JSX, KeyboardEvent } from 'react';
 
 const MODIFIER_KEYS = new Set(['Meta', 'Control', 'Alt', 'Shift']);
 const NAMED: Record<string, string> = {
-  ' ': 'Space', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Escape: 'Esc', Enter: 'Return',
+  ' ': 'Space', '+': 'Plus', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Escape: 'Esc', Enter: 'Return',
 };
+const NUMPAD: Record<string, string> = { NumpadAdd: 'numadd', NumpadSubtract: 'numsub', NumpadMultiply: 'nummult', NumpadDivide: 'numdiv', NumpadDecimal: 'numdec' };
+const MAC = typeof navigator !== 'undefined' && /Mac/iu.test(navigator.platform);
 
 /** The Electron accelerator for a key press, or null while only modifiers are held. */
 export const acceleratorFor = (event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>): string | null => {
@@ -12,8 +14,9 @@ export const acceleratorFor = (event: Pick<KeyboardEvent, 'key' | 'code' | 'meta
   // Use the physical key, so Alt/Option combinations do not record a special character.
   const key = /^Key[A-Z]$/u.test(event.code) ? event.code.slice(3)
     : /^Digit[0-9]$/u.test(event.code) ? event.code.slice(5)
-      : NAMED[event.key] ?? (event.key.length === 1 ? event.key.toUpperCase() : event.key);
-  const modifiers = [event.metaKey && 'Command', event.ctrlKey && 'Control', event.altKey && 'Alt', event.shiftKey && 'Shift'].filter(Boolean);
+      : /^Numpad[0-9]$/u.test(event.code) ? `num${event.code.slice(6)}`
+        : NUMPAD[event.code] ?? NAMED[event.key] ?? (event.key.length === 1 ? event.key.toUpperCase() : event.key);
+  const modifiers = [event.metaKey && (MAC ? 'Command' : 'Super'), event.ctrlKey && 'Control', event.altKey && 'Alt', event.shiftKey && 'Shift'].filter(Boolean);
   // A global shortcut needs at least one modifier (F-keys excepted) so it never steals ordinary typing.
   if (modifiers.length === 0 && !/^F\d{1,2}$/u.test(key)) return null;
   return [...modifiers, key].join('+');

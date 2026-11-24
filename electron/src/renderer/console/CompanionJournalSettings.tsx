@@ -23,7 +23,7 @@ export const CompanionJournalSettings = ({ zh, part }: { zh: boolean; part: 'del
         {!entries.length && <p>{zh ? '还没有日记。夜间记忆整理后会写一篇，断档时最多补一篇。' : 'No diaries yet. Writes after nightly memory tidy-up; catches up at most one missed night.'}</p>}
         {selected && <article aria-label={zh ? '编辑日记' : 'Edit diary'}><h3>{selected.date}</h3><textarea aria-label={zh ? '日记正文' : 'Diary text'} value={text} maxLength={6000} disabled={busy} onChange={e => setText(e.target.value)} />
           <button type="button" disabled={busy || !text.trim()} onClick={() => void act(async () => { await api.edit({ date: selected.date, revision: selected.revision, text }); setSelected(null); })}>{zh ? '保存日记' : 'Save diary'}</button>
-          <ConfirmButton label={zh ? '删除日记' : 'Delete diary'} confirmLabel={zh ? `确认删除 ${selected.date} 的日记` : `Delete the ${selected.date} diary`} cancelLabel={zh ? '取消' : 'Cancel'} disabled={busy} onConfirm={() => void act(async () => { await api.remove({ date: selected.date, revision: selected.revision }); setSelected(null); })} /></article>}</>)}
+          <ConfirmButton key={`${selected.date}:${selected.revision}`} label={zh ? '删除日记' : 'Delete diary'} confirmLabel={zh ? `确认删除 ${selected.date} 的日记` : `Delete the ${selected.date} diary`} cancelLabel={zh ? '取消' : 'Cancel'} disabled={busy} onConfirm={() => void act(async () => { await api.remove({ date: selected.date, revision: selected.revision }); setSelected(null); })} /></article>}</>)}
     {failed && <p role="alert">{zh ? '操作失败，可能已在其他窗口修改。请重新打开后重试。' : 'Could not complete this operation. Reopen to refresh changes made elsewhere.'}</p>}
   </section>;
 };

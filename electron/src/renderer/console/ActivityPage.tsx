@@ -15,7 +15,10 @@ export const ActivityPage = ({ t, locale }: { t(key: string): string; locale: Re
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const revision = useRef({ value: 0 });
+  // Once older events are open, coming back to the window keeps the reader's place.
+  const olderOpen = useRef(false);
   const load = useCallback(async (beforeId?: string) => {
+    if (beforeId) olderOpen.current = true;
     const current = ++revision.current.value;
     setBusy(true); setFailed(false);
     try {
@@ -30,7 +33,7 @@ export const ActivityPage = ({ t, locale }: { t(key: string): string; locale: Re
     const current = revision.current;
     void load();
     // Coming back to the window shows the latest events without a refresh button.
-    const reload = (): void => { void load(); };
+    const reload = (): void => { if (!olderOpen.current) void load(); };
     window.addEventListener('focus', reload);
     return () => { current.value++; window.removeEventListener('focus', reload); };
   }, [load]);

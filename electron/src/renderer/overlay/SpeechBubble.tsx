@@ -19,7 +19,9 @@ export const SpeechBubble = ({ text, revision, expiresAt, closeLabel, sessionId,
   text: string; revision: number; expiresAt: string | null | undefined; closeLabel: string; sessionId?: string | null | undefined; replyLabel?: string; model?: ModelBox | null; onDismiss(): void;
 }): JSX.Element | null => {
   // Reading it (pointer over it, or keyboard focus inside) holds the bubble; leaving gives a few more seconds.
-  const [held, setHeld] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const held = hovered || focused;
   const [deadline, setDeadline] = useState(() => {
     const parsed = expiresAt === undefined || expiresAt === null ? NaN : Date.parse(expiresAt);
     return Number.isFinite(parsed) ? parsed : Date.now() + 60_000;
@@ -42,12 +44,13 @@ export const SpeechBubble = ({ text, revision, expiresAt, closeLabel, sessionId,
     const expire = window.setTimeout(dismiss, Math.max(0, deadline + FADE_MS - Date.now()));
     return () => { window.clearTimeout(fade); window.clearTimeout(expire); };
   }, [deadline, dismiss, held, opening]);
-  const release = (): void => { setHeld(false); setDeadline(current => Math.max(current, Date.now() + HOLD_GRACE_MS)); };
+  const extend = (): void => setDeadline(current => Math.max(current, Date.now() + HOLD_GRACE_MS));
 
   if (hidden) return null;
   const placement = bubblePlacement(model);
   return <div className={`speech-bubble${placement?.above ? ' is-above' : ''}${fading ? ' is-fading' : ''}`} style={placement?.style} role="status"
-    onPointerEnter={() => setHeld(true)} onPointerLeave={release} onFocus={() => setHeld(true)} onBlur={release}>
+    onPointerEnter={() => setHovered(true)} onPointerLeave={() => { setHovered(false); extend(); }}
+    onFocus={() => setFocused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { setFocused(false); extend(); } }}>
     <div className="speech-bubble-text">{text}</div>
     {sessionId && <button type="button" className="speech-bubble-reply" disabled={opening} onClick={() => {
       setOpening(true);

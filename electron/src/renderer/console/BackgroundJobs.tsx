@@ -104,6 +104,8 @@ export const BackgroundJobs = ({ providers, locale, openJobId = null }: { provid
       if (mounted.current) {
         setJobs((current) => [saved, ...current.filter((job) => job.id !== saved.id)]);
         setInstruction(''); setMaterial(''); setSubmitError(null);
+        // Consent to send to a remote model covers this one task only.
+        setCloudAllowed(false); setRemoteAsked(false);
       }
       submission.current = null;
       void refresh();
@@ -144,7 +146,7 @@ export const BackgroundJobs = ({ providers, locale, openJobId = null }: { provid
       <label>{text.instruction}<textarea aria-label={text.instruction} required maxLength={32_000} value={instruction} disabled={frozen} onChange={(event) => setInstruction(event.target.value)} /></label>
       <label>{text.material}<textarea aria-label={text.material} maxLength={32_000} value={material} disabled={frozen} onChange={(event) => setMaterial(event.target.value)} /></label>
       <div className="background-job-binding">
-        <label>{text.provider}<select aria-label={text.provider} value={providerId} disabled={frozen} onChange={(event) => { setRemoteAsked(false); setProviderId(event.target.value); setModel(enabled.find((item) => item.id === event.target.value)?.model ?? ''); }}>
+        <label>{text.provider}<select aria-label={text.provider} value={providerId} disabled={frozen} onChange={(event) => { setRemoteAsked(false); setCloudAllowed(false); setProviderId(event.target.value); setModel(enabled.find((item) => item.id === event.target.value)?.model ?? ''); }}>
           {enabled.length === 0 && <option value="">{text.waiting}</option>}
           {enabled.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
         </select></label>

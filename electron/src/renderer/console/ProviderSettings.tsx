@@ -14,11 +14,6 @@ const endpointIdentity = (value: string): string => value.trim().replace(/\/+$/u
 import { ModelRoutingSettings } from './ModelRoutingSettings';
 import { ConfirmButton } from './ConfirmButton';
 
-// A local service on this computer's loopback address is the system's own answer to "does it run here?".
-const isLoopbackUrl = (value: string): boolean => {
-  try { return ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(value).hostname); } catch { return false; }
-};
-
 export const ProviderSettings = ({ providers, activeId, t, refresh }: { providers: ProviderConfig[]; activeId: string | null; t(key: string): string; refresh(): Promise<void> }): JSX.Element => {
   const locale = t('provider.type') === '服务类型' ? 'zh-CN' : 'en';
   const text = providerSetupText(locale);
@@ -192,7 +187,7 @@ export const ProviderSettings = ({ providers, activeId, t, refresh }: { provider
       <button type="button" className="secondary" disabled={busy} onClick={() => edit(provider)}>{t('common.edit')}</button>
       <button type="button" className="secondary" disabled={busy} onClick={() => void perform(async () => { const result = await window.deskpet.providers.test(provider.id); setFeedback((items) => ({ ...items, [provider.id]: t(result.messageCode) })); })}>{t('provider.test')}</button>
       <button type="button" className="secondary" disabled={busy} onClick={() => setShownModels((current) => ({ ...current, [provider.id]: !current[provider.id] }))}>{t('provider.models')}</button>
-      {provider.secretState === 'configured' && <ConfirmButton label={t('provider.clearKey')} confirmLabel={zh ? '确认移除（之后需要重新填写）' : 'Remove (you will need to enter it again)'} cancelLabel={t('common.cancel')} disabled={busy} onConfirm={() => void perform(() => window.deskpet.providers.clearSecret(provider.id))} />}
+      {provider.secretState !== 'missing' && <ConfirmButton label={t('provider.clearKey')} confirmLabel={zh ? '确认移除（之后需要重新填写）' : 'Remove (you will need to enter it again)'} cancelLabel={t('common.cancel')} disabled={busy} onConfirm={() => void perform(() => window.deskpet.providers.clearSecret(provider.id))} />}
       <ConfirmButton label={t('common.delete')} confirmLabel={zh ? `确认删除「${provider.name}」和它保存的密钥` : `Delete ${provider.name} and its saved key`} cancelLabel={t('common.cancel')} disabled={busy} onConfirm={() => void perform(() => window.deskpet.providers.remove(provider.id))} />
     </div>
     {feedback[provider.id] && <small role="status">{feedback[provider.id]}</small>}
@@ -203,7 +198,7 @@ export const ProviderSettings = ({ providers, activeId, t, refresh }: { provider
       <h3>{text('provider.setupTitle')}</h3><p className="provider-setup-intro">{text('provider.setupIntro')}</p>
       <div className="provider-setup-steps">
         <fieldset className="provider-step"><legend>1 · {t('provider.type')}</legend><label>{t('provider.type')}<select value={kind} disabled={busy} onChange={(event) => {
-          const value = event.target.value as ProviderConfig['kind']; invalidateCatalog(); setKind(value); setApiKey(''); setName(''); setLocalExecutionConfirmed(Boolean(providerDefinitions.find((item) => item.kind === value)?.local));
+          const value = event.target.value as ProviderConfig['kind']; invalidateCatalog(); setKind(value); setApiKey(''); setName(''); setLocalExecutionConfirmed(false);
           setOllamaNumCtx(''); setContextWindow(''); setOutputLimit(''); setOutputParameter(''); setBaseUrl(providerDefinitions.find((item) => item.kind === value)?.defaultBaseUrl ?? '');
         }}>{providerDefinitions.map((item) => <option key={item.kind} value={item.kind}>{item.label}</option>)}</select></label></fieldset>
         <fieldset className="provider-step"><legend>2 · {t('provider.apiKey')}</legend>
@@ -225,7 +220,7 @@ export const ProviderSettings = ({ providers, activeId, t, refresh }: { provider
       <details className="provider-advanced"><summary>{text('provider.advanced')}</summary><div className="stack-form">
         {!needsKey && <label>{t('provider.apiKey')}{locale === 'zh-CN' ? '（可选）' : ' (optional)'}<input type="password" autoComplete="off" disabled={busy} value={apiKey} placeholder={keepsKey ? t('provider.keepKey') : ''} onChange={(event) => changeKey(event.target.value)} /></label>}
         <label>{t('provider.name')}<input value={name} disabled={busy} maxLength={240} onChange={(event) => setName(event.target.value)} /></label>
-        <label>{t('provider.baseUrl')}<input type="url" required disabled={busy} value={baseUrl} onChange={(event) => { invalidateCatalog(); setBaseUrl(event.target.value); setLocalExecutionConfirmed((kind === 'ollama' || kind === 'lm-studio') && isLoopbackUrl(event.target.value)); }} /></label>
+        <label>{t('provider.baseUrl')}<input type="url" required disabled={busy} value={baseUrl} onChange={(event) => { invalidateCatalog(); setBaseUrl(event.target.value); setLocalExecutionConfirmed(false); }} /></label>
         <label className="check-row"><input type="checkbox" checked={enabled} disabled={busy} onChange={(event) => setEnabled(event.target.checked)} />{t('provider.enabled')}</label>
         <label className="check-row"><input type="checkbox" checked={tools} disabled={busy} onChange={(event) => setTools(event.target.checked)} />{t('provider.tools')}</label>
         {kind === 'openai-compatible' && <><label className="check-row"><input type="checkbox" checked={localExecutionConfirmed} disabled={busy} onChange={event => setLocalExecutionConfirmed(event.target.checked)} />{t('provider.localExecutionConfirmed')}</label>

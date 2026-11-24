@@ -11,7 +11,7 @@ import './delegations.css';
 
 const copy = {
   en: {
-    title: 'Text delegations', draft: 'Delegation draft', goal: 'Delegation goal', child: 'Child', instruction: 'instruction', material: 'selected material (paste text)',
+    title: 'Text delegations', draft: 'Delegation draft', goal: 'Delegation goal', child: 'Child', cloudShort: 'cloud allowed', localShort: 'local only', instruction: 'instruction', material: 'selected material (paste text)',
     provider: 'provider', model: 'model', choose: 'Choose an existing provider', add: 'Add child', remove: 'Remove child',
     cloud: 'Allow this child instruction and material to be sent to the selected provider, including remote execution',
     privacy: 'Local only by default. Pasted text is user-provided input; no source proof is invented. No parent chat, memory, sibling output or tool permissions are added.',
@@ -40,7 +40,7 @@ const copy = {
     queued: 'Queued', dispatching: 'Dispatch intent saved', running: 'Running', succeeded: 'Execution ended', failedExecution: 'Execution failed', blocked: 'Blocked',
   },
   'zh-CN': {
-    title: '文本委派', draft: '委派草稿', goal: '委派目标', child: 'Child', instruction: '任务指令', material: '选入材料（粘贴文本）',
+    title: '文本委派', draft: '委派草稿', goal: '委派目标', child: '子任务', cloudShort: '可发云端', localShort: '仅本机', instruction: '任务指令', material: '选入材料（粘贴文本）',
     provider: '模型服务', model: '模型', choose: '请选择已有模型服务', add: '添加子任务', remove: '移除子任务',
     cloud: '允许将此子任务的指令和材料发送至所选模型服务，包括远端执行',
     privacy: '默认仅限本机。粘贴内容如实标为用户提供，不虚构来源证明；不会添加父聊天、记忆、兄弟结果或工具权限。',
@@ -158,7 +158,7 @@ const DelegationForm = ({ draft, providers, text, locale, onSaved, onClose }: { 
     <p className="background-job-note">{text.usageNote}</p><p className="background-job-note">{text.policy}</p>
     <details open className="background-job-preview"><summary>{text.preview}</summary><strong>{text.goal}</strong><pre>{goal.trim() || '—'}</pre><p>{text.requests}: {children.length}; {text.deadline}: {minutes}</p>{attempt.current && <p>{text.frozenDeadline}: {attempt.current.deadlineAt}</p>}
       {children.map((child, index) => { const provider = enabled.find((item) => item.id === child.providerId); return <section key={child.id} aria-label={`${text.child} ${index + 1} preview`}>
-        <h4>{text.child} {index + 1}</h4><p>{provider?.name ?? text.choose} · {provider?.baseUrl ?? '—'} · {child.model.trim() || provider?.model || '—'} · {child.cloud ? 'cloud-allowed' : 'local-only'}</p>
+        <h4>{text.child} {index + 1}</h4><p>{provider?.name ?? text.choose} · {provider?.baseUrl ?? '—'} · {child.model.trim() || provider?.model || '—'} · {child.cloud ? text.cloudShort : text.localShort}</p>
         <strong>{text.instruction}</strong><pre>{child.instruction.trim() || '—'}</pre><strong>{text.material}</strong><pre>{child.material || '—'}</pre>
         {rulesFor(child).map((rule) => <div key={rule.id}><strong>{checkLabel(rule.kind, text)}</strong><pre>{rule.kind === 'exact-text' ? rule.expected : rule.kind === 'english-word-count' ? `${rule.min}–${rule.max}` : rule.description}</pre></div>)}
       </section>; })}

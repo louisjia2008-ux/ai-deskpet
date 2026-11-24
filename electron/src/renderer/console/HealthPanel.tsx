@@ -23,7 +23,7 @@ const copy = {
     sinceLaunch: 'Times cover only the period since the app last started.',
     remaining: 'Remaining today: ',
     state: { ok: 'Working', failing: 'Not working', waiting: 'Not run yet', off: 'Off' } satisfies Record<HealthState, string>,
-    feature: { asr: 'Local speech recognition', diary: 'Diary', knowledge: 'Knowledge vault', proactive: 'Unsolicited check-ins', 'wechat-moments': 'WeChat Moments', 'wechat-cron': 'WeChat scheduled delivery', 'wechat-group-digest': 'WeChat group digests', 'wechat-followup': 'Waiting for you', 'wechat-official-brief': 'WeChat official account brief', 'wechat-friends-moments': 'Friends’ Moments digest', 'wechat-friend-reply': 'Friend reply', 'auto-memory': 'Auto memory', 'companion-recent': 'Recent conversation summary', 'memory-sleep': 'Nightly memory tidy-up', schedules: 'Schedules', wechat: 'WeChat', qq: 'QQ', telegram: 'Telegram' } satisfies Record<HealthFeature, string>,
+    feature: { asr: 'Local speech recognition', diary: 'Diary', knowledge: 'Knowledge vault', proactive: 'Unsolicited check-ins', 'wechat-moments': 'WeChat Moments', 'wechat-cron': 'WeChat scheduled delivery', 'wechat-group-digest': 'WeChat group digests', 'wechat-followup': 'Group mentions', 'wechat-official-brief': 'WeChat official account brief', 'wechat-friends-moments': 'Friends’ Moments digest', 'wechat-friend-reply': 'Friend reply', 'auto-memory': 'Auto memory', 'companion-recent': 'Recent conversation summary', 'memory-sleep': 'Nightly memory tidy-up', schedules: 'Schedules', wechat: 'WeChat', qq: 'QQ', telegram: 'Telegram' } satisfies Record<HealthFeature, string>,
     about: {
       asr: 'Microphone audio is recognised on this Mac, never uploaded.', diary: 'One encrypted diary after the nightly tidy-up; only cloud-allowed owner conversations.', proactive: 'Uses the existing event policy, quiet hours and a durable daily allowance.',
       'wechat-moments': 'Draft previews and confirmed publishing; failures and uncertainty are shown here.',
@@ -380,8 +380,7 @@ export const HealthPanel = ({ api, locale, onOpen, onIssues, children }: {
       {item.lastFailureAt && <>{(item.lastSuccessAt || successTracked.has(item.feature)) && ' · '}{text.lastFailure}{time(item.lastFailureAt)}</>}
       {item.sinceLaunch && <><br />{text.sinceLaunch}</>}
     </p>}
-    {/* A feature that is on but simply has not run yet needs nothing from the owner. */}
-    {item.state !== 'ok' && item.state !== 'waiting' && <div className="attention-actions">
+    {item.state !== 'ok' && <div className="attention-actions">
       <button type="button" className={item.state === 'failing' ? undefined : 'secondary'} onClick={() => onOpen(item.feature)}>{text.open}</button>
       {item.state === 'failing' && !item.acknowledged && item.fingerprint && api.acknowledgeHealth
         && <button type="button" className="secondary" disabled={busy} onClick={() => void acknowledge(item)}>{text.acknowledge}</button>}

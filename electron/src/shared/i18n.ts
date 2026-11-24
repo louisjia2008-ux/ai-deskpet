@@ -481,7 +481,7 @@ export const zhCN: Record<MessageKey, string> = {
   'setup.missingModel': '尚未配置 Live2D 模型。',
   'setup.notSet': '还没设置形象',
   'setup.overlayLoadFailed': '暂时没能加载形象',
-  'setup.openSettings': '点这里打开设置',
+  'setup.openSettings': '点这里打开 DeskPet 设置',
   'timer.created': '计时器已创建',
   'chat.new': '新对话',
   'chat.placeholder': '和你的伙伴说点什么…',
@@ -815,7 +815,7 @@ export const zhCN: Record<MessageKey, string> = {
   'setup.security': 'Core 与模型文件只保存在本机，DeskPet 不会上传它们。',
   'diagnostics.title': '诊断',
   'diagnostics.refresh': '重新检查',
-  'privacy.localOnly': '数据保存在 DeskPet Electron 本地目录。聊天会将当前输入和经策略允许的上下文发送给所选 provider；仅限本机的记忆需要确认本机执行。',
+  'privacy.localOnly': '数据保存在 DeskPet Electron 本地目录。聊天会将当前输入和经策略允许的上下文发送给所选模型服务；仅限本机的记忆需要确认本机执行。',
 };
 
 export const messages: Record<ResolvedLocale, Record<MessageKey, string>> = {

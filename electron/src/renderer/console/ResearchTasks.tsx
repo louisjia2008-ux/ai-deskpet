@@ -95,7 +95,7 @@ export const ResearchTasks = ({ api, providers, locale, onOpenSession }: {
     submission.current = input; submitting.current = true; setBusy(true); setSubmissionError(null); setActionError('');
     try {
       await api.submit(input); submission.current = null;
-      if (mounted.current) { setGoal(''); setMaterial(''); }
+      if (mounted.current) { setGoal(''); setMaterial(''); setAllowRemote(false); setRemoteAsked(false); }
       await refresh();
     } catch (cause) {
       const rejected = definiteRejection(cause);

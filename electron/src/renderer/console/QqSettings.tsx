@@ -16,7 +16,7 @@ const careResultText = {
 const en = {
   title: 'QQ channel · experimental',
   boundary: 'Paired private and group conversations can research public sources. QQ cannot execute commands, control your computer, access files, change permissions or read desktop conversations. Memory sharing is off by default.',
-  pending: 'Group pairing and replies have been verified on QQ. Scheduled push still needs a real QQ check. QQ Cron create/update/resume require your direct /confirm after a separate full host summary; pause/cancel do not. Runs only while DeskPet is open, with no missed-run catch-up. QQ tasks pause after restart and require fresh confirmation. Desktop Cron is unchanged.',
+  pending: 'Group pairing and replies have been verified on QQ. Scheduled push still needs a real QQ check. QQ Cron create/update/resume require your direct /confirm after a separate full summary; pause/cancel do not. Runs only while DeskPet is open, with no missed-run catch-up. QQ tasks pause after restart and require fresh confirmation. Desktop Cron is unchanged.',
   cronLimits: 'QQ Cron limits: 10 uncancelled tasks (including paused tasks), at least 15 minutes apart per task, 4 model requests per run, at most 2048 output tokens per request, and a 120-second run deadline. Chat and Cron share the daily request limit. No files, computer control or nested Cron.',
   loading: 'Loading QQ settings…', failure: 'Could not update QQ settings. Check the configuration and retry.',
   appId: 'QQ AppID', secret: 'AppSecret (leave blank to keep saved secret)', savedSecret: 'AppSecret saved securely', noSecret: 'No AppSecret saved',
@@ -56,7 +56,7 @@ const en = {
   transport: 'Connection method', official: 'Official QQ bot', onebot: 'Secondary QQ account (NapCat / OneBot)',
   onebotRisk: 'Unofficial protocol: it may breach the QQ terms and the account can be restricted or banned. Use a secondary account you can afford to lose, never your main one.',
   onebotUrl: 'OneBot WebSocket address (this computer only)', token: 'OneBot access token (leave blank to keep saved token)', savedToken: 'Access token saved securely', noToken: 'No access token saved',
-  pairHelpOnebot: 'From your main QQ, send this command in a private chat to the secondary account (you must be friends), then refresh this page. The desktop must approve the candidate before any conversation is allowed.',
+  pairHelpOnebot: 'From your main QQ, send this command in a private chat to the secondary account (you must be friends), the candidate appears here by itself. The desktop must approve the candidate before any conversation is allowed.',
   verifyOnebot: 'Verify that this is your own QQ number before approving.', lastError: 'Last problem',
   errorConnect: 'Cannot reach NapCat. Check that its container is running.', errorToken: 'NapCat rejected the access token. Make sure both sides use the same one.', errorOffline: 'The secondary account is logged out or offline. Log in again in NapCat.',
 };
@@ -103,7 +103,7 @@ const zh: typeof en = {
   transport: '连接方式', official: '官方 QQ 机器人', onebot: 'QQ 小号（NapCat / OneBot）',
   onebotRisk: '非官方协议：可能违反 QQ 用户协议，账号可能被限制或封禁。请使用可以舍弃的小号，不要用大号。',
   onebotUrl: 'OneBot WebSocket 地址（仅限本机）', token: 'OneBot 访问令牌（留空保留已保存令牌）', savedToken: '访问令牌已安全保存', noToken: '尚未保存访问令牌',
-  pairHelpOnebot: '用大号在与小号的私聊中发送此命令（双方须是好友），再刷新本页。桌面确认候选身份前，不会允许任何对话。',
+  pairHelpOnebot: '用大号在与小号的私聊中发送此命令（双方须是好友），这里会自动出现待确认的身份。桌面确认候选身份前，不会允许任何对话。',
   verifyOnebot: '请核实这是你本人的 QQ 号后再确认。', lastError: '最近的问题',
   errorConnect: '连不上 NapCat，请确认容器正在运行。', errorToken: 'NapCat 拒绝了访问令牌，请确认两边填的是同一个。', errorOffline: '小号已退出或离线，请在 NapCat 中重新登录。',
 };
@@ -139,28 +139,30 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
       imageTestActive.current = false; setTestingImage(false);
     }
   };
+  // One reader keeps the status current while this page is open. The form is filled from the first
+  // successful read (even after a failed first try) and is never overwritten by later polls.
+  const formReady = useRef(false);
   useEffect(() => {
-    const id = ++request.current;
-    void window.deskpet.qq.getState().then(value => {
-      if (id !== request.current) return;
-      setState(value); setAppId(value.appId); setTransport(value.transport); setOnebotUrl(value.onebotUrl || DEFAULT_ONEBOT_URL); setProviderId(value.providerId ?? ''); setModel(value.model ?? '');
-      setDaily(value.dailyRequestLimit); setWeb(value.webCallLimit);
-    }).catch(() => { if (id === request.current) setError(true); });
-    return () => { request.current += 1; };
-  }, []);
-
-  // Keep the status current while this page is open, so pairing and connection changes appear by themselves.
-  useEffect(() => {
-    const timer = window.setInterval(() => { void window.deskpet.qq.getState().then(setState).catch(() => undefined); }, 3_000);
-    return () => window.clearInterval(timer);
+    const read = (): void => {
+      const id = request.current;
+      void window.deskpet.qq.getState().then(value => {
+        if (id !== request.current) return; // an action finished meanwhile; its result is newer
+        setState(value); setError(false);
+        if (!formReady.current) {
+          formReady.current = true;
+          setAppId(value.appId); setTransport(value.transport); setOnebotUrl(value.onebotUrl || DEFAULT_ONEBOT_URL); setProviderId(value.providerId ?? ''); setModel(value.model ?? '');
+          setDaily(value.dailyRequestLimit); setWeb(value.webCallLimit);
+        }
+      }).catch(() => { if (id === request.current && !formReady.current) setError(true); });
+    };
+    read();
+    const timer = window.setInterval(read, 3_000);
+    return () => { window.clearInterval(timer); request.current += 1; };
   }, []);
 
   useEffect(() => {
     if (!groupPairing) return;
-    const timer = window.setInterval(() => {
-      if (Date.parse(groupPairing.expiresAt) < Date.now()) { setGroupPairing(null); return; }
-      void window.deskpet.qq.getState().then(setState).catch(() => undefined);
-    }, 3_000);
+    const timer = window.setInterval(() => { if (Date.parse(groupPairing.expiresAt) < Date.now()) setGroupPairing(null); }, 3_000);
     return () => window.clearInterval(timer);
   }, [groupPairing]);
 
@@ -168,7 +170,14 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
     const id = ++request.current; setBusy(true); setError(false);
     try {
       const value = await operation();
-      if (id === request.current) { setState(value); if (value.stopped || !value.enabled || value.bound) setPairing(null); }
+      if (id === request.current) {
+        setState(value); if (value.stopped || !value.enabled || value.bound) setPairing(null);
+        if (!formReady.current) {
+          formReady.current = true;
+          setAppId(value.appId); setTransport(value.transport); setOnebotUrl(value.onebotUrl || DEFAULT_ONEBOT_URL); setProviderId(value.providerId ?? ''); setModel(value.model ?? '');
+          setDaily(value.dailyRequestLimit); setWeb(value.webCallLimit);
+        }
+      }
     } catch { if (id === request.current) setError(true); }
     finally { if (id === request.current) setBusy(false); }
   };
@@ -199,7 +208,7 @@ export const QqSettings = ({ providers, locale }: { providers: ProviderConfig[];
     <details className="settings-more"><summary>{locale === 'zh-CN' ? '定时任务规则与限额' : 'Scheduled task rules and limits'}</summary><p className="qq-warning">{copy.pending}</p><p>{copy.cronLimits}</p></details>
     {error && <p role="alert">{copy.failure} <button type="button" className="secondary" disabled={busy} onClick={() => void perform(() => window.deskpet.qq.getState())}>{copy.refresh}</button></p>}
     {/* The emergency stop only exists while QQ is actually running. */}
-    {state && !state.stopped && (state.enabled || state.connection !== 'disabled') && <div className="qq-actions">
+    {(state ? !state.stopped && (state.enabled || state.connection !== 'disabled') : error) && <div className="qq-actions">
       <button type="button" className="danger" onClick={() => { setPairing(null); void perform(() => window.deskpet.qq.stop()); }}>{copy.stop}</button>
     </div>}
     {!state ? <p role="status">{copy.loading}</p> : <>

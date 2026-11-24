@@ -9,14 +9,16 @@ const key = (key: string, code: string, mods: Partial<Record<'metaKey' | 'ctrlKe
 it('builds an accelerator from the physical key and requires a modifier', () => {
   expect(acceleratorFor(key(' ', 'Space', { altKey: true }))).toBe('Alt+Space');
   expect(acceleratorFor(key('∂', 'KeyD', { altKey: true, shiftKey: true }))).toBe('Alt+Shift+D');
-  expect(acceleratorFor(key('k', 'KeyK', { metaKey: true }))).toBe('Command+K');
+  expect(acceleratorFor(key('k', 'KeyK', { metaKey: true }))).toMatch(/^(Command|Super)\+K$/u);
   expect(acceleratorFor(key('k', 'KeyK'))).toBeNull();
   expect(acceleratorFor(key('Alt', 'AltLeft', { altKey: true }))).toBeNull();
   expect(acceleratorFor(key('F5', 'F5'))).toBe('F5');
+  expect(acceleratorFor(key('+', 'Equal', { ctrlKey: true, shiftKey: true }))).toBe('Control+Shift+Plus');
+  expect(acceleratorFor(key('1', 'Numpad1', { altKey: true }))).toBe('Alt+num1');
 });
 
 it('saves once, only when the combination is complete, and Esc cancels', async () => {
-  const onChange = vi.fn(async () => undefined);
+  const onChange = vi.fn<(next: string) => Promise<void>>(async () => undefined);
   render(<HotkeyRecorder value="Alt+Space" zh={false} onChange={onChange} />);
   const button = screen.getByRole('button', { name: 'Alt+Space' });
   fireEvent.click(button);
@@ -25,5 +27,6 @@ it('saves once, only when the combination is complete, and Esc cancels', async (
   fireEvent.click(button);
   fireEvent.keyDown(button, key('Shift', 'ShiftLeft', { shiftKey: true }));
   fireEvent.keyDown(button, key('k', 'KeyK', { metaKey: true, shiftKey: true }));
-  await waitFor(() => expect(onChange).toHaveBeenCalledExactlyOnceWith('Command+Shift+K'));
+  await waitFor(() => expect(onChange).toHaveBeenCalledOnce());
+  expect(onChange.mock.calls[0]![0]).toMatch(/^(Command|Super)\+Shift\+K$/u);
 });
