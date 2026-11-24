@@ -1156,6 +1156,21 @@ describe('QQ delivery and persistence', () => {
     expect(f.service.status()).toMatchObject({ enabled: false, bound: false, stopped: true });
   });
 
+  it('after a restore, connects only once the revocation is saved, through every connecting path', async () => {
+    const f = await fixture(); await f.pair();
+    const update = vi.spyOn(f.store, 'update').mockRejectedValueOnce(new Error('synthetic disk failure'));
+    const done = vi.fn(async () => undefined);
+    expect(await f.service.revokeBeforeConnecting(done)).toBe(false);
+    expect(done).not.toHaveBeenCalled();
+    const starts = f.adapter.starts;
+    await f.service.startConnection();
+    expect(f.adapter.starts).toBe(starts);
+    update.mockRestore();
+    await f.service.startConnection();
+    expect(done).toHaveBeenCalledOnce();
+    expect(f.service.status()).toMatchObject({ enabled: false, bound: false });
+  });
+
   it('connects OneBot from its own endpoint, and changing transport drops the binding', async () => {
     const f = await fixture(); await f.pair();
     expect(f.service.status().bound).toBe(true);

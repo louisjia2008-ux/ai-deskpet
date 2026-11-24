@@ -388,9 +388,10 @@ export const applyPendingProfileRestore = async (root: string): Promise<'none' |
       if (await exists(join(root, name))) await rename(join(root, name), join(previous, name));
       if (await exists(join(incoming, name))) await rename(join(incoming, name), join(root, name));
     }
-    await atomicWriteFile(path, JSON.stringify({ ...journal, phase: 'complete' }));
-    // The marker is durable before the journal disappears, so a crash here still revokes QQ next start.
+    // The marker is written while the journal still says "applying": if it fails, the normal rollback
+    // runs; once "complete" is recorded nothing else can fail before the journal goes away.
     await markQqRevoke(root);
+    await atomicWriteFile(path, JSON.stringify({ ...journal, phase: 'complete' }));
     await rm(path);
     return 'restored';
   } catch (error) { await rollback(); throw error; }

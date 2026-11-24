@@ -671,7 +671,22 @@ export class QqChannelService {
     return this.#manage(() => this.#syncConnection(generation, () => allowed() && this.#connection === 'offline'));
   }
 
+  #revokeGate: (() => Promise<void>) | null = null;
+  /** After a restore: revoke binding, group grants and outbox before any connection; until saved, nothing connects. */
+  async revokeBeforeConnecting(afterRevoked: () => Promise<void>): Promise<boolean> {
+    this.#revokeGate = async () => { await this.invalidateForRestore(); await afterRevoked(); };
+    return this.#passRevokeGate();
+  }
+  async #passRevokeGate(): Promise<boolean> {
+    const gate = this.#revokeGate;
+    if (gate === null) return true;
+    this.#revokeGate = null;
+    try { await gate(); return true; }
+    catch { this.#revokeGate = gate; return false; }
+  }
+
   async #syncConnection(generation: number, allowed = () => true): Promise<boolean> {
+    if (!(await this.#passRevokeGate())) return false;
     const secret = await this.#deps.getSecret().catch(() => null);
     if (!allowed() || generation !== this.#generation || this.#revoked) return false;
     this.#secretConfigured = secret !== null && secret.length > 0;

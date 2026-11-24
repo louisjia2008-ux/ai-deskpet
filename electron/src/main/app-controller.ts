@@ -365,7 +365,6 @@ export class AppController {
   #restorePrepared = false;
   /** Address each remote-consented research submission was consented for, while it is being bound. */
   readonly #researchConsent = new Map<string, string>();
-  #qqRevokePending = false;
   readonly #character: CharacterService;
   readonly #vault: SafeStorageVault;
   readonly #qqVault: SafeStorageVault;
@@ -1090,10 +1089,9 @@ export class AppController {
     await this.#qq.initialize({ deferConnection: true });
     // A restore applied at this start must not inherit the live QQ binding. Revoke before any connection;
     // if that cannot be saved, QQ stays offline and the marker remains for the next start.
-    this.#qqRevokePending = await stat(join(this.#dataRoot, QQ_REVOKE_MARKER)).then(() => true, () => false);
-    if (this.#qqRevokePending) {
-      try { await this.#qq.invalidateForRestore(); await rm(join(this.#dataRoot, QQ_REVOKE_MARKER), { force: true }); this.#qqRevokePending = false; }
-      catch { globalThis.console.error('Could not revoke the QQ binding after a restore; QQ stays offline.'); }
+    if (await stat(join(this.#dataRoot, QQ_REVOKE_MARKER)).then(() => true, () => false)
+      && !(await this.#qq.revokeBeforeConnecting(() => rm(join(this.#dataRoot, QQ_REVOKE_MARKER), { force: true })))) {
+      globalThis.console.error('Could not revoke the QQ binding after a restore; QQ stays offline until it can.');
     }
     await this.#telegram.initialize({ deferConnection: true });
     await this.#modelBindings.migrate().catch(() => globalThis.console.error('Could not complete model selection migration.'));
@@ -1103,7 +1101,7 @@ export class AppController {
     for (const task of this.#repository.snapshot().researchTasks) this.#researchStatuses.set(task.id,task.status);
     await this.#research.initialize();
     await this.#persistentSchedules.tick({ startup: true, suspended: this.#suspended });
-    if (!this.#qqRevokePending) await this.#qq.startConnection();
+    await this.#qq.startConnection();
     await this.#telegram.startConnection();
     // An unreadable character must not stop the app; chat falls back to the default voice.
     await this.#persona.initialize().catch(() => undefined);
