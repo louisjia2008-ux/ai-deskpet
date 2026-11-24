@@ -35,6 +35,8 @@ export const EventProactiveSettings = ({ api, locale, refreshKey = 0, onSaved }:
   const [form, setForm] = useState<ProactivePolicyInput | null>(null);
   const formRef = useRef(form); formRef.current = form;
   const loadedRef = useRef<ProactivePolicy | null>(null);
+  // The saved policy the current draft started from; only differences from it are sent.
+  const baseRef = useRef<ProactivePolicy | null>(null);
   const [topics, setTopics] = useState('');
   const topicsRef = useRef(topics); topicsRef.current = topics;
   const [busy, setBusy] = useState(false), [error, setError] = useState(false);
@@ -50,7 +52,7 @@ export const EventProactiveSettings = ({ api, locale, refreshKey = 0, onSaved }:
         || (JSON.stringify(formRef.current) === JSON.stringify(inputFromPolicy(previous)) && topicsRef.current === previous.topics.join('\n'));
       loadedRef.current = loaded.proactivePolicy;
       setSnapshot(loaded);
-      if (untouched) { setForm(inputFromPolicy(loaded.proactivePolicy)); setTopics(loaded.proactivePolicy.topics.join('\n')); }
+      if (untouched) { baseRef.current = loaded.proactivePolicy; setForm(inputFromPolicy(loaded.proactivePolicy)); setTopics(loaded.proactivePolicy.topics.join('\n')); }
     }).catch(() => { if (!disposed) setError(true); });
     return () => { disposed = true; };
   }, [api, refreshKey]);
@@ -69,10 +71,10 @@ export const EventProactiveSettings = ({ api, locale, refreshKey = 0, onSaved }:
         timezone: form.timezone, cooldownMinutes: form.cooldownMinutes, dailyLimit: form.dailyLimit,
         topics: topics.split('\n').map((topic) => topic.trim()).filter(Boolean) };
       // Send only what changed here since it was loaded, so a concurrent change on the card above survives.
-      const loaded = snapshot?.proactivePolicy;
+      const loaded = baseRef.current;
       const changed = Object.fromEntries(Object.entries(edited).filter(([key, value]) => !loaded || JSON.stringify(loaded[key as keyof ProactivePolicyInput]) !== JSON.stringify(value)));
       const saved = await api.patchProactive(changed);
-      loadedRef.current = saved; setForm(inputFromPolicy(saved)); setTopics(saved.topics.join('\n')); onSaved?.();
+      loadedRef.current = saved; baseRef.current = saved; setForm(inputFromPolicy(saved)); setTopics(saved.topics.join('\n')); onSaved?.();
     });
   };
   const toggleEvent = (kind: ProactiveEventKind): void => setForm((current) => current === null ? null : {

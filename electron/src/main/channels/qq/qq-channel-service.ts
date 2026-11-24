@@ -674,7 +674,16 @@ export class QqChannelService {
   #revokeGate: (() => Promise<void>) | null = null;
   /** After a restore: revoke binding, group grants and outbox before any connection; until saved, nothing connects. */
   async revokeBeforeConnecting(afterRevoked: () => Promise<void>): Promise<boolean> {
-    this.#revokeGate = async () => { await this.invalidateForRestore(); await afterRevoked(); };
+    // Runs directly, not through the management queue: it is called from inside queued work.
+    this.#revokeGate = async () => {
+      this.#revoke();
+      await Promise.all([this.#deps.host.onStopped(), this.#store.update(draft => {
+        this.#invalidate(draft); draft.stopped = true; draft.binding = null; draft.groups = [];
+        draft.config.enabled = false; draft.outbox = []; draft.confirmations = [];
+      })]);
+      this.#changed();
+      await afterRevoked();
+    };
     return this.#passRevokeGate();
   }
   async #passRevokeGate(): Promise<boolean> {

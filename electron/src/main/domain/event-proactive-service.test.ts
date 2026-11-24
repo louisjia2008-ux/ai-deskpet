@@ -280,11 +280,15 @@ describe('proactive policy patches', () => {
 });
 
 describe('proactive defaults on first switch-on', () => {
-  it('fills events and the system time zone only when still unset, judged at save time', async () => {
-    const service = setup().create();
-    await service.patch({ eventKinds: ['focus-completed'] });
-    await service.patch({ mode: 'observe', enabled: false });
-    expect(service.getPolicy().eventKinds).toEqual(['focus-completed']);
-    expect(service.getPolicy().timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  it('fills events and the system time zone only on the very first setup', async () => {
+    const first = setup().create();
+    await first.patch({ mode: 'observe', enabled: false });
+    expect(first.getPolicy().eventKinds).toEqual(['task-completed', 'focus-completed', 'explicit-check-in']);
+    expect(first.getPolicy().timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+    // Rules already chosen are never overwritten when switching on again.
+    const chosen = setup().create();
+    await chosen.patch({ eventKinds: ['focus-completed'] });
+    await chosen.patch({ mode: 'observe', enabled: false });
+    expect(chosen.getPolicy()).toMatchObject({ eventKinds: ['focus-completed'], timezone: 'UTC' });
   });
 });

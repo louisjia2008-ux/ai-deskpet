@@ -1171,6 +1171,16 @@ describe('QQ delivery and persistence', () => {
     expect(f.service.status()).toMatchObject({ enabled: false, bound: false });
   });
 
+  it('a settings save after a failed revocation completes instead of waiting on itself', async () => {
+    const f = await fixture(); await f.pair();
+    const update = vi.spyOn(f.store, 'update').mockRejectedValueOnce(new Error('synthetic disk failure'));
+    expect(await f.service.revokeBeforeConnecting(async () => undefined)).toBe(false);
+    update.mockRestore();
+    const saved = f.service.configure({ dailyRequestLimit: 40 });
+    await expect(Promise.race([saved.then(() => 'done'), new Promise(resolve => setTimeout(() => resolve('hung'), 2_000))])).resolves.toBe('done');
+    expect(f.service.status()).toMatchObject({ bound: false });
+  });
+
   it('connects OneBot from its own endpoint, and changing transport drops the binding', async () => {
     const f = await fixture(); await f.pair();
     expect(f.service.status().bound).toBe(true);
