@@ -1,5 +1,7 @@
 'use strict';
 
+const { Vec3 } = require('vec3');
+const { factsOf, isComplete } = require('../action-result');
 const { goals } = require('mineflayer-pathfinder');
 const { posKey } = require('../blacklist');
 const { FACINGS } = require('../blueprints/cobbleGenerator');
@@ -25,6 +27,42 @@ function guardDeviceCells(bot, memory, describe, cost = 1000) {
   movements.exclusionAreasStep.push(block => block?.position && (noStep.has(posKey(block.position)) || extra?.(block.position)) ? cost : 0);
   movements.exclusionAreasBreak.push(block => block?.position && noBreak.has(posKey(block.position)) ? 100 : 0);
   memory.guarded = true;
+}
+
+function adoptDeviceSite(bot, ctx, memory, slot, choose, options) {
+  if (memory[slot]) return true;
+  const site = choose((x, y, z) => bot.blockAt(new Vec3(x, y, z)), bot.entity.position, options);
+  if (!site) return false;
+  memory[slot] = site;
+  const { kind, anchor, facing } = site;
+  ctx.record('device_site', { kind, anchor, facing });
+  return true;
+}
+
+async function digDeviceCell(bot, ctx, actions, block, beforeDig) {
+  if (!block) return { ok: false, reason: 'unloaded' };
+  const reach = await actions.goToDig(bot, ctx, block);
+  if (!reach.ok) return reach;
+  return beforeDig?.() || actions.digBlock(bot, ctx, block);
+}
+
+async function stepOffDevice(bot, ctx, actions, goal, trapped, detail) {
+  await actions.goTo(bot, ctx, goal, { timeoutMs: detail?.from ? 10000 : 15000, arrived: () => !trapped() });
+  if (!trapped()) return { ok: true };
+  const result = await actions.unstick(bot, ctx);
+  ctx.record('device_step_off', { ...detail, result: isComplete(result) ? factsOf(result).moved : result.wait?.reason ?? result.reason });
+  return trapped() ? (result.wait ? result : { ok: false, reason: 'trapped_in_device' }) : { ok: true };
+}
+
+function placeDevicePart(bot, ctx, skills, part, verify, options) {
+  const toward = new Vec3(part.against.x - part.position.x, part.against.y - part.position.y, part.against.z - part.position.z);
+  const match = name => name === part.block || (options?.acceptItem && name === part.item);
+  const { acceptItem: _acceptItem, ...placement } = options || {};
+  return skills.placeAt(bot, ctx, part.position, match, { faces: [toward], verify, ...placement });
+}
+
+function recordDevicePart(ctx, blockAt, part, { ok, reason }) {
+  ctx.record('device_part', { part: part.key, ok, reason, facing: facingOf(blockAt(part.position)) });
 }
 
 function standingAt(bot, p, tolerance = 0.5) {
@@ -64,4 +102,5 @@ function findDeviceSite(blockAt, around, { radius, step = 1, soft = isSoft, avoi
   return best;
 }
 
-module.exports = { findDeviceSite, LIQUID, isAir, isSoft, isSolid, facingOf, partAccepts, partMatches, guardDeviceCells, standingAt, goToStand };
+module.exports = { findDeviceSite, LIQUID, isAir, isSoft, isSolid, facingOf, partAccepts, partMatches, guardDeviceCells, standingAt, goToStand,
+  adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, recordDevicePart };

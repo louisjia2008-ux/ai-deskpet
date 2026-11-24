@@ -154,14 +154,13 @@ async function finish(home, fixture) {
 }
 
 for (const [material, stock] of [['cobblestone', { cobblestone: 45, dirt: 0 }], ['sandstone', { sand: 196, dirt: 0 }]]) {
-  test(`wood-ladder exhaustion builds a complete 49-cell ${material} roof through the native planner`, async () => {
+  test(`carried stock and conversion build a complete 49-cell ${material} roof through the native planner`, async () => {
     const fixture = site({ materials: stock, widerStone: material === 'cobblestone' });
     const home = fixture.newHome();
     await finish(home, fixture);
-    const triggers = fixture.events.filter(e => e.type === 'home_roof_fallback');
-    assert.deepEqual(triggers.map(e => [e.material, e.needed, e.furniture, e.wood]), [[material, 49, 0, 0]]);
-    const exhausted = fixture.events.find(e => e.type === 'adaptation_exhausted' && e.task === 'wood');
-    assert.ok(exhausted && fixture.events.indexOf(exhausted) < fixture.events.indexOf(triggers[0]));
+    const firstRoof = fixture.events.findIndex(e => e.type === 'build' && e.what === 'roof');
+    const firstWoodSearch = fixture.events.findIndex(e => e.type === 'adaptation_use' && e.task === 'wood');
+    assert.ok(firstRoof >= 0 && (firstWoodSearch < 0 || firstRoof < firstWoodSearch));
     assert.deepEqual(new Set(fixture.roof.map(p => fixture.bot.blockAt(p).name)), new Set([material]));
     assert.equal(home.needsCleanup(), false);
     if (material === 'cobblestone') {
@@ -412,22 +411,13 @@ test('the compact site crafts a stone sword outside and picks up the temporary t
 });
 
 
-test('R4 seed 2 switches to its carried masonry after ten minutes without a new roof cell', async (t) => {
-  let at = 0;
-  t.mock.method(Date, 'now', () => at);
-  const fixture = site({ materials: { sandstone: 25, cobblestone: 13, dirt: 0 } });
+test('R4.1 seed 2 uses its first carried sandstone roof block before gathering wood', async () => {
+  const fixture = site({ materials: { sandstone: 72, dirt: 1 } });
   const home = fixture.newHome();
-  for (const p of fixture.roof.slice(0, 14)) fixture.setBlock(p, 'oak_planks');
-  await home.run(fixture.ctx);
-  at = 599_999;
-  await home.run(fixture.ctx);
-  assert.equal(fixture.events.some(e => e.type === 'home_roof_fallback'), false);
-  at++;
-  await home.run(fixture.ctx);
-  const record = fixture.events.find(e => e.type === 'home_roof_fallback');
-  assert.equal(record.reason, 'roof_work_stalled');
-  assert.equal(record.stalledMs, 600_000);
-  assert.equal(record.needed, 35);
-  assert.equal(record.carried, 37); // The earlier scaffold consumes one from the carried stock.
-  assert.ok(fixture.roof.slice(14).some(p => fixture.bot.blockAt(p).name === 'cobblestone'));
+  for (let i = 0; i < 7 && !fixture.events.some(e => e.type === 'build' && e.what === 'roof'); i++) {
+    await home.run(fixture.ctx);
+  }
+  assert.equal(fixture.events.find(e => e.type === 'build' && e.what === 'roof')?.material, 'sandstone');
+  assert.ok(fixture.roof.some(p => fixture.bot.blockAt(p).name === 'sandstone'));
+  assert.ok(!fixture.events.some(e => e.type === 'home_material_acquisition' && e.purpose === 'roof' && e.key === 'log'));
 });

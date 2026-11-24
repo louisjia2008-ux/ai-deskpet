@@ -33,11 +33,11 @@ async function gatherOne(bot, ctx, { blocks, dropMatch, purpose = 'gather', excl
   const here = bot.entity.position;
   const ledger = ledgerFor(bot, ctx);
   const target = p => ledgerTarget(bot, purpose, p);
-  const eligible = p => !ledger.skip(target(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p);
+  const eligible = p => (!ctx.workArea || ctx.workArea(p)) && !ledger.skip(target(p)) && !exclude(p) && !bot.companionPlayerBlock?.(p);
   const unprotected = b => !bot.companionProtectBlock?.(b) && !bot.companionPlacedRecently?.(b.position);
   // Apply home protection before the search limit.
   const candidates = bot.findBlocks({ matching: ids, maxDistance: radius, count: radius > 48 && ctx.adapt ? 160 : 64,
-    ...(eligibleFirst ? { useExtraInfo: b => eligible(b.position) && unprotected(b) } : {}) })
+    ...((eligibleFirst || ctx.workArea) ? { useExtraInfo: b => eligible(b.position) && unprotected(b) } : {}) })
     .filter(eligible)
     .map((p) => bot.blockAt(p))
     // Digging next to water or lava floods the pit the bot is standing in.
@@ -735,6 +735,7 @@ async function explore(bot, ctx, memory, { distance = 32, timeoutMs = 40000, ret
   const point = angle => here.offset(Math.cos(angle) * distance, 0, Math.sin(angle) * distance);
   const allowed = angle => !ctx.workArea || ctx.workArea(point(angle));
   const directions = Array.from({ length: 8 }, (_, i) => (i * Math.PI) / 4).filter(allowed);
+  if (!directions.length && ctx.exploration) return failure('search_area_exhausted', ctx.exploration, ctx);
   if (!directions.length) return waiting('work_budget', Date.now() + 5000);
   // Keep successful headings, and head back toward the centre past the roaming radius.
   const around = memory.around;
@@ -751,7 +752,7 @@ async function explore(bot, ctx, memory, { distance = 32, timeoutMs = 40000, ret
   memory.tried.push(angle);
   const x = Math.round(here.x + Math.cos(angle) * distance);
   const z = Math.round(here.z + Math.sin(angle) * distance);
-  ctx.record('explore', { x, z });
+  ctx.record(ctx.exploration ? 'task_explore' : 'explore', { ...ctx.exploration, from: here, x, z });
   const goal = new goals.GoalNearXZ(x, z, 4);
   const result = await actions.goTo(bot, ctx, goal, { timeoutMs, retryNoProgress, arrived: () => true });
   const moved = bot.entity.position.distanceTo(here);

@@ -5,7 +5,7 @@
 // goal can search for new terrain first, using the same cancellable body.
 
 const defaultActions = require('../actions');
-const { isComplete } = require('../action-result');
+const { failure, isComplete } = require('../action-result');
 const { goals } = require('mineflayer-pathfinder');
 const { abortError } = require('../confirm');
 const { countMatching } = require('../perception');
@@ -41,7 +41,7 @@ function bodyInDeepWater(bot) {
     || (wet(bot.blockAt(feet, false)) && wet(bot.blockAt(feet.offset(0, -1, 0), false)));
 }
 
-function selectHeading(bot, memory, distance) {
+function selectHeading(bot, memory, distance, allowed) {
   const here = bot.entity.position;
   const canopy = memory.canopy;
   const canopyDirection = canopy && Math.atan2(canopy.z - here.z, canopy.x - here.x);
@@ -50,10 +50,10 @@ function selectHeading(bot, memory, distance) {
     const x = Math.round(here.x + Math.cos(heading) * distance);
     const z = Math.round(here.z + Math.sin(heading) * distance);
     const key = `${x >> 4},${z >> 4}`;
-    if (memory.visited.has(key)) continue;
+    if (memory.visited.has(key) || !allowed({ x, z })) continue;
     const surface = [[0, 0], ...SIDES.map(([dx, dz]) => [dx * 2, dz * 2])]
       .map(([dx, dz]) => loadedSurfaceFeet(bot, x + dx, z + dz, here.y, { up: 32, down: 20 })[0])
-      .filter(p => p && !memory.visited.has(`${p.x >> 4},${p.z >> 4}`));
+      .filter(p => p && allowed(p) && !memory.visited.has(`${p.x >> 4},${p.z >> 4}`));
     if (surface.length === 0) continue;
     let score = heading === memory.heading && !memory.blocked ? 5 : 0;
     // Look past the waypoint: a new block within a previously scanned corridor
@@ -163,7 +163,7 @@ async function dryRoute(bot, ctx, action) {
 
 async function walkToSurface(bot, ctx, _memory, { surface, timeoutMs }) {
   const target = surface[0];
-  ctx.record('explore', { x: target.x, y: target.y, z: target.z });
+  ctx.record(ctx.exploration ? 'task_explore' : 'explore', { ...ctx.exploration, from: bot.entity.position, x: target.x, y: target.y, z: target.z });
   const goal = new goals.GoalCompositeAny(surface.map(({ x, y, z }) => new goals.GoalBlock(x, y, z)));
   return defaultActions.goTo(bot, ctx, goal, {
     timeoutMs, retryNoProgress: false,
@@ -192,7 +192,8 @@ function createGatherBlocksGoal({
     : countMatching(Object.fromEntries(bot.inventory.items().map((i) => [i.name, i.count])), itemMatch);
   const target = startCount + count;
 
-  const locate = findTargets || (() => defaultFindTargets(bot, blockMatch, searchRadius, maxCandidates, acceptTarget));
+  const locate = ctx => findTargets ? findTargets() : defaultFindTargets(bot, blockMatch, searchRadius, maxCandidates,
+    block => (!ctx.workArea || ctx.workArea(block.position)) && (!acceptTarget || acceptTarget(block)));
 
   return {
     name,
@@ -201,10 +202,11 @@ function createGatherBlocksGoal({
     progress: (state) => countMatching(state.inventory, itemMatch),
     async run(ctx) {
       const ledger = ledgerFor(bot, ctx), spec = p => ledgerTarget(bot, 'gather_blocks', p);
-      const availableTargets = () => locate().filter(block => !ledger.skip(spec(block.position)));
+      const availableTargets = () => locate(ctx).filter(block => (!ctx.workArea || ctx.workArea(block.position)) && !ledger.skip(spec(block.position)));
       let candidates = availableTargets();
       if (candidates.length === 0 && findBeyondRange) candidates = await findBeyondRange(ctx, availableTargets);
       if (candidates.wait) return candidates;
+      if (!candidates.length && ctx.exploration && !candidates.reason) return failure('search_area_exhausted', ctx.exploration, ctx);
       if (candidates.length === 0) {
         return { ok: false, reason: candidates.reason || (findBeyondRange ? 'log_search_exhausted' : 'no_target_in_range') };
       }
@@ -289,7 +291,8 @@ function createGatherLogsGoal({ bot, count, walk = walkToSurface, recover = reco
             block => horizontalDistance(block.position, here) > LOG_SCAN_RADIUS && hasNaturalCanopy(bot, block))[0]?.position
           : undefined;
       }
-      const next = selectHeading(bot, memory, SEARCH_LEG) ?? selectHeading(bot, memory, SEARCH_LEG / 2);
+      const next = selectHeading(bot, memory, SEARCH_LEG, ctx.workArea || (() => true))
+        ?? selectHeading(bot, memory, SEARCH_LEG / 2, ctx.workArea || (() => true));
       if (!next) break;
       const { heading, key, distance, surface } = next;
       memory.heading = heading;

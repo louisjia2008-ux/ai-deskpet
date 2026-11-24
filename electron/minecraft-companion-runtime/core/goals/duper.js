@@ -16,7 +16,7 @@
 // cells: { stand, button, buttonAim?, drop }, noStep }. A floor button is aimed
 // at just above its cell's floor; a wall button at `buttonAim`.
 
-const { findDeviceSite, LIQUID, isAir, isSoft, partMatches, guardDeviceCells, facingOf, goToStand } = require('./device-site');
+const { findDeviceSite, LIQUID, isAir, isSoft, partMatches, guardDeviceCells, goToStand, adoptDeviceSite, digDeviceCell, placeDevicePart, recordDevicePart } = require('./device-site');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -130,34 +130,19 @@ function createDuperGoal({ bot, name, create, product, seedKey, pickup = (n) => 
     progress: () => (memory.device ? inspect().built + gained() : 0),
     async run(ctx) {
       if (memory.baseline === null) memory.baseline = owned();
-      if (!memory.device) {
-        const device = chooseDeviceSite(create, (x, y, z) => bot.blockAt(new Vec3(x, y, z)), bot.entity.position);
-        if (!device) return { ok: false, reason: 'no_site' };
-        memory.device = device;
-        ctx.record('device_site', { kind: device.kind, anchor: device.anchor, facing: device.facing });
-      }
+      if (!adoptDeviceSite(bot, ctx, memory, 'device', chooseDeviceSite.bind(null, create))) return { ok: false, reason: 'no_site' };
       guardDevice();
       const s = inspect();
       if (s.hollow) {
-        const block = blockAt(s.hollow);
-        const reach = await actions.goToDig(bot, ctx, block);
-        if (!reach.ok) return reach;
-        return actions.digBlock(bot, ctx, block);
+        return digDeviceCell(bot, ctx, actions, blockAt(s.hollow));
       }
       if (s.nextPart) {
         const part = s.nextPart;
         const current = blockAt(part.position);
-        if (!isAir(current)) {
-          const reach = await actions.goToDig(bot, ctx, current);
-          if (!reach.ok) return reach;
-          return actions.digBlock(bot, ctx, current);
-        }
-        const names = new Set([part.block, part.item || part.block]);
-        const toward = new Vec3(part.against.x - part.position.x, part.against.y - part.position.y, part.against.z - part.position.z);
-        const result = await skills.placeAt(bot, ctx, part.position, (n) => names.has(n), {
-          faces: [toward], stand: part.stand, verify: () => partOk(part),
+        if (!isAir(current)) return digDeviceCell(bot, ctx, actions, current);
+        const result = await placeDevicePart(bot, ctx, skills, part, () => partOk(part), { acceptItem: true, stand: part.stand,
         });
-        ctx.record('device_part', { part: part.key, ok: result.ok, reason: result.reason, facing: facingOf(blockAt(part.position)) });
+        recordDevicePart(ctx, blockAt, part, result);
         return result;
       }
       if (lying()) {

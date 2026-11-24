@@ -70,6 +70,7 @@ const reasons = Object.freeze({
   `,
   // Inventory does not meet the requirements of the proposed action.
   material: `
+    search_area_exhausted
     bed_materials_unavailable causeway_blocks end_departure_requirements few_blocks ledge_no_blocks missing_breach_repair_material
     missing_flint_and_steel missing_ingredients missing_obsidian needs_supplies needs_usable_pickaxe
     nether_departure_requirements no_arrows no_bow no_bridge_blocks no_bucket no_diamond_pickaxe no_eye no_eyes no_farmland_near_home no_food

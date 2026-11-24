@@ -14,7 +14,7 @@
 //   5. otherwise                      -> wait in the alcove, empty the chest
 // Only mob drops gained after the goal started count.
 
-const { findDeviceSite, LIQUID, isAir, isSolid, partMatches, guardDeviceCells, facingOf, standingAt, goToStand } = require('./device-site');
+const { findDeviceSite, LIQUID, isAir, isSolid, partMatches, guardDeviceCells, standingAt, goToStand, adoptDeviceSite, placeDevicePart, recordDevicePart } = require('./device-site');
 const { posKey: key } = require('../blacklist');
 const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
@@ -188,12 +188,7 @@ function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
     progress: () => (memory.farm ? inspect().done + gained() : 0),
     async run(ctx) {
       if (memory.baseline === null) memory.baseline = drops();
-      if (!memory.farm) {
-        const farm = chooseMobFarmSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), bot.entity.position);
-        if (!farm) return { ok: false, reason: 'no_site' };
-        memory.farm = farm;
-        ctx.record('device_site', { kind: farm.kind, anchor: farm.anchor, facing: farm.facing });
-      }
+      if (!adoptDeviceSite(bot, ctx, memory, 'farm', chooseMobFarmSite)) return { ok: false, reason: 'no_site' };
       guardFarm();
       const f = memory.farm;
       const s = inspect();
@@ -218,14 +213,11 @@ function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
       if (s.nextPart) {
         const part = s.nextPart;
         if (!isAir(blockAt(part.position))) return dig(ctx, part.position); // wrong block or facing
-        const toward = new Vec3(part.against.x - part.position.x, part.against.y - part.position.y, part.against.z - part.position.z);
-        const place = () => skills.placeAt(bot, ctx, part.position, (n) => n === part.block, {
-          faces: [toward], sneak: Boolean(part.sneak), verify: () => partOk(part),
-        });
+        const place = () => placeDevicePart(bot, ctx, skills, part, () => partOk(part), { sneak: Boolean(part.sneak) });
         let result = await place();
         if (part.key === 'hopper' && result.reason === 'cell_occupied_by_entity'
           && await clearCollectorBat(ctx, part.position)) result = await place();
-        ctx.record('device_part', { part: part.key, ok: result.ok, reason: result.reason, facing: facingOf(blockAt(part.position)) });
+        recordDevicePart(ctx, blockAt, part, result);
         return result;
       }
       return collect(ctx);

@@ -17,7 +17,7 @@ const { posKey } = require('../blacklist');
 const { ledgerFor, ledgerTarget } = require('../failure-ledger');
 const { waitUntil } = require('../confirm');
 const { exploreFor, furnaceStock, rememberShortfall, placeStation, runPlanned } = require('./common');
-const { outwardLeg, gatherWood, runSearchLeg, OUTWARD_HEADINGS } = require('../adaptation-strategies');
+const { outwardLeg, gatherWood, OUTWARD_HEADINGS } = require('../adaptation-strategies');
 const { alternateStand, clearTerrain } = require('../target-recovery');
 const { topology, safeStand, isBed, clear, supports, SIDES } = require('../home-topology');
 const { dryComponent, drySiteAccess } = require('../dry-route');
@@ -29,6 +29,7 @@ const EARLY_GEAR = new Set(['stone_sword', 'stone_tier_pickaxe', 'pickaxe', 'woo
 const DOWN = [new Vec3(0, -1, 0)];
 const BATCH = 16;
 const SITE_METHODS = ['near_flat', 'more_earthwork', 'compact', 'hillside'];
+const { boundedWork, explorationScope, EXPLORATION_RANGE } = require('../work-budget');
 const SCOUT_RADIUS = 12;
 const SCOUT_SPACING = 24;
 const targetFailure = result => result?.kind === 'target' && !result.facts.target && !result.facts.adaptation;
@@ -37,7 +38,7 @@ const STATIONS = ['crafting_table', 'furnace', 'chest'];
 const STORABLE = ['dirt', 'cobblestone', 'cobbled_deepslate', 'stick', 'rotten_flesh', 'feather', 'leather'];
 
 function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'starter', autonomous = false, gear = DEFAULT_GEAR, skills = defaultSkills, actions = defaultActions,
-  kb = KNOWLEDGE, maxExploreStreak = 20, searchRadius = 128, maxSearchStreak = 8 } = {}) {
+  kb = KNOWLEDGE, origin: spawn = null, maxExploreStreak = 20, searchRadius = EXPLORATION_RANGE, maxSearchStreak = 8 } = {}) {
   const memory = {
     house: anchor ? createStarterHouse(anchor, { variant }) : null,
     // A spot the owner chose (or stood on): built there or not at all, never moved elsewhere.
@@ -378,28 +379,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const wood = supply('roof', budget(inventory), {}).primary;
     const furniture = woodForFurniture(hs, inventory);
     if (!needed || wood >= needed + furniture) return;
-    return enableRoofFallback(ctx, exhaustion.reason || 'wood_exhausted', needed, furniture, wood,
-      materialStock(hs, inventory), { method: exhaustion.method });
-  }
-
-  function enableRoofFallback(ctx, reason, needed, furniture, wood, stock, evidence) {
-    const { item, conversion, carried } = supply('roof', stock, {}, true);
-    if (reason === 'roof_work_stalled' && carried < Math.min(needed, BATCH)) return false;
-    return allowFallback(ctx, 'roof', reason, { needed, furniture, wood,
-      material: item || conversion || 'cobblestone', carried, ...evidence });
-  }
-
-  function checkRoofProgress(ctx, hs, inventory) {
-    if (memory.materialFallbacks.roof || memory.established || hs.missing.some(b => b.phase === 'walls')) return;
-    const needed = hs.missing.filter(b => b.phase === 'roof').length;
-    if (!needed) return;
-    const now = Date.now();
-    if (!memory.roofClock || needed < memory.roofClock.remaining) memory.roofClock = { remaining: needed, at: now };
-    const stalledMs = now - memory.roofClock.at;
-    if (stalledMs < 600_000) return;
-    const stock = materialStock(hs, inventory);
-    enableRoofFallback(ctx, 'roof_work_stalled', needed, woodForFurniture(hs, inventory),
-      supply('roof', stock, {}).primary, stock, { stalledMs });
+    const { item, conversion, carried } = supply('roof', materialStock(hs, inventory), {}, true);
+    return allowFallback(ctx, 'roof', exhaustion.reason || 'wood_exhausted', { needed, furniture, wood,
+      material: item || conversion || 'cobblestone', carried, method: exhaustion.method });
   }
 
   async function materialStep(ctx, { purpose, batch }, hs) {
@@ -709,7 +691,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const material = task.purpose && supply(task.purpose, stock, memory.materialFallbacks);
       const have = material ? material.carried : countKey(task.material, inventory, kb);
       // Once a batch is started it continues until that material runs out.
-      const continuing = memory.batch === task.material || memory.materialFallbacks[task.purpose]
+      const continuing = task.purpose === 'roof' || memory.batch === task.material || memory.materialFallbacks[task.purpose]
         || bot.entity.position.distanceTo(v(task.position)) <= 12;
       if (have <= 0 || (whenBatchReady && !continuing && have < task.batch)) {
         waiting[task.material] = (waiting[task.material] || 0) + 1;
@@ -767,26 +749,27 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
 
   const readSite = (x, y, z) => blockAt(new Vec3(x, y, z));
 
-  function siteSearch(state, adaptation) {
+  function siteSearch(state, adaptation, wide = false) {
     const protectedCell = (p) => bot.companionPlayerBlock?.(p);
     const avoid = (p) => nearDanger(p) || adaptation?.avoids('rejected_site', p) || bot.companionNearPlayerBuild?.(p);
     if (!autonomous || !adaptation) return { protectedCell, avoid };
-    const wood = supply('roof', budget(state.inventory), {}).primary;
+    const stock = budget(state.inventory), wood = supply('roof', stock, {}).primary;
     let access;
     return { protectedCell, avoid, access(house) {
       if (!access) {
-        const logs = (bot.findBlocks?.({ matching: b => b && kb.log.match(b.name), maxDistance: 56, count: 192 }) || [])
+        const logs = (bot.findBlocks?.({ matching: b => b && kb.log.match(b.name), maxDistance: wide ? 88 : 56, count: 192 }) || [])
           .filter(p => !protectedCell(p) && !adaptation.avoids('hard_route', p));
         access = drySiteAccess(blockAt, state.position, logs);
       }
-      return access(house, wood >= house.blocks.filter(b => b.purpose === 'roof').length + 23);
+      return access(house, wood >= 23 && (wood + supply('roof', stock, {}, true).available
+        >= house.blocks.filter(b => b.purpose === 'roof').length + 23));
     } };
   }
 
-  function findSite(state, searches, methods, radius) {
+  function findSite(state, searches, methods, radius, step) {
     for (const method of methods) {
       const site = method === 'hillside' ? chooseHillside(readSite, state.position, searches)
-        : chooseSite(readSite, state.position, { ...searches, radius, variant: method === 'compact' ? 'compact' : 'starter',
+        : chooseSite(readSite, state.position, { ...searches, radius, step, variant: method === 'compact' ? 'compact' : 'starter',
           maxWork: method === 'near_flat' ? 12 : 32 });
       if (site) return site;
     }
@@ -886,6 +869,62 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     verifiedParts.clear();
     memory.upgradesComplete = false;
     return { ...outcome, ok: true, abandoned: true, progress: false };
+  }
+
+  async function relocateSite(ctx, state, origin, method) {
+    const up = await surfaceFirst(ctx);
+    if (up) return up;
+    const route = (memory.homesteadRoute ||= { heading: 0,
+      bearing: Math.atan2(state.position.z - origin.z, state.position.x - origin.x) });
+    const travel = { ...ctx, dryRoute: true, ...explorationScope(ctx, origin, 200), exploration: undefined };
+    const distance = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+    while (route.heading < OUTWARD_HEADINGS.length && (route.distance || 0) < 593) {
+      let last = bot.entity.position.clone();
+      const from = last, started = Date.now(), heading = route.heading, candidates = [];
+      const measured = () => {
+        const now = bot.entity.position;
+        route.distance = (route.distance || 0) + distance(last, now);
+        last = now.clone();
+        return route.distance < 599 && distance(now, origin) <= 200;
+      };
+      if (route.legHeading !== heading) Object.assign(route, { legHeading: heading, legs: 0 });
+      const moved = await boundedWork(bot, travel, { timeoutMs: 15000, check: measured,
+        limitResult: () => failure('relocation_routes_exhausted', {}, ctx) }, attempt =>
+        outwardLeg(bot, attempt, actions, route, origin, { distance: Math.min(28, 598 - route.distance), bearing: route.bearing }));
+      measured();
+      const here = ctx.perceive(), displacement = distance(from, here.position);
+      const usable = !here.inWater && (moved.ok && !moved.wait || displacement >= 16);
+      let site;
+      if (usable) {
+        const review = (candidate, reason) => {
+          candidates.push([posKey(candidate.anchor), candidate.variant, reason]);
+          if (reason !== 'restricted' && Number.isFinite(candidate.cost) && (!route.best || candidate.cost < route.best.cost)) {
+            route.best = { ...candidate, from: here.position };
+          }
+        };
+        site = findSite(here, { ...siteSearch(here, ctx.adapt, true), review }, SITE_METHODS, 52, 2);
+      }
+      const interrupted = ctx.signal?.aborted || moved.wait || ['start', 'interrupted'].includes(moved.kind) || moved.facts?.adaptation;
+      const legs = interrupted ? route.legs : ++route.legs;
+      if (!interrupted && route.heading === heading && (legs >= 8 || !moved.ok)) route.heading++;
+      ctx.record('home_relocation_leg', { method, origin, from, position: here.position, distance: displacement, total: route.distance, heading, legs,
+        candidates, inWater: here.inWater, ok: moved.ok, reason: moved.reason, result: moved, elapsedMs: Date.now() - started });
+      if (interrupted) return moved;
+      if (site) return adoptSite(ctx, site, method);
+      if (usable) return finished(false, { moved: displacement });
+    }
+    const best = route.best;
+    ctx.record('home_relocation_budget', { method, distance: route.distance, anchor: best?.anchor, candidatesExhausted: true });
+    if (best) {
+      if (distance(bot.entity.position, best.from) > 3) {
+        const moved = await actions.goNear(bot, travel, v(best.from), 2, { timeoutMs: 45000, skipAdaptation: true });
+        if (!moved.ok || moved.wait) return moved;
+      }
+      const here = ctx.perceive();
+      const site = findSite(here, siteSearch(here, ctx.adapt, true), SITE_METHODS.slice(1), 16, 1);
+      if (site) return adoptSite(ctx, site, method);
+    }
+    return failure('relocation_routes_exhausted', {}, ctx);
   }
 
   async function exploreRelocation(ctx) {
@@ -1864,44 +1903,12 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           if (chosen) return chosen;
           state = ctx.perceive();
         }
-        const origin = (memory.searchOrigin ||= bot.entity.position.clone());
+        const origin = (memory.searchOrigin ||= spawn || bot.entity.position.clone());
         return ctx.adapt.run('home_site', { position: origin }, async (method) => {
           let site;
-          if (method === 'relocate' || method === 'move_to_fresh_area') {
-            const up = await surfaceFirst(ctx);
-            if (up) return up;
-            if (memory.homesteadRoute?.method !== method) memory.homesteadRoute = { method,
-              heading: method === 'move_to_fresh_area' ? 2 : 0,
-              bearing: Math.atan2(state.position.z - origin.z, state.position.x - origin.x) };
-            const route = memory.homesteadRoute;
-            const travelCtx = autonomous ? { ...ctx, dryRoute: true } : ctx;
-            for (let tried = 0; tried < OUTWARD_HEADINGS.length; tried++) {
-              const from = bot.entity.position.clone();
-              const started = Date.now();
-              const moved = await outwardLeg(bot, travelCtx, actions, route, origin,
-                { distance: method === 'relocate' ? 28 : 40, bearing: route.bearing });
-              if (ctx.signal?.aborted || moved.wait || ['start', 'interrupted'].includes(moved.kind) || moved.facts?.adaptation) return moved;
-              const here = ctx.perceive();
-              const distance = Math.hypot(here.position.x - from.x, here.position.z - from.z);
-              ctx.record('home_relocation_leg', { method, from, position: here.position, distance, inWater: here.inWater,
-                ok: moved.ok, reason: moved.reason, result: resultFrom(moved, ctx, bot), elapsedMs: Date.now() - started });
-              if (here.inWater || (!moved.ok && distance < 16)) {
-                if (moved.ok) route.heading += 1; // An X/Z goal can finish in water.
-                continue;
-              }
-
-              // A completed leg, or a partial leg that reached new dry
-              // ground, gives the porch search a new starting point.
-              site = findSite(here, siteSearch(here, ctx.adapt), SITE_METHODS);
-              if (site) break;
-              return method === 'relocate' ? finished(false, { moved: distance })
-                : runSearchLeg(ctx, route, () => finished(false, { moved: distance }), { reason: 'relocation_routes_exhausted' });
-            }
-            if (!site) return { ok: false, reason: 'relocation_routes_exhausted' };
-          } else {
-            site = findSite(state, siteSearch(state, ctx.adapt), [method]);
-            if (!site) return { ok: false, reason: 'no_suitable_site' };
-          }
+          if (method === 'relocate' || method === 'move_to_fresh_area') return relocateSite(ctx, state, origin, method);
+          site = findSite(state, siteSearch(state, ctx.adapt), [method]);
+          if (!site) return { ok: false, reason: 'no_suitable_site' };
           return adoptSite(ctx, site, method);
         });
       }
@@ -1951,7 +1958,6 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       reportedUpgradeBlocks.set(position, conflict.reason);
     }
     for (const position of reportedUpgradeBlocks.keys()) if (!blockedNow.has(position)) reportedUpgradeBlocks.delete(position);
-    checkRoofProgress(ctx, hs, state.inventory);
     memory.houseBuilt = memory.house.blocks.length - hs.missing.length;
     memory.houseBed = hs.placed.bed;
     // A full bag is emptied into the house chest rather than onto the ground.

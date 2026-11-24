@@ -5,6 +5,7 @@ const { stepTarget, startTarget } = require('./planner');
 const { createScheduleBackoff } = require('./schedule-backoff');
 const { createAdaptation } = require('./adaptation');
 const { complete, failure, isComplete, isRescueBehavior, factsOf } = require('./action-result');
+const { explorationScope, explorationExhausted } = require('./work-budget');
 const { schedulingInputs, travelTicks, nightBudget } = require('./scheduling');
 
 const RISKS = new Set(['low', 'medium', 'high']);
@@ -245,6 +246,15 @@ function createDirector({
       value: () => Math.max(1, current.value),
       managesFailures: Boolean(adaptation),
       async before(ctx) {
+        const house = memory.homestead?.memory?.house, state = ctx.perceive?.();
+        if (current.card.bounded && (card !== 'homestead' || house) && state?.dimension === 'overworld') {
+          const origin = house?.interiorCenter || memory.explorationOrigin;
+          Object.assign(ctx, explorationScope(ctx, origin), { dryRoute: true });
+          if (!ctx.pathArea(state.position)) {
+            if (card !== 'homestead') return explorationExhausted(ctx);
+            delete ctx.pathArea; // A respawn outside the work area may approach home.
+          }
+        }
         const p = generic(card);
         if (!p) return null;
         if (p.method === 'recover' && recoveredRevision !== `${p.key}:${p.revision}`) {
@@ -311,6 +321,7 @@ function createDirector({
           return { card, reason: 'adaptation_exhausted', task: exhausted.task, method: exhausted.method, key: exhausted.key,
             failure: exhausted.reason, until: Math.max(at + yieldCooldownMs, exhausted.retryAt) };
         }
+        if (result?.reason === 'search_area_exhausted') return { card, reason: result.reason, until: at + yieldCooldownMs };
         if (result?.wait) {
           if (card === 'homestead' && result.wait.reason === 'sheltering_until_daylight') {
             if (state && nightBudget(state).dark && state.sheltered) return null;
@@ -379,6 +390,7 @@ function createDirector({
       if (at - idleSince < idleMs) return null;
       const state = perceive();
       if (!state || state.alive === false) return null;
+      memory.explorationOrigin ||= state.position;
       const { stage, scores, card: initial, reserve, reserveScores, inputs } = evaluate(state, at, true);
       const retryAt = Math.min(...scores.filter((score) => score.until > at).map((score) => score.until));
       let card = initial;

@@ -110,8 +110,8 @@ function supply(purpose, stock, fallbacks, alternate = false) {
   const [preferred, fallback, source] = RULES[purpose];
   const sum = (names, count) => names.reduce((total, name) => total + count(name), 0);
   const primary = sum(preferred, stock.total);
-  const mode = fallbacks[purpose];
-  const group = alternate || (mode && (!primary || mode.reason === 'roof_work_stalled')) ? fallback : preferred;
+  const group = alternate ? fallback : purpose === 'roof' ? [...preferred, ...fallback]
+    : fallbacks[purpose] && !primary ? fallback : preferred;
   return { primary, available: sum(group, stock.total),
     carried: sum(group, name => stock.carried[name] || 0), item: group.find(name => stock.carried[name] > 0),
     conversion: group.find(name => stock.craftable[name]?.count > 0), source };

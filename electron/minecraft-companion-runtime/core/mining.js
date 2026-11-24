@@ -354,6 +354,7 @@ async function mineStep(bot, ctx, memory, { blocks, dropMatch, y, start = null, 
   };
   const [dx, dz] = DIRS[dir];
   const next = add(mine.front, dx, descend ? -1 : 0, dz);
+  if (ctx.workArea && !ctx.workArea(next)) return fail('search_area_exhausted');
   if (posKey(next) in mine.cells || mine.tried[attempt]) return blocked('visited');
   const step = inspectStep((x, yy, z) => bot.blockAt(new Vec3(x, yy, z)), mine.front, dir,
     { descend, surfaceY: mine.surfaceY - 1, known: (c) => knownOpen(mine, c) });

@@ -10,7 +10,7 @@
 //   4. otherwise                -> stand on the edge, cast and wait for a bite
 // A catch counts once the reeled-in item is in the inventory.
 
-const { findDeviceSite, LIQUID, isAir, isSoft, isSolid, goToStand } = require('./device-site');
+const { findDeviceSite, LIQUID, isAir, isSoft, isSolid, goToStand, adoptDeviceSite, digDeviceCell } = require('./device-site');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -104,21 +104,13 @@ function createFishingGoal({ bot, anchor = null, facing = 'east', count = 5,
         + p.pond.filter(isSource).length + memory.catches;
     },
     async run(ctx) {
-      if (!memory.pond) {
-        const pond = choosePondSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), bot.entity.position);
-        if (!pond) return { ok: false, reason: 'no_site' };
-        memory.pond = pond;
-        ctx.record('device_site', { kind: pond.kind, anchor: pond.anchor, facing: pond.facing });
-      }
+      if (!adoptDeviceSite(bot, ctx, memory, 'pond', choosePondSite)) return { ok: false, reason: 'no_site' };
       const s = inspect();
       if (s.dig) {
         // Standing on a cell about to be dug drops the bot into the pond.
         const feet = bot.entity.position.floored();
         if (memory.pond.pond.some((c) => c.x === feet.x && c.y === feet.y - 1 && c.z === feet.z)) return goStand(ctx);
-        const block = blockAt(s.dig);
-        const reach = await actions.goToDig(bot, ctx, block);
-        if (!reach.ok) return reach;
-        return actions.digBlock(bot, ctx, block);
+        return digDeviceCell(bot, ctx, actions, blockAt(s.dig));
       }
       if (s.dry) {
         // Both buckets in: the cells between the two sources fill by themselves.

@@ -504,3 +504,29 @@ test('R4 seed 2 wood search stops at the sixth successful empty leg', async () =
   assert.equal(walked, 6);
   assert.equal((await runSearchLeg({}, { legs: 4, distance: 164 }, leg)).facts.distance, 192);
 });
+
+
+test('seed 2 relocation exhausts its 200-block radial and 600-block total budgets', async () => {
+  const adaptation = createAdaptation();
+  const origin = new Vec3(24.5, 63, 10.5), position = origin.clone(), events = [];
+  const bot = { entity: { position }, blockAt: () => null };
+  const goal = createHomesteadGoal({ bot, origin, autonomous: true, actions: {
+    async goTo(_bot, ctx, target) {
+      assert.ok(ctx.pathArea(new Vec3(target.x, position.y, target.z)));
+      position.set(target.x, position.y, target.z);
+      return { ok: true };
+    },
+  } });
+  adaptation.promote('home_site', { position: origin }, 'relocate', 'fixture');
+  const ctx = { adapt: adaptation.scope(() => true), record: (type, data) => events.push({ type, ...data }),
+    perceive: () => ({ position: position.clone(), inventory: {}, isDay: true }) };
+  let stopped;
+  for (let i = 0; i < 64 && !stopped; i++) {
+    stopped = (await goal.run(ctx)).facts?.adaptation?.exhausted;
+  }
+  assert.ok(stopped);
+  const legs = events.filter(event => event.type === 'home_relocation_leg');
+  assert.ok(legs.length > 8);
+  assert.ok(legs.every(leg => leg.legs <= 8 && leg.total <= 600.01 && Math.hypot(leg.position.x - origin.x, leg.position.z - origin.z) <= 200));
+  assert.ok(events.some(event => event.type === 'home_relocation_budget'));
+});

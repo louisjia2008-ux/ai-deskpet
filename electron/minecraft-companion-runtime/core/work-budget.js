@@ -1,7 +1,7 @@
 'use strict';
 
 const { Vec3 } = require('vec3');
-const { isComplete, waiting } = require('./action-result');
+const { failure, isComplete, waiting } = require('./action-result');
 const { nightBudget, travelTicks } = require('./scheduling');
 const { wet } = require('./dry-route');
 const { countKey } = require('./knowledge');
@@ -9,7 +9,7 @@ const { countKey } = require('./knowledge');
 const FOOD_MOBS = ['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom'];
 const OPPORTUNITY_RANGE = 8;
 const OPPORTUNITY_MS = 20_000;
-const PROVISION_RANGE = 96;
+const EXPLORATION_RANGE = 96;
 const PROVISION_MS = 45_000;
 const horizontal = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
@@ -33,6 +33,17 @@ async function boundedWork(bot, ctx, { timeoutMs, check, allow = ctx.workArea, l
   return limitResult();
 }
 
+function explorationScope(ctx, origin, radius = EXPLORATION_RANGE) {
+  const work = ctx.workArea, path = ctx.pathArea;
+  return { workArea: p => horizontal(p, origin) <= radius - 4 && (!work || work(p)),
+    pathArea: p => horizontal(p, origin) <= radius - 1 && (!path || path(p)),
+    exploration: { origin, radius } };
+}
+
+function explorationExhausted(ctx) {
+  return failure('search_area_exhausted', ctx.exploration || {}, ctx);
+}
+
 function dryAt(bot, p) {
   const feet = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
   return [feet, feet.offset(0, 1, 0)].every(position => {
@@ -53,7 +64,7 @@ async function localOpportunity(bot, ctx, kind, position, run) {
   if (!opportunityAllowed(bot, state, position)) return waiting('work_budget');
   const from = bot.entity.position.clone(), started = Date.now();
   const details = { kind, distance: Math.round(position.distanceTo(from)) };
-  const allow = p => p.distanceTo(from) <= OPPORTUNITY_RANGE && dryAt(bot, p);
+  const allow = p => (!ctx.workArea || ctx.workArea(p)) && p.distanceTo(from) <= OPPORTUNITY_RANGE && dryAt(bot, p);
   const check = () => !bot.entity.isInWater && !nightBudget(ctx.perceive()).dusk && allow(bot.entity.position);
   ctx.record('opportunity_started', details);
   try {
@@ -66,16 +77,18 @@ async function localOpportunity(bot, ctx, kind, position, run) {
 function createForaging({ bot, skills, home = () => null, mobs = FOOD_MOBS, dropMatch, spare = () => false, targetGoal, prepare }) {
   const memory = {};
   let origin;
-  return async (ctx, radius = PROVISION_RANGE, { roam = true } = {}) => {
+  return async (ctx, radius = EXPLORATION_RANGE, { roam = true } = {}) => {
     const state = ctx.perceive(), position = state.position || bot.entity.position;
     origin ||= new Vec3(position.x, position.y, position.z);
-    const anchor = home() || origin;
+    const anchor = home() || ctx.exploration?.origin || origin;
     const { maxOutingDistance: outing, distanceHome } = nightBudget({ ...state, position }, anchor);
-    const leash = Math.min(PROVISION_RANGE, distanceHome + outing);
-    const allow = p => horizontal(p, anchor) <= leash - 6 && horizontal(p, position) <= outing;
-    const bodyLimit = distanceHome > leash ? distanceHome + 3 : leash;
-    const check = () => !nightBudget(ctx.perceive()).dusk && horizontal(bot.entity.position, anchor) <= bodyLimit;
-    return boundedWork(bot, ctx, { timeoutMs: PROVISION_MS, check, allow }, async attempt => {
+    const leash = Math.min(EXPLORATION_RANGE, distanceHome + outing);
+    const prior = ctx.workArea;
+    const allow = p => horizontal(p, position) <= outing && (!prior || prior(p));
+    const check = () => !nightBudget(ctx.perceive()).dusk && horizontal(bot.entity.position, anchor) <= leash;
+    ctx = { ...ctx, ...explorationScope({ ...ctx, workArea: allow }, anchor, leash), dryRoute: true };
+    if (distanceHome > EXPLORATION_RANGE) return explorationExhausted(ctx);
+    return boundedWork(bot, ctx, { timeoutMs: PROVISION_MS, check }, async attempt => {
       const prepared = await prepare?.(attempt);
       if (prepared && !isComplete(prepared)) return prepared;
       const hunted = await skills.huntOne(bot, attempt, { mobs, radius, dropMatch, accept: e => !spare(e), targetGoal });
@@ -101,4 +114,4 @@ function createOpportunisticHunt({ bot, skills, mobs, food, spare, backoff }) {
   };
 }
 
-module.exports = { boundedWork, createForaging, createOpportunisticHunt, localOpportunity, opportunityAllowed, FOOD_MOBS };
+module.exports = { boundedWork, createForaging, createOpportunisticHunt, localOpportunity, opportunityAllowed, FOOD_MOBS, explorationScope, explorationExhausted, EXPLORATION_RANGE };

@@ -20,7 +20,7 @@
 // The villagers still have to sleep in their beds once before they call golems:
 // the farm starts working after its first night.
 
-const { findDeviceSite, LIQUID, isAir, isSolid, guardDeviceCells, standingAt, goToStand } = require('./device-site');
+const { findDeviceSite, LIQUID, isAir, isSolid, guardDeviceCells, standingAt, goToStand, adoptDeviceSite, placeDevicePart, recordDevicePart } = require('./device-site');
 const { posKey: key } = require('../blacklist');
 const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
@@ -217,12 +217,7 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
     progress: () => (memory.farm ? inspect().done + (zombieIn() ? 1 : 0) + (sealed() ? 1 : 0) + villagers() + gained() : 0),
     async run(ctx) {
       if (memory.baseline === null) memory.baseline = iron();
-      if (!memory.farm) {
-        const farm = chooseIronFarmSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), bot.entity.position);
-        if (!farm) return { ok: false, reason: 'no_site' };
-        memory.farm = farm;
-        ctx.record('device_site', { kind: farm.kind, anchor: farm.anchor, facing: farm.facing });
-      }
+      if (!adoptDeviceSite(bot, ctx, memory, 'farm', chooseIronFarmSite)) return { ok: false, reason: 'no_site' };
       guardFarm();
       const f = memory.farm;
       // The zombie behind the slit can't reach the bot: never fight it.
@@ -237,12 +232,9 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
       if (s.nextPart) {
         const part = s.nextPart;
         if (!isAir(blockAt(part.position))) return dig(ctx, part.position); // wrong block or facing
-        const names = new Set([part.block, part.item || part.block]);
-        const toward = new Vec3(part.against.x - part.position.x, part.against.y - part.position.y, part.against.z - part.position.z);
-        const result = await skills.placeAt(bot, ctx, part.position, (n) => names.has(n), {
-          faces: [toward], stand: part.stand, verify: () => partOk(part), alsoClear: part.head ? [part.head] : [],
+        const result = await placeDevicePart(bot, ctx, skills, part, () => partOk(part), { acceptItem: true, stand: part.stand, alsoClear: part.head ? [part.head] : [],
         });
-        ctx.record('device_part', { part: part.key, ok: result.ok, reason: result.reason, facing: props(blockAt(part.position)).facing });
+        recordDevicePart(ctx, blockAt, part, result);
         return result;
       }
       if (s.dry) {

@@ -30,18 +30,18 @@ function groundAt(blockAt, x, z, top, bottom) {
   return { missing: true };
 }
 
-function evaluateSite(blockAt, corner, around, { variant = 'starter', protectedCell = () => false } = {}) {
+function evaluateSite(blockAt, corner, around, { variant = 'starter', protectedCell = () => false, ground = (x,z) => groundAt(blockAt, x, z, around.y + 10, around.y - 12) } = {}) {
   const size = variant === 'starter' ? SIZE : 5;
   const heights = [];
   for (let dx = -1; dx <= size; dx += 1) {
     for (let dz = -1; dz <= size; dz += 1) {
-      const ground = groundAt(blockAt, corner.x + dx, corner.z + dz, around.y + 10, around.y - 12);
+      const column = ground(corner.x + dx, corner.z + dz);
       const inside = dx >= 0 && dz >= 0 && dx < size && dz < size;
-      if (ground.y === undefined) {
-        if (inside || ground.liquid) return null; // water next to the walls floods the door
+      if (column.y === undefined) {
+        if (inside || column.liquid) return null; // water next to the walls floods the door
         continue;
       }
-      if (inside) heights.push(ground.y);
+      if (inside) heights.push(column.y);
     }
   }
   const counts = new Map();
@@ -102,19 +102,26 @@ function evaluateSite(blockAt, corner, around, { variant = 'starter', protectedC
 
 /** Best nearby site within `radius` of `around`, or null. */
 function chooseSite(blockAt, around, { radius = 32, step = 3, maxWork = 12, avoid = () => false, variant = 'starter',
-  protectedCell, access = () => ({}) } = {}) {
+  protectedCell, access = () => ({}), review } = {}) {
+  const columns = new Map();
+  const ground = (x,z) => {
+    const key = x + ',' + z;
+    if (!columns.has(key)) columns.set(key, groundAt(blockAt, x, z, center.y + 10, center.y - 12));
+    return columns.get(key);
+  };
   let best = null;
   const center = { x: Math.floor(around.x), y: Math.floor(around.y), z: Math.floor(around.z) };
   for (let dx = -radius; dx <= radius; dx += step) {
     for (let dz = -radius; dz <= radius; dz += step) {
       const half = variant === 'starter' ? Math.floor(SIZE / 2) : 2;
       const corner = { x: center.x + dx - half, z: center.z + dz - half };
-      const site = evaluateSite(blockAt, corner, center, { variant, protectedCell });
-      if (!site || site.fills + site.digs > maxWork || avoid(site.anchor)) continue;
-      if (!best || site.cost < best.cost) {
-        const route = access(createStarterHouse(site.anchor, site));
-        if (route) best = { ...site, route };
-      }
+      const site = evaluateSite(blockAt, corner, center, { variant, protectedCell, ground });
+      const reason = !site ? 'terrain' : avoid(site.anchor) ? 'restricted' : site.fills + site.digs > maxWork ? 'earthwork'
+        : best && site.cost >= best.cost ? 'higher_cost' : null;
+      if (reason) { review?.(site || { anchor: corner, variant }, reason); continue; }
+      const route = access(createStarterHouse(site.anchor, site));
+      review?.(site, route ? 'reachable' : 'dry_access');
+      if (route) best = { ...site, route };
     }
   }
   return best;

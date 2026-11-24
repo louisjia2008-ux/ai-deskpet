@@ -294,3 +294,24 @@ test('generic block collection retains its in-range behavior', async () => {
   const goal = createGatherBlocksGoal({ bot, count: 1, itemMatch: () => true, findTargets: () => [] });
   assert.deepEqual(await goal.run(ctx), { ok: false, reason: 'no_target_in_range' });
 });
+
+
+test('the reserve log goal discards the seed 2 target 270 blocks from home', async () => {
+  const { bot, ctx } = fixture();
+  const { explorationScope } = require('../core/work-budget');
+  const distant = { name: 'oak_log', position: new Vec3(270, 64, 0) };
+  const seen = [];
+  const goal = createGatherLogsGoal({ bot, count: 1, findTargets: () => [distant],
+    walk: async (_bot, attempt, _memory, { surface }) => {
+      assert.ok(surface.every(attempt.pathArea));
+      seen.push(...surface);
+      return { ok: false, reason: 'not_arrived' };
+    },
+    actions: { goToDig: async () => assert.fail('the outlying log must not be approached') },
+  });
+  Object.assign(ctx, explorationScope(ctx, new Vec3(0, 64, 0)));
+  const exhausted = await goal.run(ctx);
+  assert.equal(exhausted.kind, 'material');
+  assert.equal(exhausted.reason, 'search_area_exhausted');
+  assert.ok(seen.length && seen.every(p => Math.hypot(p.x,p.z) < 96));
+});

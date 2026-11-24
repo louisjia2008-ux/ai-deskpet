@@ -12,7 +12,7 @@
 //   6. otherwise                -> wait for the furnace, take the output chest's contents
 // The only memory kept across runs is the site and what was taken out.
 
-const { findDeviceSite, isAir, isSoft, partMatches, isSolid, guardDeviceCells, facingOf } = require('./device-site');
+const { findDeviceSite, isAir, isSoft, partMatches, isSolid, guardDeviceCells, adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, recordDevicePart } = require('./device-site');
 const { posKey: key } = require('../blacklist');
 const { factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
@@ -83,11 +83,7 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
   async function stepOff(ctx) {
     const a = memory.device.anchor;
     const away = new goals.GoalInvert(new goals.GoalNear(a.x, a.y + 1, a.z, 2.5));
-    await actions.goTo(bot, ctx, away, { timeoutMs: 15000, arrived: () => !overPit() });
-    if (!overPit()) return { ok: true };
-    const result = await actions.unstick(bot, ctx);
-    ctx.record('device_step_off', { result: isComplete(result) ? factsOf(result).moved : result.wait?.reason ?? result.reason });
-    return overPit() ? (result.wait ? result : { ok: false, reason: 'trapped_in_device' }) : { ok: true };
+    return stepOffDevice(bot, ctx, actions, away, overPit);
   }
 
   function inspect() {
@@ -126,13 +122,8 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
     isDone: () => Boolean(memory.device) && inspect().nextPart === null && memory.taken >= count,
     progress: () => (memory.device ? inspect().built + memory.taken : 0),
     async run(ctx) {
-      if (!memory.device) {
-        const device = chooseSmelterSite((x, y, z) => bot.blockAt(new Vec3(x, y, z)), bot.entity.position,
-          { avoid: q => avoid?.(q) || bot.companionPlayerBlock?.(q) || targets.avoids(ctx, q) });
-        if (!device) return { ok: false, reason: 'no_site' };
-        memory.device = device;
-        ctx.record('device_site', { kind: device.kind, anchor: device.anchor, facing: device.facing });
-      }
+      if (!adoptDeviceSite(bot, ctx, memory, 'device', chooseSmelterSite,
+        { avoid: q => avoid?.(q) || bot.companionPlayerBlock?.(q) || targets.avoids(ctx, q) })) return { ok: false, reason: 'no_site' };
       guardDevice();
       const d = memory.device;
       const s = inspect();
@@ -142,20 +133,12 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
       if (s.toDig.length || s.nextPart) {
         if (overPit() && s.toDig.length) return targets.run(ctx, 'step_off', s.toDig[0], () => stepOff(ctx), { relocate: relocation });
         const target = s.toDig[0] || (s.nextPart && !isAir(blockAt(s.nextPart.position)) ? s.nextPart.position : null);
-        if (target) {
-          return targets.run(ctx, 'dig', target, async () => {
-            const block = blockAt(target);
-            if (!block) return { ok: false, reason: 'unloaded' };
-            const reach = await actions.goToDig(bot, ctx, block);
-            return reach.ok ? actions.digBlock(bot, ctx, block) : reach;
-          }, { relocate: relocation });
-        }
+        if (target) return targets.run(ctx, 'dig', target,
+          () => digDeviceCell(bot, ctx, actions, blockAt(target)), { relocate: relocation });
         const part = s.nextPart;
-        const toward = new Vec3(part.against.x - part.position.x, part.against.y - part.position.y, part.against.z - part.position.z);
-        const result = await targets.run(ctx, 'part', part.position, () => skills.placeAt(bot, ctx, part.position, (n) => n === part.block, {
-          faces: [toward], sneak: Boolean(part.sneak), verify: () => partOk(part),
-        }), { cells: [part.against], tag: `${part.block}:${d.facing}`, relocate: relocation });
-        ctx.record('device_part', { part: part.key, ok: result.ok, reason: result.reason, facing: facingOf(blockAt(part.position)) });
+        const result = await targets.run(ctx, 'part', part.position, () => placeDevicePart(bot, ctx, skills, part, () => partOk(part), { sneak: Boolean(part.sneak) }),
+          { cells: [part.against], tag: `${part.block}:${d.facing}`, relocate: relocation });
+        recordDevicePart(ctx, blockAt, part, result);
         return result;
       }
 

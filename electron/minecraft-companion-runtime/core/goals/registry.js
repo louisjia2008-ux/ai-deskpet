@@ -48,22 +48,28 @@ function avoidFor(memory, home, self) {
   };
 }
 
+const stockWork = (stock, key, target, kb) => {
+  const remaining = Math.max(0, target - countKey(key, stock, kb));
+  return { remaining, readiness: 1 - remaining / target };
+};
+
 function createReserveCards(bot, kb, food, inOverworld) {
   const hasRoom = (state) => state.freeSlots !== 0 && inOverworld();
-  const cobble = (state) => countKey('cobblestone', state.inventory, kb);
   const faces = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
   return [food, {
-    id: 'stock_wood', stage: 0, risk: 'medium', requires: hasRoom,
-    demand: (state) => Math.max(0, 1 - countKey('log', state.inventory, kb) / 64),
+    id: 'stock_wood', stage: 0, risk: 'medium', requires: hasRoom, bounded: true,
+    demand: (state) => stockWork(state.inventory, 'log', 64, kb).remaining / 64,
+    work: (_state, _memory, stock) => stockWork(stock, 'log', 64, kb),
     create: () => createGatherLogsGoal({ bot, count: 1 }),
   }, {
-    id: 'stock_cobblestone', stage: 0, risk: 'medium',
+    id: 'stock_cobblestone', stage: 0, risk: 'medium', bounded: true,
     requires: (state) => hasRoom(state) && countKey('pickaxe', state.inventory, kb) > 0,
-    demand: (state) => Math.max(0, 1 - cobble(state) / 64),
+    demand: (state) => stockWork(state.inventory, 'cobblestone', 64, kb).remaining / 64,
+    work: (_state, _memory, stock) => stockWork(stock, 'cobblestone', 64, kb),
     create: (memory) => {
       const home = homeOf(memory);
       const protect = home && avoidFor(memory, home);
-      return createGatherBlocksGoal({ bot, name: 'stock_cobblestone', count: 1, searchRadius: 20,
+      return createGatherBlocksGoal({ bot, name: 'stock_cobblestone', count: 1,
         itemMatch: kb.cobblestone.match, blockMatch: kb.cobblestone.sources[0].blocks,
         acceptTarget(block) {
           const p = block.position;
@@ -80,7 +86,7 @@ function createReserveCards(bot, kb, food, inOverworld) {
 function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = FOOD_TARGET, progression = false } = {}) {
   // One homestead for the whole run: it holds the chosen site and which
   // furniture has been used, so every later pick continues the same house.
-  const home = (memory) => (memory.homestead ||= createHomesteadGoal({ bot, autonomous: progression, ...homestead }));
+  const home = (memory) => (memory.homestead ||= createHomesteadGoal({ bot, origin: memory.explorationOrigin, autonomous: progression, ...homestead }));
 
   const cards = [
     {
@@ -94,7 +100,8 @@ function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = 
     {
       id: 'stock_food',
       stage: progression ? 0 : 1,
-      risk: 'medium',
+      risk: 'medium', bounded: true,
+      work: (_state, _memory, stock) => stockWork(stock, 'food', foodTarget, kb),
       demand: (state) => {
         const food = countKey('food', state.inventory, kb);
         return food < 4 ? 1 + (4 - food) / 16 : Math.max(0, (1 - food / foodTarget) * 0.75);
@@ -136,6 +143,9 @@ function createDefaultCards({ bot, kb = KNOWLEDGE, homestead = {}, foodTarget = 
 
   if (progression) {
     const route = createProgression({ bot, kb, homeOf, avoidFor });
+    const outsideScope = new Set(['return_home', 'nether_supplies', 'nether_fortress', 'nether_return',
+      'ender_pearls', 'end_supplies', 'stronghold', 'dragon_return']);
+    for (const card of [...cards, ...route.cards]) card.bounded = !outsideScope.has(card.id);
     const overworld = () => !['the_nether', 'the_end'].includes(String(bot.game?.dimension).replace('minecraft:', ''));
     cards[1].requires = overworld;
     for (const card of cards.filter(card => card.local)) {

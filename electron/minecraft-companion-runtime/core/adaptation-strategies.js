@@ -1,6 +1,7 @@
 'use strict';
 
 const { goals } = require('mineflayer-pathfinder');
+const { EXPLORATION_RANGE } = require('./work-budget');
 const { blockTarget } = require('./target-recovery');
 const { complete, resultFrom, failure, factsOf, isComplete } = require('./action-result');
 
@@ -17,7 +18,8 @@ async function outwardLeg(bot, ctx, actions, memory, away, { distance = 24, time
     end = point(angle);
   }
   const { x, z } = end;
-  ctx.record?.('adaptation_route', { x, z, heading: turn, bearing: angle });
+  if ((ctx.workArea && !ctx.workArea(end)) || (around && !around(end))) return failure('search_area_exhausted', ctx.exploration || {}, ctx);
+  ctx.record?.(ctx.exploration ? 'task_explore' : 'adaptation_route', { ...ctx.exploration, from, x, z, heading: turn, bearing: angle });
   const goal = new goals.GoalNearXZ(x, z, 3);
   const result = resultFrom(await actions.goTo(bot, ctx, goal, { timeoutMs, retryNoProgress: false }), ctx, bot);
   if (result.wait || result.kind === 'start' || result.kind === 'interrupted') return result;
@@ -46,12 +48,12 @@ async function gatherWood({ bot, ctx, skills, actions, memory, anchor, blocks, d
   const origin = anchor || (memory.woodOrigin ||= bot.entity.position.clone());
   const location = { position: origin, target: 'log' };
   const spec = (p) => blockTarget(bot, 'wood', 'gather_log', p, { cells: [p.offset(0, -1, 0)] });
-  const around = p => Math.hypot(p.x - origin.x, p.z - origin.z) <= 128;
+  const around = p => Math.hypot(p.x - origin.x, p.z - origin.z) <= EXPLORATION_RANGE - 4 && (!ctx.workArea || ctx.workArea(p));
   const avoid = p => !around(p) || exclude?.(p) || ctx.adapt.avoids('hard_route', p) || ctx.adapt.targets.avoid(spec(p));
   return ctx.adapt.run('wood', location, async (method, plan, observe) => {
     const near = method === 'near_tree';
     const found = resultFrom(await skills.gatherOne(bot, ctx, { blocks, dropMatch, exclude: avoid,
-      radius: near ? 48 : 128, destination: { spec, observe } }), ctx, bot);
+      radius: near ? 48 : EXPLORATION_RANGE, destination: { spec, observe } }), ctx, bot);
     const id = `${plan.key}:${plan.revision}:${method}`;
     if (found.progress) { memory.woodRoute = null; return found; }
     if (near || ['start', 'interrupted'].includes(found.kind) || found.facts?.target || found.facts?.adaptation || !['no_target_in_range', 'not_arrived',
