@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import { API_VERSION, MAX_IPC_BYTES } from '../../shared';
 import type { ProviderConfig, ResolvedLocale } from '../../shared';
+import { ConsolidationCandidateEditor } from './ConsolidationCandidateEditor';
 import { consolidationCandidateSchema } from '../../shared/consolidation';
 import type { ConsolidationApplyInput, ConsolidationBatch, ConsolidationEditInput, ConsolidationPreviewInput, ConsolidationSource } from '../../shared/consolidation';
 import './memory-consolidation.css';
@@ -16,7 +17,7 @@ const copy = {
     input: 'Estimated complete input tokens', limit: 'Maximum input tokens', output: 'Reserved output tokens', destination: 'Destination',
     generate: 'Generate candidate once', once: 'One no-tool E-P2 job, one generation attempt, no automatic retry. Leaving this page does not cancel it. Requests that may have been sent are not regenerated after restart.',
     empty: 'No consolidation batches in this conversation.', batches: 'Saved batches', review: 'Review batch', reviewTitle: 'Consolidation candidate review',
-    version: 'Candidate version', candidateJson: 'Candidate JSON', editorNote: 'Edit this structured candidate while comparing every claim with the original sources. sourceIds are claims of support, not semantic proof. Editing cannot authorize a new memory fact.',
+    version: 'Candidate version', candidateJson: 'Candidate JSON', editorNote: 'Check each item against the original memories below. A ticked “based on” is a claim, not proof; do not add facts the originals do not contain.',
     save: 'Save candidate edit', dirty: 'Edits have not been saved. Save them and review the resulting version before confirming.',
     reviewed: 'I compared this version with every source, including conditions and conflicts', enable: 'Use this summary for eligible requests',
     enableNote: 'Enabling is an explicit representation choice, not proof of accuracy or token savings. The host uses a summary only when the selected coverage, current dependencies and request budget allow it; otherwise current valid originals remain available.',
@@ -43,7 +44,7 @@ const copy = {
     input: '完整输入估算 token', limit: '输入 token 上限', output: '预留输出 token', destination: '目的地',
     generate: '仅生成一次候选', once: '复用一个无工具 E-P2 job，最多一次生成，不自动重试。离开本页不会取消；重启后不会重新生成可能已发送的请求。',
     empty: '此会话暂无整理批次。', batches: '已保存批次', review: '审阅批次', reviewTitle: '整理候选审阅',
-    version: '候选版本', candidateJson: '候选 JSON', editorNote: '编辑结构化候选时，请逐项对照原文。sourceIds 是支持来源的声明，不代表语义已核验；编辑不授权新增记忆事实。',
+    version: '候选版本', candidateJson: '候选 JSON', editorNote: '请对照下面的原记忆逐条核对。勾选的“依据”只是声明，不代表已核验；不要加入原记忆里没有的事实。',
     save: '保存候选编辑', dirty: '编辑尚未保存。请先保存，再审阅保存后的版本并确认。',
     reviewed: '我已逐项对照本版本与全部来源，包括限定条件及冲突', enable: '在允许的请求中使用此摘要',
     enableNote: '启用是明确的表示选择，不代表已证明准确性或 token 收益。DeskPet仅在覆盖范围、当前依赖和请求预算允许时使用摘要，否则保留当前有效原文路径。',
@@ -187,9 +188,11 @@ export const MemoryConsolidation = ({ providers, sessionId, locale, openBatchId 
       </section>
       <p>{text.once}</p>{batch.status === 'draft' && <button type="button" disabled={frozen} onClick={() => void perform({ kind: 'generate', payload: { id: batch.id, operationId: crypto.randomUUID() } })}>{text.generate}</button>}
       {hasCandidate && batch.candidate ? <>
-        <p>{text.editorNote}</p><div className="consolidation-segments">{batch.candidate.segments.map((segment, index) => <blockquote key={index}><p>{segment.text}</p><small>{segment.sourceIds.join(', ')}</small></blockquote>)}</div>
-        <dl><dt>{text.covered}</dt><dd>{batch.candidate.coveredMemoryIds.join(', ')}</dd><dt>{text.uncovered}</dt><dd>{batch.candidate.uncoveredMemoryIds.join(', ') || text.none}</dd><dt>{text.conflicts}</dt><dd>{batch.candidate.conflicts.length ? batch.candidate.conflicts.join('\n') : text.none}</dd></dl>
-        <label>{text.candidateJson}<textarea aria-label={text.candidateJson} spellCheck={false} rows={14} maxLength={120_000} disabled={frozen || batch.status !== 'review'} value={editor} onChange={(event) => { setEditor(event.target.value); setReviewed(false); setEnable(false); }} /></label>
+        <p>{text.editorNote}</p>
+        <ConsolidationCandidateEditor value={editor} sources={batch.sources} disabled={frozen || batch.status !== 'review'} zh={locale === 'zh-CN'}
+          onChange={next => { setEditor(next); setReviewed(false); setEnable(false); }} />
+        <details className="settings-more"><summary>{locale === 'zh-CN' ? '技术详情（结构化原文）' : 'Technical details (structured form)'}</summary>
+        <label>{text.candidateJson}<textarea aria-label={text.candidateJson} spellCheck={false} rows={14} maxLength={120_000} disabled={frozen || batch.status !== 'review'} value={editor} onChange={(event) => { setEditor(event.target.value); setReviewed(false); setEnable(false); }} /></label></details>
         {dirty && <p role="status">{text.dirty}</p>}{batch.status === 'review' && <button type="button" className="secondary" disabled={frozen || !dirty} onClick={saveEdit}>{text.save}</button>}
         {!complete && <p>{text.fullCoverage}</p>}
         {batch.status === 'review' && <div className="consolidation-confirm">
