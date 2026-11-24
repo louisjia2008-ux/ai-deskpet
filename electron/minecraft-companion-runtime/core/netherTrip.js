@@ -13,9 +13,11 @@ const { Vec3 } = require('vec3');
 const nether = require('./nether');
 const end = require('./end');
 const { abortError } = require('./confirm');
+const { integerBox } = require('./geometry');
 const { RaycastIterator } = require('prismarine-world').iterators;
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
+const CARDINAL = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const { fail } = require('./action-result');
 // Runtime blocks expose their actual collision shapes. A fence or half slab
 // cannot stand in for the full-height floor and walls admitted by this route.
 const fullCube = (block) => block?.boundingBox === 'block' && (!block.shapes || (block.shapes.length === 1
@@ -227,6 +229,17 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     return null;
   }
 
+  function* adjacentStands(cell, valid) {
+    for (const [dx, dz] of CARDINAL) {
+      for (const dy of [0, 1, -1]) {
+        const p = cell.offset(dx, dy, dz);
+        if (!valid(p, dy)) continue;
+        yield p;
+        break;
+      }
+    }
+  }
+
   function dryPathTo(target) {
     const start = bot.entity.position.floored();
     const initialFailure = dryFootFailure(start) || dryFootFailure(target);
@@ -241,18 +254,11 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
         for (let at = key; at !== null; at = seen.get(at).parent) path.unshift(seen.get(at).cell);
         return { ok: true, path };
       }
-      const neighbours = [];
-      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        for (const dy of [0, 1, -1]) {
-          const p = cell.offset(dx, dy, dz);
-          if (seen.has(cellKey(p)) || p.distanceTo(start) > 96 || dryFootFailure(p)) continue;
-          // One block up needs headroom above the takeoff body as well.
-          if (dy === 1 && !openCell(cell.offset(0, 2, 0))) continue;
-          if (dy === -1 && !openCell(p.offset(0, 2, 0))) continue;
-          neighbours.push(p);
-          break;
-        }
-      }
+      const neighbours = [...adjacentStands(cell, (p, dy) => {
+        if (seen.has(cellKey(p)) || p.distanceTo(start) > 96 || dryFootFailure(p)) return false;
+        // One block up needs headroom above the takeoff body as well.
+        return dy === 1 ? openCell(cell.offset(0, 2, 0)) : dy === 0 || openCell(p.offset(0, 2, 0));
+      })];
       neighbours.sort((a, b) => a.distanceTo(target) - b.distanceTo(target));
       for (const p of neighbours) {
         seen.set(cellKey(p), { cell: p, parent: cellKey(cell) });
@@ -369,12 +375,12 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     if (index < 0) {
       const landing = route[route.length - 1];
       ctx.record('bridge_return_anchor', { at: cellKey(bot.entity.position.floored()), to: cellKey(landing), cells: route.length });
-      const arrived = walkOnly ? await walkDryRoute(ctx, new Vec3(landing.x, landing.y, landing.z))
-        : await actions.goNear(bot, ctx, new Vec3(landing.x, landing.y, landing.z), 0, { timeoutMs: 120000 });
+      const target = new Vec3(landing.x, landing.y, landing.z);
+      const arrived = await (walkOnly ? walkDryRoute(ctx, target) : actions.goNear(bot, ctx, target, 0, { timeoutMs: 120000 }));
       if (ctx.signal?.aborted) throw abortError(ctx.signal);
       if (!arrived.ok) return arrived;
       if (!sameBridgeCell(landing, bot.entity.position.floored()) || !bot.entity.onGround) {
-        return fail(arrived.ok ? 'bridge_anchor_not_reached' : arrived.reason);
+        return fail('bridge_anchor_not_reached');
       }
       index = route.length - 1;
     }
@@ -470,13 +476,10 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     const along = alongX ? [1, 0] : [0, 1];
     const faces = alongX ? [[0, 1], [0, -1]] : [[1, 0], [-1, 0]];
     const cells = [];
-    for (let u = -2; u <= 2; u += 1) {
-      for (const [fx, fz] of faces) {
-        for (let d = 1; d <= 2; d += 1) {
-          const p = bottom.offset(along[0] * u + fx * d, 0, along[1] * u + fz * d);
-          if (/^lava$/.test(bot.blockAt(p)?.name || '') && bot.blockAt(p.offset(0, -1, 0))?.boundingBox === 'block') cells.push(p);
-        }
-      }
+    for (const [u, face, d] of integerBox([-2, 2], [0, 1], [1, 2])) {
+      const [fx, fz] = faces[face];
+      const p = bottom.offset(along[0] * u + fx * d, 0, along[1] * u + fz * d);
+      if (/^lava$/.test(bot.blockAt(p)?.name || '') && bot.blockAt(p.offset(0, -1, 0))?.boundingBox === 'block') cells.push(p);
     }
     if (!cells.length) return false;
     const here = bot.entity.position;
@@ -542,7 +545,7 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     for (const cell of [ahead, ahead.offset(0, 1, 0)]) {
       const block = bot.blockAt(cell);
       if (!block) return fail('bridge_guard_unknown');
-      if (/fire|lava|water|magma|campfire|cactus|powder_snow|sweet_berry_bush/.test(block.name)) return fail('bridge_guard_unsafe');
+      if (GUARDED_HAZARD.test(block.name)) return fail('bridge_guard_unsafe');
       if (phase !== 'before_clear' && block.boundingBox !== 'empty') return fail('bridge_guard_blocked');
     }
     if (phase !== 'before_clear') {
@@ -676,16 +679,15 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     }
     const width = bot.entity.width ?? .6, height = bot.entity.height ?? 1.8;
     if (![width,height].every(Number.isFinite) || width <= 0 || width > 1 || height <= 0 || height > 2) return no('bridge_body_shape_unknown');
-    for (let x=Math.floor(actual.x-width/2+1e-8);x<=Math.floor(actual.x+width/2-1e-8);x++) {
-      for (let z=Math.floor(actual.z-width/2+1e-8);z<=Math.floor(actual.z+width/2-1e-8);z++) {
-        const cell = new Vec3(x,feet.y,z), floor = bot.blockAt(cell.offset(0,-1,0));
-        if (!strictFull(floor)) return no(floor ? 'bridge_support_shape_unknown' : 'bridge_support_unknown');
-        const dry = dryFootFailure(cell); if (dry) return no(dry);
-        for (let y=feet.y;y<=Math.floor(actual.y+height-1e-8);y++) {
-          const body = bot.blockAt(new Vec3(x,y,z));
-          if (!body || body.boundingBox !== 'empty' || body.shapes?.length !== 0 || GUARDED_HAZARD.test(body.name)) {
-            return no(!body ? 'bridge_body_unknown' : 'bridge_body_unsafe');
-          }
+    const span = n => [Math.floor(n - width / 2 + 1e-8), Math.floor(n + width / 2 - 1e-8)];
+    for (const [x, z] of integerBox(span(actual.x), span(actual.z))) {
+      const cell = new Vec3(x, feet.y, z), floor = bot.blockAt(cell.offset(0, -1, 0));
+      if (!strictFull(floor)) return no(floor ? 'bridge_support_shape_unknown' : 'bridge_support_unknown');
+      const dry = dryFootFailure(cell); if (dry) return no(dry);
+      for (let y = feet.y; y <= Math.floor(actual.y + height - 1e-8); y++) {
+        const body = bot.blockAt(new Vec3(x, y, z));
+        if (!body || body.boundingBox !== 'empty' || body.shapes?.length !== 0 || GUARDED_HAZARD.test(body.name)) {
+          return no(!body ? 'bridge_body_unknown' : 'bridge_body_unsafe');
         }
       }
     }
@@ -721,7 +723,7 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     ctx.record('bridge_guard_plan_rejected', { at: cellKey(feet), shore: cellKey(shore), reason: planned.reason, cell: planned.cell });
     if (!memory.netherPortal || feet.distanceTo(memory.netherPortal) > 8) return planned;
     const choices = [];
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (const [dx, dz] of CARDINAL) {
       const vector = new Vec3(dx, 0, dz); const next = feet.plus(vector);
       if ([next, next.offset(0, 1, 0)].some((p) => { const b = bot.blockAt(p); return !b || !AIR.test(b.name); })) continue;
       const candidate = guardPlan({ feet, ahead: next, dir: vector });
@@ -885,17 +887,11 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     const queue = [start];
     let natural = 0;
     while (queue.length) {
-      const c = queue.shift();
-      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        for (const dy of [0, 1, -1]) {
-          const n = c.offset(dx, dy, dz);
-          if (seen.has(cellKey(n)) || !standable(n)) continue;
-          seen.set(cellKey(n), n);
-          if (!LAID.test(bot.blockAt(n.offset(0, -1, 0))?.name || '')) natural += 1;
-          if (natural > limit || seen.size > 400) return null;
-          queue.push(n);
-          break;
-        }
+      for (const p of adjacentStands(queue.shift(), n => !seen.has(cellKey(n)) && standable(n))) {
+        seen.set(cellKey(p), p);
+        if (!LAID.test(bot.blockAt(p.offset(0, -1, 0))?.name || '')) natural += 1;
+        if (natural > limit || seen.size > 400) return null;
+        queue.push(p);
       }
     }
     return [...seen.values()];
@@ -911,7 +907,7 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     const keys = new Set(cells.map(cellKey));
     let drops = 0;
     for (const c of cells) {
-      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      for (const [dx, dz] of CARDINAL) {
         const n = c.offset(dx, 0, dz);
         if (keys.has(cellKey(n)) || !openCell(n)) continue;
         let depth = 0;
@@ -927,16 +923,14 @@ function createPortalTrip({ bot, memory, actions = defaultActions, walkOnly = fa
     const feet = bot.entity.position.floored();
     const keys = new Set(cells.map(cellKey));
     let best = null;
-    for (let dx = -radius; dx <= radius; dx += 1) {
-      for (let dz = -radius; dz <= radius; dz += 1) {
-        const d = Math.hypot(dx, dz);
-        if (d < 3 || d > radius || (best && d >= best.d)) continue;
-        const p = feet.offset(dx, -1, dz);
-        if (keys.has(cellKey(p.offset(0, 1, 0)))) continue;
-        if (memory.ledgeBlocked?.has(cellKey(p))) continue;
-        if (!landingAt(p.offset(0, 1, 0))) continue;
-        best = { p, d };
-      }
+    for (const [dx, dz] of integerBox([-radius, radius], [-radius, radius])) {
+      const d = Math.hypot(dx, dz);
+      if (d < 3 || d > radius || (best && d >= best.d)) continue;
+      const p = feet.offset(dx, -1, dz);
+      if (keys.has(cellKey(p.offset(0, 1, 0)))) continue;
+      if (memory.ledgeBlocked?.has(cellKey(p))) continue;
+      if (!landingAt(p.offset(0, 1, 0))) continue;
+      best = { p, d };
     }
     return best?.p || null;
   }

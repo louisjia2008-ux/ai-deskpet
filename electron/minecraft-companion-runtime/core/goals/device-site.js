@@ -44,8 +44,12 @@ function adoptDeviceSite(bot, ctx, memory, slot, choose, options) {
   return true;
 }
 
-async function digDeviceCell(bot, ctx, actions, block, beforeDig) {
-  if (!block) return { ok: false, reason: 'unloaded' };
+function digDeviceCell(bot, ctx, actions, block, beforeDig) {
+  if (!block) return Promise.resolve({ ok: false, reason: 'unloaded' });
+  return reachAndDig(bot, ctx, actions, block, beforeDig);
+}
+
+async function reachAndDig(bot, ctx, actions, block, beforeDig) {
   const reach = await actions.goToDig(bot, ctx, block);
   if (!reach.ok) return reach;
   return beforeDig?.() || actions.digBlock(bot, ctx, block);
@@ -106,6 +110,30 @@ function validDeviceLayers(blockAt, ...layers) {
   return layers.every(([cells, check]) => cells.every(p => check(blockAt(p.x, p.y, p.z))));
 }
 
+function layeredDeviceSite(create, layers, defaults, footprint) {
+  const evaluate = (blockAt, anchor, facing) => {
+    const site = create(anchor, facing);
+    for (const layer of layers(site)) if (!validDeviceLayers(blockAt, layer)) return null;
+    return site;
+  };
+  const choose = (blockAt, around, options = {}) => {
+    const { radius = defaults.radius } = options;
+    const avoid = footprint && options.avoid;
+    const accept = avoid && (site => !footprint(site).some(avoid));
+    return findDeviceSite(blockAt, around, { ...defaults, radius, evaluate, accept });
+  };
+  return { evaluate, choose };
+}
+
+function firstDeviceGround(blockAt, x, z, top, bottom, soft) {
+  for (let y = top; y >= bottom; y -= 1) {
+    const block = blockAt(x, y, z);
+    if (!block) break;
+    if (!soft(block)) return y;
+  }
+  return null;
+}
+
 function standingAt(bot, p, tolerance = 0.5) {
   const { x, y, z } = bot.entity.position;
   return Math.floor(x) === p.x && Math.floor(z) === p.z && Math.abs(y - p.y) < tolerance;
@@ -120,28 +148,24 @@ async function goToStand(bot, ctx, actions, p, timeoutMs, tolerance) {
 }
 
 // Inspect each column's highest usable layer and break score ties in scan order.
-function findDeviceSite(blockAt, around, { radius, step = 1, soft = isSoft, avoidFeet = false, evaluate, cost = () => 0 }) {
+function findDeviceSite(blockAt, around, { radius, step = 1, soft = isSoft, avoidFeet = false, evaluate, accept, cost = () => 0 }) {
   const x = Math.floor(around.x), y = Math.floor(around.y), z = Math.floor(around.z);
   let best = null, bestScore = Infinity;
   for (let dx = -radius; dx <= radius; dx += step) for (let dz = -radius; dz <= radius; dz += step) {
-    for (let top = y + 3; top >= y - 4; top--) {
-      const block = blockAt(x + dx, top, z + dz);
-      if (!block) break;
-      if (soft(block)) continue;
-      const anchor = { x: x + dx, y: top, z: z + dz };
-      const dist = Math.hypot(dx, dz);
-      const approach = dist + Math.abs(top + 1 - y) * 2 + (avoidFeet && dist < 3 ? 6 : 0);
-      for (const facing of Object.keys(FACINGS)) {
-        const site = evaluate(blockAt, anchor, facing);
-        if (!site) continue;
-        const score = cost(site) + approach;
-        if (score < bestScore) { best = site; bestScore = score; }
-      }
-      break;
+    const top = firstDeviceGround(blockAt, x + dx, z + dz, y + 3, y - 4, soft);
+    if (top === null) continue;
+    const anchor = { x: x + dx, y: top, z: z + dz };
+    const dist = Math.hypot(dx, dz);
+    const approach = dist + Math.abs(top + 1 - y) * 2 + (avoidFeet && dist < 3 ? 6 : 0);
+    for (const facing of Object.keys(FACINGS)) {
+      const site = evaluate(blockAt, anchor, facing);
+      if (!site || (accept && !accept(site))) continue;
+      const score = cost(site) + approach;
+      if (score < bestScore) { best = site; bestScore = score; }
     }
   }
   return best;
 }
 
-module.exports = { findDeviceSite, LIQUID, isAir, isSoft, isSolid, facingOf, partAccepts, partMatches, guardDeviceCells, standingAt, goToStand, validDeviceLayers,
-  adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, finishDevicePart, swimOutOfDevice, digFromBeside, stepBeside, TERRAIN, TUNNEL };
+module.exports = { findDeviceSite, firstDeviceGround, LIQUID, isAir, isSoft, isSolid, facingOf, partAccepts, partMatches, guardDeviceCells, standingAt, goToStand, validDeviceLayers, layeredDeviceSite,
+  adoptDeviceSite, digDeviceCell, reachAndDig, stepOffDevice, placeDevicePart, finishDevicePart, swimOutOfDevice, digFromBeside, stepBeside, TERRAIN, TUNNEL };

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { TextDecoder } = require('node:util');
+const { integerBox } = require('./geometry');
 const { positionKey } = require('./survey-plan-rules');
 
 const CHANNEL = 'deskpet:plan';
@@ -366,11 +367,11 @@ function installSurveyPlanReceiver(bot, { ledgerDir, mode = 'dry_run', observe =
   bot.companionNearPlayerBuild = (p) => {
     if (!p || protectedDimension !== dimension()) return false;
     if (protectionOverflow) return true;
-    for (let x = Math.floor((p.x - clearance) / 16); x <= Math.floor((p.x + clearance) / 16); x += 1) {
-      for (let z = Math.floor((p.z - clearance) / 16); z <= Math.floor((p.z + clearance) / 16); z += 1) {
-        for (const cell of playerBlocks.get(`${x},${z}`) || []) {
-          if (Math.hypot(x * 16 + (cell & 15) - p.x, z * 16 + ((cell >> 4) & 15) - p.z) <= clearance) return true;
-        }
+    const xChunks = [Math.floor((p.x - clearance) / 16), Math.floor((p.x + clearance) / 16)];
+    const zChunks = [Math.floor((p.z - clearance) / 16), Math.floor((p.z + clearance) / 16)];
+    for (const [x, z] of integerBox(xChunks, zChunks)) {
+      for (const cell of playerBlocks.get(`${x},${z}`) || []) {
+        if (Math.hypot(x * 16 + (cell & 15) - p.x, z * 16 + ((cell >> 4) & 15) - p.z) <= clearance) return true;
       }
     }
     return false;

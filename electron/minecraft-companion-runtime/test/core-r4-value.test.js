@@ -3,12 +3,14 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { EventEmitter } = require('node:events');
+const { Vec3 } = require('vec3');
+const actions = require('../core/actions');
 const { chooseNext, createDirector } = require('../core/director');
 const { stepRetryAt } = require('../core/planner');
 const { createDefaultCards } = require('../core/goals/registry');
 const { complete, failure } = require('../core/action-result');
 
-function fixture(cards, state, bot) {
+function fixture(cards, state, bot, memory) {
   let at = 0, goal, governor, generation = 0, director;
   const events = [];
   const brain = {
@@ -24,7 +26,7 @@ function fixture(cards, state, bot) {
       director.handleEvent({ type: 'goal_cleared', goal: previous.name, generation: previous.generation, reason });
     },
   };
-  director = createDirector({ brain, bot, cards, stageOf: () => 1, now: () => at, idleMs: 0,
+  director = createDirector({ brain, bot, memory, cards, stageOf: () => 1, now: () => at, idleMs: 0,
     perceive: () => state, onEvent: event => events.push(event) });
   director.enable();
   function yieldGoal(fields) {
@@ -35,7 +37,7 @@ function fixture(cards, state, bot) {
   return { director, events, at: next => { at = next; }, yieldGoal, step: (step, result) => governor.stepOutcome(step, result, () => {}),
     planning: () => governor.planning(), boundary: result => governor.outcome(result, 1_000),
     async run(work) {
-      const ctx = { perceive: () => state };
+      const ctx = { perceive: () => state, record: (type, fields) => events.push({ type, ...fields }) };
       return await governor.before(ctx) || governor.run(ctx, work);
     } };
 }
@@ -235,4 +237,35 @@ test('direct body movements in a bounded card also stop before 96 blocks from ho
   assert.equal(result.kind, 'material');
   assert.equal(result.reason, 'search_area_exhausted');
   assert.equal(bot.listenerCount('physicsTick'), 0);
+});
+
+
+test('R4.2 seed 2 returns to the last relocation anchor before searching', async (t) => {
+  const relocationAnchor = new Vec3(102, 72, 81);
+  const position = relocationAnchor.offset(110, 40, 0);
+  const bot = Object.assign(new EventEmitter(), { entity: { position } });
+  const state = { ...day, position };
+  const memory = { explorationOrigin: new Vec3(24, 63, 10), homestead: { memory: { relocationAnchor } } };
+  const run = fixture([card('stock_wood', { bounded: true })], state, bot, memory);
+  let calls = 0;
+  t.mock.method(actions, 'goTo', async (_bot, _ctx, goal, options) => {
+    calls++;
+    assert.equal(goal.isEnd(relocationAnchor.offset(88, 40, 0)), true);
+    assert.equal(goal.isEnd(relocationAnchor.offset(89, 40, 0)), false);
+    assert.equal(options.timeoutMs, 30000);
+    if (calls === 2) return failure('path_timeout');
+    position.x = relocationAnchor.x + 86;
+    return complete();
+  });
+  assert.equal(run.director.tick(), 'stock_wood');
+  assert.equal((await run.run(ctx => {
+    assert.equal(ctx.exploration.anchorSource, 'relocation');
+    assert.ok(ctx.pathArea(position));
+    return complete();
+  })).ok, true);
+  position.x = relocationAnchor.x + 110;
+  const denied = await run.run(() => assert.fail('no search outside scope'));
+  assert.equal(denied.kind, 'environment');
+  assert.equal(denied.facts.distance, 110);
+  assert.deepEqual(run.events.filter(e => e.type === 'task_range_return').map(e => e.phase), ['start', 'finish', 'start', 'finish']);
 });

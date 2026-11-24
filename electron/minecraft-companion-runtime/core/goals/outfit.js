@@ -13,13 +13,12 @@
 const { createDeviceProjectGoal } = require('./deviceProject');
 const { createStockFoodGoal } = require('./stockFood');
 const { KNOWLEDGE, countKey } = require('../knowledge');
-const { upgrades } = require('../armor');
+const { upgrades, equipUpgrades } = require('../armor');
 
 // Tools and weapons stay in the bag as they are made: stored, the bot spent
 // hours mining with stone picks and fighting bare-handed beside a chest
 // holding its iron sword and pickaxe.
 const CARRY = /(_sword|_pickaxe|_axe)$|^(shield|bow)$/;
-const isAbort = (error) => error?.code === 'aborted';
 
 function createKit({ bot, items, home, kb = KNOWLEDGE }) {
   const carried = (state, r) => Math.min(r.count, countKey(r.key, state.inventory, kb));
@@ -39,15 +38,8 @@ function createKit({ bot, items, home, kb = KNOWLEDGE }) {
     isDone: (state) => items.every((r) => carried(state, r) >= r.count) && upgrades(bot).length === 0,
     progress: (state) => items.reduce((n, r) => n + carried(state, r), 0) + (upgrades(bot).length === 0 ? 1 : 0),
     async run(ctx) {
-      for (const [item, slot] of upgrades(bot)) {
-        try {
-          await bot.equip(item, slot);
-          ctx.record('equip', { item: item.name, slot });
-        } catch (error) {
-          if (isAbort(error)) throw error;
-          return { ok: false, reason: 'equip_failed', item: item.name };
-        }
-      }
+      const equipped = await equipUpgrades(bot, ctx);
+      if (!equipped.ok) return equipped;
       if (hunt && !hunt.isDone(ctx.perceive())) return hunt.run(ctx);
       return { ok: true };
     },

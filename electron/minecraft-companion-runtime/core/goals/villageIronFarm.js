@@ -22,13 +22,14 @@
 // end, so each new rail joins the previous one and curves shape themselves.
 
 const { integerBox } = require('../geometry');
-const { goToStand } = require('./device-site');
+const { vec: v } = require('../blacklist');
+const { firstDeviceGround, goToStand, isAir, LIQUID, reachAndDig } = require('./device-site');
 const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
-const { createIronFarmGoal, evaluateIronFarmSite } = require('./ironFarm');
+const { createIronFarmGoal, evaluateIronFarmSite, breakMinecart, placeRail } = require('./ironFarm');
 const { createRailDuperGoal, chooseRailDuperSite } = require('./railDuper');
 const { FACINGS } = require('../blueprints/cobbleGenerator');
 const { isBaby } = require('../husbandry');
@@ -43,14 +44,11 @@ const SPARE_RAILS = 16; // beyond the straight distance: the line bends after vi
 const MAX_PATH = 64;
 const PUSH_MS = 1200;
 
-const LIQUID = new Set(['water', 'lava', 'bubble_column']);
 // Rails need a full top face under them.
 const NOT_FULL = /(_slab|_stairs|farmland|_bed|chest|_fence|_wall|_pane|glass|leaves|composter|lectern|cauldron|bell|hopper|lantern|_carpet|^snow|_trapdoor|_door|_fence_gate|scaffolding|campfire|_leaves)$/;
 const KEEP = /(rail|_door|_sign|torch|banner|_button|lever|pressure_plate|bell|_bed|lantern|tripwire|redstone_wire|repeater|comparator)$/;
-const isAir = (block) => !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
 const isRail = (block) => Boolean(block) && /(^|_)rail$/.test(block.name);
 const key = (p) => `${p.x},${p.y},${p.z}`;
-const v = (p) => new Vec3(p.x, p.y, p.z);
 const STEPS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 /**
@@ -156,14 +154,7 @@ function chooseVillageFarmSite(blockAt, village, { radius = 4 } = {}) {
       const ox = Math.round(c.x + Math.cos(angle) * distance);
       const oz = Math.round(c.z + Math.sin(angle) * distance);
       for (const [dx, dz] of integerBox([-radius, radius, 2], [-radius, radius, 2])) {
-        let y = null;
-        for (let top = c.y + 4; top >= c.y - 6; top -= 1) {
-          const block = blockAt(ox + dx, top, oz + dz);
-          if (!block) break;
-          if (isAir(block) || block.boundingBox === 'empty') continue;
-          y = top;
-          break;
-        }
+        const y = firstDeviceGround(blockAt, ox + dx, oz + dz, c.y + 4, c.y - 6, block => isAir(block) || block.boundingBox === 'empty');
         if (y === null) continue;
         for (const facing of Object.keys(FACINGS)) {
           const farm = evaluateIronFarmSite(blockAt, { x: ox + dx, y, z: oz + dz }, facing);
@@ -251,9 +242,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
     if (need.path) {
       // A dirt path is a little lower than a full block: dig it, put the dirt back.
       const ground = blockAt({ ...cell, y: cell.y - 1 });
-      const reach = await actions.goToDig(bot, ctx, ground);
-      if (!reach.ok) return reach;
-      const dug = await actions.digBlock(bot, ctx, ground);
+      const dug = await reachAndDig(bot, ctx, actions, ground);
       if (!dug.ok) return dug;
       await sleep(300, ctx.signal);
     }
@@ -275,7 +264,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
       }
       if (!filled.ok) return filled;
     }
-    const result = await skills.placeAt(bot, ctx, cell, (n) => n === 'rail', { faces: [new Vec3(0, -1, 0)], passable: true });
+    const result = await placeRail(bot, ctx, skills, cell, 'rail');
     if (result.ok) memory.line.push({ ...cell });
     ctx.record('village_rail', { at: cell, ok: result.ok, reason: result.reason, line: memory.line.length,
       shape: blockAt(cell)?.getProperties?.().shape });
@@ -295,7 +284,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
     if (!inCell(current, cell)) return { ok: false, reason: 'villager_moved' };
     if (!isRail(blockAt(cell))) {
       // A rail of its own under it: rails have no collision, so it goes in under the villager.
-      const placed = await skills.placeAt(bot, ctx, cell, (n) => n === 'rail', { faces: [new Vec3(0, -1, 0)], passable: true });
+      const placed = await placeRail(bot, ctx, skills, cell, 'rail');
       if (!placed.ok) return placed;
       if (!ours().has(key(cell))) memory.stub = { ...cell };
       if (!inCell(bot.entities[villager.id], cell)) return { ok: false, reason: 'villager_moved' };
@@ -329,24 +318,19 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
   async function takeBackCart(ctx, cart) {
     const moved = await actions.goNear(bot, ctx, cart.position.clone(), 2, { timeoutMs: 15000 });
     if (!moved.ok) return moved;
-    // A cart breaks once its damage passes 40. Each hit adds ten times its
-    // damage and it heals one a tick, so a fist (1) never gets there; two
-    // full-strength pickaxe hits (4) under a second apart do. Changing items
-    // resets the attack charge: equip once and let it charge before each hit.
-    const tool = bot.inventory.items().find((i) => /_(sword|axe|pickaxe)$/.test(i.name) && !/^(wooden|golden)_/.test(i.name));
-    if (tool && bot.heldItem?.name !== tool.name) await bot.equip(tool, 'hand').catch(() => {});
-    for (let hit = 0; hit < 6 && bot.entities[cart.id]; hit += 1) {
-      await sleep(900, ctx.signal);
-      try { await bot.attack(bot.entities[cart.id]); } catch { break; }
-    }
-    await sleep(300, ctx.signal);
-    const gone = !bot.entities[cart.id];
+    const gone = await breakMinecart(bot, ctx, cart, 6);
     if (gone) {
       const drop = Object.values(bot.entities).find((e) => e.name === 'item' && e.position.distanceTo(cart.position) < 3);
       if (drop) await actions.goNear(bot, ctx, drop.position.clone(), 0.5, { timeoutMs: 6000 });
     }
     ctx.record('village_cart_taken_back', { ok: gone, distance: +cart.position.distanceTo(bot.entity.position).toFixed(1) });
     return gone ? { ok: true } : { ok: false, reason: 'cart_not_broken' };
+  }
+
+  async function removeStub(ctx, stub) {
+    const dug = await reachAndDig(bot, ctx, actions, blockAt(stub));
+    if (dug.ok) memory.stub = null;
+    return dug;
   }
 
   // A villager in a cart off the line: run the line to the rail it stands on,
@@ -357,15 +341,8 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
     const stub = memory.stub;
     const stubThere = stub && isRail(blockAt(stub)) && !ours().has(key(stub));
     const onStub = stubThere && at.x === stub.x && at.z === stub.z;
-    if (stubThere && !onStub) {
-      // Rolled off: take its rail back, or the line could join that instead.
-      const block = blockAt(stub);
-      const reach = await actions.goToDig(bot, ctx, block);
-      if (!reach.ok) return reach;
-      const dug = await actions.digBlock(bot, ctx, block);
-      if (dug.ok) memory.stub = null;
-      return dug;
-    }
+    // Rolled off: take its rail back, or the line could join that instead.
+    if (stubThere && !onStub) return removeStub(ctx, stub);
     const target = onStub ? stub : at;
     const mine = ours();
     if (onStub) mine.add(key(stub));
@@ -469,14 +446,7 @@ function createVillageIronFarmGoal({ bot, count = 3, skills = defaultSkills, act
       const empty = Object.values(bot.entities).find((e) => e.name === 'minecart' && !e.passengers?.length
         && e.position && Math.hypot(e.position.x - stub.x - 0.5, e.position.z - stub.z - 0.5) < 2);
       if (empty) return takeBackCart(ctx, empty);
-      if (isRail(blockAt(stub))) {
-        const block = blockAt(stub);
-        const reach = await actions.goToDig(bot, ctx, block);
-        if (!reach.ok) return reach;
-        const dug = await actions.digBlock(bot, ctx, block);
-        if (dug.ok) memory.stub = null;
-        return dug;
-      }
+      if (isRail(blockAt(stub))) return removeStub(ctx, stub);
       memory.stub = null;
     }
     if (bot.inventory.items().every((i) => i.name !== 'minecart')) {

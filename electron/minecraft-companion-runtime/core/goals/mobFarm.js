@@ -14,7 +14,7 @@
 //   5. otherwise                      -> wait in the alcove, empty the chest
 // Only mob drops gained after the goal started count.
 
-const { findDeviceSite, LIQUID, isAir, isSolid, partMatches, guardDeviceCells, standingAt, goToStand, adoptDeviceSite, placeDevicePart, finishDevicePart, digFromBeside, stepBeside, TUNNEL: DIGGABLE, validDeviceLayers } = require('./device-site');
+const { layeredDeviceSite, LIQUID, isAir, isSolid, partMatches, guardDeviceCells, standingAt, goToStand, adoptDeviceSite, placeDevicePart, finishDevicePart, digFromBeside, stepBeside, TUNNEL: DIGGABLE } = require('./device-site');
 const { vec: v, posKey: key } = require('../blacklist');
 const { factsOf } = require('../action-result');
 const { Vec3 } = require('vec3');
@@ -29,22 +29,16 @@ const MOB_DROPS = new Set(['rotten_flesh', 'bone', 'arrow', 'gunpowder', 'string
 const COLLECT_WAIT_MS = 20000;
 
 
-function evaluateMobFarmSite(blockAt, anchor, facing) {
-  const farm = createMobFarm(anchor, facing);
-  const at = (p) => blockAt(p.x, p.y, p.z);
+const { evaluate: evaluateMobFarmSite, choose: chooseMobFarmSite } = layeredDeviceSite(createMobFarm, function* (farm) {
   // The ground's top at the hole and at the stairs' exit, open air above both.
-  const exit = farm.stairs[0];
-  for (const p of [farm.anchor, exit]) {
-    if (!isSolid(at(p)) || !isAir(at({ ...p, y: p.y + 1 }))) return null;
+  for (const p of [farm.anchor, farm.stairs[0]]) {
+    yield [[p], isSolid];
+    yield [[{ ...p, y: p.y + 1 }], isAir];
   }
   const tunnel = [...farm.stairs, ...farm.room, ...farm.channels, ...farm.shaft, ...farm.bottom];
-  return validDeviceLayers(blockAt, [tunnel, b => DIGGABLE.test(b?.name || '')], [farm.solid, isSolid]) ? farm : null;
-}
-
-/** Nearest spot with solid rock all the way down; the anchor is the ground's top block above the hole. */
-function chooseMobFarmSite(blockAt, around, { radius = 6 } = {}) {
-  return findDeviceSite(blockAt, around, { radius, step: 2, soft: block => isAir(block) || block.boundingBox === 'empty', evaluate: evaluateMobFarmSite });
-}
+  yield [tunnel, b => DIGGABLE.test(b?.name || '')];
+  yield [farm.solid, isSolid];
+}, { radius: 6, step: 2, soft: block => isAir(block) || block.boundingBox === 'empty' });
 
 function createMobFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
   skills = defaultSkills, actions = defaultActions } = {}) {

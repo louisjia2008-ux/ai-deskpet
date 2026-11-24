@@ -16,7 +16,7 @@ const defaultActions = require('../actions');
 const defaultSkills = require('../skills');
 const { BAND } = require('../brain');
 const { nightBudget } = require('./nightRest');
-const { upgrades } = require('../armor');
+const { upgrades, equipUpgrades } = require('../armor');
 
 const PATH_FAILURES = new Set(['NoPath', 'Timeout', 'path_timeout', 'not_arrived', 'no_progress', 'chase_stuck', 'leg_blocked']);
 // Never wanted by any goal; thrown away first when the bag is full.
@@ -348,18 +348,7 @@ function createRecovery({
       if (typeof bot.equip !== 'function' || !calm(state, 6)) return 0;
       return upgrades(bot).length ? 0.75 : 0;
     },
-    async run(ctx) {
-      for (const [item, slot] of upgrades(bot)) {
-        try {
-          await bot.equip(item, slot);
-          ctx.record('equip', { item: item.name, slot });
-        } catch (error) {
-          if (error?.code === 'aborted') throw error;
-          return { ok: false, reason: 'equip_failed', item: item.name };
-        }
-      }
-      return { ok: true };
-    },
+    run: ctx => equipUpgrades(bot, ctx),
   };
 
   return {

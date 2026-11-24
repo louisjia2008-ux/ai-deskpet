@@ -353,6 +353,21 @@ function createBrain({
     }
   }
 
+  async function endGoal(reason, event) {
+    assertActive();
+    const active = running, entry = detachGoal();
+    if (event === 'stopped') {
+      emit(event, { reason, ...correlation(entry) });
+    } else if (event === 'goal_failed') {
+      if (!entry) return;
+      const state = safePerceive();
+      goalEvent(event, entry, { progress: state ? safeProgress(entry.def, state) : null, reasons: [reason] });
+    } else if (entry) {
+      goalEvent(event, entry, { reason });
+    }
+    if (event === 'stopped' || active?.behavior.isGoal) await preempt(reason, active, true);
+  }
+
   return {
     tick,
     setGoal(def, metadata = {}) {
@@ -376,23 +391,8 @@ function createBrain({
       if (chore && state && wantOf(chore.behavior, state) <= 0) void preempt('goal_set', chore).catch(() => {});
       return nextGeneration;
     },
-    async clearGoal(reason = 'cleared') {
-      assertActive();
-      const active = running, entry = detachGoal();
-      // Publish before awaiting abort so an observer never receives an old
-      // uncorrelated terminal event after a replacement was installed.
-      if (entry) goalEvent('goal_cleared', entry, { reason });
-      if (active?.behavior.isGoal) await preempt(reason, active, true);
-    },
-    /** Ends the goal as failed from outside (a death loop, say). */
-    async failGoal(reason = 'failed') {
-      assertActive();
-      const active = running, entry = detachGoal();
-      if (!entry) return;
-      const state = safePerceive();
-      goalEvent('goal_failed', entry, { progress: state ? safeProgress(entry.def, state) : null, reasons: [reason] });
-      if (active?.behavior.isGoal) await preempt(reason, active, true);
-    },
+    clearGoal: (reason = 'cleared') => endGoal(reason, 'goal_cleared'),
+    failGoal: (reason = 'failed') => endGoal(reason, 'goal_failed'),
     /** Suspend goal work only. Permanent safety behaviors still own the body. */
     async pauseGoal(reason = 'paused') {
       assertActive();
@@ -418,12 +418,7 @@ function createBrain({
       await preempt(reason, active, true);
     },
     /** Legacy task stop: clears goals, but subsequent ticks keep safety active. */
-    async stop(reason = 'stopped') {
-      assertActive();
-      const active = running, entry = detachGoal();
-      emit('stopped', { reason, ...correlation(entry) });
-      await preempt(reason, active, true);
-    },
+    stop: (reason = 'stopped') => endGoal(reason, 'stopped'),
     /** Terminal all-stop. No future tick or goal can restart this brain. */
     dispose() {
       if (disposal) return disposal;

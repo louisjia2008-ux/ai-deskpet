@@ -74,6 +74,23 @@ test('pillaring settles on a placed floor before cutting submerged stone', async
   assert.ok(bot.entity.position.floored().equals(feet.offset(0, 4, 0)));
 });
 
+test('exhausted water rescue reports the methods that actually ran', async () => {
+  const { bot } = pocket();
+  const tracker = createSelfStuck(bot);
+  tracker.force('route_origin_water');
+  const attempted = [];
+  const failMethod = method => async () => { attempted.push(method); return false; };
+  const escape = createHomeEscape({ bot, tracker, home: () => null, actions: {
+    stepOutOfPool: failMethod('step_out_of_pool'), swimAshore: failMethod('swim_ashore'),
+    digWaterExit: (_bot, _ctx, options) => failMethod(options?.pillar ? 'pillar_up' : 'dig_exit')(),
+  } });
+  const outcome = await escape.run({ record() {} });
+  assert.equal(outcome.reason, 'self_escape_unconfirmed');
+  assert.equal(outcome.objective, 'dry_ground');
+  assert.deepEqual(outcome.attempted, attempted);
+  assert.equal(attempted.length, 4);
+});
+
 const turn = () => new Promise(resolve => setImmediate(resolve));
 
 test('only critical air interrupts water rescue, then the same method resumes', async () => {

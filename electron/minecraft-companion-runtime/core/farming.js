@@ -3,6 +3,7 @@
 // seeds. Each function does one thing and confirms it against the world
 // (the block that is there afterwards), like every other skill.
 
+const { integerBox } = require('./geometry');
 const { equipMatching } = require('./inventory');
 const { Vec3 } = require('vec3');
 const { fail, isComplete } = require('./action-result');
@@ -10,7 +11,7 @@ const actions = require('./actions');
 const { clearCoverAt, pourLiquid } = require('./skills');
 const { naturalCover, isWaterlogged } = require('./natural-cover');
 const { SIDES, supports } = require('./home-topology');
-const { isAbort, waitUntil } = require('./confirm');
+const { ignoreUnlessAborted, waitUntil } = require('./confirm');
 const { vec: v, posKey } = require('./blacklist');
 const { ledgerFor, ledgerTarget, recordTarget } = require('./failure-ledger');
 
@@ -51,12 +52,10 @@ function choosePlots(blockAt, center, { count = 16, radius = 24, exclude = () =>
   // Wheat already growing there (a farm left on an earlier task).
   const sown = (p) => blockAt(p)?.name === 'farmland' && blockAt({ ...p, y: p.y + 1 })?.name === 'wheat';
   for (const w of waters.sort((a, b) => distance(a) - distance(b))) {
-    for (let dx = -4; dx <= 4; dx += 1) {
-      for (let dz = -4; dz <= 4; dz += 1) {
-        for (const y of [w.y, w.y - 1]) {
-          const p = { x: w.x + dx, y, z: w.z + dz };
-          if (!plots.has(posKey(p)) && usable(p)) plots.set(posKey(p), { ...p, hydrated: true });
-        }
+    for (const [dx, dz] of integerBox([-4, 4], [-4, 4])) {
+      for (const y of [w.y, w.y - 1]) {
+        const p = { x: w.x + dx, y, z: w.z + dz };
+        if (!plots.has(posKey(p)) && usable(p)) plots.set(posKey(p), { ...p, hydrated: true });
       }
     }
     if (plots.size >= count) break;
@@ -153,10 +152,10 @@ async function tend(bot, ctx, plot, seed) {
   if (!cleared.ok) return cleared;
   if ((!bot.heldItem || !match(bot.heldItem.name)) && !await equip(bot, match)) return fail(missing);
   if (bot.companionPlayerBlock?.(ground)) return fail('protected_player_block');
-  try {
+  await ignoreUnlessAborted(async () => {
     await bot.lookAt(ground.offset(0.5, 1, 0.5), true);
     await bot.activateBlock(bot.blockAt(ground), new Vec3(0, 1, 0));
-  } catch (error) { if (isAbort(error)) throw error; }
+  });
   const done = await waitUntil(() => bot.blockAt(seed ? crop : ground)?.name === (seed ? 'wheat' : 'farmland'),
     { timeoutMs: 1500, signal: ctx.signal });
   return done ? { ok: true } : fail(seed ? 'plant_unconfirmed' : 'till_unconfirmed');

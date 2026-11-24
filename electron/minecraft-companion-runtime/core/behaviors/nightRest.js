@@ -108,7 +108,7 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
     else {
       const grounded = () => bot.entity.onGround !== false;
       if (!grounded() && !await waitUntil(grounded, { timeoutMs: 2000, signal: ctx.signal })) {
-        return failure('shelter_not_entered', {}, ctx, bot);
+        return failure('shelter_not_entered', { objective: bot.entity.position.floored(), attempted: ['wait_for_landing'] }, ctx, bot);
       }
       enclosure ||= { top: bot.entity.position.floored(), placed: [] };
     }
@@ -128,7 +128,7 @@ function createNightRest({ bot, home, activeGoal = () => null, shelterDoor, ente
     const interrupted = ctx.signal?.aborted || result?.wait || result?.kind === 'interrupted';
     if (shaft) {
       if (!interrupted) missedDig = true;
-      return room ? failure('shelter_not_entered', {}, ctx, bot) : result;
+      return room ? failure('shelter_not_entered', { objective: room.top, attempted: ['dig_in'] }, ctx, bot) : result;
     }
     if (interrupted || result?.kind === 'start' || result?.reason === 'shelter_not_entered') {
       if (!enclosure.placed.length) enclosure = null;

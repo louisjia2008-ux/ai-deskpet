@@ -10,7 +10,7 @@ const defaultActions = require('../actions');
 const stronghold = require('../stronghold');
 const { dimension } = require('../nether');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
+const { fail } = require('../action-result');
 
 /** Middle of the end portal blocks in sight, or null. */
 function portalInSight(bot, maxDistance = 160) {

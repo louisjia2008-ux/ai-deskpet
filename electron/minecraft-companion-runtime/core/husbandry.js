@@ -7,9 +7,9 @@ const { integerBox } = require('./geometry');
 const { equipMatching } = require('./inventory');
 const { Vec3 } = require('vec3');
 const actions = require('./actions');
-const { isAbort, waitUntil, sleep } = require('./confirm');
+const { ignoreUnlessAborted, waitUntil, sleep } = require('./confirm');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
+const { fail } = require('./action-result');
 const v = (p) => new Vec3(p.x, p.y, p.z);
 
 // What each animal follows and breeds on.
@@ -93,7 +93,7 @@ async function setGate(bot, ctx, pen, open) {
     const moved = await actions.goNear(bot, ctx, v(open ? pen.outside : pen.inside).offset(0.5, 0, 0.5), 1, { timeoutMs: 30000 });
     if (!moved.ok && !actions.withinReach(bot, v(pen.gate).offset(0.5, 0.5, 0.5), 4.5)) return moved;
   }
-  try { await bot.activateBlock(gate); } catch (error) { if (isAbort(error)) throw error; }
+  await ignoreUnlessAborted(() => bot.activateBlock(gate));
   return await waitUntil(() => isOpen() === open, { timeoutMs: 1500, signal: ctx.signal }) ? { ok: true } : fail('gate_unconfirmed');
 }
 
@@ -220,10 +220,10 @@ async function breed(bot, ctx, pen, kind) {
     const target = bot.entities[animal.id];
     if (!target) continue;
     await actions.goNear(bot, ctx, target.position.clone(), 2, { timeoutMs: 10000 });
-    try {
+    await ignoreUnlessAborted(async () => {
       await bot.lookAt(target.position.offset(0, (target.height || 1) * 0.6, 0), true);
       await bot.activateEntity(target);
-    } catch (error) { if (isAbort(error)) throw error; }
+    });
     await sleep(300, ctx.signal);
   }
   const born = await waitUntil(() => animalsIn(bot, pen, kind).length > before, { timeoutMs: 10000, signal: ctx.signal });

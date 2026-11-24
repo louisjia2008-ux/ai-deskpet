@@ -20,7 +20,7 @@ const SURVIVAL_ITEM_DETAILS = new Set([
 // first 42 potions. Wind charged, weaving, oozing and infested follow.
 const LAST_NON_MUTATING_POTION = 41;
 const faceOffsets = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
-const fail = (reason) => ({ ok: false, reason });
+const { fail } = require('./action-result');
 const asVec = ({ x, y, z }) => new Vec3(x, y, z);
 const isSurveyNight = (bot) => isDaylight(bot.time?.timeOfDay) === false;
 

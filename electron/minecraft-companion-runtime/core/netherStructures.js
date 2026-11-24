@@ -13,6 +13,10 @@ const BASTION_BLOCKS = ['polished_blackstone_bricks', 'cracked_polished_blacksto
 const MIN_BLOCKS = { fortress: 24, bastion: 48 };
 const CLUSTER = 24;
 
+const open = (bot, p) => {
+  const block = bot.blockAt(p);
+  return block && block.boundingBox === 'empty' && !/lava|fire/.test(block.name);
+};
 const ids = (bot, names) => names.map((n) => bot.registry.blocksByName[n]?.id).filter(Number.isInteger);
 
 /**
@@ -47,12 +51,8 @@ function findSpawners(bot, near, radius = 64) {
 function fortressFloor(bot, near, radius = 48, count = 64, keep = () => true) {
   const id = bot.registry.blocksByName.nether_bricks?.id;
   if (!Number.isInteger(id)) return [];
-  const open = (p) => {
-    const b = bot.blockAt(p);
-    return b && b.boundingBox === 'empty' && !/lava|fire/.test(b.name);
-  };
   return bot.findBlocks({ point: near, matching: id, maxDistance: radius, count: Number.MAX_SAFE_INTEGER })
-    .filter((p) => p.distanceTo(near) <= radius && open(p.offset(0, 1, 0)) && open(p.offset(0, 2, 0)) && keep(p))
+    .filter((p) => p.distanceTo(near) <= radius && open(bot, p.offset(0, 1, 0)) && open(bot, p.offset(0, 2, 0)) && keep(p))
     .slice(0, count);
 }
 
@@ -64,18 +64,16 @@ function fortressFloor(bot, near, radius = 48, count = 64, keep = () => true) {
  * `top`, nearest to `from` first.
  */
 function towerSpots(bot, floor, from, { maxDrop = 48 } = {}) {
-  const at = (p) => bot.blockAt(p);
-  const open = (p) => { const b = at(p); return b && b.boundingBox === 'empty' && !/lava|fire/.test(b.name); };
   const seen = new Set();
   const spots = [];
   for (const deck of floor) {
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const side = deck.offset(dx, 0, dz);
-      if (!open(side) || !open(side.offset(0, 1, 0)) || !open(side.offset(0, 2, 0))) continue;
+      if (!open(bot, side) || !open(bot, side.offset(0, 1, 0)) || !open(bot, side.offset(0, 2, 0))) continue;
       let ground = null;
       for (let y = side.y - 1; y >= side.y - maxDrop; y -= 1) {
         const p = side.offset(0, y - side.y, 0);
-        const b = at(p);
+        const b = bot.blockAt(p);
         if (!b || /lava|fire|magma/.test(b.name)) break;
         if (b.boundingBox === 'block') { ground = p; break; }
       }
@@ -124,9 +122,7 @@ function isFireResistancePotion(item) {
 
 function hasEffect(bot, name) {
   const effect = Object.values(bot.registry.effects || {}).find((e) => e.name === name);
-  if (!effect) return false;
-  const active = bot.entity?.effects?.[effect.id];
-  return Boolean(active);
+  return Boolean(effect && bot.entity?.effects?.[effect.id]);
 }
 
 module.exports = {

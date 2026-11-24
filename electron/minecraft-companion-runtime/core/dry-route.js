@@ -4,8 +4,8 @@ const { Vec3 } = require('vec3');
 const { posKey } = require('./blacklist');
 const { clear, safeStand, SIDES } = require('./home-topology');
 
-const wet = (b) => Boolean(b && (/^(water|lava|bubble_column|kelp|kelp_plant|seagrass|tall_seagrass)$/.test(b.name)
-  || b.getProperties?.().waterlogged === true));
+const isWaterBlock = (b) => /^(water|bubble_column|kelp|kelp_plant|seagrass|tall_seagrass)$/.test(b?.name);
+const wet = (b) => Boolean(b && (isWaterBlock(b) || b.name === 'lava' || b.getProperties?.().waterlogged === true));
 
 const dryStand = (read, p) => safeStand(read, p) && [0, 1, -1].every(dy => !wet(read(p.offset(0, dy, 0))));
 
@@ -56,4 +56,4 @@ function drySiteAccess(read, from, logs) {
   };
 }
 
-module.exports = { dryComponent, drySiteAccess, dryStand, wet };
+module.exports = { dryComponent, drySiteAccess, dryStand, isWaterBlock, wet };

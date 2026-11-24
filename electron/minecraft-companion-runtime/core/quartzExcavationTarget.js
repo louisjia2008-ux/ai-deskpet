@@ -2,15 +2,9 @@
 // Coordinate planning only. This never authorizes a dig or movement: the
 // executor must freshly admit each actual edge and each ore harvest.
 const { Vec3 } = require('vec3');
+const { DIRS, NEIGHBORS, key, DANGER, GRAVITY, ROCK, full } = require('./quartzExcavationGeometry');
 
-const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
-const key = (p) => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
 const feet = (p) => new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
-const HAZARD = /^(water|lava|bubble_column|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|powder_snow|nether_portal)$/;
-const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
-const ROCK = new Set(['basalt','polished_basalt','smooth_basalt','netherrack','blackstone','polished_blackstone']);
-const full = (b) => b?.boundingBox === 'block' && b.shapes?.length === 1 && b.shapes[0].length === 6
-  && b.shapes[0].every((n,i) => n === [0,0,0,1,1,1][i]);
 
 function targetCost(from, ore, used = {}) {
   const horizontal = Math.abs(from.x - ore.x) + Math.abs(from.z - ore.z);
@@ -79,7 +73,7 @@ function chooseExcavationTarget({ bot, portal, shore, anchorMode = 'portal', led
       else { query.stableRejectedCount++; query.stableRejections.push({ position: coordinate, reason }); }
       continue;
     }
-    const buried = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]
+    const buried = NEIGHBORS
       .every(([x,y,z]) => full(observed.get(key(p.offset(x,y,z)))));
     options.push({ block: observed.get(coordinate), cost, safetyClass: buried ? 'six_solid_neighbors' : 'original_guard_pass', rank: buried ? 0 : 1 });
   }
@@ -115,12 +109,12 @@ function oreSafetyFailure(bot, position, ledger, stage = 'before') {
   if (!ledger || ledger.protectedFloors?.has(key(p)) || bot.companionProtectBlock?.(block)
     || bot.companionPlacedRecently?.(p)) return 'protected_ore_or_route_floor';
   if (stage === 'before' ? block.name !== 'nether_quartz_ore' || !full(block)
-    : block.boundingBox !== 'empty' || block.shapes?.length !== 0 || HAZARD.test(block.name)) return 'ore_or_open_changed';
+    : block.boundingBox !== 'empty' || block.shapes?.length !== 0 || DANGER.test(block.name)) return 'ore_or_open_changed';
   const known = (cell) => ledger.open?.has(key(cell)) || ledger.route?.some((r) => [0,1,2].some(y => key(r.offset(0,y,0)) === key(cell)));
-  for (const [x,y,z] of [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) {
+  for (const [x,y,z] of NEIGHBORS) {
     const cell=p.offset(x,y,z), next=bot.blockAt(cell);
     if (!next) return 'unknown_ore_margin';
-    if (HAZARD.test(next.name) || GRAVITY.test(next.name)) return 'hazard_or_gravity_ore_margin';
+    if (DANGER.test(next.name) || GRAVITY.test(next.name)) return 'hazard_or_gravity_ore_margin';
     if (next.boundingBox === 'empty' && cell.y < ledger.surfaceY && !known(cell)) return 'unconfirmed_cave_at_ore';
   }
   return null;
@@ -132,7 +126,7 @@ function shoreSafetyFailure(bot, shore, actual = bot.entity.position, ownedSuppo
   const stand = (p) => {
     const floor=bot.blockAt(p.offset(0,-1,0));
     return full(floor) && ROCK.has(floor.name) && !ownedSupports.has(key(floor.position)) && !bot.companionPlacedRecently?.(floor.position)
-      && [0,1].every(y=>{const b=bot.blockAt(p.offset(0,y,0));return b?.boundingBox==='empty'&&b.shapes?.length===0&&!HAZARD.test(b.name);});
+      && [0,1].every(y=>{const b=bot.blockAt(p.offset(0,y,0));return b?.boundingBox==='empty'&&b.shapes?.length===0&&!DANGER.test(b.name);});
   };
   const patch=[[-1,-1],[-1,0],[0,-1],[0,0]].some(([x,z])=>[0,1].every(dx=>[0,1].every(dz=>stand(shore.offset(x+dx,0,z+dz)))));
   if (!patch) return 'shore_natural_patch_unconfirmed';

@@ -3,7 +3,7 @@
 // Quartz-only explicit excavation: real state gates, bounded edges and a
 // confirmed reversible route. Native automatic digging stays disabled.
 // Only inspectStep is reused; mineStep/walkTunnel are deliberately not called.
-const {CAPS,ROCK,DANGER,GRAVITY,DIRS,key,same,fail,full,empty,inspectExcavationGeometry}=require('./quartzExcavationGeometry');
+const {CAPS,ROCK,DANGER,GRAVITY,DIRS,NEIGHBORS,key,same,fail,full,empty,inspectExcavationGeometry}=require('./quartzExcavationGeometry');
 const {rankContinuations,cloneLedger}=require('./quartzExcavationContinuation');
 const {oreSafetyFailure}=require('./quartzExcavationTarget');
 
@@ -321,9 +321,7 @@ function createExcavation({ bot, memory, shore, portal, inspectStep, Vec3, actio
       const unsafe = safety(ctx.signal, { returning: true });
       if (unsafe || bot.pathfinder.movements !== m) return fail(unsafe || 'profile_owner_changed');
       if (!result.ok || !actualAt(to)) return fail(result.reason || 'actual_edge_arrival_unconfirmed');
-      for(const p of [to,to.offset(0,1,0)])for(const [dx,dy,dz] of [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) {
-        const b=read(p.offset(dx,dy,dz));if(!b||DANGER.test(b.name)||GRAVITY.test(b.name))return fail('actual_edge_margin_changed');
-      }
+      if (![to, to.offset(0, 1, 0)].every(safeMargin)) return fail('actual_edge_margin_changed');
       return { ok: true };
     } finally {
       if(m.getNeighbors===edgeNeighbors){if(hadOwnNeighbors)m.getNeighbors=originalNeighbors;else delete m.getNeighbors;}
@@ -331,6 +329,10 @@ function createExcavation({ bot, memory, shore, portal, inspectStep, Vec3, actio
       for (const [k, fn] of arrays) { const i = m[k].indexOf(fn); if (i >= 0) m[k].splice(i, 1); }
     }
   }
+  const safeMargin = p => NEIGHBORS.every(([dx, dy, dz]) => {
+    const b = read(p.offset(dx, dy, dz));
+    return b && !DANGER.test(b.name) && !GRAVITY.test(b.name);
+  });
   async function advance(ctx, { direction, descend = false } = {}) {
     if (!Number.isInteger(direction) || !DIRS[direction]) return fail('invalid_cardinal_direction');
     return lease(ctx, async (child, remaining) => {
@@ -400,9 +402,7 @@ function createExcavation({ bot, memory, shore, portal, inspectStep, Vec3, actio
       const sweep=[from.offset(0,1,0),to,to.offset(0,1,0),...(to.y>from.y?[from.offset(0,2,0)]:[])];
       for(const p of sweep){
         if(!empty(read(p)))return fail('reverse_clearance_changed');
-        for(const [dx,dy,dz]of[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]){
-          const b=read(p.offset(dx,dy,dz));if(!b||DANGER.test(b.name)||GRAVITY.test(b.name))return fail('reverse_margin_changed');
-        }
+        if (!safeMargin(p)) return fail('reverse_margin_changed');
       }
       const moved=await moveEdge(child,s,from,to,remaining);if(!moved.ok)return moved;
       s.routeIndex=nextIndex;s.used.knownEdges++;s.used.totalEdges++;if(towards==='shore')s.used.returnEdges++;

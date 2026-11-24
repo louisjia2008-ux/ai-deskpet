@@ -11,7 +11,7 @@ const { dimension } = require('./nether');
 const { hold } = require('./end');
 
 const FALLING = /sand|gravel|concrete_powder/;
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
+const { fail } = require('./action-result');
 const flat = (v) => new Vec3(v.x, 0, v.z);
 
 const eyesOf = (bot) => Object.values(bot.entities).filter((e) => e.name === 'eye_of_ender');

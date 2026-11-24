@@ -13,7 +13,7 @@
 // quartz goal: a death in the nether sends it back through the portal.
 
 const { integerBox } = require('../geometry');
-const { ARMOR_SLOTS, bestArmor, armorRank } = require('../armor');
+const { ARMOR_SLOTS, bestArmor, armorRank, equipAndRecord } = require('../armor');
 const { fail, factsOf, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
@@ -24,7 +24,7 @@ const end = require('../end');
 const structures = require('../netherStructures');
 const { createPortalTrip } = require('../netherTrip');
 const { createBlacklist, posKey } = require('../blacklist');
-const { isAbort, waitUntil, runCancellable, sleep } = require('../confirm');
+const { ignoreUnlessAborted, isAbort, waitUntil, runCancellable, sleep } = require('../confirm');
 
 const SCAN_EVERY_MS = 10000;
 // Below this the fortress is left to its mobs until health is back.
@@ -99,12 +99,7 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
       const rank = name => slot === 'head' && name.startsWith('golden_') ? 99 : armorRank(name);
       const best = bestArmor(bot, name => pattern.test(name), rank);
       if (!best || (worn && rank(worn.name) >= rank(best.name))) continue;
-      try {
-        await bot.equip(best, slot);
-        ctx.record('equip', { item: best.name, slot });
-      } catch (error) {
-        if (isAbort(error)) throw error;
-      }
+      await equipAndRecord(bot, ctx, best, slot);
     }
   }
 
@@ -127,13 +122,11 @@ function createNetherExpeditionGoal({ bot, blazeRods = 6, witherSkulls = 1, trad
       }
       return { ok: true, skipped: true };
     }
-    try {
+    await ignoreUnlessAborted(async () => {
       await bot.equip(potion, 'hand');
       await runCancellable(() => bot.consume(), { signal: ctx.signal, timeoutMs: 5000, timeoutCode: 'drink_timeout',
         cancel: () => bot.deactivateItem() });
-    } catch (error) {
-      if (isAbort(error)) throw error;
-    }
+    });
     const active = await waitUntil(() => structures.hasEffect(bot, 'FireResistance'), { timeoutMs: 2000, signal: ctx.signal });
     ctx.record('drink', { potion: 'fire_resistance', active });
     return active ? { ok: true } : fail('drink_unconfirmed');

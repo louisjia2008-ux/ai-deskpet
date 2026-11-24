@@ -742,6 +742,16 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
     return operation;
   }
 
+  async function stopTask(reason, { keepAutonomy, clearOnly }) {
+    assertActive();
+    taskEpoch += 1;
+    paused = false;
+    await Promise.all([keepAutonomy ? undefined : director.disable(reason),
+      clearOnly ? brain.clearGoal(reason) : brain.stop(reason)]);
+    await joinRetirement();
+    if (!clearOnly) haltBody(bot);
+  }
+
   return {
     brain,
     director,
@@ -796,13 +806,8 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       return Promise.resolve();
     },
     /** Cancel task/autonomy only; survival and maintenance remain active. */
-    async cancelTask(reason = 'task_cancelled', { keepAutonomy = false } = {}) {
-      assertActive();
-      taskEpoch += 1;
-      paused = false;
-      await Promise.all([keepAutonomy ? undefined : director.disable(reason), brain.clearGoal(reason)]);
-      await joinRetirement();
-    },
+    cancelTask: (reason = 'task_cancelled', { keepAutonomy = false } = {}) =>
+      stopTask(reason, { keepAutonomy, clearOnly: true }),
     /** Suspend task selection and goal work, without suspending safety. */
     async pauseTask(reason = 'task_paused') {
       assertActive();
@@ -831,14 +836,7 @@ function createCompanion({ bot, onEvent: publish = () => {}, tickMs = 250, auton
       return director?.memory.homestead?.status(perceive(bot)) ?? null;
     },
     /** Legacy stop is not an all-stop: subsequent ticks still run safety. */
-    async stop(reason = 'user_stop') {
-      assertActive();
-      taskEpoch += 1;
-      paused = false;
-      await Promise.all([director.disable(reason), brain.stop(reason)]);
-      await joinRetirement();
-      haltBody(bot);
-    },
+    stop: (reason = 'user_stop') => stopTask(reason, {}),
     status: () => ({ ...brain.status(), paused, disposed, cleanupFailed: retirementFailed, recovery: recovery.status(),
       selfStuck: selfStuck.state(), autonomy: director.status(), doctor: doctor.getStatus() }),
     /** Terminal all-stop; construct a new companion to restart. Does not disconnect the bot. */

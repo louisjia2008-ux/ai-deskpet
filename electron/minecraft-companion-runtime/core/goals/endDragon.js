@@ -9,6 +9,7 @@
 // synced phase and health.
 
 const { fail, complete, waiting } = require('../action-result');
+const { integerBox } = require('../geometry');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
 const end = require('../end');
@@ -16,6 +17,8 @@ const { returnToEnd } = require('./endReturn');
 const { createBlacklist } = require('../blacklist');
 const { sleep, waitUntil } = require('../confirm');
 
+const pending = (ctx, delay) => sleep(delay, ctx.signal).then(() => waiting('dimension_action_pending'));
+const dragonForward = dragon => new Vec3(Math.sin(dragon.yaw), 0, Math.cos(dragon.yaw));
 const key = (e) => String(e.id);
 const at = (p) => `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}`;
 // The exit portal sits on the column x = z = 0; the fight happens around it.
@@ -71,8 +74,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
       // A breath cloud on the way in: wait it out here, not walk back into it.
       const ahead = (d) => feet.offset(Math.round(-here.x / flat * d), 0, Math.round(-here.z / flat * d));
       if ([1, 3, 5, 7].some((d) => end.cloudOver(bot, ahead(d), 1))) {
-        await sleep(1000, ctx.signal);
-        return waiting('dimension_action_pending');
+        return pending(ctx, 1000);
       }
       const bridged = await end.bridgeToward(bot, ctx, new Vec3(0, feet.y, 0), { maxSteps: 40 });
       ctx.record('end_bridge', { steps: bridged.steps ?? 0, stopped: bridged.stopped || bridged.reason || null });
@@ -138,7 +140,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
     // the head from a few blocks out.
     const spot = () => {
       const d = bot.entities[dragon.id] || dragon;
-      const forward = new Vec3(Math.sin(d.yaw), 0, Math.cos(d.yaw));
+      const forward = dragonForward(d);
       const side = new Vec3(forward.z, 0, -forward.x);
       const sign = bot.entity.position.minus(d.position).dot(side) >= 0 ? 1 : -1;
       return d.position.plus(forward.scaled(6.8)).plus(side.scaled(4 * sign));
@@ -151,13 +153,12 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
     const standAt = spot();
     if (end.cloudOver(bot, new Vec3(standAt.x - 0.5, bot.entity.position.y, standAt.z - 0.5), 1.5)) {
       ctx.record('melee_spot_clouded');
-      await sleep(600, ctx.signal);
-      return waiting('dimension_action_pending');
+      return pending(ctx, 600);
     }
     // Behind its head: go round wide, out of reach of the wings, not past them.
     {
       const d = bot.entities[dragon.id] || dragon;
-      const forward = new Vec3(Math.sin(d.yaw), 0, Math.cos(d.yaw));
+      const forward = dragonForward(d);
       const side = new Vec3(forward.z, 0, -forward.x);
       const rel = bot.entity.position.minus(d.position);
       if (rel.dot(forward) < 6.5) {
@@ -252,14 +253,12 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
     }
     // The wall two cells out from the crystal, three bars wide, from the bedrock up.
     let broken = 0;
-    for (let dy = -1; dy <= 1; dy += 1) {
-      for (let s = -1; s <= 1; s += 1) {
-        const p = new Vec3(c.x + side.x * 2 + side.z * s, c.y + dy, c.z + side.z * 2 + side.x * s);
-        const b = bot.blockAt(p);
-        if (b?.name !== 'iron_bars') continue;
-        const dug = await actions.digBlock(bot, ctx, b, { timeoutMs: 8000 });
-        if (dug.ok) broken += 1;
-      }
+    for (const [dy, s] of integerBox([-1, 1], [-1, 1])) {
+      const p = new Vec3(c.x + side.x * 2 + side.z * s, c.y + dy, c.z + side.z * 2 + side.x * s);
+      const b = bot.blockAt(p);
+      if (b?.name !== 'iron_bars') continue;
+      const dug = await actions.digBlock(bot, ctx, b, { timeoutMs: 8000 });
+      if (dug.ok) broken += 1;
     }
     memory.opened.add(key(crystal));
     delete memory.spots[key(crystal)];
@@ -333,13 +332,9 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
         return leave(ctx);
       }
       // Recovery and survival leave a sheltered bot where it is.
-      await sleep(500, ctx.signal);
-      return waiting('dimension_action_pending');
+      return pending(ctx, 500);
     }
-    if (memory.exposedUntil && now < memory.exposedUntil && bot.health >= 10) {
-      await sleep(500, ctx.signal);
-      return waiting('dimension_action_pending');
-    }
+    if (memory.exposedUntil && now < memory.exposedUntil && bot.health >= 10) return pending(ctx, 500);
     const here = bot.entity.position.clone();
     const a = Math.atan2(here.z, here.x);
     for (const r of [9, 11, 13, 8, 15]) {
@@ -351,8 +346,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
       ctx.record('shelter', { at: at(stand), ok: dug.ok, reason: dug.reason || null });
       if (dug.ok) { memory.shelter = dug.top; return { ok: true }; }
     }
-    await sleep(1000, ctx.signal);
-    return waiting('dimension_action_pending');
+    return pending(ctx, 1000);
   }
 
   async function leave(ctx) {
@@ -404,7 +398,7 @@ function createEndDragonGoal({ bot, actions = defaultActions } = {}) {
       // Taking off it flies out straight ahead and up, through anything there:
       // step off its line, to the side.
       if (dragon && phase === TAKEOFF && dragon.position.distanceTo(here) < 18) {
-        const forward = new Vec3(Math.sin(dragon.yaw), 0, Math.cos(dragon.yaw));
+        const forward = dragonForward(dragon);
         const side = new Vec3(forward.z, 0, -forward.x);
         const rel = here.minus(dragon.position);
         const sign = rel.dot(side) >= 0 ? 1 : -1;

@@ -6,6 +6,7 @@ const ROCK = new Set(['basalt', 'polished_basalt', 'smooth_basalt', 'netherrack'
 const DANGER = /^(water|lava|bubble_column|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|powder_snow|nether_portal)$/;
 const GRAVITY = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+const NEIGHBORS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const key = p => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
 const same = (a, b) => key(a) === key(b);
 const fail = (reason, extra = {}) => ({ ok: false, progress: false, reason, ...extra });
@@ -16,15 +17,14 @@ const empty = b => Boolean(b && b.boundingBox === 'empty' && b.shapes?.length ==
 
 function inspectExcavationGeometry({read,from,dir,descend,ledger:s,bounds,protectedCell,banned,inspectStep,Vec3,requireOpen=false}) {
   const v=p=>new Vec3(Math.floor(p.x),Math.floor(p.y),Math.floor(p.z));
-    const inner = inspectStep((x, y, z) => read(new Vec3(x, y, z)), from, dir,
-      { descend, surfaceY: s.surfaceY, known: p => s.open.has(key(p)) || s.route.some(at => [0, 1, 2].some(y => same(at.offset(0, y, 0), p))) });
+    const known = p => s.open.has(key(p)) || s.route.some(at => [0, 1, 2].some(y => same(at.offset(0, y, 0), p)));
+    const inner = inspectStep((x, y, z) => read(new Vec3(x, y, z)), from, dir, { descend, surfaceY: s.surfaceY, known });
     if (!inner.ok) return fail(`topology_${inner.reason}`);
     const target = v(inner.target);
     if (!bounds(target)) return fail('portal_radius');
     const floor = read(target.offset(0, -1, 0));
     if (!full(floor) || DANGER.test(floor.name) || GRAVITY.test(floor.name)) return fail('unsafe_full_floor');
     const clear = (descend ? [2, 1, 0] : [1, 0]).map(y => target.offset(0, y, 0));
-    const known = p => s.open.has(key(p)) || s.route.some(at => [0, 1, 2].some(y => same(at.offset(0, y, 0), p)));
     for (const cell of clear) {
       const b = read(cell);
       if (!b) return fail('unknown_clearance');
@@ -32,7 +32,7 @@ function inspectExcavationGeometry({read,from,dir,descend,ledger:s,bounds,protec
       if (!empty(b) && (!full(b) || !ROCK.has(b.name) || banned.has(b.name) || b.diggable === false || protectedCell(s, cell))) return fail('forbidden_obstacle');
       if (requireOpen && !empty(b)) return fail('clearance_not_open');
       // Topology's skipped clear/behind exceptions are still loaded/hazard checked.
-      for (const [dx, dy, dz] of [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) {
+      for (const [dx, dy, dz] of NEIGHBORS) {
         const near = cell.offset(dx, dy, dz), n = read(near);
         if (!n) return fail('unknown_margin');
         if (DANGER.test(n.name) || GRAVITY.test(n.name)) return fail('hazard_margin');
@@ -48,4 +48,4 @@ function inspectExcavationGeometry({read,from,dir,descend,ledger:s,bounds,protec
     }
     return { ok: true, target, dig: clear.filter(p => !empty(read(p))), clear };
 }
-module.exports={CAPS,ROCK,DANGER,GRAVITY,DIRS,key,same,fail,full,empty,inspectExcavationGeometry};
+module.exports={CAPS,ROCK,DANGER,GRAVITY,DIRS,NEIGHBORS,key,same,fail,full,empty,inspectExcavationGeometry};

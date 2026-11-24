@@ -12,7 +12,7 @@
 //   6. otherwise                -> wait for the furnace, take the output chest's contents
 // The only memory kept across runs is the site and what was taken out.
 
-const { findDeviceSite, isAir, isSoft, partMatches, isSolid, guardDeviceCells, adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, finishDevicePart, TERRAIN: DIGGABLE, validDeviceLayers } = require('./device-site');
+const { layeredDeviceSite, isAir, isSoft, partMatches, isSolid, guardDeviceCells, adoptDeviceSite, digDeviceCell, stepOffDevice, placeDevicePart, finishDevicePart, TERRAIN: DIGGABLE } = require('./device-site');
 const { vec: v, posKey: key } = require('../blacklist');
 const { factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
@@ -27,20 +27,10 @@ const { deviceTargets } = require('../target-recovery');
 const SMELT_WAIT_MS = 11000;
 
 
-function evaluateSmelterSite(blockAt, anchor, facing) {
-  const device = createAutoSmelter(anchor, facing);
-  return validDeviceLayers(blockAt, [device.dig, b => b && DIGGABLE.has(b.name)],
-    [device.floor, isSolid], [device.clearAbove, isSoft]) ? device : null;
-}
-
-/** Nearest buildable spot; the anchor (furnace cell) is the top solid block of its column. */
-function chooseSmelterSite(blockAt, around, { radius = 10, avoid = null } = {}) {
-  return findDeviceSite(blockAt, around, { radius, avoidFeet: true, evaluate(read, anchor, facing) {
-    const device = evaluateSmelterSite(read, anchor, facing);
-    if (!device || (avoid && [...device.dig, ...device.floor, ...device.clearAbove, ...device.parts.map(p => p.position)].some(avoid))) return null;
-    return device;
-  } });
-}
+const footprint = d => [...d.dig, ...d.floor, ...d.clearAbove, ...d.parts.map(p => p.position)];
+const { evaluate: evaluateSmelterSite, choose: chooseSmelterSite } = layeredDeviceSite(createAutoSmelter, device => [
+  [device.dig, b => b && DIGGABLE.has(b.name)], [device.floor, isSolid], [device.clearAbove, isSoft],
+], { radius: 10, avoidFeet: true }, footprint);
 
 function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'raw_iron', output = 'iron_ingot',
   fuel = 'coal', count = 8, avoid = null, skills = defaultSkills, actions = defaultActions } = {}) {
@@ -118,7 +108,7 @@ function createAutoSmelterGoal({ bot, anchor = null, facing = 'east', input = 'r
       const d = memory.device;
       const s = inspect();
       const relocation = !anchor && !memory.loaded.input && !memory.loaded.fuel
-        ? [...d.dig, ...d.floor, ...d.clearAbove, ...d.parts.map(p => p.position)] : null;
+        ? footprint(d) : null;
 
       if (s.toDig.length || s.nextPart) {
         if (overPit() && s.toDig.length) return targets.run(ctx, 'step_off', s.toDig[0], () => stepOff(ctx), { relocate: relocation });

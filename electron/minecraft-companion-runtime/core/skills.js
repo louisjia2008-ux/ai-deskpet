@@ -5,7 +5,7 @@
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('./actions');
-const { isAbort, waitUntil, runCancellable, sleep, abortError } = require('./confirm');
+const { ignoreUnlessAborted, isAbort, waitUntil, runCancellable, sleep, abortError } = require('./confirm');
 const { vec: v, posKey } = require('./blacklist');
 const { ledgerFor, ledgerTarget, recordTarget, targetsFor } = require('./failure-ledger');
 const { FUELS, COLORS } = require('./knowledge');
@@ -15,6 +15,7 @@ const { isLog, isSurfaceLog } = require('./goals/gatherBlocks');
 const { isAir, naturalCover, plantPartner, isWaterlogged } = require('./natural-cover');
 const { wet } = require('./dry-route');
 const { contactBlock } = require('./home-topology');
+const { integerBox } = require('./geometry');
 const { blockTarget, watchDestination } = require('./target-recovery');
 const { accepts, pickItem, stableSolid, seal: sealMatch, isSealSoil, isSealRock, SANDSTONE } = require('./materials');
 const { fail, complete, factsOf, failure, isComplete, resultFrom, settleAction, waiting, waterRouteFailure, waterRouteTarget } = require('./action-result');
@@ -195,11 +196,7 @@ async function craft(bot, ctx, { item, times = 1, tablePosition = null }) {
       const recipe = bot.recipesFor(info.id, null, 1, table)[0];
       if (!recipe) break;
       const count = actions.countItems(bot, (n) => n === item);
-      try {
-        await craftInWindow(bot, ctx, recipe, table);
-      } catch (error) {
-        if (isAbort(error)) throw error;
-      }
+      await ignoreUnlessAborted(() => craftInWindow(bot, ctx, recipe, table));
       if (await waitUntil(() => actions.countItems(bot, (n) => n === item) > count, { timeoutMs: 1500, signal: ctx.signal })) {
         crafted += 1;
       } else break;
@@ -410,11 +407,7 @@ async function pourLiquid(bot, ctx, position, fluid, { against = null } = {}) {
     if (!result.ok) return result;
   }
   if (entityInside(bot, target)) return fail('cell_occupied_by_entity');
-  try {
-    await bot.equip(bucket, 'hand');
-  } catch (error) {
-    if (isAbort(error)) throw error;
-  }
+  await ignoreUnlessAborted(() => bot.equip(bucket, 'hand'));
   // The bucket goes next to whatever the look ray hits first: from a wrong
   // angle that is a wall of the hole, not its floor. Aim where the ray
   // really reaches the floor's top face, from the rim if need be.
@@ -462,13 +455,10 @@ async function aimAtFace(bot, position, face) {
 
 function rimCells(bot, target) {
   const cells = [];
-  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    for (let dy = 0; dy <= 2; dy += 1) {
-      const feet = target.offset(dx, dy, dz);
-      const below = bot.blockAt(feet.offset(0, -1, 0));
-      if (below?.boundingBox !== 'block' || !isAir(bot.blockAt(feet)?.name) || !isAir(bot.blockAt(feet.offset(0, 1, 0))?.name)) continue;
-      cells.push(feet);
-    }
+  for (const [dx, dz] of SIDES4) for (const dy of [0, 1, 2]) {
+    const feet = target.offset(dx, dy, dz);
+    if (bot.blockAt(feet.offset(0, -1, 0))?.boundingBox === 'block'
+      && [feet, feet.offset(0, 1, 0)].every(p => isAir(bot.blockAt(p)?.name))) cells.push(feet);
   }
   return cells.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position)).slice(0, 4);
 }
@@ -501,14 +491,12 @@ async function scoopLiquid(bot, ctx, position, fluid) {
   return fail('scoop_unconfirmed');
 }
 
-async function tryBucket(bot, aim) {
-  try {
+function tryBucket(bot, aim) {
+  return ignoreUnlessAborted(async () => {
     if (aim) await aim();
     await bot.waitForTicks(2);
     bot.activateItem();
-  } catch (error) {
-    if (isAbort(error)) throw error;
-  }
+  });
 }
 
 function goToGoal(bot, ctx, goal, arrived) {
@@ -706,11 +694,7 @@ async function pickBerries(bot, ctx, { radius = 32, purpose = 'berry' } = {}) {
   const before = actions.countItems(bot, (n) => n === 'sweet_berries');
   const moved = await actions.goToDig(bot, ctx, block, { timeoutMs: 30000 });
   if (!isComplete(moved)) return recordTarget(bot, ctx, moved, target(block.position));
-  try {
-    await bot.activateBlock(bot.blockAt(block.position));
-  } catch (error) {
-    if (isAbort(error)) throw error;
-  }
+  await ignoreUnlessAborted(() => bot.activateBlock(bot.blockAt(block.position)));
   await actions.collectDrops(bot, ctx, block.position.offset(0.5, 0.5, 0.5), (n) => n === 'sweet_berries', { radius: 4, timeoutMs: 4000 });
   const gained = actions.countItems(bot, (n) => n === 'sweet_berries') - before;
   if (gained <= 0) return recordTarget(bot, ctx, fail('berries_unconfirmed'), target(block.position));
@@ -726,7 +710,7 @@ async function explore(bot, ctx, memory, { distance = 32, timeoutMs = 40000, ret
   const point = angle => here.offset(Math.cos(angle) * distance, 0, Math.sin(angle) * distance);
   const allowed = angle => !ctx.workArea || ctx.workArea(point(angle));
   const directions = Array.from({ length: 8 }, (_, i) => (i * Math.PI) / 4).filter(allowed);
-  if (!directions.length && ctx.exploration) return failure('search_area_exhausted', ctx.exploration, ctx);
+  if (!directions.length && ctx.exploration) return failure('search_area_exhausted', { ...ctx.exploration, position: here, distance, attempted: ['filter_eight_headings'] }, ctx);
   if (!directions.length) return waiting('work_budget', Date.now() + 5000);
   // Keep successful headings, and head back toward the centre past the roaming radius.
   const around = memory.around;
@@ -783,27 +767,30 @@ async function storeItems(bot, ctx, { position, items }) {
   return freed ? { ok: true, stored: result.stored } : fail('chest_full');
 }
 
+async function transferStacks(items, remaining, exchange, skipEmpty = false) {
+  for (const item of items) {
+    const amount = Math.min(item.count, remaining);
+    if (remaining <= 0 || skipEmpty && amount <= 0) break;
+    try { remaining -= await exchange(item, amount); } catch (error) {
+      if (isAbort(error)) throw error;
+      break;
+    }
+  }
+}
+
 /** Takes matching stacks and confirms that the bag gained them after closing. */
 async function takeItems(bot, ctx, { position, itemMatch, count: requested = Infinity }) {
-  const count = () => ownedItems(bot).filter(i => itemMatch(i.name)).reduce((sum, i) => sum + i.count, 0);
+  const count = () => actions.countItems(bot, itemMatch);
   let before;
   const result = await withChest(bot, ctx, position, () => {
     before = count();
     return async chest => {
       const stacks = chest.containerItems().filter(i => itemMatch(i.name));
       if (!stacks.length) return fail('chest_empty');
-      let remaining = requested;
-      for (const stack of stacks) {
-        const amount = Math.min(stack.count, remaining);
-        if (amount <= 0) break;
-        try {
-          await chest.withdraw(stack.type, null, amount);
-          remaining -= amount;
-        } catch (error) {
-          if (isAbort(error)) throw error;
-          break;
-        }
-      }
+      await transferStacks(stacks, requested, async (stack, amount) => {
+        await chest.withdraw(stack.type, null, amount);
+        return amount;
+      }, true);
       return { ok: true };
     };
   });
@@ -843,17 +830,11 @@ function storeInChest(bot, ctx, { position, wants = [] }, beforeOpen) {
   const deposit = async chest => {
     const stored = {};
     for (const { match, count } of wants) {
-      let left = count;
-      for (const item of bot.inventory.items().filter((i) => match(i.name))) {
-        if (left <= 0) break;
-        let added;
-        try { added = await depositObserved(chest, ctx, item, Math.min(left, item.count)); } catch (error) {
-          if (isAbort(error)) throw error;
-          break;
-        }
+      await transferStacks(bot.inventory.items().filter(i => match(i.name)), count, async (item, amount) => {
+        const added = await depositObserved(chest, ctx, item, amount);
         if (added) stored[item.name] = (stored[item.name] || 0) + added;
-        left -= added;
-      }
+        return added;
+      });
     }
     const contents = chestCounts(chest);
     // Nothing went in (a full chest): not progress, even though the chest was read.
@@ -983,8 +964,8 @@ async function prepareShelterSeal(bot, ctx, { want = 2, avoid = () => false } = 
 /** A spot where a sealed shaft can be dug: solid ground all around, nothing that flows. */
 function bunkerSpot(bot, top, depth) {
   if (![0, 1].every(y => naturalCover(bot.blockAt(top.offset(0, y, 0))))) return false;
-  for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) {
-    if ([-1, 0, 1].some(y => wet(bot.blockAt(top.offset(x, y, z))))) return false;
+  for (const [x, z, y] of integerBox([-1, 1], [-1, 1], [-1, 1])) {
+    if (wet(bot.blockAt(top.offset(x, y, z)))) return false;
   }
   for (let dy = 1; dy <= depth; dy += 1) {
     const b = bot.blockAt(top.offset(0, -dy, 0));
@@ -1062,15 +1043,15 @@ async function openEnclosure(bot, ctx, shelter) {
   return complete();
 }
 
-async function supportShortCover(bot, ctx, top, refuge, match) {
+async function supportShortCover(bot, ctx, top, refuge, match, minimum) {
   const side = SIDES4.map(([x, z]) => top.offset(x, 0, z));
   if (side.some(p => shelterSolid(bot.blockAt(p)))) return complete(false);
   const support = side.find(p => SHAFT_SOLID(bot.blockAt(p.offset(0, -1, 0))) && naturalCover(bot.blockAt(p))
     && !bot.companionHomeSite?.(p) && !bot.companionPlayerBlock?.(p));
   if (!support) return fail('no_support');
-  if (actions.countItems(bot, match) < 2) {
+  if (actions.countItems(bot, match) < minimum) {
     await prepareShelterSeal(bot, ctx, { avoid: p => Math.max(Math.abs(top.x - p.x), Math.abs(top.z - p.z)) <= 1 });
-    if (actions.countItems(bot, match) < 2) return fail(actions.countItems(bot, match) ? 'no_support' : 'no_seal_block');
+    if (actions.countItems(bot, match) < minimum) return fail(actions.countItems(bot, match) ? 'no_support' : 'no_seal_block');
   }
   const placed = await placeAt(bot, ctx, support, match, { requireAir: true });
   if (placed.ok) refuge.placed.push({ position: support, name: bot.blockAt(support).name });
@@ -1101,15 +1082,11 @@ async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false, depth
     if (shortShaft) return fail(hasSeal() ? 'no_bunker_spot' : 'no_seal_block');
     // Look for a suitable spot close by and walk there first.
     let best = null;
-    for (let dx = -8; dx <= 8; dx += 1) {
-      for (let dz = -8; dz <= 8; dz += 1) {
-        for (let dy = -2; dy <= 2; dy += 1) {
-          const p = top.offset(dx, dy, dz);
-          if (avoid(p) || !bunkerSpot(bot, p, depth) || (!hasSeal() && !shaftYieldsSeal(p))) continue;
-          const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy) * 2;
-          if (!best || d < best.d) best = { p, d };
-        }
-      }
+    for (const [dx, dz, dy] of integerBox([-8, 8], [-8, 8], [-2, 2])) {
+      const p = top.offset(dx, dy, dz);
+      if (avoid(p) || !bunkerSpot(bot, p, depth) || (!hasSeal() && !shaftYieldsSeal(p))) continue;
+      const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy) * 2;
+      if (!best || d < best.d) best = { p, d };
     }
     if (!best) return fail(hasSeal() ? 'no_bunker_spot' : 'no_seal_block');
     const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(best.p.x, best.p.y, best.p.z), { timeoutMs: 20000 });
@@ -1128,7 +1105,7 @@ async function digIn(bot, ctx, { avoid = () => false, prepareSeal = false, depth
     }
   }
   if (shortShaft) {
-    const supported = await supportShortCover(bot, ctx, top, refuge, material);
+    const supported = await supportShortCover(bot, ctx, top, refuge, material, shaftYieldsSeal(top) ? 1 : 2);
     if (!supported.ok) return supported;
     if (!bot.entity.position.floored().equals(top)) {
       const moved = await actions.goTo(bot, ctx, new goals.GoalBlock(top.x, top.y, top.z), { timeoutMs: 10000 });

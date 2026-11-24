@@ -19,10 +19,8 @@ const { waitUntil } = require('../confirm');
 function exitPortalCells(bot) {
   const cells = [];
   for (const [x, z] of integerBox([-3, 3], [-3, 3])) {
-    for (let y = 40; y <= 90; y += 1) {
-      const p = new Vec3(x, y, z);
-      if (bot.blockAt(p)?.name === 'end_portal') { cells.push(p); break; }
-    }
+    const cell = end.exitPortalCell(bot, x, z);
+    if (cell) cells.push(cell);
   }
   const here = bot.entity.position;
   return cells.sort((a, b) => a.distanceTo(here) - b.distanceTo(here));

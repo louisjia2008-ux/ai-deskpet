@@ -13,18 +13,17 @@ const nether = require('../nether');
 const { createBlacklist } = require('../blacklist');
 const { createPortalTrip } = require('../netherTrip');
 const { findStructure } = require('../netherStructures');
-const { sleep } = require('../confirm');
+const { abortError, sleep } = require('../confirm');
 const { KNOWLEDGE } = require('../knowledge');
 const { Vec3 } = require('vec3');
 const { RaycastIterator } = require('prismarine-world').iterators;
-const { abortError } = require('../confirm');
 const { inspectStep } = require('../mining');
 const { perceive } = require('../perception');
 const { chooseExcavationTarget, excavationDirections, oreSafetyFailure, shoreSafetyFailure } = require('../quartzExcavationTarget');
 
 const isQuartz = (n) => n === 'quartz';
 const isQuartzOre = (n) => n === 'nether_quartz_ore';
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
+const { fail } = require('../action-result');
 // Blazes and wither skeletons spawn in and around a fortress, and a portal
 // can open right beside one. Quartz is everywhere else: mine away from it.
 const FORTRESS_BERTH = 40;

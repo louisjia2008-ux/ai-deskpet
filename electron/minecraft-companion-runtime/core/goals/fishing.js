@@ -10,7 +10,7 @@
 //   4. otherwise                -> stand on the edge, cast and wait for a bite
 // A catch counts once the reeled-in item is in the inventory.
 
-const { findDeviceSite, LIQUID, isAir, isSoft, isSolid, goToStand, adoptDeviceSite, digDeviceCell } = require('./device-site');
+const { layeredDeviceSite, LIQUID, isAir, isSoft, isSolid, goToStand, adoptDeviceSite, digDeviceCell } = require('./device-site');
 const { Vec3 } = require('vec3');
 const defaultSkills = require('../skills');
 const defaultActions = require('../actions');
@@ -25,19 +25,10 @@ const DIGGABLE = new Set(['grass_block', 'dirt', 'coarse_dirt', 'podzol', 'roote
   'stone', 'andesite', 'diorite', 'granite', 'cobblestone', 'clay', 'terracotta', 'deepslate', 'tuff']);
 const v = (p) => new Vec3(p.x, p.y, p.z);
 
-function evaluatePondSite(blockAt, anchor, facing) {
-  const pond = createFishPond(anchor, facing);
-  const at = (p) => blockAt(p.x, p.y, p.z);
-  for (const p of [...pond.floor, ...pond.rim]) if (!isSolid(at(p))) return null;
-  for (const p of pond.pond) { const b = at(p); if (!isAir(b) && b?.name !== 'water' && !DIGGABLE.has(b?.name)) return null; }
-  for (const p of pond.clear) if (!isSoft(at(p))) return null;
-  return pond;
-}
-
-/** Nearest flat spot; the anchor is the ground block the bot stands on. */
-function choosePondSite(blockAt, around, { radius = 8 } = {}) {
-  return findDeviceSite(blockAt, around, { radius, evaluate: evaluatePondSite });
-}
+const { evaluate: evaluatePondSite, choose: choosePondSite } = layeredDeviceSite(createFishPond, pond => [
+  [[...pond.floor, ...pond.rim], isSolid], [pond.pond, b => isAir(b) || b?.name === 'water' || DIGGABLE.has(b?.name)],
+  [pond.clear, isSoft],
+], { radius: 8 });
 
 function createFishingGoal({ bot, anchor = null, facing = 'east', count = 5,
   skills = defaultSkills, actions = defaultActions } = {}) {

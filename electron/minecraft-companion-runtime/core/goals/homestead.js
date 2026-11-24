@@ -2,7 +2,7 @@
 // Choose a site, build a usable house through the material planner, and
 // confirm optional upgrades against the current world.
 
-const { complete: finished, createAttempt, factsOf, failure, isComplete, resultFrom, waiting } = require('../action-result');
+const { complete: finished, createAttempt, factsOf, fail, failure, isComplete, resultFrom, waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
 const { nightBudget } = require('../behaviors/nightRest');
 const { goals } = require('mineflayer-pathfinder');
@@ -476,6 +476,11 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       const up = await surfaceFirst(ctx);
       if (up) return { ...up, transit: true };
     }
+    const missingResource = () => {
+      if (!requirement?.optional) return explore(ctx, step.key);
+      skipped.set(requirement.key, Date.now() + 300000);
+      return { ok: true, skipped: requirement.key };
+    };
     switch (step.kind) {
       case 'place_station': {
         // A station needs its foundation; if that hole is still open, fill it first.
@@ -522,11 +527,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
             : step.key === 'cobblestone' && allowFallback(ctx, step.purpose, result.reason, {}, true);
           return switched ? { ok: true, progress: false } : result;
         }
-        if (result.reason === 'no_target_in_range') {
-          if (requirement?.optional) { skipped.set(requirement.key, Date.now() + 300000); return { ok: true, skipped: requirement.key }; }
-          return explore(ctx, step.key);
-        }
-        return result;
+        return result.reason === 'no_target_in_range' ? missingResource() : result;
       }
       case 'smelt': {
         const result = await skills.smelt(bot, ctx, { input: step.input, count: step.count,
@@ -549,11 +550,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           const spider = await skills.huntOne(bot, ctx, { mobs: ['spider', 'cave_spider'], dropMatch: (n) => n === 'string', radius: 48 });
           if (spider.reason !== 'no_mob_in_range') return spider;
         }
-        if (result.reason === 'no_mob_in_range') {
-          if (requirement?.optional) { skipped.set(requirement.key, Date.now() + 300000); return { ok: true, skipped: requirement.key }; }
-          return explore(ctx, step.key);
-        }
-        return result;
+        return result.reason === 'no_mob_in_range' ? missingResource() : result;
       }
       default:
         return { ok: false, reason: `unplannable:${step.key}:${step.reason}` };
@@ -772,11 +769,12 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
   }
 
   function adoptSite(ctx, site, method) {
-    memory.house = createStarterHouse(site.anchor, site);
+    memory.house = createStarterHouse(site.anchor, method ? site : undefined);
     memory.relocation = null;
-    memory.homesteadRoute = null;
-    ctx.record('site_chosen', { anchor: site.anchor, fills: site.fills, digs: site.digs, method, variant: site.variant, route: site.route });
-    return { ok: true, progress: false };
+    if (method) memory.homesteadRoute = null;
+    ctx.record('site_chosen', { anchor: site.anchor, fills: site.fills, digs: site.digs,
+      ...(method && { method, variant: site.variant, route: site.route }) });
+    return method ? { ok: true, progress: false } : { ok: true };
   }
 
   function scoutSite(state, adaptation, record) {
@@ -875,6 +873,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     if (retry) return relocateAway(ctx, retry);
     const route = (memory.homesteadRoute ||= { heading: 0,
       bearing: Math.atan2(state.position.z - origin.z, state.position.x - origin.x) });
+    const exhausted = () => failure('relocation_routes_exhausted', { origin, travelled: (route.distance ?? 0) + (route.revisitDistance ?? 0),
+      bestCandidate: route.best?.anchor ?? null, rejectedBecause: route.best?.rejectedBecause ?? null,
+      attempted: [method] }, ctx);
     const travel = { ...ctx, dryRoute: true, ...explorationScope(ctx, origin, 200), exploration: undefined };
     const distance = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
     const searches = here => {
@@ -892,10 +893,11 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
       };
       if (route.legHeading !== heading) Object.assign(route, { legHeading: heading, legs: 0 });
       const moved = await boundedWork(bot, travel, { timeoutMs: 15000, check: measured,
-        limitResult: () => failure('relocation_routes_exhausted', {}, ctx) }, attempt =>
+        limitResult: exhausted }, attempt =>
         outwardLeg(bot, attempt, actions, route, origin, { distance: Math.min(28, 598 - route.distance), bearing: route.bearing }));
       measured();
       const here = ctx.perceive(), displacement = distance(from, here.position);
+      if (displacement > 0) memory.relocationAnchor = v(here.position);
       const usable = !here.inWater && (moved.ok && !moved.wait || displacement >= 16);
       let site;
       if (usable) {
@@ -903,7 +905,7 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           candidates.push([posKey(candidate.anchor), candidate.variant, reason]);
           if (reason !== 'restricted' && reason !== 'relocation_radius'
             && Number.isFinite(candidate.cost) && (!route.best || candidate.cost < route.best.cost)) {
-            route.best = candidate;
+            route.best = { ...candidate, rejectedBecause: reason };
           }
         };
         site = findSite(here, { ...searches(here), review }, ['near_flat'], 52, 2);
@@ -920,15 +922,19 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     const best = route.best;
     ctx.record('home_relocation_budget', { method, distance: route.distance, anchor: best?.anchor, candidatesExhausted: true });
     if (best) {
-      if (distance(bot.entity.position, best.anchor) > 5) {
+      const before = bot.entity.position.clone();
+      if (distance(before, best.anchor) > 5) {
         const moved = await actions.goNear(bot, travel, v(best.anchor), 4, { timeoutMs: 45000, skipAdaptation: true });
+        const offset = distance(before, bot.entity.position);
+        route.revisitDistance = (route.revisitDistance || 0) + offset;
+        if (offset > 0) memory.relocationAnchor = bot.entity.position.clone();
         if (!moved.ok || moved.wait) return moved;
       }
       const here = ctx.perceive();
       const site = findSite(here, searches(here), SITE_METHODS.slice(1), 16, 1);
       if (site) return adoptSite(ctx, site, method);
     }
-    return failure('relocation_routes_exhausted', {}, ctx);
+    return exhausted();
   }
 
   async function relocateAway(ctx, retry) {
@@ -941,8 +947,9 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
     ctx.record('recovery_switch', { task: 'homestead_site', to: 'outward_route', ...end, attempt: retry.attempt + 1 });
     const walk = walkOutward(bot, ctx, actions, end, 15000);
     const result = await walk.result;
-    if (result.reason === 'aborted' || ctx.signal?.aborted) return result;
     const moved = bot.entity.position.distanceTo(from);
+    if (moved > 0) memory.relocationAnchor = bot.entity.position.clone();
+    if (result.reason === 'aborted' || ctx.signal?.aborted) return result;
     if (result.ok && moved >= 6 && walk.goal.isEnd(bot.entity.position.floored())) return { ok: true, moved };
     if (++retry.attempt >= 2 * turns) retry.retryAt = Date.now() + 10 * 60_000;
     return result.ok ? { ok: false, reason: 'relocation_not_arrived' } : result;
@@ -1886,16 +1893,13 @@ function createHomesteadGoal({ bot, anchor = null, near = null, variant = 'start
           let site;
           if (method === 'relocate' || method === 'move_to_fresh_area') return relocateSite(ctx, state, origin, method);
           site = findSite(state, siteSearch(state, ctx.adapt), [method]);
-          if (!site) return { ok: false, reason: 'no_suitable_site' };
+          if (!site) return fail('no_suitable_site', { objective: origin, position: state.position, attempted: [method] });
           return adoptSite(ctx, site, method);
         });
       }
       const site = chooseSite(readSite, near || state.position, siteSearch(state, ctx.adapt));
       if (!site) return memory.relocation?.anchor ? relocateSite(ctx, state) : explore(ctx, 'site');
-      memory.house = createStarterHouse(site.anchor);
-      memory.relocation = null;
-      ctx.record('site_chosen', { anchor: site.anchor, fills: site.fills, digs: site.digs });
-      return { ok: true };
+      return adoptSite(ctx, site);
     }
     // Respawned far away from a site that barely stands and has no bed yet:
     // starting over here is cheaper than the long walk back.

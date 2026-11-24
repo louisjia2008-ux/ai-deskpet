@@ -20,7 +20,7 @@
 // The villagers still have to sleep in their beds once before they call golems:
 // the farm starts working after its first night.
 
-const { findDeviceSite, LIQUID, isAir, isSolid, guardDeviceCells, standingAt, goToStand, adoptDeviceSite, placeDevicePart, finishDevicePart, digFromBeside, stepBeside, TUNNEL: DIGGABLE, validDeviceLayers } = require('./device-site');
+const { layeredDeviceSite, LIQUID, isAir, isSolid, guardDeviceCells, standingAt, goToStand, adoptDeviceSite, placeDevicePart, finishDevicePart, digFromBeside, stepBeside, TUNNEL: DIGGABLE } = require('./device-site');
 const { vec: v, posKey: key } = require('../blacklist');
 const { waiting } = require('../action-result');
 const { Vec3 } = require('vec3');
@@ -37,17 +37,27 @@ const WAIT_MS = 15000;
 
 const { droppedItemName: droppedName } = defaultActions;
 
-function evaluateIronFarmSite(blockAt, anchor, facing) {
-  const farm = createIronFarm(anchor, facing);
+const { evaluate: evaluateIronFarmSite, choose: chooseIronFarmSite } = layeredDeviceSite(createIronFarm, farm => {
   const top = farm.cells.stairsTop;
-  return validDeviceLayers(blockAt, [[{ ...top, y: top.y - 1 }], isSolid], [[top, { ...top, y: top.y + 1 }], isAir],
-    [farm.digOrder, b => DIGGABLE.test(b?.name || '')], [farm.solid, isSolid],
-    [farm.parts.map(part => part.against), isSolid]) ? farm : null;
+  return [[[{ ...top, y: top.y - 1 }], isSolid], [[top, { ...top, y: top.y + 1 }], isAir],
+    [farm.digOrder, b => DIGGABLE.test(b?.name || '')], [farm.solid, isSolid], [farm.parts.map(part => part.against), isSolid]];
+}, { radius: 6, step: 2, soft: block => isAir(block) || block.boundingBox === 'empty' });
+
+// Each hit adds ten times its damage and a cart breaks at 40, healing one
+// a tick. Let the tool recharge and keep hits less than a second apart.
+async function breakMinecart(bot, ctx, cart, maxHits) {
+  const tool = bot.inventory.items().find(i => /_(sword|axe|pickaxe)$/.test(i.name) && !/^(wooden|golden)_/.test(i.name));
+  if (tool && bot.heldItem?.name !== tool.name) await bot.equip(tool, 'hand').catch(() => {});
+  for (let hit = 0; hit < maxHits && bot.entities[cart.id]; hit += 1) {
+    await sleep(900, ctx.signal);
+    try { await bot.attack(bot.entities[cart.id]); } catch { break; }
+  }
+  await sleep(300, ctx.signal);
+  return !bot.entities[cart.id];
 }
 
-/** Nearest spot with solid rock under it; the anchor is the ground's top block above the corridor. */
-function chooseIronFarmSite(blockAt, around, { radius = 6 } = {}) {
-  return findDeviceSite(blockAt, around, { radius, step: 2, soft: block => isAir(block) || block.boundingBox === 'empty', evaluate: evaluateIronFarmSite });
+function placeRail(bot, ctx, skills, cell, name) {
+  return skills.placeAt(bot, ctx, cell, n => n === name, { faces: [new Vec3(0, -1, 0)], passable: true });
 }
 
 function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, villagersBy = 'eggs',
@@ -111,20 +121,6 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
 
   const goStand = (ctx, p, timeoutMs = 30000) => goToStand(bot, ctx, actions, p, timeoutMs, 0.6);
 
-  // A cart breaks once its damage passes 40; each hit adds ten times its
-  // damage and it heals one a tick. Changing items resets the attack charge, so
-  // equip once, let it charge, then hit at full strength under a second apart.
-  async function breakCart(ctx, cart) {
-    const tool = bot.inventory.items().find((i) => /_(sword|axe|pickaxe)$/.test(i.name) && !/^(wooden|golden)_/.test(i.name));
-    if (tool && bot.heldItem?.name !== tool.name) await bot.equip(tool, 'hand').catch(() => {});
-    for (let hit = 0; hit < 4 && bot.entities[cart.id]; hit += 1) {
-      await sleep(900, ctx.signal);
-      try { await bot.attack(bot.entities[cart.id]); } catch { break; }
-    }
-    await sleep(300, ctx.signal);
-    return !bot.entities[cart.id];
-  }
-
   function dig(ctx, p) {
     // The last bed pit has no other neighbour. Check the dug pit below as well.
     return digFromBeside(bot, ctx, actions, blockAt, p, () =>
@@ -154,7 +150,7 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
   async function layRail(ctx, rail) {
     const current = blockAt(rail.position);
     if (!isAir(current) && current.name !== rail.block) return dig(ctx, rail.position);
-    const result = await skills.placeAt(bot, ctx, rail.position, (n) => n === rail.block, { faces: [new Vec3(0, -1, 0)], passable: true });
+    const result = await placeRail(bot, ctx, skills, rail.position, rail.block);
     ctx.record('iron_farm_rail', { at: rail.position, block: rail.block, ok: result.ok, reason: result.reason,
       shape: blockAt(rail.position)?.getProperties?.().shape });
     return result;
@@ -271,7 +267,7 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
             const moved = await goStand(ctx, c.villagerStand);
             if (!moved.ok) return moved;
           }
-          await breakCart(ctx, cart);
+          await breakMinecart(bot, ctx, cart, 4);
           ctx.record('iron_farm_entrance_cart', { broken: !bot.entities[cart.id] });
           // A hit that doesn't break it knocks it on into the corridor, which frees the entrance too.
           memory.entranceHits = (memory.entranceHits || 0) + 1;
@@ -303,4 +299,4 @@ function createIronFarmGoal({ bot, anchor = null, facing = 'east', count = 3, vi
   };
 }
 
-module.exports = { createIronFarmGoal, chooseIronFarmSite, evaluateIronFarmSite };
+module.exports = { createIronFarmGoal, chooseIronFarmSite, evaluateIronFarmSite, breakMinecart, placeRail };

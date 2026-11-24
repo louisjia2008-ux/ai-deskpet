@@ -5,7 +5,7 @@ const { stepTarget, startTarget } = require('./planner');
 const { createScheduleBackoff } = require('./schedule-backoff');
 const { createAdaptation } = require('./adaptation');
 const { complete, failure, isComplete, isRescueBehavior, factsOf } = require('./action-result');
-const { boundedWork, explorationScope, explorationExhausted } = require('./work-budget');
+const { boundedWork, explorationScope, explorationExhausted, returnToWorkArea } = require('./work-budget');
 const { schedulingInputs, travelTicks, nightBudget } = require('./scheduling');
 
 const RISKS = new Set(['low', 'medium', 'high']);
@@ -252,13 +252,14 @@ function createDirector({
         return boundedWork(bot, ctx, { check, limitResult: () => explorationExhausted(ctx) }, work);
       },
       async before(ctx) {
-        const house = memory.homestead?.memory?.house, state = ctx.perceive?.();
+        const site = memory.homestead?.memory, state = ctx.perceive?.(), house = site?.house;
         if (current.card.bounded && (card !== 'homestead' || house) && state?.dimension === 'overworld') {
-          const origin = house?.interiorCenter || memory.explorationOrigin;
+          const origin = house?.interiorCenter ?? site?.relocationAnchor ?? state.position;
           Object.assign(ctx, explorationScope(ctx, origin), { dryRoute: true });
-          if (!ctx.pathArea(state.position)) {
-            if (card !== 'homestead') return explorationExhausted(ctx);
-            delete ctx.pathArea; // A respawn outside the work area may approach home.
+          ctx.exploration.anchorSource = house ? 'home' : site?.relocationAnchor ? 'relocation' : 'current_position';
+          if (bot && !ctx.pathArea(state.position)) {
+            const returned = await returnToWorkArea(bot, ctx);
+            if (returned) return returned;
           }
         }
         const p = generic(card);

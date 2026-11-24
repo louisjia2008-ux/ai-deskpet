@@ -82,6 +82,56 @@ function sameWater(bot, from, to) {
 
 const fail = (reason, details = {}) => ({ ok: false, reason, ...details });
 
+const descriptions = {
+  search_area_exhausted: 'No suitable work target was reachable within the search boundary.',
+  aborted: 'The current action was cancelled before its outcome was confirmed.',
+  no_suitable_site: 'The requested site scan found no buildable and reachable house site.',
+  combat_leash: 'The target moved beyond the permitted pursuit area.',
+  relocation_routes_exhausted: 'The relocation search ended without finding a usable site.',
+  path_timeout: 'The walk did not reach its destination within the allowed time.',
+  drops_not_collected: 'The expected drop did not appear in inventory.',
+  Timeout: 'The native path planner ran out of time.',
+  not_arrived: 'The movement finished without the body arriving at the destination.',
+  still_below_surface: 'The body remains below the verified exit level.',
+  chase_stuck: 'The chase stopped closing the distance to the target.',
+  no_progress: 'The action stalled without confirmed movement or work.',
+  place_unconfirmed: 'The server did not confirm the expected block placement.',
+  self_escape_unconfirmed: 'The world and body position did not confirm an escape.',
+  shelter_not_entered: 'The feet and head were not confirmed inside the shelter.',
+};
+
+function failureFacts(reason, facts, ctx, state) {
+  const summary = Object.hasOwn(descriptions, reason) && descriptions[reason];
+  if (!summary) return facts;
+  const bot = state?.bot ?? state, at = bot?.entity?.position ?? state?.position;
+  const home = bot?.companionHomeAt?.();
+  const { distanceHome, target, adaptation, source, rescue, terminal, routeCaused, enteredWater, destinationObserved, ...details } = facts;
+  const evidence = { target, adaptation, source, rescue, terminal, routeCaused, enteredWater, destinationObserved, summary,
+    objective: facts.objective ?? facts.destination ?? facts.origin ?? facts.position ?? ctx?.route?.destination ?? ctx?.behavior ?? null,
+    attempted: facts.attempted ?? facts.tried ?? [facts.method ?? facts.rescue ?? ctx?.behavior].filter(Boolean), need: facts.need ?? {},
+    distanceHome: distanceHome ?? (home && at ? Math.round(Math.hypot(at.x - home.x, at.z - home.z) * 10) / 10 : null),
+    ...details, ...(reason === 'aborted' && !facts.cause && ctx?.signal?.reason && { cause: String(ctx.signal.reason) }) };
+  return boundedFacts(evidence);
+}
+
+function boundedFacts(value, depth = 0) {
+  if (typeof value === 'string') return value.slice(0, 160);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (value === null || typeof value === 'boolean') return value;
+  if (!value || typeof value !== 'object' || depth > 4) return undefined;
+  if (value instanceof Vec3) return value.clone();
+  if (Array.isArray(value)) return value.slice(0, 16).map(item => boundedFacts(item, depth + 1));
+  if (![null, Object.prototype].includes(Object.getPrototypeOf(value))) return undefined;
+  let out = {};
+  for (const [key, item] of Object.entries(value)) {
+    const safe = boundedFacts(item, depth + 1);
+    if (safe === undefined) continue;
+    const next = { ...out, [key]: safe };
+    if (depth || Buffer.byteLength(JSON.stringify(next)) <= 1024) out = next;
+  }
+  return out;
+}
+
 function failure(reason, facts = {}, ctx, state) {
   let kind = classifyReason(reason);
   const rescue = rescueOf(ctx);
@@ -110,7 +160,7 @@ function failure(reason, facts = {}, ctx, state) {
     facts = { ...facts, need: facts.need ?? missing ?? {},
       carried: bag && typeof bag.items !== 'function' ? bag : countInventory(ownedItems(bot)) };
   }
-  return { ok: false, kind, reason, facts, attemptId: createAttempt(ctx).attemptId };
+  return { ok: false, kind, reason, facts: failureFacts(reason, facts, ctx, state), attemptId: createAttempt(ctx).attemptId };
 }
 
 const waterRouteFailure = result => Boolean(result?.facts?.enteredWater || result?.facts?.routeCaused);
@@ -172,7 +222,9 @@ function resultFrom(value, ctx, state) {
     const attempt = createAttempt({ ...ctx, attemptId: ctx?.attemptId ?? attemptId });
     classifyReason(reason);
     if (kind && facts && attemptId === attempt.attemptId && !Object.keys(details).length
-      && (!ctx || kind === 'interrupted' || (rescueOf(ctx) ? facts.rescue && kind !== 'start' : !facts.rescue || kind === 'start'))) return value;
+      && (!ctx || kind === 'interrupted' || (rescueOf(ctx) ? facts.rescue && kind !== 'start' : !facts.rescue || kind === 'start'))) {
+      return Object.hasOwn(descriptions, reason) ? { ...value, facts: failureFacts(reason, facts, attempt, state) } : value;
+    }
     return failure(reason, { ...details, ...facts }, attempt, state);
   }
   if (value?.wait) return waiting(value.wait.reason, value.wait.until);

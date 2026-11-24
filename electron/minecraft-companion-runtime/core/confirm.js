@@ -5,6 +5,13 @@
 
 const isAbort = error => error?.code === 'aborted';
 
+// A missing native reply can still be followed by a confirmed world change.
+async function ignoreUnlessAborted(run) {
+  try { return await run(); } catch (error) {
+    if (isAbort(error)) throw error;
+  }
+}
+
 function abortError(signal) {
   const error = new Error(String(signal?.reason || 'aborted'));
   error.code = 'aborted';
@@ -88,4 +95,4 @@ async function withRouteDeadline(ctx, timeoutMs, halt, timedOut, run) {
   } finally { clearTimeout(timer); }
 }
 
-module.exports = { sleep, waitUntil, runCancellable, abortError, isAbort, withRouteDeadline };
+module.exports = { sleep, waitUntil, runCancellable, abortError, isAbort, ignoreUnlessAborted, withRouteDeadline };

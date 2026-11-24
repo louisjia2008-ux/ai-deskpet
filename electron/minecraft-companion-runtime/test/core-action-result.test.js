@@ -144,7 +144,11 @@ test('first path step failure is distinct from exhausted routes with usable star
   assert.equal(cannotLeave.kind, 'start');
   assert.equal(cannotLeave.facts.source, 'path_first_step');
   bot.pathfinder.goto = async () => { bot.emit('path_update', { status: 'noPath', visitedNodes: 17 }); };
-  assert.deepEqual(await actions.goTo(bot, ctx, goal), failure('not_arrived', {}, ctx));
+  const stalled = await actions.goTo(bot, ctx, goal);
+  assert.equal(stalled.kind, 'target');
+  assert.equal(stalled.reason, 'not_arrived');
+  assert.equal(stalled.attemptId, ctx.attemptId);
+  assert.deepEqual(stalled.facts.objective, { x: 10, y: 64, z: 0 });
   assert.equal(bot.listenerCount('path_update'), 0);
   assert.equal(bot.listenerCount('path_reset'), 0);
 });
@@ -153,7 +157,9 @@ test('the same failed movement belongs to rescue inside and becomes start when h
   const ctx = createAttempt({ behavior: 'goal:homestead' });
   const rescue = failure('not_arrived', {}, { ...ctx, rescue: 'home_escape' }, { inWater: true });
   assert.equal(rescue.kind, 'target');
-  assert.deepEqual(rescue.facts, { rescue: 'home_escape', source: 'water' });
+  assert.equal(rescue.facts.rescue, 'home_escape');
+  assert.equal(rescue.facts.source, 'water');
+  assert.deepEqual(rescue.facts.attempted, ['home_escape']);
   const work = resultFrom(rescue, ctx);
   assert.equal(work.kind, 'start');
   assert.equal(work.attemptId, rescue.attemptId);
@@ -231,4 +237,40 @@ test('a cancelled public action returns its attempt outcome before touching the 
   bot.pathfinder.goto = () => assert.fail('starting a cancelled action touches the body');
   assert.deepEqual(await actions.goTo(bot, ctx, new goals.GoalBlock(10, 64, 0)),
     failure('aborted', { cause: 'preempted' }, ctx));
+});
+
+
+test('frequent failed actions carry bounded serializable facts for the model', () => {
+  const reasons = ['search_area_exhausted', 'aborted', 'no_suitable_site', 'combat_leash', 'relocation_routes_exhausted',
+    'path_timeout', 'drops_not_collected', 'Timeout', 'not_arrived', 'still_below_surface', 'chase_stuck', 'no_progress',
+    'place_unconfirmed', 'self_escape_unconfirmed', 'shelter_not_entered'];
+  const objective = new Vec3(106, 72, 81), crowded = {};
+  for (let n = 0; n < 80; n++) crowded[n] = '句'.repeat(260);
+  class Window {
+    items() { return [{ name: 'sandstone', count: 2 }]; }
+  }
+  const window = new Window();
+  window.circular = window;
+  const bot = { entity: { position: new Vec3(3, 72, 4) }, inventory: window,
+    companionHomeAt: () => new Vec3(0, 72, 0) };
+  for (const reason of reasons) {
+    const { facts } = failure(reason, { objective, need: { sandstone: 1 }, attempted: ['recorded attempt'], crowded, window },
+      createAttempt(), bot);
+    assert.equal(typeof facts.summary, 'string', reason);
+    assert.deepEqual({ ...facts.objective }, { x: 106, y: 72, z: 81 });
+    assert.deepEqual(facts.attempted, ['recorded attempt']);
+    assert.deepEqual(facts.need, { sandstone: 1 });
+    assert.equal(facts.distanceHome, 5);
+    assert.equal('window' in facts, false);
+    assert.ok(Buffer.byteLength(JSON.stringify(facts)) <= 1024, reason);
+  }
+  const long = failure('not_arrived', { objective: 'a'.repeat(140), attempted: Array(4).fill('b'.repeat(160)),
+    target: { excluded: true } }, {});
+  assert.equal(long.facts.target.excluded, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(long.facts)) <= 1024);
+  const beforeHome = failure('still_below_surface', { tried: ['pathfinder', 'side_stairs'] }, {});
+  const later = resultFrom(beforeHome, {}, bot);
+  assert.equal(later.facts.distanceHome, 5);
+  assert.deepEqual(later.facts.attempted, ['pathfinder', 'side_stairs']);
+  assert.deepEqual(failure('no_seal_block', {}, {}, bot).facts.carried, { sandstone: 2 });
 });

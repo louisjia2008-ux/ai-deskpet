@@ -1,6 +1,7 @@
 'use strict';
 
 const { Vec3 } = require('vec3');
+const { goals: { GoalNearXZ } } = require('mineflayer-pathfinder');
 const { failure, isComplete, waiting } = require('./action-result');
 const { nightBudget, travelTicks } = require('./scheduling');
 const { wet } = require('./dry-route');
@@ -40,8 +41,24 @@ function explorationScope(ctx, origin, radius = EXPLORATION_RANGE) {
     exploration: { origin, radius } };
 }
 
+async function returnToWorkArea(bot, ctx) {
+  const { origin, radius, anchorSource } = ctx.exploration;
+  const from = bot.entity.position.clone();
+  const reached = () => ctx.pathArea(bot.entity.position);
+  const facts = () => ({ origin, radius, anchorSource, from, position: bot.entity.position,
+    distance: horizontal(bot.entity.position, origin), attempted: ['return_to_work_area'] });
+  const failed = () => failure('exploration_return_unconfirmed', facts(), { ...ctx, departure: null });
+  ctx.record('task_range_return', { phase: 'start', ...facts() });
+  const result = await boundedWork(bot, { ...ctx, pathArea: undefined, workArea: undefined },
+    { timeoutMs: 30_000, check: () => true, limitResult: failed }, scoped =>
+      require('./actions').goTo(bot, scoped, new GoalNearXZ(origin.x, origin.z, radius - 8),
+        { timeoutMs: 30_000, retryNoProgress: false }));
+  ctx.record('task_range_return', { phase: 'finish', ...facts(), reached: reached(), reason: result?.reason });
+  return ctx.signal?.aborted ? result : reached() ? null : failed();
+}
+
 function explorationExhausted(ctx) {
-  return failure('search_area_exhausted', ctx.exploration || {}, ctx);
+  return failure('search_area_exhausted', { ...ctx.exploration, attempted: ['bounded_search'] }, ctx);
 }
 
 function dryAt(bot, p) {
@@ -114,4 +131,4 @@ function createOpportunisticHunt({ bot, skills, mobs, food, spare, backoff }) {
   };
 }
 
-module.exports = { boundedWork, createForaging, createOpportunisticHunt, localOpportunity, opportunityAllowed, FOOD_MOBS, explorationScope, explorationExhausted, EXPLORATION_RANGE };
+module.exports = { boundedWork, createForaging, createOpportunisticHunt, localOpportunity, opportunityAllowed, FOOD_MOBS, explorationScope, explorationExhausted, returnToWorkArea, EXPLORATION_RANGE };

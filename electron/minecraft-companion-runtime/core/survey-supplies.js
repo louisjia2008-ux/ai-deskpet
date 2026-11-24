@@ -3,7 +3,7 @@
 const actions = require('./actions');
 const skills = require('./skills');
 const { abortError, waitUntil } = require('./confirm');
-const { vec, placementSpec, openDoorIfVisible, descendSurveyScaffold } = require('./survey-placement');
+const { vec, placementSpec, walkThroughDoor, descendSurveyScaffold } = require('./survey-placement');
 
 const HOE = 'wooden_hoe';
 const SALVAGE = /^(grass_block|dirt|coarse_dirt|rooted_dirt|mud|cobblestone|cobbled_deepslate|stone|andesite|diorite|granite|tuff|calcite|dripstone_block|sand|red_sand|sandstone|red_sandstone|gravel|.+_log|.+_stem)$/;
@@ -64,10 +64,8 @@ function createSurveySupplies(bot, plan, { baseline, borrowed } = createSurveyIn
     if (!chestPos) return { ok: false, reason: 'no_supply_chest' };
     if (!actions.withinReach(bot, chestPos, 3.8)) {
       await descendSurveyScaffold(bot, ctx, plan);
-      let travel = await actions.goNear(bot, ctx, chestPos.offset(0.5, 0, 0.5), 2, { timeoutMs: PATH_TIMEOUT });
-      if (!travel.ok && await openDoorIfVisible(bot, ctx, plan)) {
-        travel = await actions.goNear(bot, ctx, chestPos.offset(0.5, 0, 0.5), 2, { timeoutMs: PATH_TIMEOUT });
-      }
+      const travel = await walkThroughDoor(bot, ctx, plan,
+        () => actions.goNear(bot, ctx, chestPos.offset(0.5, 0, 0.5), 2, { timeoutMs: PATH_TIMEOUT }));
       if (!travel.ok || !actions.withinReach(bot, chestPos, 4.3)) return chestFailure('supply_chest_unreachable');
     }
     const chest = bot.blockAt(chestPos);
@@ -93,20 +91,23 @@ function createSurveySupplies(bot, plan, { baseline, borrowed } = createSurveyIn
     }
   }
 
-  async function withdraw(window, name, quantity) {
-    let left = quantity;
-    for (const item of window.containerItems()) {
-      if (!isMaterial(name, item) || left <= 0) continue;
-      const n = Math.min(left, item.count, room(window, item, window.inventoryStart, window.inventoryEnd));
+  async function transfer(window, items, left, intoWindow) {
+    const start = intoWindow ? 0 : window.inventoryStart;
+    const end = intoWindow ? window.inventoryStart : window.inventoryEnd;
+    for (const item of items) {
+      const n = Math.min(left, item.count, room(window, item, start, end));
       if (n <= 0) break;
-      // Revocation can interrupt after the server transfers a stack but before
-      // Mineflayer resolves the window operation.
-      borrowed.add(item.name);
-      await window.withdraw(item.type, item.metadata, n, item.nbt);
+      if (intoWindow) await window.deposit(item.type, item.metadata, n, item.nbt);
+      else {
+        // Revocation may interrupt after the server transfers a stack.
+        borrowed.add(item.name);
+        await window.withdraw(item.type, item.metadata, n, item.nbt);
+      }
       left -= n;
     }
-    return quantity - left;
+    return left;
   }
+  const withdraw = (window, name, qty) => transfer(window, window.containerItems().filter(item => isMaterial(name, item)), qty, false);
 
   async function craftFromInventory(ctx, needed) {
     for (const [name, yieldCount] of [['oak_planks', 4], ['stick', 4]]) {
@@ -128,8 +129,7 @@ function createSurveySupplies(bot, plan, { baseline, borrowed } = createSurveyIn
       for (const [name, qty] of needed) {
         const short = qty - count(have(), name);
         if (short <= 0) continue;
-        const amount = await withdraw(window, name, short);
-        const remaining = short - amount;
+        const remaining = await withdraw(window, name, short);
         if (remaining <= 0) continue;
         if (name === 'oak_planks') await withdraw(window, 'oak_log', Math.max(0, Math.ceil(remaining / 4) - count(have(), 'oak_log')));
         if (name === 'stick') await withdraw(window, 'oak_planks', Math.max(0, 2 * Math.ceil(remaining / 4) - count(have(), 'oak_planks')));
@@ -171,13 +171,8 @@ function createSurveySupplies(bot, plan, { baseline, borrowed } = createSurveyIn
         const items = window.slots.slice(window.inventoryStart, window.inventoryEnd).filter((item) => item?.name === name);
         // The final placement acknowledgement can precede the inventory slot update.
         // The contents delivered when opening the chest are the current server view.
-        let left = items.reduce((total, item) => total + item.count, 0) - (baseline.get(name) || 0);
-        for (const item of items) {
-          const n = Math.min(left, item.count, room(window, item, 0, window.inventoryStart));
-          if (n <= 0) break;
-          await window.deposit(item.type, item.metadata, n, item.nbt);
-          left -= n;
-        }
+        const extra = items.reduce((total, item) => total + item.count, 0) - (baseline.get(name) || 0);
+        const left = await transfer(window, items, extra, true);
         if (left > 0) return { ok: false, reason: 'chest_full' };
       }
       return { ok: true };

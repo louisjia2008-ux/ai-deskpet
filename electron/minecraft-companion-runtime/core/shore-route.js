@@ -1,15 +1,13 @@
 'use strict';
 
-const { dryComponent, wet } = require('./dry-route');
-const { safeStand, SIDES } = require('./home-topology');
+const { dryComponent, dryStand, isWaterBlock } = require('./dry-route');
+const { SIDES } = require('./home-topology');
 const { isAir } = require('./natural-cover');
 const { abortError, runCancellable, waitUntil } = require('./confirm');
 
-const WATER = /^(water|bubble_column|kelp|kelp_plant|seagrass|tall_seagrass)$/;
 const shoreDistance = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const sameBlock = (entry, block) => Boolean(block && block.name === entry.name && block.stateId === entry.stateId);
-const dryCell = (bot, p) => safeStand(q => bot.blockAt(q), p)
-  && [-1, 0, 1].every(y => !wet(bot.blockAt(p.offset(0, y, 0))));
+const dryCell = (bot, p) => dryStand(q => bot.blockAt(q), p);
 
 function steadyGround(bot) {
   return bot.entity.onGround === true && !bot.entity.isInWater && !bot.entity.isInLava
@@ -18,13 +16,13 @@ function steadyGround(bot) {
 
 function waterContact(bot, nearBank = false) {
   const at = bot.entity.position.floored();
-  if (bot.entity.isInWater || WATER.test(bot.blockAt(at)?.name || '')) return at;
+  if (bot.entity.isInWater || isWaterBlock(bot.blockAt(at))) return at;
   if (!nearBank) return null;
   for (const [x, z] of SIDES) {
     for (const distance of [1, 2]) {
       for (const drop of [0, 1, 2]) {
         const p = at.offset(x * distance, -drop, z * distance);
-        if (WATER.test(bot.blockAt(p)?.name || '')) return p;
+        if (isWaterBlock(bot.blockAt(p))) return p;
       }
     }
   }
@@ -85,7 +83,7 @@ function bridgePlan(bot, goal, isProtected) {
       const floor = p.offset(0, -1, 0);
       if (distance === 4 || isProtected(floor) || isProtected(p)
         || ![floor, p, p.offset(0, 1, 0)].every(q => isAir(bot.blockAt(q)?.name))
-        || ![1, 2].some(drop => WATER.test(bot.blockAt(floor.offset(0, -drop, 0))?.name || ''))) break;
+        || ![1, 2].some(drop => isWaterBlock(bot.blockAt(floor.offset(0, -drop, 0))))) break;
       cells.push(p);
     }
   }

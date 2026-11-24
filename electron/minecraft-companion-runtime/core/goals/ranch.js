@@ -121,22 +121,13 @@ function createRanchGoal({ bot, kind = 'cow', target = 3, size = 6, center = nul
       const result = await husbandry.lure(bot, ctx, pen, outside);
       return recordTarget(bot, ctx, result, animal(outside));
     }
-    if (adults.length < 2) {
-      // One that just slipped away is still in sight: try it again shortly
-      // rather than wander off looking for others.
-      const known = Object.values(bot.entities).some((e) => e.name === kind && e.position && !pen.contains(e.position)
-        && !husbandry.isBaby(bot, e) && e.position.distanceTo(penMiddle()) < ROAM);
-      if (known) {
-        if (pen.contains(bot.entity.position)) return husbandry.leave(bot, ctx, pen);
-        await sleep(waitMs, ctx.signal);
-        return waiting('animals_settling');
-      }
-      return skills.explore(bot, ctx, memory);
-    }
-    // Parents on cooldown: wait it out, out of the pen.
+    const settling = adults.length < 2;
+    // A visible adult can settle back into the pen before another search.
+    if (settling && !Object.values(bot.entities).some((e) => e.name === kind && e.position && !pen.contains(e.position)
+      && !husbandry.isBaby(bot, e) && e.position.distanceTo(penMiddle()) < ROAM)) return skills.explore(bot, ctx, memory);
     if (pen.contains(bot.entity.position)) return husbandry.leave(bot, ctx, pen);
     await sleep(waitMs, ctx.signal);
-    return waiting('animals_breeding');
+    return waiting(settling ? 'animals_settling' : 'animals_breeding');
   }
 
   return {

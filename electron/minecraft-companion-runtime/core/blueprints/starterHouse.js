@@ -18,6 +18,7 @@
 //   z=5  W C F . H t W      C crafting table, F furnace, H chest
 //   z=6  W W W W W W W
 
+const { integerBox } = require('../geometry');
 const SIZE = 7;
 const WALL_HEIGHT = 2;
 
@@ -33,13 +34,11 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
 
   const door = { dx: mid, dz: 0 };
   for (let dy = 0; dy < WALL_HEIGHT; dy += 1) {
-    for (let dx = 0; dx < size; dx += 1) {
-      for (let dz = 0; dz < size; dz += 1) {
-        const edge = dx === 0 || dz === 0 || dx === size - 1 || dz === size - 1;
-        if (!edge) continue;
-        if (dx === door.dx && dz === door.dz && dy < 2) continue;
-        add(dx, dy, dz, variant === 'hillside' && dz > 0 ? 'cave_wall' : 'wall', 'walls');
-      }
+    for (const [dx, dz] of integerBox([0, (size) - 1], [0, (size) - 1])) {
+      const edge = dx === 0 || dz === 0 || dx === size - 1 || dz === size - 1;
+      if (!edge) continue;
+      if (dx === door.dx && dz === door.dz && dy < 2) continue;
+      add(dx, dy, dz, variant === 'hillside' && dz > 0 ? 'cave_wall' : 'wall', 'walls');
     }
   }
   // Roof: the ring over the walls first (supported from below), then inwards.
@@ -73,11 +72,9 @@ function createStarterHouse(anchor, { variant = 'starter' } = {}) {
 
   // Everything inside the shell and one block of headroom above the roof must be clear.
   const clearance = [], foundation = [];
-  for (let dx = 0; dx < size; dx += 1) {
-    for (let dz = 0; dz < size; dz += 1) {
-      foundation.push(at(dx, -1, dz));
-      for (let dy = 0; dy <= WALL_HEIGHT + (variant === 'hillside' ? 0 : 1); dy += 1) clearance.push(at(dx, dy, dz));
-    }
+  for (const [dx, dz] of integerBox([0, (size) - 1], [0, (size) - 1])) {
+    foundation.push(at(dx, -1, dz));
+    for (let dy = 0; dy <= WALL_HEIGHT + (variant === 'hillside' ? 0 : 1); dy += 1) clearance.push(at(dx, dy, dz));
   }
   const entrance = at(door.dx, 0, -1);
   const exteriorTorches = furniture.torches.filter((p) => p.z < anchor.z);

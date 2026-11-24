@@ -28,6 +28,7 @@
 // slime) and places those parts from the top of it. A last cobblestone bridges
 // that stand to the piston's top, so drops landing on the machine can be fetched.
 
+const { integerBox } = require('../geometry');
 const { blueprintFrame, DIRECTION_NAMES } = require('./cobbleGenerator');
 
 function createRailDuper(anchor, facing = 'east') {
@@ -73,13 +74,11 @@ function createRailDuper(anchor, facing = 'east') {
   const floor = [];
   const clear = [];
   const machine = new Set(parts.map((p) => `${p.position.x},${p.position.y},${p.position.z}`));
-  for (let a = -2; a <= 4; a += 1) {
-    for (let l = -1; l <= 3; l += 1) {
-      floor.push(at(a, 0, l));
-      for (let dy = 1; dy <= 5; dy += 1) {
-        const c = at(a, dy, l);
-        if (!machine.has(`${c.x},${c.y},${c.z}`)) clear.push(c);
-      }
+  for (const [a, l] of integerBox([-2, 4], [-1, 3])) {
+    floor.push(at(a, 0, l));
+    for (let dy = 1; dy <= 5; dy += 1) {
+      const c = at(a, dy, l);
+      if (!machine.has(`${c.x},${c.y},${c.z}`)) clear.push(c);
     }
   }
   // Wall button: aim at the middle of its cell, toward the cobblestone.

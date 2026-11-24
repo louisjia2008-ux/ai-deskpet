@@ -1,7 +1,7 @@
 'use strict';
 // Query-only direction ranking. No bot, actions, pose or actual ledger writes.
 const crypto=require('node:crypto'),{performance}=require('node:perf_hooks');
-const DIRS=[[1,0],[0,1],[-1,0],[0,-1]],key=p=>`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
+const { DIRS, key } = require('./quartzExcavationGeometry');
 const unknown=r=>/unknown|unloaded|changed|budget|reserve|deadline|cancel|aborted/.test(r||'');
 function cloneLedger(s){return{...s,route:s.route.map(p=>p.clone()),used:{...s.used},routeFeet:new Set(s.routeFeet),protectedFloors:new Set(s.protectedFloors),open:new Set(s.open),digCells:new Set(s.digCells),confirmedDigCells:new Set(s.confirmedDigCells)};}
 function rankContinuations(input){

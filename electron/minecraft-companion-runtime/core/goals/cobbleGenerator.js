@@ -52,10 +52,10 @@ function evaluateGeneratorSite(blockAt, anchor, facing, options = {}) {
 
 /** Nearest buildable spot around `around`; `avoid(p)` rules out cells that belong to something else (the house). */
 function chooseGeneratorSite(blockAt, around, { radius = 10, collector = false, avoid = null } = {}) {
-  const site = findDeviceSite(blockAt, around, { radius, avoidFeet: true, cost: value => value.fixes * 4, evaluate(read, anchor, facing) {
-    const value = evaluateGeneratorSite(read, anchor, facing, { collector });
-    return value && !(avoid && footprint(value.device).some(avoid)) ? value : null;
-  } });
+  const site = findDeviceSite(blockAt, around, { radius, avoidFeet: true, cost: value => value.fixes * 4,
+    evaluate: (read, anchor, facing) => evaluateGeneratorSite(read, anchor, facing, { collector }),
+    accept: avoid && (value => !footprint(value.device).some(avoid)),
+  });
   return site?.device ?? null;
 }
 

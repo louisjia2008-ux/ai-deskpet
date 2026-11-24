@@ -1,5 +1,6 @@
 'use strict';
 
+const { integerBox } = require('./geometry');
 const { Vec3 } = require('vec3');
 const { posKey } = require('./blacklist');
 
@@ -45,11 +46,9 @@ function topology(house, read, { occupy = [], remove = [] } = {}) {
     return supports(floor) && space.every((b) => clear(b) || (isDoor && b?.name.endsWith('_door')));
   };
   const cells = new Map();
-  for (let dx = 1; dx < house.size - 1; dx++) {
-    for (let dz = 1; dz < house.size - 1; dz++) {
-      const p = new Vec3(x + dx, y, z + dz);
-      if (walkable(p)) cells.set(posKey(p), p);
-    }
+  for (const [dx, dz] of integerBox([1, (house.size - 1) - 1], [1, (house.size - 1) - 1])) {
+    const p = new Vec3(x + dx, y, z + dz);
+    if (walkable(p)) cells.set(posKey(p), p);
   }
   const threshold = new Vec3(door.x, door.y, door.z);
   const porch = new Vec3(house.entrance.x, house.entrance.y, house.entrance.z);

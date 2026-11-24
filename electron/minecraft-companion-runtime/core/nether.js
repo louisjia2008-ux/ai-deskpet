@@ -10,10 +10,10 @@ const { integerBox } = require('./geometry');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 const actions = require('./actions');
-const { isAbort, waitUntil, runCancellable, sleep } = require('./confirm');
+const { ignoreUnlessAborted, waitUntil, runCancellable, sleep } = require('./confirm');
 const { posKey } = require('./blacklist');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
+const { fail } = require('./action-result');
 const AIR = new Set(['air', 'cave_air', 'void_air']);
 const CORNERS = new Set(['cobblestone', 'cobbled_deepslate', 'netherrack', 'dirt', 'stone', 'blackstone']);
 
@@ -118,13 +118,11 @@ async function placeFrameBlock(bot, ctx, pos, itemMatch, against, stand) {
   }
   if (!ref) return fail('no_support');
   const face = pos.minus(ref.position);
-  try {
+  await ignoreUnlessAborted(async () => {
     await bot.equip(item, 'hand');
     await bot.lookAt(ref.position.offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5), true);
     await runCancellable(() => bot.placeBlock(ref, face), { signal: ctx.signal, timeoutMs: 6000, timeoutCode: 'place_timeout' });
-  } catch (error) {
-    if (isAbort(error)) throw error;
-  }
+  });
   const placed = await waitUntil(() => itemMatch(bot.blockAt(pos)?.name || ''), { timeoutMs: 1500, signal: ctx.signal });
   if (placed) return { ok: true };
   ctx.record('place_failed', { target: posKey(pos), ref: posKey(ref.position), now: bot.blockAt(pos)?.name || null });
@@ -171,13 +169,11 @@ async function ignite(bot, ctx, frame) {
     if (!moved.ok) return moved;
   }
   const floor = bot.blockAt(frame.ignite);
-  try {
+  await ignoreUnlessAborted(async () => {
     await bot.equip(tool, 'hand');
     await bot.lookAt(floor.position.offset(0.5, 1, 0.5), true);
     await bot.activateBlock(floor, new Vec3(0, 1, 0));
-  } catch (error) {
-    if (isAbort(error)) throw error;
-  }
+  });
   const lit = await waitUntil(() => frame.interior.every((p) => bot.blockAt(p)?.name === 'nether_portal'),
     { timeoutMs: 3000, signal: ctx.signal });
   return lit ? { ok: true, lit: true } : fail('portal_not_lit');
@@ -252,11 +248,8 @@ async function travel(bot, ctx, portal, { timeoutMs = 20000, settleMs = 6000, co
     return fail('portal_no_transfer', where);
   }
   // New dimension: wait for the ground to load before anything plans a path.
-  try {
-    await runCancellable(() => bot.waitForChunksToLoad(), { signal: ctx.signal, timeoutMs: 20000, timeoutCode: 'chunks_timeout' });
-  } catch (error) {
-    if (isAbort(error)) throw error;
-  }
+  await ignoreUnlessAborted(() => runCancellable(() => bot.waitForChunksToLoad(),
+    { signal: ctx.signal, timeoutMs: 20000, timeoutCode: 'chunks_timeout' }));
   await sleep(500, ctx.signal);
   return { ok: true, dimension: dimension(bot) };
 }

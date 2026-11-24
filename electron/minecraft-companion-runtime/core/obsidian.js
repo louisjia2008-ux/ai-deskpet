@@ -13,13 +13,13 @@
 //   5. pit is empty            -> pour the lava bucket in
 // The only memory is the mold: { pit, water } cell positions.
 
-const { Vec3 } = require('vec3');
 const defaultSkills = require('./skills');
 const defaultActions = require('./actions');
 const { vec: v, posKey } = require('./blacklist');
 const { waitUntil } = require('./confirm');
+const { integerBox } = require('./geometry');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
+const { fail } = require('./action-result');
 const AIR = new Set(['air', 'cave_air', 'void_air']);
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 // Soil and rock a pit can be dug in, that lava does not burn and nothing falls into.
@@ -67,23 +67,21 @@ function findMold(bot, { avoid = () => false } = {}) {
   const dry = (p) => !wet.some((w) => Math.abs(w.x - p.x) <= DRY_RADIUS && Math.abs(w.z - p.z) <= DRY_RADIUS
     && Math.abs(w.y - p.y) <= 2);
   let best = null;
-  for (let dx = -SEARCH; dx <= SEARCH; dx += 1) {
-    for (let dz = -SEARCH; dz <= SEARCH; dz += 1) {
-      const d = Math.abs(dx) + Math.abs(dz);
-      if (d < 3 || (best && d >= best.d)) continue;
-      for (const dy of [-1, -2, 0]) {
-        const pit = here.offset(dx, dy, dz);
-        if (avoid(pit) || !solid(bot.blockAt(pit)) || bot.blockAt(pit).name === 'obsidian' || !dry(pit)) continue;
-        if (!isAir(bot.blockAt(pit.offset(0, 1, 0))) || !isAir(bot.blockAt(pit.offset(0, 2, 0)))) continue;
-        for (const [sx, sz] of SIDES) {
-          const mold = { pit, water: pit.offset(sx, 1, sz) };
-          if (moldOk(bot, mold) && isAir(bot.blockAt(mold.water)) && isAir(bot.blockAt(mold.water.offset(0, 1, 0)))) {
-            best = { ...mold, d };
-            break;
-          }
+  for (const [dx, dz] of integerBox([-SEARCH, SEARCH], [-SEARCH, SEARCH])) {
+    const d = Math.abs(dx) + Math.abs(dz);
+    if (d < 3 || (best && d >= best.d)) continue;
+    for (const dy of [-1, -2, 0]) {
+      const pit = here.offset(dx, dy, dz);
+      if (avoid(pit) || !solid(bot.blockAt(pit)) || bot.blockAt(pit).name === 'obsidian' || !dry(pit)) continue;
+      if (!isAir(bot.blockAt(pit.offset(0, 1, 0))) || !isAir(bot.blockAt(pit.offset(0, 2, 0)))) continue;
+      for (const [sx, sz] of SIDES) {
+        const mold = { pit, water: pit.offset(sx, 1, sz) };
+        if (moldOk(bot, mold) && isAir(bot.blockAt(mold.water)) && isAir(bot.blockAt(mold.water.offset(0, 1, 0)))) {
+          best = { ...mold, d };
+          break;
         }
-        if (best?.d === d) break;
       }
+      if (best?.d === d) break;
     }
   }
   return best ? { pit: best.pit, water: best.water } : null;

@@ -3,6 +3,7 @@
 // goal while one of them wants the body and the goal re-plans afterwards.
 // Kept deliberately simple; hardening them is the next milestone.
 
+const { integerBox } = require('../geometry');
 const { complete, failure, waiting, factsOf, isComplete } = require('../action-result');
 const { Vec3 } = require('vec3');
 const defaultActions = require('../actions');
@@ -20,6 +21,7 @@ const { isSurveySurvivalItem } = require('../survey-plan-actions');
 const { contactBlock, safeStand } = require('../home-topology');
 const { applyWalkOnlyMovements } = require('../nether');
 const { ledgerTarget } = require('../failure-ledger');
+const { isWaterBlock } = require('../dry-route');
 
 const SURVEY_REFLEXES = new Set(['escape', 'defend', 'eat', 'heal', 'recover', 'quench', 'block', 'survey_archer']);
 const enabledDuringSurvey = ({ name }) => SURVEY_REFLEXES.has(name);
@@ -81,10 +83,8 @@ function fireBodyCells(bot, at = bot.entity?.position) {
   const width = bot.entity.width > 0 && bot.entity.width <= 2 ? bot.entity.width : 0.6;
   const height = bot.entity.height > 0 && bot.entity.height <= 3 ? bot.entity.height : 1.8;
   const cells = [];
-  for (let x = Math.floor(at.x - width / 2 + 1e-7); x <= Math.floor(at.x + width / 2 - 1e-7); x++) {
-    for (let z = Math.floor(at.z - width / 2 + 1e-7); z <= Math.floor(at.z + width / 2 - 1e-7); z++) {
-      for (let y = Math.floor(at.y + 1e-7); y <= Math.floor(at.y + height - 1e-7); y++) cells.push(new Vec3(x, y, z));
-    }
+  for (const [x, z] of integerBox([Math.floor(at.x - width / 2 + 1e-7), Math.floor(at.x + width / 2 - 1e-7)], [Math.floor(at.z - width / 2 + 1e-7), Math.floor(at.z + width / 2 - 1e-7)])) {
+    for (let y = Math.floor(at.y + 1e-7); y <= Math.floor(at.y + height - 1e-7); y++) cells.push(new Vec3(x, y, z));
   }
   return cells;
 }
@@ -117,12 +117,10 @@ function fireEdgeSafe(bot, from, to, allowedFire) {
   if (!first.length || !last.length) return false;
   const points = [...first, ...last];
   for (let x = Math.min(...points.map((p) => p.x)); x <= Math.max(...points.map((p) => p.x)); x++) {
-    for (let z = Math.min(...points.map((p) => p.z)); z <= Math.max(...points.map((p) => p.z)); z++) {
-      for (let y = start.y; y <= Math.max(...points.map((p) => p.y)); y++) {
-        const p = new Vec3(x, y, z), b = bot.blockAt(p);
-        if (!b || b.boundingBox !== 'empty' || FIRE_UNSAFE.test(b.name)
-          || (FIRE.has(b.name) && !allowedFire.has(fireKey(p)))) return false;
-      }
+    for (const [z, y] of integerBox([Math.min(...points.map((p) => p.z)), Math.max(...points.map((p) => p.z))], [start.y, Math.max(...points.map((p) => p.y))])) {
+      const p = new Vec3(x, y, z), b = bot.blockAt(p);
+      if (!b || b.boundingBox !== 'empty' || FIRE_UNSAFE.test(b.name)
+        || (FIRE.has(b.name) && !allowedFire.has(fireKey(p)))) return false;
     }
   }
   return true;
@@ -149,13 +147,11 @@ const SIDES = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec
 
 function nearestColumn(radius, evaluate) {
   let best = null, nearest = Infinity;
-  for (let dx = -radius; dx <= radius; dx++) {
-    for (let dz = -radius; dz <= radius; dz++) {
-      const distance = Math.hypot(dx, dz);
-      if (distance >= nearest) continue;
-      const found = evaluate(dx, dz, distance);
-      if (found) { best = found; nearest = distance; }
-    }
+  for (const [dx, dz] of integerBox([-radius, radius], [-radius, radius])) {
+    const distance = Math.hypot(dx, dz);
+    if (distance >= nearest) continue;
+    const found = evaluate(dx, dz, distance);
+    if (found) { best = found; nearest = distance; }
   }
   return best;
 }
@@ -170,11 +166,9 @@ function lavaShore(bot, radius = 16, usable = () => true, lip = 0) {
   // bastion's slab an hour, the slab's top a ledge from the open lava beside.
   let top = lavaSurface(bot, feet);
   if (lip) {
-    for (let dx = -2; dx <= 2; dx += 1) {
-      for (let dz = -2; dz <= 2; dz += 1) {
-        const beside = feet.offset(dx, 0, dz);
-        if (bot.blockAt(beside)?.name === 'lava') top = Math.max(top, lavaSurface(bot, beside));
-      }
+    for (const [dx, dz] of integerBox([-2, 2], [-2, 2])) {
+      const beside = feet.offset(dx, 0, dz);
+      if (bot.blockAt(beside)?.name === 'lava') top = Math.max(top, lavaSurface(bot, beside));
     }
   }
   const surface = top + lip;
@@ -238,19 +232,17 @@ function coverSpot(bot, ghast) {
   const eye = ghast.position.offset(0, 2, 0);
   let best = null;
   for (let dx = -6; dx <= 6; dx += 1) {
-    for (let dz = -6; dz <= 6; dz += 1) {
-      for (let dy = -2; dy <= 2; dy += 1) {
-        const p = feet.offset(dx, dy, dz);
-        const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy);
-        if (best && d >= best.d) continue;
-        const floor = bot.blockAt(p.offset(0, -1, 0));
-        if (!floor || floor.boundingBox !== 'block' || /magma|lava/.test(floor.name)) continue;
-        if (bot.blockAt(p)?.boundingBox !== 'empty' || bot.blockAt(p.offset(0, 1, 0))?.boundingBox !== 'empty') continue;
-        if (/lava|fire/.test(bot.blockAt(p)?.name || '')) continue;
-        if (bot.blockAt(p.offset(0, 2, 0))?.boundingBox !== 'block') continue;
-        if (clearLine(bot, eye, p.offset(0.5, 1.6, 0.5)) || clearLine(bot, eye, p.offset(0.5, 0.5, 0.5))) continue;
-        best = { p, d };
-      }
+    for (const [dz, dy] of integerBox([-6, 6], [-2, 2])) {
+      const p = feet.offset(dx, dy, dz);
+      const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy);
+      if (best && d >= best.d) continue;
+      const floor = bot.blockAt(p.offset(0, -1, 0));
+      if (!floor || floor.boundingBox !== 'block' || /magma|lava/.test(floor.name)) continue;
+      if (bot.blockAt(p)?.boundingBox !== 'empty' || bot.blockAt(p.offset(0, 1, 0))?.boundingBox !== 'empty') continue;
+      if (/lava|fire/.test(bot.blockAt(p)?.name || '')) continue;
+      if (bot.blockAt(p.offset(0, 2, 0))?.boundingBox !== 'block') continue;
+      if (clearLine(bot, eye, p.offset(0.5, 1.6, 0.5)) || clearLine(bot, eye, p.offset(0.5, 0.5, 0.5))) continue;
+      best = { p, d };
     }
   }
   return best?.p || null;
@@ -773,11 +765,9 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   function surroundings(feet) {
     const cells = [];
     for (let dy = -1; dy <= 3; dy += 1) {
-      for (let dx = -2; dx <= 2; dx += 1) {
-        for (let dz = -2; dz <= 2; dz += 1) {
-          const b = bot.blockAt(feet.offset(dx, dy, dz));
-          if (b && b.boundingBox === 'block') cells.push(`${dx},${dy},${dz}:${b.name}`);
-        }
+      for (const [dx, dz] of integerBox([-2, 2], [-2, 2])) {
+        const b = bot.blockAt(feet.offset(dx, dy, dz));
+        if (b && b.boundingBox === 'block') cells.push(`${dx},${dy},${dz}:${b.name}`);
       }
     }
     return cells.join(' ');
@@ -1004,7 +994,6 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
   };
 
   /** The nearest column (within three) whose water ends in open air, reachable at body height. */
-  const WET = /^(water|bubble_column|seagrass|tall_seagrass|kelp|kelp_plant)$/;
   function airColumn() {
     const feet = bot.entity.position.floored();
     const passable = (p) => { const b = bot.blockAt(p); return Boolean(b) && b.boundingBox === 'empty'; };
@@ -1013,9 +1002,9 @@ function createSurvivalBehaviors({ bot, actions = defaultActions, skills = defau
       const col = feet.offset(dx, 0, dz);
       if (d > 0 && !(passable(col) && passable(col.offset(0, 1, 0)))) return null;
       let y = 0;
-      while (y < 6 && WET.test(bot.blockAt(col.offset(0, y, 0))?.name || '')) y += 1;
+      while (y < 6 && isWaterBlock(bot.blockAt(col.offset(0, y, 0)))) y += 1;
       const top = bot.blockAt(col.offset(0, y, 0));
-      return top?.boundingBox === 'empty' && !WET.test(top.name) && top.name !== 'lava' ? { x: col.x, z: col.z } : null;
+      return top?.boundingBox === 'empty' && !isWaterBlock(top) && top.name !== 'lava' ? { x: col.x, z: col.z } : null;
     });
   }
 

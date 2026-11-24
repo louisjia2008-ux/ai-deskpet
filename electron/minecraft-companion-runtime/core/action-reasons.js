@@ -86,6 +86,7 @@ const reasons = Object.freeze({
   `,
   // Observation, bounds, server confirmation, or action environment prevented completion.
   environment: `
+    exploration_return_unconfirmed
     action_failed actual_held_tool_unconfirmed adaptation_other_work awaiting_villagers bed_explodes_here behavior_error
     berries_unconfirmed bridge_guard_changed bridge_guard_partial bridge_guard_place_failed bridge_guard_unknown
     bridge_inspection_reentrant bridge_observation_changed bridge_place_failed bridge_prepare_failed

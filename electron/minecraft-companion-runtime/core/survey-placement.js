@@ -190,6 +190,11 @@ async function openDoorIfVisible(bot, ctx, plan) {
   return (await actions.openSurveyDoor(bot, ctx, block)).ok;
 }
 
+async function walkThroughDoor(bot, ctx, plan, walk) {
+  const moved = await walk();
+  return !moved.ok && await openDoorIfVisible(bot, ctx, plan) ? walk() : moved;
+}
+
 async function closePlanDoor(bot, ctx, plan, onFailure) {
   const door = plan.template?.door;
   if (!door) return { ok: true };
@@ -250,10 +255,8 @@ async function climbSurveyScaffold(bot, ctx, plan, onFailure, heightLimit = Infi
   if (bot.entity.position.y >= top.y - 0.1) return;
   const goal = new goals.GoalBlock(top.x, top.y, top.z);
   const arrived = (pos) => pos.y >= top.y - 0.1 && Math.hypot(pos.x - top.x - 0.5, pos.z - top.z - 0.5) < 0.7;
-  let walk = await actions.goTo(bot, ctx, goal, { timeoutMs: 10000, retryNoProgress: false, arrived });
-  if (!walk.ok && await openDoorIfVisible(bot, ctx, plan)) {
-    walk = await actions.goTo(bot, ctx, goal, { timeoutMs: 10000, retryNoProgress: false, arrived });
-  }
+  const walk = await walkThroughDoor(bot, ctx, plan,
+    () => actions.goTo(bot, ctx, goal, { timeoutMs: 10000, retryNoProgress: false, arrived }));
   if (!walk.ok) onFailure(walk.reason, {
     feet: bot.entity.position, scaffoldTop: { x: top.x, y: top.y, z: top.z },
   });
@@ -317,4 +320,4 @@ async function aimAndPlace(bot, ctx, target, hit, item) {
 }
 
 module.exports = { vec, placementSpec, hitFor, stationChoices, walkToStations, aimAndPlace,
-  openDoorIfVisible, closePlanDoor, climbSurveyScaffold, descendSurveyScaffold };
+  openDoorIfVisible, walkThroughDoor, closePlanDoor, climbSurveyScaffold, descendSurveyScaffold };

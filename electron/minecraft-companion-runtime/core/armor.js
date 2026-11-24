@@ -1,6 +1,8 @@
 'use strict';
 // Armour (and a shield) in the bag that beats what is worn: what to put on.
 
+const { isAbort } = require('./confirm');
+
 const ARMOR_SLOTS = [['head', 5, /_helmet$/], ['torso', 6, /_chestplate$/], ['legs', 7, /_leggings$/], ['feet', 8, /_boots$/]];
 const OFF_HAND = 45;
 const RANK = ['leather', 'golden', 'chainmail', 'iron', 'diamond', 'netherite'];
@@ -29,4 +31,22 @@ function upgrades(bot) {
   return out;
 }
 
-module.exports = { upgrades, ARMOR_SLOTS, bestArmor, armorRank: rank };
+async function equipAndRecord(bot, ctx, item, slot) {
+  try {
+    await bot.equip(item, slot);
+    ctx.record('equip', { item: item.name, slot });
+  } catch (error) {
+    if (isAbort(error)) throw error;
+    return { ok: false, reason: 'equip_failed', item: item.name };
+  }
+}
+
+async function equipUpgrades(bot, ctx) {
+  for (const [item, slot] of upgrades(bot)) {
+    const failed = await equipAndRecord(bot, ctx, item, slot);
+    if (failed) return failed;
+  }
+  return { ok: true };
+}
+
+module.exports = { upgrades, equipAndRecord, equipUpgrades, ARMOR_SLOTS, bestArmor, armorRank: rank };

@@ -14,7 +14,7 @@ const actions = require('./actions');
 const { waitUntil, sleep, abortError } = require('./confirm');
 const { dimension, applyRealmMovements } = require('./nether');
 
-const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
+const { fail } = require('./action-result');
 const inEnd = (bot) => dimension(bot) === 'the_end';
 
 // ---- projectiles -----------------------------------------------------------
@@ -186,23 +186,17 @@ async function throwPearl(bot, ctx, target, { high = false } = {}) {
 // ---- void-safe movement ----------------------------------------------------
 
 /** Nothing below `p` all the way down: one step over the edge is death. */
-function overVoid(bot, x, y, z) {
-  for (let yy = Math.floor(y) - 1; yy >= Math.max(-1, Math.floor(y) - 64); yy -= 1) {
-    const b = bot.blockAt(new Vec3(x, yy, z));
-    if (!b) return false; // unloaded: unknown, not void
-    if (b.boundingBox === 'block') return false;
-  }
-  return true;
-}
-
-/** No solid block within `depth` below `p`: a step there is a fall the bot may not survive. */
-function deepDrop(bot, x, y, z, depth = 4) {
-  for (let yy = Math.floor(y) - 1; yy >= Math.floor(y) - depth; yy -= 1) {
+function openColumn(bot, x, y, z, lowest) {
+  for (let yy = Math.floor(y) - 1; yy >= lowest; yy -= 1) {
     const b = bot.blockAt(new Vec3(x, yy, z));
     if (!b || b.boundingBox === 'block') return false;
   }
   return true;
 }
+
+// Unloaded terrain does not confirm void or a deep drop.
+const overVoid = (bot, x, y, z) => openColumn(bot, x, y, z, Math.max(-1, Math.floor(y) - 64));
+const deepDrop = (bot, x, y, z, depth = 4) => openColumn(bot, x, y, z, Math.floor(y) - depth);
 
 /**
  * End movement: no pathfinder bridging or towers (gaps over the void are
@@ -270,12 +264,11 @@ async function bridgeStepBody(bot, ctx, target, { avoidLiquids = false, blocks =
   const dz = target.z - (feet.z + 0.5);
   const dir = Math.abs(dx) >= Math.abs(dz) ? new Vec3(Math.sign(dx) || 1, 0, 0) : new Vec3(0, 0, Math.sign(dz) || 1);
   const ahead = feet.plus(dir);
+  const validate = phase => validateNext({ feet, ahead, dir, phase });
   // Underground, opening a cell beside water or lava floods the tunnel.
   if (avoidLiquids && (touchesLiquid(bot, ahead) || touchesLiquid(bot, ahead.offset(0, 1, 0)))) return fail('liquid_ahead');
-  if (validateNext) {
-    const checked = await validateNext({ feet, ahead, dir, phase: 'before_clear' });
-    if (!checked?.ok) return checked || fail('bridge_validate_failed');
-  }
+  const opening = validateNext && await validate('before_clear');
+  if (validateNext && !opening?.ok) return opening || fail('bridge_validate_failed');
   // Protection is ready before opening an old side wall or placing/moving
   // onto the next central floor. End bridging has no preparation by default.
   let prepared;
@@ -310,20 +303,16 @@ async function bridgeStepBody(bot, ctx, target, { avoidLiquids = false, blocks =
     const placed = await waitUntil(() => bot.blockAt(ahead.offset(0, -1, 0))?.boundingBox === 'block', { timeoutMs: 1500, signal: ctx.signal });
     if (!placed) return fail('bridge_place_failed');
   }
-  if (validateNext) {
-    const checked = await validateNext({ feet, ahead, dir, phase: 'after_clear' });
-    if (!checked?.ok) return checked || fail('bridge_validate_failed');
-  }
+  const cleared = validateNext && await validate('after_clear');
+  if (validateNext && !cleared?.ok) return cleared || fail('bridge_validate_failed');
   if (prepared?.afterClear) {
     const completed = await prepared.afterClear();
     if (ctx.signal?.aborted) throw abortError(ctx.signal);
     const position = prepared.assertPosition?.();
     if (position && !position.ok) return position;
     if (!completed?.ok) return completed || fail('bridge_prepare_failed');
-    if (validateNext) {
-      const checked = await validateNext({ feet, ahead, dir, phase: 'after_guard' });
-      if (!checked?.ok) return checked || fail('bridge_validate_failed');
-    }
+    const guarded = validateNext && await validate('after_guard');
+    if (validateNext && !guarded?.ok) return guarded || fail('bridge_validate_failed');
   }
   // Step onto it sneaking, stopping on its centre: the physics never lets a
   // sneaking body walk off an edge, whatever the timing.
@@ -337,10 +326,8 @@ async function bridgeStepBody(bot, ctx, target, { avoidLiquids = false, blocks =
       if (Math.hypot(p.x - centre.x, p.z - centre.z) < 0.3) break;
       await bot.lookAt(centre.offset(0, 1.6, 0), true);
       if (ctx.signal?.aborted) throw abortError(ctx.signal);
-      if (validateNext) {
-        const checked = await validateNext({ feet, ahead, dir, phase: 'before_pulse' });
-        if (!checked?.ok) return checked || fail('bridge_validate_failed');
-      }
+      const checked = validateNext && await validate('before_pulse');
+      if (validateNext && !checked?.ok) return checked || fail('bridge_validate_failed');
       bot.setControlState('forward', true);
       await sleep(50, ctx.signal);
     }
@@ -596,21 +583,23 @@ function cloudOver(bot, p, margin = 1) {
     && Math.abs(e.position.y - p.y) <= 3);
 }
 
+function exitPortalCell(bot, x, z, stopAtUnloaded = false) {
+  for (let y = 40; y <= 90; y += 1) {
+    const p = new Vec3(x, y, z), block = bot.blockAt(p);
+    if (block?.name === 'end_portal') return p;
+    if (!block && stopAtUnloaded) break;
+  }
+  return null;
+}
+
 /** Exit portal lit: the server has counted the dragon as killed. */
 // Checked every brain tick: a direct look at the portal's few columns, cached.
 let litCache = { at: 0, bot: null, value: false };
 function exitPortalLit(bot) {
   if (!inEnd(bot)) return false;
   if (litCache.bot === bot && Date.now() - litCache.at < 2000) return litCache.value;
-  let value = false;
-  for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1]]) {
-    for (let y = 40; y <= 90 && !value; y += 1) {
-      const b = bot.blockAt(new Vec3(x, y, z));
-      if (!b) break;
-      if (b.name === 'end_portal') value = true;
-    }
-    if (value) break;
-  }
+  const value = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1]]
+    .some(([x, z]) => exitPortalCell(bot, x, z, true));
   litCache = { at: Date.now(), bot, value };
   return value;
 }
@@ -674,6 +663,6 @@ async function walkTo(bot, ctx, p, range = 1, timeoutMs = 60000) {
 
 module.exports = {
   inEnd, ARROW, PEARL, flightInfo, bridgeStep, bridgeToward, descendSpiral, stranded, digShelter, leaveShelter, pillarUp, digPillarDown, direction, fly, aim, clearFlight, shootArrow, throwPearl, hold, overVoid, deepDrop, applyEndMovements,
-  wearArmor, dragonOf, dragonPhase, dragonHealth, crystalsOf, caged, cloudOver, exitPortalLit, surfaceAt, firingSpots, headAim, headPosition, headPart,
+  wearArmor, dragonOf, dragonPhase, dragonHealth, crystalsOf, caged, cloudOver, exitPortalCell, exitPortalLit, surfaceAt, firingSpots, headAim, headPosition, headPart,
   walkTo, PERCHED, DYING, waitUntil, goals,
 };

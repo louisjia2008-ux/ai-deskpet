@@ -15,7 +15,7 @@
 // Only cane gained after the column was cut while the bot waited counts.
 
 const { integerBox } = require('../geometry');
-const { findDeviceSite, LIQUID, isAir, isSoft, isSolid, partMatches, guardDeviceCells, partAccepts, goToStand, adoptDeviceSite, digDeviceCell, finishDevicePart, stepOffDevice, swimOutOfDevice, validDeviceLayers } = require('./device-site');
+const { layeredDeviceSite, LIQUID, isAir, isSoft, isSolid, partMatches, guardDeviceCells, partAccepts, goToStand, adoptDeviceSite, digDeviceCell, finishDevicePart, stepOffDevice, swimOutOfDevice } = require('./device-site');
 const { vec: v, posKey: key } = require('../blacklist');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
@@ -32,16 +32,10 @@ const DIGGABLE = new Set([...CANE_SOIL, 'stone', 'andesite', 'diorite', 'granite
 const HARVEST_WAIT_MS = 60000;
 
 
-function evaluateCaneSite(blockAt, anchor, facing) {
-  const farm = createCaneFarm(anchor, facing);
-  return validDeviceLayers(blockAt, [farm.dig, b => DIGGABLE.has(b?.name)], [[farm.cells.dirt], b => CANE_SOIL.has(b?.name)],
-    [[...farm.solid, ...farm.standFloors], isSolid], [farm.clear, b => b && isSoft(b)]) ? farm : null;
-}
-
-/** Nearest buildable spot; the anchor (the cane's first cell) is the top solid block of its column. */
-function chooseCaneSite(blockAt, around, { radius = 10 } = {}) {
-  return findDeviceSite(blockAt, around, { radius, avoidFeet: true, evaluate: evaluateCaneSite });
-}
+const { evaluate: evaluateCaneSite, choose: chooseCaneSite } = layeredDeviceSite(createCaneFarm, farm => [
+  [farm.dig, b => DIGGABLE.has(b?.name)], [[farm.cells.dirt], b => CANE_SOIL.has(b?.name)],
+  [[...farm.solid, ...farm.standFloors], isSolid], [farm.clear, b => b && isSoft(b)],
+], { radius: 10, avoidFeet: true });
 
 function createCaneFarmGoal({ bot, anchor = null, facing = 'east', count = 4,
   skills = defaultSkills, actions = defaultActions } = {}) {

@@ -1,7 +1,7 @@
 'use strict';
 
 const { BAND } = require('../brain');
-const { factsOf, isComplete } = require('../action-result');
+const { factsOf, fail, isComplete } = require('../action-result');
 const defaultActions = require('../actions');
 const { safeStand, SIDES } = require('../home-topology');
 const { wet } = require('../dry-route');
@@ -75,7 +75,7 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
     }
     record('water_rescue_alert', null, { reason: 'methods_exhausted' });
     episode.retryAt = now() + 3000;
-    return { ok: false, reason: 'self_escape_unconfirmed' };
+    return fail('self_escape_unconfirmed', { objective: 'dry_ground', position: bot.entity.position, attempted: methods.map(([method]) => method) });
   }
 
   return {
@@ -125,7 +125,7 @@ function createHomeEscape({ bot, home, tracker, adaptation, actions = defaultAct
         && factsOf(result).surfaced !== false;
       const climbed = !escaped(walked) && !walked.wait && await actions.surface?.(bot, rescue);
       return escaped(climbed || walked) ? finish(ctx, 'natural_route') : climbed?.wait ? climbed : walked.wait ? walked
-        : { ok: false, reason: walked.reason || 'self_escape_unconfirmed' };
+        : fail(walked.reason || 'self_escape_unconfirmed', { objective: 'dry_ground', position: bot.entity.position, attempted: climbed ? ['unstick', 'surface'] : ['unstick'] });
     },
   };
 }
