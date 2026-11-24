@@ -56,10 +56,13 @@ export const EventProactiveSettings = ({ api, locale, refreshKey = 0, onSaved }:
     event.preventDefault(); if (!form) return;
     await perform(async () => {
       // Only the rules edited here are written, on top of the latest saved policy (mode, model and privacy live on the card above).
-      const latest = inputFromPolicy((await api.snapshot()).proactivePolicy);
-      const saved = await api.configureProactive({ ...latest, eventKinds: form.eventKinds, quietStart: form.quietStart, quietEnd: form.quietEnd,
+      const edited: Partial<ProactivePolicyInput> = { eventKinds: form.eventKinds, quietStart: form.quietStart, quietEnd: form.quietEnd,
         timezone: form.timezone, cooldownMinutes: form.cooldownMinutes, dailyLimit: form.dailyLimit,
-        topics: topics.split('\n').map((topic) => topic.trim()).filter(Boolean) });
+        topics: topics.split('\n').map((topic) => topic.trim()).filter(Boolean) };
+      // Send only what changed here since it was loaded, so a concurrent change on the card above survives.
+      const loaded = snapshot?.proactivePolicy;
+      const changed = Object.fromEntries(Object.entries(edited).filter(([key, value]) => !loaded || JSON.stringify(loaded[key as keyof ProactivePolicyInput]) !== JSON.stringify(value)));
+      const saved = await api.patchProactive(changed);
       setForm(inputFromPolicy(saved)); setTopics(saved.topics.join('\n')); onSaved?.();
     });
   };

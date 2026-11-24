@@ -19,7 +19,7 @@ const fixture = (items: PersistentSchedule[] = []) => {
     scheduleCancel: vi.fn(async (id) => { const item = state.automationSchedules.find((value) => value.id === id)!; item.enabled = false; item.cancelledAt = '2026-10-29T09:00:00Z'; item.nextRunAt = null; }),
     scheduleRunNow: vi.fn(async ({ id, operationId }) => ({ id: operationId, key: `schedule-manual:${operationId}`, kind: 'schedule' as const, sourceId: id, dueAt: '2026-10-29T09:00:00Z', policyRevision: 1, status: 'submitted' as const, jobId: '80541163-3ea1-4ba8-994c-f8052ba050ea', messageId: null, createdAt: '2026-10-29T09:00:00Z', updatedAt: '2026-10-29T09:00:00Z', cancelledAt: null, errorCode: null })),
     schedulePreview: vi.fn(async () => ['2026-11-02T06:30:00Z']),
-    configureProactive: vi.fn(async (value) => ({ ...value, revision: 1 })), explicitCheckIn: vi.fn(async () => undefined), cancelTrigger: vi.fn(async () => undefined),
+    patchProactive: vi.fn(), configureProactive: vi.fn(async (value) => ({ ...value, revision: 1 })), explicitCheckIn: vi.fn(async () => undefined), cancelTrigger: vi.fn(async () => undefined),
   };
   return { state, api };
 };

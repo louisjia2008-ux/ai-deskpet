@@ -105,6 +105,17 @@ export class EventProactiveService {
     if (proactiveMode(this.getPolicy()) === 'auto') this.#changed();
   }
 
+  #patches: Promise<unknown> = Promise.resolve();
+  /** Applies field patches one at a time on the policy as saved then, so concurrent edits never revive old values. */
+  patch(fields: Partial<ProactivePolicyInput>): Promise<ProactivePolicy> {
+    const run = this.#patches.then(() => {
+      const { revision, ...current } = this.getPolicy(); void revision;
+      return this.configure({ ...current, ...fields });
+    });
+    this.#patches = run.catch(() => undefined);
+    return run;
+  }
+
   async configure(raw: ProactivePolicyInput): Promise<ProactivePolicy> {
     const input = validateProactivePolicyInput(raw);
     const previous = this.getPolicy();

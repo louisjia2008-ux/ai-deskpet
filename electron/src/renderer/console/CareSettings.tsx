@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { JSX } from 'react';
 import { proactiveMode } from '../../shared/automation';
-import type { AutomationAPI, ProactiveMode, ProactivePolicy } from '../../shared/automation';
+import type { AutomationAPI, ProactiveMode, ProactivePolicy, ProactivePolicyInput } from '../../shared/automation';
 import { providerIsLocal } from './provider-locality';
 import type { ProviderConfig } from '../../shared';
 import './persona-settings.css';
@@ -51,14 +51,20 @@ export const CareSettings = ({ api, providers, activeProviderId, locale, request
     setBusy(true); setStatus(null);
     try {
       if (nextMode === 'auto' && mode !== 'auto') await requestPermission();
-      const { revision, ...input } = policy; void revision;
-      const model = 'model' in patch ? patch.model ?? null : chosen?.id === policy.providerId ? policy.model : null;
-      setPolicy(await api.configureProactive({ ...input, enabled: nextMode === 'auto', mode: nextMode,
-        eventKinds: input.eventKinds.length ? input.eventKinds : ['task-completed', 'focus-completed', 'explicit-check-in'],
-        timezone: input.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-        ...(patch.frequency ? FREQUENCIES[patch.frequency] : {}),
-        privacy: patch.privacy ?? input.privacy,
-        providerId: chosen?.id ?? input.providerId, model }));
+      // Only the fields this card changed are sent; the host merges them onto the policy as saved then.
+      const fields: Partial<ProactivePolicyInput> = { enabled: nextMode === 'auto', mode: nextMode };
+      if (patch.frequency) Object.assign(fields, FREQUENCIES[patch.frequency]);
+      if (patch.privacy) fields.privacy = patch.privacy;
+      if ('provider' in patch || 'model' in patch || (nextMode === 'auto' && mode !== 'auto')) {
+        fields.providerId = chosen?.id ?? policy.providerId;
+        fields.model = 'model' in patch ? patch.model ?? null : chosen?.id === policy.providerId ? policy.model : null;
+      }
+      // First switch-on fills what the system knows: the selectable events and this computer's time zone.
+      if (nextMode !== 'off' && mode === 'off') {
+        if (!policy.eventKinds.length) fields.eventKinds = ['task-completed', 'focus-completed', 'explicit-check-in'];
+        if (policy.timezone === 'UTC') fields.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      }
+      setPolicy(await api.patchProactive(fields));
       onSaved?.();
     } catch { setStatus('failed'); }
     finally { setBusy(false); }

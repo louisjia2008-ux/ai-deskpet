@@ -2503,6 +2503,7 @@ export class AppController {
     this.#ipc.register('automation:schedule-run-now', consoleOnly, (input) => this.#persistentSchedules.runNow(input));
     this.#ipc.register('automation:schedule-preview', consoleOnly, (input) => this.#persistentSchedules.preview(input));
     this.#ipc.register('automation:configure-proactive', consoleOnly, (input) => this.#proactive.configure(input));
+    this.#ipc.register('automation:patch-proactive', consoleOnly, (patch) => this.#proactive.patch(Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) as Parameters<EventProactiveService['patch']>[0]));
     this.#ipc.register('automation:cancel-trigger', consoleOnly, ({id}) => this.#automaticTasks.cancelTrigger(id));
     this.#ipc.register('automation:explicit-check-in', consoleOnly, async ({operationId}) => {
       const id = `explicit:${operationId}`; const old = this.#repository.snapshot().proactiveEvents.find((v) => v.id === id);

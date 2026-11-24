@@ -8,6 +8,7 @@ import { EventProactiveSettings } from './EventProactiveSettings';
 const fixture = (): AutomationSnapshot => ({ automationSchedules: [], automationTriggers: [], proactivePolicy: defaultEventProactivePolicy(), proactiveEvents: [], jobs: [] });
 const apiFor = (state: AutomationSnapshot): AutomationAPI => ({ snapshot: vi.fn(async () => structuredClone(state)),
   configureProactive: vi.fn(async (input) => { state.proactivePolicy = { ...input, revision: state.proactivePolicy.revision + 1 }; return structuredClone(state.proactivePolicy); }),
+  patchProactive: vi.fn<AutomationAPI['patchProactive']>(async (fields) => { state.proactivePolicy = { ...state.proactivePolicy, ...fields, revision: state.proactivePolicy.revision + 1 }; return structuredClone(state.proactivePolicy); }),
   explicitCheckIn: vi.fn(async () => undefined), cancelTrigger: vi.fn(async () => undefined),
   triggerResult: vi.fn(async (triggerId) => ({ triggerId, jobId: 'job-one', status: 'succeeded', result: 'SYNTHETIC_EXPLICIT_RESULT' })),
   scheduleUpsert: vi.fn(), schedulePause: vi.fn(), scheduleCancel: vi.fn(), scheduleRunNow: vi.fn(), schedulePreview: vi.fn(),
@@ -15,21 +16,28 @@ const apiFor = (state: AutomationSnapshot): AutomationAPI => ({ snapshot: vi.fn(
 const providers = [{ id: 'provider', name: 'Synthetic local', model: 'synthetic', enabled: true }] as ProviderConfig[];
 afterEach(cleanup);
 
-it('saves only its own rules on top of the latest saved policy, after an explicit save', async () => {
+it('sends only the rules changed here, after an explicit save', async () => {
   const state = fixture(), api = apiFor(state); let finish!: () => void;
   state.proactivePolicy = { ...state.proactivePolicy, mode: 'auto', enabled: true, providerId: 'provider', privacy: 'cloud-allowed' };
-  api.configureProactive = vi.fn(async (input) => { await new Promise<void>((resolve) => { finish = resolve; });
-    state.proactivePolicy = { ...input, revision: 2 }; return state.proactivePolicy; });
+  const patch = vi.mocked(api.patchProactive);
+  const merge = patch.getMockImplementation()!;
+  patch.mockImplementationOnce(async (fields) => { await new Promise<void>((resolve) => { finish = resolve; }); return merge(fields); });
   render(<EventProactiveSettings api={api} providers={providers} locale="en" />);
-  fireEvent.click(await screen.findByLabelText('App task completed'));
+  const taskEvent = await screen.findByLabelText('App task completed');
+  const wasChecked = (taskEvent as globalThis.HTMLInputElement).checked;
+  fireEvent.click(taskEvent);
   fireEvent.change(screen.getByLabelText('Optional preferred topics, one per line'), { target: { value: 'reading\nsmall victories' } });
   expect(screen.queryByLabelText('Mode')).toBeNull(); expect(screen.queryByLabelText('Provider')).toBeNull();
-  expect(api.configureProactive).not.toHaveBeenCalled(); expect(api.explicitCheckIn).not.toHaveBeenCalled();
+  expect(patch).not.toHaveBeenCalled(); expect(api.explicitCheckIn).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Save these rules' }));
-  await waitFor(() => expect(api.configureProactive).toHaveBeenCalled());
+  await waitFor(() => expect(patch).toHaveBeenCalled());
   expect(screen.getByRole('button', { name: 'Save these rules' })).toBeDisabled();
-  expect(api.configureProactive).toHaveBeenCalledWith(expect.objectContaining({ mode: 'auto', enabled: true, providerId: 'provider', privacy: 'cloud-allowed', topics: ['reading', 'small victories'] }));
+  const sent = patch.mock.calls[0]![0];
+  expect(Object.keys(sent).sort()).toEqual(['eventKinds', 'topics']);
+  expect(sent.topics).toEqual(['reading', 'small victories']);
+  expect(sent.eventKinds?.includes('task-completed')).toBe(!wasChecked);
   finish(); await waitFor(() => expect(screen.getByRole('button', { name: 'Save these rules' })).toBeEnabled());
+  expect(state.proactivePolicy).toMatchObject({ mode: 'auto', providerId: 'provider', privacy: 'cloud-allowed' });
 });
 
 it('does not reveal job result bodies until an explicit result action and targets cancellation by trigger id', async () => {
@@ -47,7 +55,7 @@ it('keeps the one-check-in request unavailable while check-ins are off and repor
   const state = fixture(), api = apiFor(state);
   render(<EventProactiveSettings api={api} providers={providers} locale="en" />);
   const action = await screen.findByRole('button', { name: 'Request one check-in' }); expect(action).toBeDisabled();
-  api.configureProactive = vi.fn(async () => { throw new Error('SYNTHETIC_BACKEND_FAILURE'); });
+  api.patchProactive = vi.fn(async () => { throw new Error('SYNTHETIC_BACKEND_FAILURE'); });
   fireEvent.click(screen.getByRole('button', { name: 'Save these rules' })); await screen.findByRole('alert');
   expect(api.explicitCheckIn).not.toHaveBeenCalled();
 });

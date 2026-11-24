@@ -203,7 +203,7 @@ const api: DeskPetApi = {
     snapshot: () => invoke('automation:snapshot', {}), triggerResult: (id) => invoke('automation:trigger-result', {id}), scheduleUpsert: (input) => invoke('automation:schedule-upsert', input),
     schedulePause: (id) => invoke('automation:schedule-pause', {id}), scheduleCancel: (id) => invoke('automation:schedule-cancel', {id}),
     scheduleRunNow: (input) => invoke('automation:schedule-run-now', input), schedulePreview: (input) => invoke('automation:schedule-preview', input),
-    configureProactive: (input) => invoke('automation:configure-proactive', input), explicitCheckIn: (input) => invoke('automation:explicit-check-in', input), cancelTrigger: (id) => invoke('automation:cancel-trigger', {id}),
+    configureProactive: (input) => invoke('automation:configure-proactive', input), patchProactive: (patch) => invoke('automation:patch-proactive', patch), explicitCheckIn: (input) => invoke('automation:explicit-check-in', input), cancelTrigger: (id) => invoke('automation:cancel-trigger', {id}),
   },
   delegations: {
     openDraft: (input) => invoke('delegations:open-draft', input),

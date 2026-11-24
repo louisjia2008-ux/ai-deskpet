@@ -121,6 +121,8 @@ export interface AutomationAPI {
   scheduleRunNow(input: { id: string; operationId: string }): Promise<AutomaticTrigger>;
   schedulePreview(input: { rule: CalendarRule; timezone: string; after: string; count: number }): Promise<string[]>;
   configureProactive(input: ProactivePolicyInput): Promise<ProactivePolicy>;
+  /** Changes only the given fields, on top of the policy as saved at that moment. */
+  patchProactive(patch: Partial<ProactivePolicyInput>): Promise<ProactivePolicy>;
   explicitCheckIn(input: { operationId: string }): Promise<void>;
   cancelTrigger(id: string): Promise<void>;
 }

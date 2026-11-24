@@ -30,6 +30,8 @@ const proactivePolicyBaseSchema = z.object({
   privacy: z.enum(['local-only', 'cloud-allowed']), providerId: z.string().min(1).max(128).nullable(), model: z.string().trim().max(240).nullable(),
 }).strict();
 const consistentProactiveMode = (value: { enabled: boolean; mode?: 'off' | 'observe' | 'auto' | undefined }): boolean => value.mode === undefined || value.enabled === (value.mode === 'auto');
+/** Only the fields one control changed; merged onto the current policy in order, then validated as a whole. */
+export const proactivePolicyPatchSchema = proactivePolicyBaseSchema.partial();
 export const proactivePolicyInputSchema = proactivePolicyBaseSchema
   .refine(consistentProactiveMode, 'Only auto mode may enable model execution.')
   .refine((value) => proactiveMode(value) !== 'auto' || (value.providerId !== null && value.model !== '' && value.eventKinds.length > 0), 'Choose events and a provider before enabling auto mode.')

@@ -267,3 +267,14 @@ describe('deterministic observation mode without model work', () => {
     expect(s.store.snapshot().automationTriggers).toEqual([]); expect(s.submit).not.toHaveBeenCalled();
   });
 });
+
+describe('proactive policy patches', () => {
+  it('applies concurrent field patches in order without reviving older values', async () => {
+    const service = setup().create();
+    const turnOn = service.patch({ mode: 'observe', enabled: false, eventKinds: ['focus-completed'] });
+    const quiet = service.patch({ quietStart: '21:30' });
+    const off = service.patch({ mode: 'off', enabled: false });
+    await Promise.all([turnOn, quiet, off]);
+    expect(service.getPolicy()).toMatchObject({ mode: 'off', quietStart: '21:30', eventKinds: ['focus-completed'] });
+  });
+});

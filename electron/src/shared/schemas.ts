@@ -6,7 +6,7 @@ import { extensionInputs } from './desktop-extensions';
 import { minecraftCompanionConfigSchema, minecraftCompanionTaskSchema } from './minecraft-companion';
 import { minecraftDedicatedIdentitySchema, minecraftDedicatedSettingsSchema } from './minecraft-dedicated';
 import { CHAT_CRON_CAPABILITIES } from './chat-cron';
-import { calendarRuleSchema, persistentScheduleInputSchema, proactivePolicyInputSchema, timezoneSchema, usageRateInputSchema, usageRateTargetSchema } from './automation-schemas';
+import { calendarRuleSchema, persistentScheduleInputSchema, proactivePolicyInputSchema, proactivePolicyPatchSchema, timezoneSchema, usageRateInputSchema, usageRateTargetSchema } from './automation-schemas';
 import { consolidationCandidateSchema } from './consolidation';
 import { requirementsSchema } from './delegation-checks';
 import { proactiveConfigSchema } from './proactive';
@@ -252,6 +252,7 @@ export const invokePayloadSchemas = {
   'automation:schedule-run-now': z.object({id:idSchema,operationId:idSchema}).strict(),
   'automation:schedule-preview': z.object({rule:calendarRuleSchema,timezone:timezoneSchema,after:z.iso.datetime(),count:z.number().int().min(1).max(10)}).strict(),
   'automation:configure-proactive': proactivePolicyInputSchema,
+  'automation:patch-proactive': proactivePolicyPatchSchema,
   'automation:explicit-check-in': z.object({operationId:idSchema}).strict(),
   'automation:cancel-trigger': z.object({id:idSchema}).strict(),
   'proactive:get-state': emptySchema,
