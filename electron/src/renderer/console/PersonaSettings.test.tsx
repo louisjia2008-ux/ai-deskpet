@@ -17,7 +17,7 @@ it('saves the form, splits line lists, and uses the name as the companion name',
   fireEvent.change(screen.getByLabelText('名字'), { target: { value: 'Kitty' } });
   fireEvent.change(screen.getByLabelText('性格'), { target: { value: '傲娇' } });
   fireEvent.change(screen.getByLabelText('口头禅（一行一个）'), { target: { value: '才不是呢\n\n  哼  ' } });
-  fireEvent.click(screen.getByRole('button', { name: '保存人格' }));
+  fireEvent.click(screen.getByRole('button', { name: '保存人设' }));
   await waitFor(() => expect(update).toHaveBeenCalledOnce());
   expect(update.mock.calls[0]![0]).toMatchObject({ name: 'Kitty', personality: '傲娇', catchphrases: ['才不是呢', '哼'] });
   await screen.findByRole('status');
@@ -33,4 +33,14 @@ it('imports a character card into the form without saving it', async () => {
   await waitFor(() => expect(screen.getByLabelText<globalThis.HTMLInputElement>('名字').value).toBe('小雪'));
   expect(screen.getByRole('status').textContent).toBe('已填入表单，还没有保存。');
   expect(update).not.toHaveBeenCalled();
+});
+
+it('says so when the character saved but the sidebar name did not', async () => {
+  const persona = { get: vi.fn(async () => ({ ...defaultPersona, name: '' })), update: vi.fn(async (value: typeof defaultPersona) => value) };
+  const relationship = { setNickname: vi.fn(async () => { throw new Error('synthetic'); }) };
+  Object.defineProperty(window, 'deskpet', { value: { persona, relationship }, configurable: true });
+  render(<PersonaSettings locale="zh-CN" />);
+  fireEvent.change(await screen.findByLabelText('名字'), { target: { value: '小伙伴' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存人设' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('侧边栏昵称没更新');
 });

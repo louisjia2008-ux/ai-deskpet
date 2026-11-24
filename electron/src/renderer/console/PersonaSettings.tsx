@@ -12,7 +12,7 @@ const copy = {
     examples: 'Example dialogue', boundaries: 'Things to avoid', catchphrases: 'Catchphrases (one per line)', tapLines: 'What it says when tapped (one per line)',
     shareStyle: 'Also use imported tone on cloud models', shareStyleHelp: 'Imported tone is kept to local models unless you allow this.',
     importFile: 'Import character card or notes', importHelp: 'A character card (.json) or notes (.md, .txt). Review it below, then save.', imported: 'Imported into the form. Not saved yet.', importFailed: 'That file could not be read.',
-    save: 'Save character', saved: 'Saved. New replies use this character.', failed: 'Not saved. Check the length of each field and try again.',
+    save: 'Save character', saved: 'Saved. New replies use this character.', nicknameFailed: 'The character was saved, but the sidebar name was not updated. Save again to retry.', failed: 'Not saved. Check the length of each field and try again.',
   },
   'zh-CN': {
     title: '人格设定', intro: '她是谁、怎么说话。聊天、主动问候和 QQ 都会用到。',
@@ -21,7 +21,7 @@ const copy = {
     examples: '示例对话', boundaries: '不要做的事', catchphrases: '口头禅（一行一个）', tapLines: '被点击时说的话（一行一个）',
     shareStyle: '导入的语气也用于云端模型', shareStyleHelp: '不勾选时，导入的语气只在本地模型上生效。',
     importFile: '导入角色卡或笔记', importHelp: '支持角色卡（.json）和笔记（.md、.txt）。导入后请在下方核对，再保存。', imported: '已填入表单，还没有保存。', importFailed: '这个文件读取失败。',
-    save: '保存人格', saved: '已保存，新的回复会使用这个人格。', failed: '保存失败。请检查各项长度后重试。',
+    save: '保存人设', saved: '已保存，新的回复会用这个人设。', nicknameFailed: '人设已保存，但侧边栏昵称没更新。再按一次保存重试。', failed: '保存失败。请检查各项长度后重试。',
   },
 } as const;
 
@@ -33,7 +33,7 @@ export const PersonaSettings = ({ locale, nickname = '' }: { locale: 'en' | 'zh-
   const [persona, setPersona] = useState<Persona>(defaultPersona);
   const [catchphrases, setCatchphrases] = useState('');
   const [tapLines, setTapLines] = useState('');
-  const [status, setStatus] = useState<'saved' | 'failed' | 'imported' | 'importFailed' | null>(null);
+  const [status, setStatus] = useState<'saved' | 'failed' | 'imported' | 'importFailed' | 'nicknameFailed' | null>(null);
   const [busy, setBusy] = useState(false);
   const file = useRef<globalThis.HTMLInputElement>(null);
   const show = (value: Persona): void => { setPersona(value); setCatchphrases(toLines(value.catchphrases)); setTapLines(toLines(value.tapLines)); };
@@ -54,8 +54,12 @@ export const PersonaSettings = ({ locale, nickname = '' }: { locale: 'en' | 'zh-
     event.preventDefault(); setBusy(true); setStatus(null);
     try {
       const saved = await window.deskpet.persona.update({ ...persona, catchphrases: fromLines(catchphrases), tapLines: fromLines(tapLines) });
-      show(saved); setStatus('saved');
-      if (saved.name) void window.deskpet.relationship.setNickname(saved.name).catch(() => undefined);
+      show(saved);
+      // The sidebar name is part of this save: report success only once both are stored.
+      if (saved.name && saved.name !== nickname) {
+        try { await window.deskpet.relationship.setNickname(saved.name); setStatus('saved'); }
+        catch { setStatus('nicknameFailed'); }
+      } else setStatus('saved');
     }
     catch { setStatus('failed'); }
     finally { setBusy(false); }
@@ -83,7 +87,7 @@ export const PersonaSettings = ({ locale, nickname = '' }: { locale: 'en' | 'zh-
       <small>{t.shareStyleHelp}</small>
       <p className="muted">{t.privacy}</p>
       <div className="persona-actions"><button type="submit" disabled={busy}>{t.save}</button>
-        {status && <span role={status === 'failed' || status === 'importFailed' ? 'alert' : 'status'}>{t[status]}</span>}</div>
+        {status && <span role={status === 'failed' || status === 'importFailed' || status === 'nicknameFailed' ? 'alert' : 'status'}>{t[status]}</span>}</div>
     </form>
   </section>;
 };

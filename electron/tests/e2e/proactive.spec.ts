@@ -38,8 +38,8 @@ test('one setting turns on check-ins, which use the character and reach the desk
     await page.locator('nav').getByRole('button', { name: '陪伴', exact: true }).click();
     await page.getByRole('tab', { name: '人设', exact: true }).click();
     await page.getByRole('textbox', { name: '性格', exact: true }).fill('傲娇，嘴硬心软');
-    await page.getByRole('button', { name: '保存人格', exact: true }).click();
-    await expect(page.getByText('已保存，新的回复会使用这个人格。')).toBeVisible();
+    await page.getByRole('button', { name: '保存人设', exact: true }).click();
+    await expect(page.getByText('已保存，新的回复会用这个人设。')).toBeVisible();
     await page.getByRole('tab', { name: '主动关心', exact: true }).click();
     expect(requests).toHaveLength(0);
     await page.getByRole('radio', { name: '主动问候', exact: true }).click();
