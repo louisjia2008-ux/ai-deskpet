@@ -29,10 +29,26 @@ export const memoryEventIds = (memory: MemoryItem, state?: PersistentState): str
 };
 
 const bump = (state: PersistentState): void => { state.memoryRevision += 1; };
+/** A nightly merge into a kept memory leaves that memory's sources as they were; the merged-in duplicates' sources
+ * are known from the cleanup reports, which outlast the summaries fed into new conversations. */
+const mergedEventIds = (state: PersistentState, memoryId: string): string[] => {
+  const ids: string[] = [], pending = [memoryId], seen = new Set<string>();
+  while (pending.length) {
+    const target = pending.pop()!;
+    if (seen.has(target)) continue;
+    seen.add(target);
+    for (const report of state.memorySleep.reports) for (const change of report.changes) {
+      if (change.undoneAt || change.kind !== 'merge' || change.resultId !== target) continue;
+      for (const removed of change.removed) { ids.push(...memoryEventIds(removed, state)); pending.push(removed.id); }
+    }
+  }
+  return ids;
+};
 export const recordMemorySupersession = (state: PersistentState, memory: MemoryItem, kind: 'deleted' | 'corrected', now = new Date()): void => {
   const textDigest = memoryTextDigest(memory.text);
   if (!state.memoryTombstones.some((item) => item.memoryId === memory.id && item.kind === kind && item.textDigest === textDigest && item.memoryRevision === memory.contextMetadata?.revision)) {
-    state.memoryTombstones.push({ id: randomUUID(), memoryId: memory.id, textDigest, sourceEventIds: memoryEventIds(memory, state),
+    const sourceEventIds = [...new Set([...memoryEventIds(memory, state), ...mergedEventIds(state, memory.id)])].slice(0, 256);
+    state.memoryTombstones.push({ id: randomUUID(), memoryId: memory.id, textDigest, sourceEventIds,
       identityKey: memoryIdentityKey(memory.contextMetadata?.identity), scope: structuredClone(memoryScope(memory)), deletedAt: now.toISOString(), kind, ...(memory.contextMetadata ? { memoryRevision: memory.contextMetadata.revision } : {}) });
   }
 };

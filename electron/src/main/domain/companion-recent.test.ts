@@ -4,7 +4,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import type { ChatMessage, ProviderConfig } from '../../shared';
+import type { ChatMessage, MemoryItem, MemorySourceReference, ProviderConfig } from '../../shared';
+import { confirmedMemoryMetadata } from './context-provenance';
+import { recordMemorySupersession } from './memory-commit';
+import { createDefaultState } from './schemas';
 import type { ProviderAdapter, ProviderChatRequest } from '../providers/types';
 import { ChatService } from './chat-service';
 import { prepareChatContext } from './chat-context';
@@ -189,4 +192,21 @@ it('pairs a reply with its follow-ups, reads offered choices, and does not pass 
   const marked = supersededChat({ chatMessages: [request, followup, choices, later], memoryTombstones: [{ id: randomUUID(), memoryId: deletedId,
     textDigest: 'e'.repeat(64), sourceEventIds: [], identityKey: null, scope: { kind: 'global' }, deletedAt: at, kind: 'deleted' }] });
   expect([...marked.keys()].sort()).toEqual([request.id, followup.id, choices.id].sort());
+});
+
+it('treats the source of a duplicate merged into a kept memory as superseded when that memory is deleted', async () => {
+  const state = createDefaultState(), at = new Date().toISOString(), sessionId = randomUUID();
+  const user: ChatMessage = { id: randomUUID(), sessionId, role: 'user', content: 'SYNTHETIC_MERGED_FACT', createdAt: at, status: 'complete', errorCode: null };
+  state.chatMessages.push(user);
+  const memory = (id: string, sourceReferences: MemorySourceReference[]): MemoryItem => ({ id, text: 'SYNTHETIC_MERGED_FACT', tags: [], source: 'user',
+    createdAt: at, updatedAt: at, contextMetadata: confirmedMemoryMetadata({ origin: 'chat-user', sourceReferences }) });
+  const loose = memory(randomUUID(), [{ kind: 'chat-user', sessionId, messageId: user.id }]);
+  const kept = memory(randomUUID(), [{ kind: 'manual-user', actionId: randomUUID() }]);
+  state.memories.push(kept);
+  state.memorySleep.reports.push({ id: randomUUID(), at, provider: 'fixture', changes: [{ id: randomUUID(), kind: 'merge', removed: [loose],
+    resultId: kept.id, created: false, after: kept.text, undoneAt: null }] });
+  state.memorySleep.recallReplacements[loose.id] = kept.id;
+  expect(supersededChat(state).has(user.id)).toBe(false);
+  recordMemorySupersession(state, kept, 'deleted');
+  expect(supersededChat(state).get(user.id)).toBe('deleted');
 });
