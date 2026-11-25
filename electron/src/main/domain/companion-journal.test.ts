@@ -411,3 +411,54 @@ it('retires a diary for a correction along a merge chain whichever memory is che
   expect(f.journal.list()[0]!.memories[0]!.id).toBe(into.id);
   expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
 });
+
+it('leaves out of a new diary a reply that reached a superseded message only through other replies', async () => {
+  const f = await fixture();
+  const reply = (content: string, history: string[]): ChatMessage => ({ id: randomUUID(), sessionId: f.session.id, role: 'assistant', content,
+    createdAt: stamp, status: 'complete', errorCode: null, contextTrace: { ...trace(), historyMessageIds: history } });
+  const first = reply('合成首答复述旧事实。', [f.message.id]);
+  const asker = { ...f.message, id: randomUUID(), content: '合成追问一' }, b = reply('合成回复 B。', [first.id]);
+  const asker2 = { ...f.message, id: randomUUID(), content: '合成追问二' }, c = reply('合成回复 C 复述旧事实。', [b.id]);
+  f.state.chatMessages.push(first, asker, b, asker2, c);
+  f.state.memoryTombstones.push({ id: randomUUID(), memoryId: randomUUID(), textDigest: '1'.repeat(64),
+    sourceEventIds: [recentDigest(`chat:${f.session.id}:${f.message.id}`)], identityKey: null, scope: { kind: 'global' }, deletedAt: stamp, kind: 'deleted' });
+  const ids = diaryMaterial(f.state, date, 'UTC', () => false).sources.map(source => source.id);
+  expect(ids).not.toContain(b.id); expect(ids).not.toContain(c.id);
+  expect(ids).toEqual(expect.arrayContaining([asker.id, asker2.id]));
+});
+
+it('does not carry a retired diary into the next one through a reply that used it', async () => {
+  const f = await fixture();
+  const memory = globalMemory('主人住在合成旧城。');
+  f.state.memories.push(memory);
+  await f.journal.tick(f.input);
+  const used = f.journal.context(f.state, 'remote', () => false).references;
+  const nextDay = '2026-11-15', at = `${nextDay}T12:00:00.000Z`;
+  const reply: ChatMessage = { id: randomUUID(), sessionId: f.session.id, role: 'assistant', content: '合成回复提到旧城。', createdAt: at,
+    status: 'complete', errorCode: null, contextTrace: { ...trace(), diaryReferences: used } };
+  f.state.chatMessages.push({ ...f.message, id: randomUUID(), createdAt: at, content: '合成第二天的话。' }, reply);
+  f.state.memoryTombstones.push({ id: randomUUID(), memoryId: memory.id, textDigest: '2'.repeat(64), sourceEventIds: [], identityKey: null,
+    scope: { kind: 'global' }, deletedAt: stamp, kind: 'corrected', memoryRevision: 1 });
+  memory.text = '主人住在合成新城。'; memory.contextMetadata!.revision = 2;
+  await f.journal.tick({ ...f.input, now: Date.parse('2026-11-16T03:01:00Z') });
+  const sent = JSON.stringify(f.complete.mock.calls.at(-1));
+  expect(f.complete).toHaveBeenCalledTimes(2);
+  expect(sent).toContain('合成第二天的话');
+  expect(sent).not.toContain('合成回复提到旧城');
+});
+
+it('follows a long merge chain to a correction at its end', async () => {
+  const f = await fixture();
+  const first = globalMemory('主人喜欢合成链首。');
+  f.state.memories.push(first);
+  await f.journal.tick(f.input);
+  const chain = Array.from({ length: 70 }, () => randomUUID());
+  f.state.memories = f.state.memories.filter(item => item.id !== first.id);
+  [first.id, ...chain].forEach((id, index) => { if (index < chain.length) f.state.memorySleep.recallReplacements[id] = chain[index]!; });
+  const end = { ...globalMemory('主人喜欢合成链尾。'), id: chain.at(-1)! };
+  f.state.memories.push(end);
+  expect(f.journal.context(f.state, 'remote', () => false).summaries).toHaveLength(1);
+  f.state.memoryTombstones.push({ id: randomUUID(), memoryId: end.id, textDigest: '3'.repeat(64), sourceEventIds: [], identityKey: null,
+    scope: { kind: 'global' }, deletedAt: stamp, kind: 'corrected', memoryRevision: 1 });
+  expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
+});

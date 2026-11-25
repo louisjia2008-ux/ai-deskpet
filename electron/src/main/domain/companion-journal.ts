@@ -26,9 +26,19 @@ const digest = (text: string): string => createHash('sha256').update(text).diges
 const previousDate = (date: string): string => new Date(Date.parse(date + 'T12:00:00Z') - 86_400_000).toISOString().slice(0, 10);
 
 /** A cloud diary only ever sees proven owner sessions with complete, currently allowed lineage. */
-export function diaryMaterial(state: PersistentState, date: string, timezone: string, suppressed: (id: string) => boolean, diaryAllowed?: (reference: DiaryReference) => boolean) {
+export function diaryMaterial(state: PersistentState, date: string, timezone: string, suppressed: (id: string) => boolean,
+  diaryAllowed?: (reference: DiaryReference) => boolean, diaryCurrent?: (reference: DiaryReference) => boolean) {
   const memories = state.memories.filter(memory => !suppressed(memory.id));
   const superseded = supersededChat(state);
+  // A new diary is written only from what still stands: not a superseded message, nor anything that had one in
+  // its context however indirectly, nor a reply that used a diary no longer current. Context always points back.
+  const stale = new Set<string>();
+  for (const message of state.chatMessages) {
+    const trace = message.contextTrace;
+    if (superseded.has(message.id) || (trace && (trace.historyMessageIds.some(id => stale.has(id))
+      || (trace.historyLookupReferences ?? []).some(reference => stale.has(reference.messageId))
+      || (diaryCurrent !== undefined && (trace.diaryReferences ?? []).some(reference => !diaryCurrent(reference)))))) stale.add(message.id);
+  }
   const sources: Array<{ id: string; digest: string; text: string; role: string }> = [];
   let used = 0;
   for (const session of state.chatSessions) {
@@ -37,10 +47,7 @@ export function diaryMaterial(state: PersistentState, date: string, timezone: st
     const allowed = selectAllowedHistory({ sessionId: session.id, history, memories, destination: 'remote', historyPrivacy: session.historyPrivacy ?? 'cloud-allowed',
       ...(diaryAllowed ? { diaryAllowed } : {}) });
     for (const message of allowed) {
-      // A reply that had a superseded message in its context may repeat it too.
-      const dependsOnSuperseded = superseded.has(message.id) || (message.contextTrace?.historyMessageIds ?? []).some(id => superseded.has(id))
-        || (message.contextTrace?.historyLookupReferences ?? []).some(reference => superseded.has(reference.messageId));
-      if (proactiveDayKey(Date.parse(message.createdAt), timezone) !== date || !message.content.trim() || dependsOnSuperseded
+      if (proactiveDayKey(Date.parse(message.createdAt), timezone) !== date || !message.content.trim() || stale.has(message.id)
         || sources.length >= 120 || used + message.content.length > 24_000) continue;
       sources.push({ id: message.id, digest: digest(message.content + JSON.stringify(message.contextTrace)), text: message.content, role: message.role }); used += message.content.length;
     }
@@ -110,7 +117,8 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
     // A later correction leaves the old wording out of new conversations without retracting past replies.
     if ((correctedAt.get(id) ?? -1) >= revision) retired = true;
     // So does a correction anywhere along what it was merged into. Walked on its own, whatever was checked first.
-    for (let next = replacementOf(id), hops = 0; typeof next === 'string' && hops < 64; next = memories.has(next) ? null : replacementOf(next), hops++) {
+    for (let next = replacementOf(id), walked = new Set<string>(); typeof next === 'string' && !walked.has(next);
+      walked.add(next), next = memories.has(next) ? null : replacementOf(next)) {
       if (correctedAt.has(next)) retired = true;
     }
     let current = id;
@@ -222,7 +230,8 @@ export class CompanionJournal {
       try {
         const collect = () => {
           const state = input.state();
-          return diaryMaterial(state, date, input.timezone, input.suppressed, reference => this.referenceRetained(reference, state, input.suppressed));
+          return diaryMaterial(state, date, input.timezone, input.suppressed, reference => this.referenceRetained(reference, state, input.suppressed),
+            reference => this.referenceCurrent(reference, state, 'remote', input.suppressed));
         };
         const material = collect();
         if (!material.sources.length) return;
