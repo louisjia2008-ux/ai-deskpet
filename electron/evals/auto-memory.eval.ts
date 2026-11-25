@@ -46,7 +46,7 @@ it('saves lasting facts and nothing else, as the app does', async () => {
       const invalid = !reply ? undefined : !reply.finished ? 'reply cut off' : proposed === null ? 'not the requested JSON' : undefined;
       const checks = autoMemoryChecks(item, saved);
       const verdict = invalid ? undefined : await judge(RUBRIC, { sent, saved }, 4);
-      return { checks, ...(verdict ? { judge: verdict } : {}), ...(invalid ? { invalid } : {}),
+      return { checks, modelAnswered: Boolean(request), ...(verdict ? { judge: verdict } : {}), ...(invalid ? { invalid } : {}),
         output: { sent: Boolean(request), raw: reply?.text ?? null, proposed, saved, status: service.attempts().errorCode ?? null }, ms: Date.now() - started };
     } finally { await dispose(); }
   });

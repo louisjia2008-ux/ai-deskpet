@@ -42,7 +42,8 @@ export const sleepChecks = (item: SleepCase, changes: readonly SleepChange[], fi
     || merges.some((change) => change.before.includes(text(n)) && change.after === memory.text)));
   for (const n of item.promote ?? []) checks.push({ name: `应提升：${n}`, passed: deep(n) });
   for (const n of item.drop ?? []) checks.push({ name: `应删除：${n}`, passed: removed(n) });
-  for (const n of item.keep ?? []) checks.push({ name: `应保留：${n}`, passed: !removed(n) });
+  // Kept means still there as written (a promotion keeps the text); being merged into something else is not keeping it.
+  for (const n of item.keep ?? []) checks.push({ name: `应保留：${n}`, passed: final.some((memory) => memory.text === text(n)) });
   if (item.maxPromote !== undefined) {
     const before = item.entries.filter((entry) => entry.kind === 'deep').length, after = final.filter((memory) => memory.layer === 'deep').length;
     checks.push({ name: `深层新增不超过 ${item.maxPromote} 条`, passed: after - before <= item.maxPromote, detail: `${after - before} 条` });

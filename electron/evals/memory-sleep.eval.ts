@@ -7,6 +7,7 @@ import { evalProvider, judge, runCases, writeReport } from './runner';
 import type { CaseResult } from './runner';
 
 const RUBRIC = `The app's nightly tidy-up was shown "entries" (kind, text, age in days; "fixed" entries were written by the owner and never change) and these "changes" took effect.
+Entries not named in any change stay exactly as they are. A merge whose "into" is "owner entry" folded duplicates into an entry the owner wrote, which keeps its own text by design.
 Score 0-4, one point each:
 1. Merged sentences keep every detail still true, let the newer statement win, and invent nothing. (No merges: give the point.)
 2. Entries saying the same thing, or a newer correction of an older one, were merged, and different facts were kept apart.
@@ -37,7 +38,9 @@ it('tidies memory without losing or inventing facts, as the app applies it', asy
       const final = repository.snapshot().memories.map((memory) => ({ text: memory.text, layer: memory.contextMetadata?.layer ?? 'fixed' }));
       const checks = sleepChecks(item, changes, final);
       const listed = JSON.parse(recorder.requests[0]?.messages[1]?.content ?? '{"entries":[]}') as { entries: unknown[] };
-      const verdict = invalid ? undefined : await judge(RUBRIC, { entries: listed.entries, changes }, 4);
+      const fixedTexts = new Set(item.entries.filter((entry) => entry.kind === 'fixed').map((entry) => entry.text));
+      const shown = changes.map((change) => change.kind === 'merge' && change.after !== null && fixedTexts.has(change.after) ? { ...change, into: 'owner entry' } : change);
+      const verdict = invalid ? undefined : await judge(RUBRIC, { entries: listed.entries, changes: shown }, 4);
       return { checks, ...(verdict ? { judge: verdict } : {}), ...(invalid ? { invalid } : {}),
         output: { raw: reply?.text ?? null, plan, changes, lastError: status.lastError ?? null }, ms: Date.now() - started };
     } finally { await dispose(); }

@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { OpenAICompatibleAdapter } from '../src/main/providers/openai-compatible';
 import type { ProviderChatMessage, ProviderChatRequest } from '../src/main/providers/types';
 import type { ProviderConfig } from '../src/shared';
@@ -22,27 +22,45 @@ export const evalSettings = (): EvalSettings => ({
 });
 
 const OFFICIAL = 'https://api.openai.com';
-let cachedKey: string | null = null;
-/** The OpenAI key only ever goes to OpenAI; another endpoint needs its own DESKPET_EVAL_API_KEY. */
-const apiKey = (): string => {
-  if (cachedKey) return cachedKey;
-  const endpoint = new URL(evalSettings().baseUrl);
-  if (endpoint.origin !== OFFICIAL) {
-    // Another endpoint has its own key: DESKPET_EVAL_API_KEY, or the keychain item `deskpet-eval` / its host name.
-    let custom = process.env.DESKPET_EVAL_API_KEY?.trim();
-    if (!custom) { try { custom = execFileSync('security', ['find-generic-password', '-s', 'deskpet-eval', '-a', endpoint.host, '-w'], { encoding: 'utf8' }).trim(); } catch { /* Reported below. */ } }
-    if (!custom) throw new Error(`No key for ${endpoint.host}: set DESKPET_EVAL_API_KEY, or run once: security add-generic-password -s deskpet-eval -a ${endpoint.host} -w (the OpenAI key is never sent there)`);
-    return (cachedKey = custom);
+const keys = new Map<string, string>();
+const keychain = (service: string, account: string): string | undefined => {
+  try { return execFileSync('security', ['find-generic-password', '-s', service, '-a', account, '-w'], { encoding: 'utf8' }).trim() || undefined; }
+  catch { return undefined; }
+};
+/**
+ * The key for one endpoint. The OpenAI key (OPENAI_API_KEY, or keychain `deskpet-eval` / `openai`) only ever goes to
+ * api.openai.com; any other endpoint uses DESKPET_EVAL_API_KEY or keychain `deskpet-eval-endpoint` / its host.
+ */
+const apiKey = (baseUrl = evalSettings().baseUrl): string => {
+  const endpoint = new URL(baseUrl), cached = keys.get(endpoint.origin);
+  if (cached) return cached;
+  let key: string | undefined;
+  if (endpoint.origin === OFFICIAL) {
+    key = process.env.OPENAI_API_KEY?.trim() || keychain('deskpet-eval', 'openai');
+    if (!key) throw new Error('No OpenAI key: set OPENAI_API_KEY, or run once: security add-generic-password -s deskpet-eval -a openai -w "$(pbpaste)"');
+  } else {
+    if (endpoint.protocol !== 'https:') throw new Error(`Refusing to send a key over ${endpoint.protocol} to ${endpoint.host}.`);
+    key = process.env.DESKPET_EVAL_API_KEY?.trim() || keychain('deskpet-eval-endpoint', endpoint.host);
+    if (!key) throw new Error(`No key for ${endpoint.host}: set DESKPET_EVAL_API_KEY, or run once: security add-generic-password -s deskpet-eval-endpoint -a ${endpoint.host} -w "$(pbpaste)"`);
   }
-  const fromEnv = process.env.OPENAI_API_KEY?.trim();
-  if (fromEnv) return (cachedKey = fromEnv);
-  try {
-    cachedKey = execFileSync('security', ['find-generic-password', '-s', 'deskpet-eval', '-a', 'openai', '-w'], { encoding: 'utf8' }).trim();
-  } catch {
-    throw new Error('No OpenAI key: set OPENAI_API_KEY, or run once: security add-generic-password -s deskpet-eval -a openai -w');
+  keys.set(endpoint.origin, key);
+  return key;
+};
+
+/** Private material (a real profile, reports quoting model output) may only live where git ignores it, or outside any repository. */
+export const assertUntracked = (path: string, label: string): void => {
+  const absolute = existsSync(path) ? realpathSync(path) : resolve(path);
+  const directory = existsSync(absolute) && statSync(absolute).isDirectory() ? absolute : dirname(absolute);
+  // Git's messages are localized; read them in English to tell "not a repository" from a failure.
+  const env = { ...process.env, LC_ALL: 'C', LANGUAGE: 'C' };
+  const git = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: directory, encoding: 'utf8', env });
+  if (git.error) throw new Error(`${label}: cannot check git (${git.error.message}); refusing.`);
+  if (git.status !== 0) {
+    if (/not a git repository/iu.test(git.stderr)) return;
+    throw new Error(`${label}: git check failed; refusing.`);
   }
-  if (!cachedKey) throw new Error('The deskpet-eval keychain item is empty.');
-  return cachedKey;
+  const ignored = spawnSync('git', ['check-ignore', '-q', absolute], { cwd: directory, encoding: 'utf8', env });
+  if (ignored.error || ignored.status !== 0) throw new Error(`${label} is inside a git repository and not ignored: ${absolute}`);
 };
 
 const adapters = new Map<string, OpenAICompatibleAdapter>();
@@ -53,7 +71,7 @@ export const adapter = (model: string, baseUrl: string): OpenAICompatibleAdapter
   const key = `${baseUrl}|${model}`;
   let found = adapters.get(key);
   if (!found) {
-    found = new OpenAICompatibleAdapter({ config: { ...evalProvider(model), baseUrl }, apiKey: apiKey() });
+    found = new OpenAICompatibleAdapter({ config: { ...evalProvider(model), baseUrl }, apiKey: apiKey(baseUrl) });
     adapters.set(key, found);
   }
   return found;
@@ -86,7 +104,7 @@ export const judge = async (rubric: string, material: unknown, max: number): Pro
     try {
       const parsed = JSON.parse(reply.text.trim().replace(/^```(?:json)?\s*/u, '').replace(/\s*```$/u, '')) as { score?: unknown; reasons?: unknown };
       const score = parsed.score;
-      if (reply.finished && typeof score === 'number' && Number.isInteger(score) && score >= 0 && score <= max && typeof parsed.reasons === 'string') return { score, max, reasons: parsed.reasons };
+      if (reply.finished && typeof score === 'number' && Number.isInteger(score) && score >= 0 && score <= max && typeof parsed.reasons === 'string' && parsed.reasons.trim() !== '') return { score, max, reasons: parsed.reasons };
     } catch { /* Ask once more. */ }
   }
   return { score: 0, max, reasons: 'judge-unparseable', unparseable: true };
@@ -99,33 +117,28 @@ export interface CaseResult {
   output: unknown; ms: number; error?: string;
   /** The model's reply was cut off or not the requested JSON: the app would use nothing from it. */
   invalid?: string;
+  /** False when the app filtered the input and never asked the model: the case tests the host, not the model. */
+  modelAnswered?: boolean;
 }
 
 /** Programmatic checks weigh as much as the judge: each half of a case is worth 1. */
 export const caseScore = (result: CaseResult): number => {
   if (result.error || result.invalid) return 0;
   const checks = result.checks.length === 0 ? 1 : result.checks.filter((check) => check.passed).length / result.checks.length;
-  return result.judge ? (checks + result.judge.score / result.judge.max) / 2 : checks;
-};
-
-/** Reports quote model output, so they may only go where git ignores them (or outside the repository). */
-const assertPrivateOut = (directory: string): void => {
-  mkdirSync(directory, { recursive: true });
-  try { execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: directory, stdio: 'pipe' }); }
-  catch { return; } // Outside any repository.
-  try { execFileSync('git', ['check-ignore', '-q', directory], { cwd: directory, stdio: 'pipe' }); }
-  catch { throw new Error(`DESKPET_EVAL_OUT is tracked by git: ${directory}`); }
+  // A judge that gave no usable verdict leaves the case scored by its checks alone; it is reported as unjudged.
+  return result.judge && !result.judge.unparseable ? (checks + result.judge.score / result.judge.max) / 2 : checks;
 };
 
 export const writeReport = (suite: string, results: CaseResult[]): string => {
   const settings = evalSettings(), stamp = new Date().toISOString().replaceAll(':', '-');
   const directory = join(settings.out, suite);
-  assertPrivateOut(directory);
+  mkdirSync(directory, { recursive: true });
+  assertUntracked(directory, 'DESKPET_EVAL_OUT');
   mkdirSync(directory, { recursive: true });
   const total = results.length === 0 ? 0 : results.reduce((sum, result) => sum + caseScore(result), 0) / results.length;
   const lines = [`# ${suite} · ${(total * 100).toFixed(1)}%`, '', `model ${settings.model} · judge ${settings.judgeModel} · ${results.length} runs · ${new Date().toISOString()}`, '',
     '| case | run | score | failed checks | judge |', '|---|---|---|---|---|',
-    ...results.map((result) => `| ${result.id} ${result.title} | ${result.run} | ${(caseScore(result) * 100).toFixed(0)}% | ${result.error ? `error: ${result.error}` : result.invalid ? `invalid: ${result.invalid}` : result.checks.filter((check) => !check.passed).map((check) => `${check.name}${check.detail ? ` (${check.detail})` : ''}`).join('; ')} | ${result.judge ? `${result.judge.score}/${result.judge.max} ${result.judge.reasons}` : ''} |`)];
+    ...results.map((result) => `| ${result.id} ${result.title} | ${result.run} | ${(caseScore(result) * 100).toFixed(0)}% | ${result.error ? `error: ${result.error}` : result.invalid ? `invalid: ${result.invalid}` : result.checks.filter((check) => !check.passed).map((check) => `${check.name}${check.detail ? ` (${check.detail})` : ''}`).join('; ')} | ${result.judge ? (result.judge.unparseable ? 'unjudged' : `${result.judge.score}/${result.judge.max} ${result.judge.reasons}`) : result.modelAnswered === false ? '(filtered before the model)' : ''} |`)];
   writeFileSync(join(directory, `${stamp}.md`), `${lines.join('\n')}\n`);
   writeFileSync(join(directory, `${stamp}.json`), JSON.stringify({ suite, settings: { ...settings, out: undefined }, total, results }, null, 2));
   return `${(total * 100).toFixed(1)}% → ${join(directory, `${stamp}.md`)}`;
@@ -145,7 +158,9 @@ export const runCases = async <C extends { id: string; title: string }>(suite: s
   };
   await Promise.all([worker(), worker()]);
   results.sort((a, b) => a.id.localeCompare(b.id) || a.run - b.run);
-  // A run where nothing reached the model says nothing about quality; fail it instead of reporting 0%.
-  if (results.every((result) => result.error)) throw new Error(`Every ${suite} case failed: ${results[0]?.error ?? 'no cases'}`);
+  // A run where nothing reached the model says nothing about quality; fail it instead of reporting a score.
+  const answered = results.filter((result) => !result.error && !result.invalid && result.modelAnswered !== false);
+  if (answered.length === 0) throw new Error(`No ${suite} case got a usable model answer: ${results.find((result) => result.error)?.error ?? 'all filtered or invalid'}`);
+  if (results.some((result) => result.judge) && results.every((result) => !result.judge || result.judge.unparseable)) throw new Error(`No ${suite} case got a usable verdict from the judge.`);
   return results;
 };

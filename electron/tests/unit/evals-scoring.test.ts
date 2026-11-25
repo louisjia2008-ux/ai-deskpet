@@ -26,9 +26,14 @@ describe('eval scoring', () => {
     expect(failed(sleepChecks(merge, [{ kind: 'merge', before: ['用户住在北京。', '用户上个月搬到了上海浦东。'], after: '用户住在北京。' }], [])))
       .toEqual(['合并后保留：上海', '合并后不应写：仍住北京']);
     const separate = byId(sleepCases, 'ms04');
-    expect(failed(sleepChecks(separate, [{ kind: 'merge', before: ['用户喜欢猫。', '用户喜欢狗。'], after: '用户喜欢猫和狗。' }], []))).toEqual(['不应合并：1 与 2']);
+    expect(failed(sleepChecks(separate, [{ kind: 'merge', before: ['用户喜欢猫。', '用户喜欢狗。'], after: '用户喜欢猫和狗。' }],
+      [{ text: '用户喜欢猫和狗。', layer: 'shallow' }, { text: '用户在学日语。', layer: 'shallow' }]))).toEqual(['不应合并：1 与 2', '应保留：1', '应保留：2']);
     expect(failed(sleepChecks(byId(sleepCases, 'ms03'), [{ kind: 'merge', before: ['用户养了一只叫团子的猫。'], after: '用户的猫叫团子。' }], []))).toEqual([]);
-    expect(failed(sleepChecks(byId(sleepCases, 'ms06'), [{ kind: 'expire', before: ['用户在准备下周三的面试。'], after: null }], []))).toEqual([]);
+    const toefl = [{ text: '用户在准备托福考试，目标 100 分。', layer: 'shallow' }];
+    expect(failed(sleepChecks(byId(sleepCases, 'ms06'), [{ kind: 'expire', before: ['用户在准备下周三的面试。'], after: null }], toefl))).toEqual([]);
+    // Merged into something else is not kept.
+    expect(failed(sleepChecks(byId(sleepCases, 'ms06'), [{ kind: 'merge', before: ['用户在准备下周三的面试。', '用户在准备托福考试，目标 100 分。'], after: '用户喜欢看电影。' }], [{ text: '用户喜欢看电影。', layer: 'shallow' }])))
+      .toEqual(['应删除：1', '应保留：2']);
     expect(failed(sleepChecks(byId(sleepCases, 'ms10'), [{ kind: 'promote', before: ['用户最近在读《三体》。'], after: '用户最近在读《三体》。' }], []))).toEqual([]);
   });
 
