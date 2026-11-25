@@ -4,7 +4,7 @@ import type { Pattern } from './auto-memory';
 export interface SleepCase {
   id: string; title: string;
   entries: Array<{ kind: 'shallow' | 'deep' | 'fixed'; text: string; days: number }>;
-  merge?: Array<{ name: string; ids: number[]; text?: Pattern[]; notText?: Pattern[] }>;
+  merge?: Array<{ name: string; ids: number[]; text?: Pattern[]; notText?: Pattern[]; /** The merged entry belongs in the deep profile. */ deep?: boolean }>;
   separate?: Array<[number, number]>;
   promote?: number[]; drop?: number[]; keep?: number[];
   /** Must stay shallow (not promoted, and not merged into a deep entry). */
@@ -39,7 +39,7 @@ export const sleepCases: SleepCase[] = [
     ...['用户喜欢用 Vim。', '用户每周三晚上打羽毛球。', '用户正在装修新房。', '用户的生日在十月。', '用户喜欢下雨天。', '用户收藏黑胶唱片。'].map((text) => ({ kind: 'shallow' as const, text, days: 8 }))],
     maxPromote: 2, keep: [11, 12, 13, 14, 15, 16] },
   { id: 'ms09', title: '合并保留全部细节', entries: [{ kind: 'shallow', text: '用户在杭州工作。', days: 10 }, { kind: 'shallow', text: '用户是前端工程师，在杭州一家做电商的公司。', days: 2 }],
-    merge: [{ name: '工作', ids: [1, 2], text: [{ name: '杭州', pattern: /杭州/u }, { name: '前端', pattern: /前端/u }, { name: '电商', pattern: /电商/u }] }] },
+    merge: [{ name: '工作', ids: [1, 2], deep: true, text: [{ name: '杭州', pattern: /杭州/u }, { name: '前端', pattern: /前端/u }, { name: '电商', pattern: /电商/u }] }] },
   { id: 'ms11', title: '长期身份即使用进行时也提升，短期计划不提升', entries: [{ kind: 'shallow', text: '用户在急诊科当护士已经八年了。', days: 5 },
     { kind: 'shallow', text: '用户在准备下周的护理职称考试。', days: 5 }], promote: [1], shallow: [2], keep: [2] },
   { id: 'ms10', title: '没什么要整理', entries: [...deepProfile(3), { kind: 'shallow', text: '用户最近在读《三体》。', days: 2 }, { kind: 'shallow', text: '用户的妹妹在成都读大学。', days: 2 }],

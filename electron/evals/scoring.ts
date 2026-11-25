@@ -33,6 +33,7 @@ export const sleepChecks = (item: SleepCase, changes: readonly SleepChange[], fi
       for (const pattern of expected.text ?? []) checks.push({ name: `合并后保留：${pattern.name}`, passed: pattern.pattern.test(after), detail: after });
       for (const pattern of expected.notText ?? []) checks.push({ name: `合并后不应写：${pattern.name}`, passed: !pattern.pattern.test(after), detail: after });
       checks.push({ name: '合并文本格式', passed: /^(?:用户|The user)/u.test(after) && after.length <= 160, detail: after });
+      if (expected.deep) checks.push({ name: '合并结果进入深层', passed: final.some((memory) => memory.text === after && memory.layer === 'deep') });
     }
   }
   for (const [a, b] of item.separate ?? []) {

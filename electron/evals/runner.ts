@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { OpenAICompatibleAdapter } from '../src/main/providers/openai-compatible';
+import { normalizedProviderBaseUrl } from '../src/main/providers/request-budget';
 import type { ProviderChatMessage, ProviderChatRequest } from '../src/main/providers/types';
 import type { ProviderConfig } from '../src/shared';
 
@@ -32,18 +33,18 @@ const keychain = (service: string, account: string): string | undefined => {
  * api.openai.com; any other endpoint uses DESKPET_EVAL_API_KEY or keychain `deskpet-eval-endpoint` / its host.
  */
 const apiKey = (baseUrl = evalSettings().baseUrl): string => {
-  const endpoint = new URL(baseUrl);
-  // Checked before any key is looked up: only plain https endpoints, never blob:, data: or credentials in the URL.
-  if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password) throw new Error(`Refusing to send a key to ${endpoint.protocol}//${endpoint.host}.`);
+  // Checked the way the production adapter checks it, before any key is looked up.
+  const endpoint = normalizedProviderBaseUrl({ ...evalProvider(), baseUrl });
+  if (endpoint.protocol !== 'https:') throw new Error(`Refusing to send a key to ${endpoint.protocol}//${endpoint.host}.`);
   const cached = keys.get(endpoint.origin);
   if (cached) return cached;
   let key: string | undefined;
   if (endpoint.origin === OFFICIAL) {
     key = process.env.OPENAI_API_KEY?.trim() || keychain('deskpet-eval', 'openai');
-    if (!key) throw new Error('No OpenAI key: set OPENAI_API_KEY, or run once: security add-generic-password -s deskpet-eval -a openai -w "$(pbpaste)"');
+    if (!key) throw new Error('No OpenAI key: set OPENAI_API_KEY, or add a password item in Keychain Access named deskpet-eval with account openai (see evals/README.md).');
   } else {
     key = process.env.DESKPET_EVAL_API_KEY?.trim() || keychain('deskpet-eval-endpoint', endpoint.host);
-    if (!key) throw new Error(`No key for ${endpoint.host}: set DESKPET_EVAL_API_KEY, or run once: security add-generic-password -s deskpet-eval-endpoint -a ${endpoint.host} -w "$(pbpaste)"`);
+    if (!key) throw new Error(`No key for ${endpoint.host}: set DESKPET_EVAL_API_KEY, or add a password item in Keychain Access named deskpet-eval-endpoint with account ${endpoint.host}.`);
   }
   keys.set(endpoint.origin, key);
   return key;

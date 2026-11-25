@@ -41,7 +41,13 @@ it('tidies memory without losing or inventing facts, as the app applies it', asy
       // A merge into an owner entry is one the app applied to that existing entry, not a new entry that happens to read the same.
       const fixedIds = new Set(seeded.filter((_, index) => item.entries[index]!.kind === 'fixed').map((memory) => memory.id));
       const applied = repository.snapshot().memorySleep.reports.at(-1)?.changes ?? [];
-      const shown = changes.map((change, index) => { const raw = applied[index]; return change.kind === 'merge' && raw && !raw.created && raw.resultId !== null && fixedIds.has(raw.resultId) ? { ...change, into: 'owner entry' } : change; });
+      // The judge sees which layer each result landed in, so a merge kept shallow differs from one made deep.
+      const layers = new Map(repository.snapshot().memories.map((memory) => [memory.id, memory.contextMetadata?.layer ?? 'fixed']));
+      const shown = changes.map((change, index) => {
+        const raw = applied[index], layer = raw?.resultId ? layers.get(raw.resultId) : undefined;
+        const into = change.kind === 'merge' && raw && !raw.created && raw.resultId !== null && fixedIds.has(raw.resultId) ? { into: 'owner entry' } : {};
+        return { ...change, ...into, ...(layer ? { layer } : {}) };
+      });
       const verdict = invalid ? undefined : await judge(RUBRIC, { entries: listed.entries, changes: shown }, 4);
       return { checks, ...(verdict ? { judge: verdict } : {}), ...(invalid ? { invalid } : {}),
         output: { raw: reply?.text ?? null, plan, changes, lastError: status.lastError ?? null }, ms: Date.now() - started };

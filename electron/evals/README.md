@@ -15,10 +15,9 @@ with the production instructions, so they match what the app sends.
 ## Run
 
 ```sh
-# once: store an OpenAI API key in the login keychain (it prompts for the key)
-# (macOS's prompt cuts input at 128 characters, too short for an sk-proj key, so read it from the clipboard;
-#  the key is briefly visible to other local processes as an argument)
-security add-generic-password -U -s deskpet-eval -a openai -w "$(pbpaste)"; pbcopy </dev/null
+# once: in Keychain Access (钥匙串访问), File → New Password Item: name `deskpet-eval`, account `openai`,
+# password = your OpenAI API key. (The `security -w` prompt cuts input at 128 characters, too short for an
+# sk-proj key, and passing the key as an argument shows it to other local processes.)
 
 npm run eval:memory      # auto-memory + memory-sleep
 npm run eval:persona     # persona
