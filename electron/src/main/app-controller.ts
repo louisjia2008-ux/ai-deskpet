@@ -3304,7 +3304,10 @@ export class AppController {
     const route = result.route ?? (result.localModel ? {
       providerId: wechatLocalEvidenceRoute(result.localModel).provider.id, model: result.localModel,
     } : null);
-    if (route) this.#autoMemory.note(session.id, { ...route, destination: result.destination, source: 'wechat' });
+    // A cloud reply is read again only by the service that answered it; the local evidence model needs no such check.
+    if (route && (!result.route || result.answeredBy)) {
+      this.#autoMemory.note(session.id, { ...route, destination: result.destination, source: 'wechat', ...(result.route && result.answeredBy ? { endpoint: result.answeredBy } : {}) });
+    } else this.#autoMemory.cancel(session.id);
     void this.#recent.tick().catch(() => undefined);
   }
 
@@ -4312,7 +4315,7 @@ export class AppController {
         // Only a turn whose answering service is known is read again, and only by that same service.
         if (done.answeredBy?.providerId === done.providerId) {
           this.#autoMemory.note(sessionId, { providerId: done.providerId, model: done.model, destination: done.destination, source: done.channel.origin, endpoint: done.answeredBy.identity });
-        }
+        } else this.#autoMemory.cancel(sessionId);
       }
       if (learn) void this.#recent.tick().catch(() => undefined);
       lease?.signal.removeEventListener('abort',abort);lease?.release();this.#reaChatGuards.delete(runId);this.#workContexts.delete(runId);this.#notesScopes.delete(runId);this.#skillTools.release(runId);this.#qqWebBudget.release(runId);};
@@ -4616,6 +4619,10 @@ export class AppController {
         if (this.#repository.snapshot().chatSessions.find(item => item.id === sessionId)?.knowledgeLocalOnly && !localNotesBinding(nextBinding)) continue;
         const previous = { providerId: provider.id, model };
         binding = nextBinding; provider = nextBinding.provider; model = nextBinding.model; usingFallback = true;
+        // The fallback is now the service that answers; background memory follows it, not the one that failed.
+        const fallbackIdentity = answeringServiceIdentity(nextBinding);
+        if (fallbackIdentity) workContext.answeredBy = { providerId: provider.id, identity: fallbackIdentity };
+        else delete workContext.answeredBy;
         Object.assign(contextBinding, { providerId: provider.id, kind: provider.kind, baseUrl: provider.baseUrl, model,
           localExecutionConfirmed: provider.localExecutionConfirmed === true,
           serviceExecution: channel.origin === 'qq' ? 'remote' : binding.inspection.executionDestination });

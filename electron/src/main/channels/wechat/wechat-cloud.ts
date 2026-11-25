@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { chmod, lstat, open, rename, unlink } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
+import { answeringServiceIdentity } from '../../domain/auto-memory';
 import { z } from 'zod';
 import { companionName, plainReply } from '../../../../wechat-runtime/reply_policy.cjs';
 
@@ -109,6 +110,8 @@ export interface WeChatReplyCompletion {
   route: WeChatPinnedCloudRoute | null;
   localModel: string | null;
   destination: 'local' | 'remote';
+  /** Kind, address and credential of the cloud service that answered; background memory reads only with the same. */
+  answeredBy?: string;
 }
 export interface WeChatAssistantReply { reply: string; sticker: boolean; stickerAsset?: string; knowledgePolicyToken?: string; privateContext?: true; assertCurrent?(): void }
 type Settings = z.infer<typeof settingsSchema>;
@@ -771,7 +774,8 @@ export class WeChatCloud {
         if (result) {
           const { reply, sticker, mood } = result;
           // No check after this: what is recorded is what is delivered.
-          await this.#completed(input, { reply, mood, route, localModel: null, destination: 'remote' });
+          const answeredBy = answeringServiceIdentity(captured);
+          await this.#completed(input, { reply, mood, route, localModel: null, destination: 'remote', ...(answeredBy ? { answeredBy } : {}) });
           return { reply, sticker, routeFingerprint, ...(context?.recent && input.target === 'private' ? { privateContext: true } : {}) };
         }
       }

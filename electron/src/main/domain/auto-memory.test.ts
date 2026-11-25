@@ -88,6 +88,15 @@ it('never reads a queued conversation with a provider entry since edited to poin
   expect(f.requests).toHaveLength(1);
 });
 
+it('drops a queued read when the next turn cannot name the service that answered it', async () => {
+  const f = await fixture(() => '{"memories":[]}');
+  await f.say('我现在高三');
+  f.service.note(f.session.id, turn);
+  f.service.cancel(f.session.id);
+  await f.quiet();
+  expect(f.requests).toHaveLength(0);
+});
+
 it('treats another address, kind or credential behind the same provider entry as another recipient', () => {
   const base = answeringServiceIdentity({ provider, credentialRef: 'key-1' });
   expect(answeringServiceIdentity({ provider, credentialRef: 'key-1' })).toBe(base);

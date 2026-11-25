@@ -89,6 +89,9 @@ export class AutoMemoryService {
   }
 
   /** Called when an owner's turn has finished. The read happens once the conversation goes quiet. */
+  /** Drops a queued read of this conversation, so later messages never go to an earlier turn's service. */
+  cancel(sessionId: string): void { this.#pending.delete(sessionId); }
+
   note(sessionId: string, turn: AutoMemoryTurn): void {
     if (this.#closed || !this.repository.read('autoMemory').enabled) return;
     this.#pending.set(sessionId, { ...turn, at: this.#now(), attempts: this.#pending.get(sessionId)?.attempts ?? 0 });
