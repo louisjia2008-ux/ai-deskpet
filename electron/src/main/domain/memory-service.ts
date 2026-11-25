@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatMessage, ContextScope, MemoryContextMetadata, MemoryEditResult, MemoryForgetResult, MemoryInput, MemoryItem, MemoryReceipt } from '../../shared';
-import { acknowledgeMemoryProtection, assertOrdinaryMemoryProtection, commitMemoryCandidate, memoryDigest, recordMemorySupersession, stableMemorySources } from './memory-commit';
+import { acknowledgeMemoryProtection, assertOrdinaryMemoryProtection, commitMemoryCandidate, memoryDigest, recordMemorySupersession, releaseMergedMemory, stableMemorySources } from './memory-commit';
 import { isExcludedFromMemory, sourceUserBefore } from './context-provenance';
 
 const isTemporary = (text: string): boolean => /(?:今天|这次|本次|本轮|当前会话|today|this (?:session|time|conversation))/iu.test(text);
@@ -251,6 +251,7 @@ export class MemoryService {
           existing.contextMetadata = metadata;
           Object.assign(existing, { text: input.text, tags: [...input.tags], updatedAt: now.toISOString() });
           acknowledgeMemoryProtection(state, existing, reviewing ? 'save' : 'correct');
+          if (source === 'user' && (reviewing || textChanged)) releaseMergedMemory(state, existing.id, now);
           assertOrdinaryMemoryProtection(state, existing);
         }
         return finish(existing);

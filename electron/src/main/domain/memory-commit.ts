@@ -53,6 +53,17 @@ export const acknowledgeMemoryProtection = (state: PersistentState, memory: Memo
   }
   memory.contextMetadata.protectionAcknowledgements = [...known];
 };
+/** The owner confirmed or rewrote this memory, so it is theirs now: a nightly merge it was once folded into no
+ * longer speaks for it, including after a restore. */
+export const releaseMergedMemory = (state: PersistentState, memoryId: string, now: Date): void => {
+  const at = now.toISOString();
+  for (const link of mergeLinks(state.memorySleep)) {
+    if (link.memoryId !== memoryId || link.undoneAt) continue;
+    const stored = state.memorySleep.mergeLineage.find((item) => item.memoryId === link.memoryId && item.resultId === link.resultId && item.at === link.at);
+    if (stored) stored.undoneAt = at; else state.memorySleep.mergeLineage.push({ ...link, undoneAt: at });
+  }
+  state.memorySleep.mergeLineage = state.memorySleep.mergeLineage.slice(-MERGE_LINEAGE_LIMIT);
+};
 export const requireMemoryReview = (memory: MemoryItem, reason: NonNullable<MemoryContextMetadata['reviewReason']>): void => {
   memory.contextMetadata ??= { ...confirmedMemoryMetadata({ origin: 'legacy-unknown', sourceReferences: [] }), trust: 'unverified' };
   memory.contextMetadata.trust = 'unverified'; memory.contextMetadata.reviewReason = reason;

@@ -18,9 +18,9 @@ export const parseChatForgetCommand = (input: string, history: readonly ChatMess
   const match = prefix ?? suffix ?? english;
   if (!match || /[?？]\s*$/u.test(text)) return null;
   // A quoted target names a memory as plainly as 「请忘记X」.
-  // 「忘记关于X」 names a memory too, unless it ends like a report: 「忘记关于房贷的细节了」.
-  const explicit = POLITE.test(text) || /记忆/u.test(text) || /^(?:please)\b/iu.test(text) || /^(?:关于\s*)?[“「『"']/u.test(match[1]!.trim())
-    || (/^关于/u.test(match[1]!.trim()) && !BARE_STATEMENT.test(text));
+  // 「忘记关于X」 or naming 记忆 counts too, unless it ends like a report: 「忘记关于那段旅行的记忆了」.
+  const explicit = POLITE.test(text) || /^(?:please)\b/iu.test(text) || /^(?:关于\s*)?[“「『"']/u.test(match[1]!.trim())
+    || ((/记忆/u.test(text) || /^关于/u.test(match[1]!.trim())) && !BARE_STATEMENT.test(text));
   if (!explicit && BARE_STATEMENT.test(text)) return null;
   if (/(?:不要|不用|不需要|别)(?:真的|实际|再)?(?:删除|忘记|忘掉|执行)|(?:仅|只是)(?:引用|示例|演示|举例|翻译)|\b(?:example|translate|do not|don't)\b/iu.test(text)) return null;
   const previous = history.filter((item) => item.role === 'user' && item.status === 'complete').at(-1)?.content ?? '';
