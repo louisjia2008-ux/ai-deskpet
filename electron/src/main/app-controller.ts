@@ -4345,7 +4345,8 @@ export class AppController {
     // A bare 「忘记X」/「把X改成Y」 is a memory command only when X names a memory;
     // otherwise it is ordinary conversation for the model.
     const parsedForget = hostCommands ? null : parseChatForgetCommand(content, history);
-    const forgetCommand = parsedForget?.kind === 'forget' && !parsedForget.explicit && !this.#memory.matchesInSession(sessionId, parsedForget.query) ? null : parsedForget;
+    const forgetCommand = parsedForget?.kind === 'forget' && !parsedForget.explicit
+      && !this.#memory.matchesInSession(sessionId, parsedForget.query, parsedForget.report === true) ? null : parsedForget;
     const parsedEdit = hostCommands ? null : parseChatEditCommand(content, history);
     const editCommand = parsedEdit?.kind === 'edit' && !parsedEdit.explicit && !this.#memory.matchesInSession(sessionId, parsedEdit.query) ? null : parsedEdit;
     const illustrative = !research && isIllustrativeCommand(content);

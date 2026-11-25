@@ -33,7 +33,7 @@ export const parseChatMemoryCommand = (query: string, history: readonly ChatMess
   const text = (particle ? afterParticle : match[1]!).trim().replace(/^(?:以下(?:信息|内容))[：:]\s*/u, '');
   if (text.length > CHAT_MEMORY_MAX_CHARACTERS) return { kind: 'clarify', reason: 'length' };
   if (!text || /^(?:[：:,，。.!！?？\s]*|(?:这|那)(?:些|个|件事|两件事|一点)|(?:刚才|上面|之前|前面)(?:的)?(?:话|内容|信息)?|了吗|了吗[?？]|me|this|it|what I said)[。.!！?？\s]*$/iu.test(text)
-    || /^(?:住|下|下来)?(?:了吗|什么|怎么|如何)/u.test(text)
+    || (!(particle && colon) && /^(?:住|下|下来)?(?:了吗|什么|怎么|如何)/u.test(text))
     || /[，,。；;]\s*(?:然后|顺便|同时|再|另外)(?:请|帮我|告诉我|查|搜索|打开|创建|设置|提醒|删除|修改)/u.test(text)) return { kind: 'clarify', reason: 'content' };
   return { kind: 'save', text };
 };

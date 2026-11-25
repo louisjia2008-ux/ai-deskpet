@@ -17,8 +17,8 @@ export class MemoryService {
   }
 
   /** Whether a chat forget/edit query names at least one memory visible in this session. */
-  matchesInSession(sessionId: string, query: string): boolean {
-    return matchingMemories(this.repository.read('memories').filter((item) => memoryInSession(item, sessionId)), query).length > 0;
+  matchesInSession(sessionId: string, query: string, exactOnly = false): boolean {
+    return matchingMemories(this.repository.read('memories').filter((item) => memoryInSession(item, sessionId)), query, exactOnly).length > 0;
   }
 
   async editFromChat(messageId: string, query: string, replacement: string, signal?: AbortSignal, now = new Date()): Promise<MemoryEditResult> {
