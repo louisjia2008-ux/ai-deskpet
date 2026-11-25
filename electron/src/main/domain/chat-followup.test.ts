@@ -112,6 +112,8 @@ describe('durable additions to an active chat answer', () => {
     await f.chat.updateMessage(f.answer.id, { content: 'Interrupted draft.', status: 'cancelled', errorCode: null });
     const retry = f.chat.retryContext(f.answer.id);
     expect(retry.content).toBe('Compare these sources.\n\nAdditional user requirements for this same task:\nUse only primary sources.\n\nKeep the original date range.');
+    // Commands are decided from the owner's original message alone, as on the first attempt.
+    expect(retry.original).toBe('Compare these sources.');
     expect(retry.history).toEqual([previous, earlierAnswer]);
     expect(retry.userMessageIds).toEqual([f.question.id, first.id, second.id]);
     expect(retry.message.content).toBe('Interrupted draft.');

@@ -4341,21 +4341,26 @@ export class AppController {
     // QQ text is never parsed as a host command. Only the desktop user can use
     // the deterministic memory/direct-tool shortcuts.
     const hostCommands = managedMinecraft || analysisSession || scheduled || research !== undefined || !(directChatCommandsAllowed(channel) || (channel.origin === 'wechat' && !channel.group));
-    const memoryCommand = hostCommands ? null : parseChatMemoryCommand(content, history);
+    // A retry is decided from the owner's original message, as the first attempt was, and keeps that attempt's route
+    // for a bare 「忘记X」/「把X改成Y」: a model call already made goes to the model again; otherwise it stays local,
+    // since the memory it named may have been deleted since and the model must not see its text.
+    const commandText = retry?.original ?? content;
+    const retryRoute = retry === null ? undefined : (retry.message.requestReceipts?.length ?? 0) > 0 ? 'model' : 'local';
+    const memoryCommand = hostCommands ? null : parseChatMemoryCommand(commandText, history);
     // A bare 「忘记X」/「把X改成Y」 is a memory command only when X names a memory;
     // otherwise it is ordinary conversation for the model.
-    const parsedForget = hostCommands ? null : parseChatForgetCommand(content, history);
+    const parsedForget = hostCommands ? null : parseChatForgetCommand(commandText, history);
     // A retry after the deletion already committed reuses the query it used; the memory itself is gone by then.
     const reportTarget = parsedForget?.kind === 'forget' && parsedForget.report
       ? (retry === null ? undefined : this.#memory.recordedForgetQuery(retry.message.id, parsedForget.report.exact))
         ?? parsedForget.report.exact.find((query) => this.#memory.matchesInSession(sessionId, query, true)) : undefined;
-    // A retry keeps that shape local: the memory it named may have been deleted since the first attempt, and the
-    // model must not see its text. With nothing to match, it answers not found.
     const forgetCommand = parsedForget?.kind !== 'forget' || parsedForget.explicit ? parsedForget
-      : parsedForget.report ? (reportTarget !== undefined ? { ...parsedForget, query: reportTarget } : retry !== null ? parsedForget : null)
-        : retry !== null || this.#memory.matchesInSession(sessionId, parsedForget.query) ? parsedForget : null;
-    const parsedEdit = hostCommands ? null : parseChatEditCommand(content, history);
-    const editCommand = parsedEdit?.kind === 'edit' && !parsedEdit.explicit && retry === null && !this.#memory.matchesInSession(sessionId, parsedEdit.query) ? null : parsedEdit;
+      : retryRoute === 'model' ? null
+        : parsedForget.report ? (reportTarget !== undefined ? { ...parsedForget, query: reportTarget } : retryRoute === 'local' ? parsedForget : null)
+          : retryRoute === 'local' || this.#memory.matchesInSession(sessionId, parsedForget.query) ? parsedForget : null;
+    const parsedEdit = hostCommands ? null : parseChatEditCommand(commandText, history);
+    const editCommand = parsedEdit?.kind === 'edit' && !parsedEdit.explicit
+      && (retryRoute === 'model' || (retryRoute === undefined && !this.#memory.matchesInSession(sessionId, parsedEdit.query))) ? null : parsedEdit;
     const illustrative = !research && isIllustrativeCommand(content);
     const modelTurn = memoryCommand === null && forgetCommand === null && editCommand === null;
     const interactive = !research && (!waitForCompletion || channel.origin === 'telegram' || channel.origin === 'wechat') && !analysisSession;

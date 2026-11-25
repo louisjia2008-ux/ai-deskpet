@@ -179,7 +179,7 @@ export class ChatService {
     }, true);
   }
 
-  retryContext(messageId: string): { message: ChatMessage; content: string; history: ChatMessage[]; userMessageIds: string[] } {
+  retryContext(messageId: string): { message: ChatMessage; content: string; original: string; history: ChatMessage[]; userMessageIds: string[] } {
     const all = this.repository.snapshot().chatMessages;
     const message = all.find((item) => item.id === messageId);
     if (message?.role !== 'assistant' || (message.status !== 'failed' && message.status !== 'cancelled')) throw new Error('Retry requires an interrupted assistant reply.');
@@ -195,7 +195,7 @@ export class ChatService {
     if ([message, user, ...additions].some(item => isWeChatExcludedFromMemory(item)
       || (item.contextTrace?.knowledgePolicyToken !== undefined && this.knowledgeCurrent?.(item.contextTrace.knowledgePolicyToken) !== true))) throw new Error('chat.contextStale');
     const content = additions.length === 0 ? user.content : `${user.content}\n\nAdditional user requirements for this same task:\n${additions.map((item) => item.content).join('\n\n')}`;
-    return { message, content, history: before.slice(0, userIndex), userMessageIds: [user.id, ...additions.map((item) => item.id)] };
+    return { message, content, original: user.content, history: before.slice(0, userIndex), userMessageIds: [user.id, ...additions.map((item) => item.id)] };
   }
 
   async createSession(title: string, kind: ChatSession['kind'], now = new Date(), channelBindingId?: string, modelSelection?: ChatModelSelection): Promise<ChatSession> {
