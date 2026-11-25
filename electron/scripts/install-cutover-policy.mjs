@@ -423,6 +423,11 @@ const uxDeferredRuntime = {
   mainSHA256: '6d114d68f85ab3cbdf6bbd683b9ddfc89d3f2ed3d245cfe53d0844c79d04b11a',
   asarSHA256: 'c5d074ce3cb2256670cb97f46696224ec8db28c17f4bea1f289ec17654386f39',
 };
+const recentForgetRuntime = {
+  sourceSHA256: 'a12388588e089189ad16c65cea759c53652ee8a7e75e1985e0fb92735a516a0d',
+  mainSHA256: '2e62c7fb3dbbbfbafb0dc4232c1b100e46f93abfe50e7b4a2044a2671c288f56',
+  asarSHA256: '70a8ee0343c29e6b0755f5f47f048a98b6a9524935b3745901c65992d8059252',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -550,6 +555,8 @@ const reviewedRuntimeManifest = [
   { runtime: uxPrinciplesRuntime, previous: groupDigestDeliveryRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   // Deferred owner-first items (memory search, one check-in control, schedules, backup cancel, consolidation list) over the installed UX build, diary still on (2026-11-25).
   { runtime: uxDeferredRuntime, previous: uxPrinciplesRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // The deferred items plus forgotten memories leaving the recent summary and diaries, over the installed UX build, diary still on (2026-11-25).
+  { runtime: recentForgetRuntime, previous: uxPrinciplesRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
