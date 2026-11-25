@@ -32,22 +32,26 @@ export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'me
   // A nightly merge into a kept memory leaves that memory's sources as they were; the duplicates merged into it
   // (kept in the cleanup reports, which outlast these summaries) stand or fall with it. Read here only, so the
   // memory guards themselves are unchanged.
-  const merged = new Map<string, Memory[]>();
+  const merged = new Map<string, Array<{ memory: Memory; at: number }>>();
   for (const report of state.memorySleep.reports) for (const change of report.changes) {
-    if (change.kind === 'merge' && !change.undoneAt && change.resultId !== null) merged.set(change.resultId, [...(merged.get(change.resultId) ?? []), ...change.removed]);
+    if (change.kind === 'merge' && !change.undoneAt && change.resultId !== null)
+      merged.set(change.resultId, [...(merged.get(change.resultId) ?? []), ...change.removed.map(memory => ({ memory, at: Date.parse(report.at) }))]);
   }
   const byEvidence = new Map<string, Superseded>(), byMemory = new Map<string, Superseded>();
   for (const guard of state.memoryTombstones) {
     byMemory.set(guard.memoryId, worse(byMemory.get(guard.memoryId), guard.kind)!);
     for (const source of guard.sourceEventIds) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
-    const pending = [...(merged.get(guard.memoryId) ?? [])], seen = new Set<string>([guard.memoryId]);
+    // Only a guard recorded after the merge speaks for what was merged; an earlier correction predates it.
+    const after = Date.parse(guard.deletedAt), mergedBefore = (id: string): Memory[] =>
+      (merged.get(id) ?? []).filter(item => item.at <= after).map(item => item.memory);
+    const pending = mergedBefore(guard.memoryId), seen = new Set<string>([guard.memoryId]);
     while (pending.length) {
       const duplicate = pending.pop()!;
       if (seen.has(duplicate.id)) continue;
       seen.add(duplicate.id);
       byMemory.set(duplicate.id, worse(byMemory.get(duplicate.id), guard.kind)!);
       for (const source of evidenceOf(duplicate)) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
-      pending.push(...(merged.get(duplicate.id) ?? []));
+      pending.push(...mergedBefore(duplicate.id));
     }
   }
   const mark = (id: string, kind: Superseded | undefined): void => { const next = worse(result.get(id), kind); if (next) result.set(id, next); };

@@ -210,6 +210,12 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
     result.memories.push(memory);
   }
   result.memories = result.memories.filter(protect);
+  // Deletions newer than the backup may rest on cleanup history it never saw; the recent summary covers only the
+  // last day and a half, so it starts again rather than trust a summary written before them.
+  const known = new Set(restored.memoryTombstones.map((item) => item.id));
+  if (current.memoryTombstones.some((item) => !known.has(item.id))) {
+    result.companionRecent = { ...result.companionRecent, entries: [], summary: null, sharedSummary: null, clearedAt: new Date().toISOString() };
+  }
   result.memoryRevision = Math.max(restored.memoryRevision, current.memoryRevision) + 1;
   return result;
 };

@@ -261,7 +261,8 @@ export class MemorySleepService {
   /** Whatever the owner brings back becomes an ordinary memory, so the next night leaves it alone. */
   async undo(input: { reportId: string; changeId: string }): Promise<MemorySleepStatus> {
     await this.repository.transaction((state) => {
-      const change = state.memorySleep.reports.find((report) => report.id === input.reportId)?.changes.find((item) => item.id === input.changeId);
+      const report = state.memorySleep.reports.find((item) => item.id === input.reportId);
+      const change = report?.changes.find((item) => item.id === input.changeId);
       if (!change || change.undoneAt) throw new Error('sleep.undoStale');
       const now = this.#now().toISOString();
       if (change.kind === 'promote') {
@@ -274,8 +275,9 @@ export class MemorySleepService {
           // A merged entry the owner has since edited or deleted is theirs; putting the parts back would duplicate or revive it.
           if (!result || result.text !== change.after || result.contextMetadata?.origin !== 'auto-profile' || result.contextMetadata.layer === undefined) throw new Error('sleep.undoStale');
           state.memories = state.memories.filter((item) => item.id !== result.id);
-        } else if (change.kind === 'merge' && (!result || result.text !== change.after)) {
-          // The same for a kept memory: once the owner deleted or corrected it, its duplicates do not come back.
+        } else if (change.kind === 'merge' && (!result || result.text !== change.after
+          || state.memoryTombstones.some((guard) => guard.memoryId === change.resultId && Date.parse(guard.deletedAt) >= Date.parse(report!.at)))) {
+          // The same for a kept memory: once the owner deleted or corrected it (even back to the same words), its duplicates do not come back.
           throw new Error('sleep.undoStale');
         }
         for (const item of change.removed) {

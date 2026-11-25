@@ -223,3 +223,36 @@ it('lets duplicates merged into a deleted memory take their requests and sources
   await expect(sleep.undo({ reportId, changeId })).rejects.toThrow('sleep.undoStale');
   expect(f.repo.snapshot().memories.some(item => item.id === loose.id)).toBe(false);
 });
+
+it('refuses to undo a merge into a kept memory that was corrected and then corrected back to the same words', async () => {
+  const f = await fixture(), at = new Date(f.now() - 60_000).toISOString(), memory = new MemoryService(f.repo);
+  const kept = await memory.upsert({ id: randomUUID(), text: 'SYNTHETIC_KEPT_FACT', tags: [] });
+  const loose: MemoryItem = { ...kept, id: randomUUID(), text: 'SYNTHETIC_DUPLICATE' };
+  const reportId = randomUUID(), changeId = randomUUID();
+  await f.repo.transaction(state => {
+    state.memorySleep.reports.push({ id: reportId, at, provider: 'fixture', changes: [{ id: changeId, kind: 'merge', removed: [loose], resultId: kept.id, created: false, after: kept.text, undoneAt: null }] });
+    state.memorySleep.recallReplacements[loose.id] = kept.id;
+  });
+  await memory.upsert({ id: kept.id, text: 'SYNTHETIC_OTHER_WORDS', tags: [] });
+  await memory.upsert({ id: kept.id, text: 'SYNTHETIC_KEPT_FACT', tags: [] });
+  const sleep = new MemorySleepService(f.repo, { available: () => false, provider: () => null, adapter: async () => { throw new Error('unused'); } });
+  await expect(sleep.undo({ reportId, changeId })).rejects.toThrow('sleep.undoStale');
+});
+
+it('does not carry a correction made before a merge onto the duplicate merged in afterwards, and refuses undo after an edit back', async () => {
+  const state = createDefaultState(), sessionId = randomUUID();
+  const earlier = new Date(Date.now() - 60_000).toISOString(), mergedAt = new Date(Date.now() - 30_000).toISOString(), later = new Date().toISOString();
+  const user: ChatMessage = { id: randomUUID(), sessionId, role: 'user', content: 'SYNTHETIC_NEW_FACT', createdAt: mergedAt, status: 'complete', errorCode: null };
+  state.chatMessages.push(user);
+  const loose: MemoryItem = { id: randomUUID(), text: 'SYNTHETIC_NEW_FACT', tags: [], source: 'user', createdAt: mergedAt, updatedAt: mergedAt,
+    contextMetadata: confirmedMemoryMetadata({ origin: 'chat-user', sourceReferences: [{ kind: 'chat-user', sessionId, messageId: user.id }] }) };
+  const keptId = randomUUID();
+  state.memorySleep.reports.push({ id: randomUUID(), at: mergedAt, provider: 'fixture', changes: [{ id: randomUUID(), kind: 'merge', removed: [loose],
+    resultId: keptId, created: false, after: 'SYNTHETIC_NEW_FACT', undoneAt: null }] });
+  const guard = (deletedAt: string) => ({ id: randomUUID(), memoryId: keptId, textDigest: '4'.repeat(64), sourceEventIds: [], identityKey: null,
+    scope: { kind: 'global' as const }, deletedAt, kind: 'corrected' as const, memoryRevision: 1 });
+  state.memoryTombstones.push(guard(earlier));
+  expect(supersededChat(state).has(user.id)).toBe(false);
+  state.memoryTombstones.push(guard(later));
+  expect(supersededChat(state).get(user.id)).toBe('corrected');
+});

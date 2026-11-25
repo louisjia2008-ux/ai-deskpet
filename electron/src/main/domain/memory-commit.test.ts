@@ -72,6 +72,13 @@ describe('E-P1 stable evidence and deterministic fact commits', () => {
     const merged = reconcileMemoryProtection(oldBackup, deleted);
     expect(merged.memories.every((memory) => !memoryAllowedForContext(memory, randomUUID(), 'local'))).toBe(true);
   });
+  it('starts the recent summary again when a restore re-applies deletions the backup did not know', () => {
+    const backup = createDefaultState();
+    backup.companionRecent.entries = [{ id: randomUUID(), source: 'minecraft', text: 'restored recent', at: new Date().toISOString() }];
+    expect(reconcileMemoryProtection(backup, createDefaultState()).companionRecent.entries).toHaveLength(1);
+    const current = createDefaultState(); commitMemoryCandidate(current, candidate()); recordMemorySupersession(current, current.memories[0]!, 'deleted');
+    expect(reconcileMemoryProtection(backup, current).companionRecent).toMatchObject({ entries: [], summary: null });
+  });
   it('restore cannot append a current correction around a newer deletion in the backup', () => {
     const current = createDefaultState(); commitMemoryCandidate(current, candidate()); const row = current.memories[0]!;
     recordMemorySupersession(current, row, 'corrected', new Date('2026-10-27T01:00:00Z'));
