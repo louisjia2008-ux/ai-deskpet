@@ -14,7 +14,9 @@ const ownerMaterial = (state: PersistentState, message: ChatMessage): boolean =>
   && !session.archivedAt && !session.deletedAt && (session.companionScope === 'owner'
     || state.automationTriggers.some(trigger => trigger.id === message.automationTriggerId && trigger.kind === 'proactive' && trigger.publishedAt)));
 
-/** Frozen, privacy-filtered material. The same lineage is checked at fetch and publication. */
+/** Frozen, privacy-filtered material. The same lineage is checked at fetch and publication.
+ * Nobody asked for earlier check-ins here, so one that drew on a diary the owner has since edited or deleted
+ * is left out, as a check-in drawing on a corrected memory already is by its revision. */
 export function proactiveContext(input: Input) {
   const { state, policy, journal, suppressed } = input, destination = policy.privacy === 'local-only' ? 'local' : 'remote';
   const diary = journal.context(state, destination, suppressed);
@@ -23,7 +25,7 @@ export function proactiveContext(input: Input) {
   const lookup = createHistoryLookupResolver({ state, sessionId: scope, destination,
     suppressed: new Set(state.memories.filter(memory => suppressed(memory.id)).map(memory => memory.id)),
     messageAllowed: message => ownerMaterial(state, message),
-    diaryAllowed: reference => journal.referenceRetained(reference, state, suppressed) });
+    diaryAllowed: reference => journal.referenceCurrent(reference, state, destination, suppressed) });
   const recent = state.chatMessages.filter(message => message.automationTriggerId && state.automationTriggers.some(trigger => trigger.id === message.automationTriggerId && trigger.kind === 'proactive')
     && lookup(historyLookupReference(message)) !== null).slice(-10);
   const reminder = state.chatMessages.filter(message => {
@@ -51,7 +53,7 @@ export function assertProactiveContext(material: string, input: Omit<Input, 'now
   const trace = contextTraceSchema.parse(context.trace), { state, policy, journal, suppressed } = input;
   const destination = policy.privacy === 'local-only' ? 'local' : 'remote';
   const lookup = createHistoryLookupResolver({ state, sessionId: scope, destination,
-    diaryAllowed: reference => journal.referenceRetained(reference, state, suppressed),
+    diaryAllowed: reference => journal.referenceCurrent(reference, state, destination, suppressed),
     messageAllowed: message => ownerMaterial(state, message),
     suppressed: new Set(state.memories.filter(memory => suppressed(memory.id)).map(memory => memory.id)) });
   if (trace.privacy !== policy.privacy || trace.scope.kind !== 'global' || trace.historyMessageIds.length

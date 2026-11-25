@@ -286,8 +286,9 @@ export class MemorySleepService {
           throw new Error('sleep.undoStale');
         }
         const undone = new Set(change.removed.map((item) => item.id));
-        state.memorySleep.mergeLineage = state.memorySleep.mergeLineage.filter((link) =>
-          !(link.resultId === change.resultId && link.at === report!.at && undone.has(link.memoryId)));
+        for (const link of state.memorySleep.mergeLineage) {
+          if (link.resultId === change.resultId && link.at === report!.at && undone.has(link.memoryId)) link.undoneAt = now;
+        }
         for (const item of change.removed) {
           delete state.memorySleep.recallReplacements[item.id];
           if (state.memories.some((memory) => memory.id === item.id) || state.memoryTombstones.some((tombstone) => tombstone.memoryId === item.id)) continue;

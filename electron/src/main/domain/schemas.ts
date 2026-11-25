@@ -365,7 +365,8 @@ export const persistentStateSchema = z
       recallReplacements: z.record(id, id.nullable()).default({}),
       // Each memory a nightly merge folded into another, with the folded memory's own sources. It outlives the
       // 30-day undo reports, so deleting or correcting the kept memory later still reaches the duplicates' chat.
-      mergeLineage: z.array(z.object({ memoryId: id, resultId: id, at: timestamp, eventIds: z.array(sha256).max(320) }).strict()).max(MERGE_LINEAGE_LIMIT).default([]),
+      // An undone merge keeps its entry with `undoneAt`, so restoring a backup from before the undo cannot revive it.
+      mergeLineage: z.array(z.object({ memoryId: id, resultId: id, at: timestamp, eventIds: z.array(sha256).max(320), undoneAt: timestamp.optional() }).strict()).max(MERGE_LINEAGE_LIMIT).default([]),
       reports: z.array(z.object({ id, at: timestamp, provider: z.string().max(240), changes: z.array(z.object({
         id, kind: z.enum(['merge', 'promote', 'drop', 'expire']), removed: z.array(memorySchema).max(16),
         resultId: id.nullable(), created: z.boolean(), after: z.string().max(32_000).nullable(), undoneAt: timestamp.nullable(),

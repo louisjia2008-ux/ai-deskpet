@@ -22,20 +22,33 @@ type Memory = PersistentState['memories'][number];
 export const evidenceOf = (memory: Memory): string[] => [...new Set([...(memory.contextMetadata?.sourceEventIds ?? []),
   ...(memory.contextMetadata?.sourceReferences ?? []).flatMap(reference => reference.kind === 'chat-user' ? [chatEvidence(reference.sessionId, reference.messageId)] : [])])];
 
-/** Kept memory → what nightly merges folded into it, from the durable lineage and, for older merges, the undo reports. */
+type MergeLink = PersistentState['memorySleep']['mergeLineage'][number];
+/** Every nightly merge the durable lineage or the undo reports of these profiles know of, oldest first.
+ * Older merges exist only in the reports. An undo recorded on either side wins. */
+export function mergeLinks(...sleeps: ReadonlyArray<PersistentState['memorySleep']>): MergeLink[] {
+  const links = new Map<string, MergeLink>();
+  const add = (link: MergeLink): void => {
+    const key = `${link.memoryId}>${link.resultId}@${link.at}`, prior = links.get(key);
+    const undoneAt = prior?.undoneAt ?? link.undoneAt;
+    links.set(key, { ...structuredClone(prior ?? link), ...(undoneAt ? { undoneAt } : {}) });
+  };
+  for (const sleep of sleeps) {
+    for (const link of sleep.mergeLineage) add(link);
+    for (const report of sleep.reports) for (const change of report.changes) {
+      if (change.kind !== 'merge' || change.resultId === null) continue;
+      for (const memory of change.removed) add({ memoryId: memory.id, resultId: change.resultId, at: report.at,
+        eventIds: evidenceOf(memory).slice(0, 320), ...(change.undoneAt ? { undoneAt: change.undoneAt } : {}) });
+    }
+  }
+  return [...links.values()].sort((a, b) => a.at.localeCompare(b.at));
+}
+
+/** Kept memory → what nightly merges (not undone) folded into it. */
 export function mergedInto(sleep: PersistentState['memorySleep']): ReadonlyMap<string, ReadonlyArray<{ id: string; evidence: readonly string[]; at: number }>> {
   const merged = new Map<string, Array<{ id: string; evidence: readonly string[]; at: number }>>();
-  const seen = new Set<string>();
-  const add = (resultId: string, id: string, evidence: readonly string[], at: number): void => {
-    const key = `${id}>${resultId}@${at}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    merged.set(resultId, [...(merged.get(resultId) ?? []), { id, evidence, at }]);
-  };
-  for (const link of sleep.mergeLineage) add(link.resultId, link.memoryId, link.eventIds, Date.parse(link.at));
-  for (const report of sleep.reports) for (const change of report.changes) {
-    if (change.kind === 'merge' && !change.undoneAt && change.resultId !== null)
-      for (const memory of change.removed) add(change.resultId, memory.id, evidenceOf(memory), Date.parse(report.at));
+  for (const link of mergeLinks(sleep)) {
+    if (link.undoneAt) continue;
+    merged.set(link.resultId, [...(merged.get(link.resultId) ?? []), { id: link.memoryId, evidence: link.eventIds, at: Date.parse(link.at) }]);
   }
   return merged;
 }

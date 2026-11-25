@@ -3,6 +3,7 @@ import type { ContextScope, MemoryContextMetadata, MemoryItem, MemorySourceRefer
 import { confirmedMemoryMetadata, DEFAULT_MEMORY_PRIVACY, isExcludedFromMemory, memoryPrivacy, memoryScope, sameContextScope } from './context-provenance';
 import { MERGE_LINEAGE_LIMIT, type PersistentState } from './schemas';
 import { importedMessageSourceEventId } from './conversation-import-parser';
+import { mergeLinks } from './companion-recent-state';
 
 type MemoryTombstone = PersistentState['memoryTombstones'][number];
 
@@ -174,11 +175,10 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
     operations.set(operation.operationId, structuredClone(operation));
   }
   result.memoryOperations = [...operations.values()];
-  // A backup from before a nightly merge holds the duplicate as an ordinary memory. Keep the merges both sides
-  // know of, so a deletion or correction of the memory it was folded into still reaches it.
-  const lineage = new Map([...result.memorySleep.mergeLineage, ...current.memorySleep.mergeLineage]
-    .map((link) => [`${link.memoryId}>${link.resultId}@${link.at}`, structuredClone(link)]));
-  result.memorySleep.mergeLineage = [...lineage.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-MERGE_LINEAGE_LIMIT);
+  // A backup from before a nightly merge holds the duplicate as an ordinary memory. Keep the merges either side
+  // knows of (older ones only in its undo reports), so a deletion or correction of the memory it was folded into
+  // still reaches it. A merge undone on either side stays undone.
+  result.memorySleep.mergeLineage = mergeLinks(restored.memorySleep, current.memorySleep).slice(-MERGE_LINEAGE_LIMIT);
   // The guards on whatever this memory was folded into, recorded after every merge along the way.
   const foldedGuards = (memory: MemoryItem): MemoryTombstone[] => {
     const found: MemoryTombstone[] = [], seen = new Set<string>();
@@ -186,7 +186,7 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
     while (pending.length) {
       const { id, since } = pending.pop()!;
       for (const link of result.memorySleep.mergeLineage) {
-        if (link.memoryId !== id || seen.has(`${link.resultId}@${link.at}`)) continue;
+        if (link.undoneAt || link.memoryId !== id || seen.has(`${link.resultId}@${link.at}`)) continue;
         seen.add(`${link.resultId}@${link.at}`);
         const after = Math.max(since, Date.parse(link.at));
         found.push(...result.memoryTombstones.filter((guard) => guard.memoryId === link.resultId && Date.parse(guard.deletedAt) >= after));
@@ -195,6 +195,9 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
     }
     return found;
   };
+  // Folded guards cover a duplicate with sources of its own (folded into a handwritten memory). Parts of a merged
+  // memory share its sources, so the source rule below drops them once the merged memory is deleted or corrected,
+  // and a correction carries on as the current row.
   const protect = (memory: MemoryItem): boolean => {
     for (const guard of foldedGuards(memory)) {
       if (guard.kind === 'deleted') return false;

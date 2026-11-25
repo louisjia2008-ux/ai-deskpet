@@ -20,7 +20,8 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     const chunks: Buffer[] = []; request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as ModelRequest;
-      if (isRecentSummary(body)) { summaries.push(body); answerRecentSummary(response); return; }
+      // A summary echoes the secret while it is in its material, as a real model would.
+      if (isRecentSummary(body)) { summaries.push(body); answerRecentSummary(response, JSON.stringify(body).includes('青柠山川') ? '主人最近说验收暗号是青柠山川-5914。' : undefined); return; }
       requests.push(body);
       const content = body.messages.some((message) => message.role === 'system' && message.content.includes(secret)) ? '青柠山川-5914' : '没有';
       response.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -102,7 +103,8 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     expect(savedDelete.find((item) => item.role === 'assistant')?.memoryForget).toMatchObject({ kind: 'deleted', text: secret });
     const savedSelection = await page.evaluate((id) => window.deskpet.chat.listMessages(id), choiceSessionId);
     expect(savedSelection.find((item) => item.role === 'assistant')?.memoryForget).toMatchObject({ kind: 'deleted', text: '我的测试饮品乙是咖啡。' });
-    // Background summaries written after the deletion never carry the deleted fact either.
+    // Background summaries written after the deletion never carry the deleted fact either, and one was written.
+    await expect.poll(() => summaries.length - summariesBeforeDelete).toBeGreaterThan(0);
     expect(JSON.stringify(summaries.slice(summariesBeforeDelete))).not.toContain('青柠山川');
     expect((await page.evaluate(() => window.deskpet.permissions.list())).find((item) => item.capabilityId === 'web.read')?.state).toBe('always');
     await page.screenshot({ path: info.outputPath('chat-memory-forget-after-restart.png') });

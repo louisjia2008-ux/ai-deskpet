@@ -301,6 +301,24 @@ it('binds proactive context to current journal sources, privacy and identity at 
   f.session.historyPrivacy = 'local-only'; expect(() => assertProactiveContext(material, input)).toThrow('automation.contextStale');
 });
 
+it.each(['edit', 'remove'] as const)('leaves out an earlier check-in that drew on a diary the owner then chose to %s', async (change) => {
+  const f = await fixture(); await f.journal.tick(f.input);
+  const policy = { ...f.state.proactivePolicy, privacy: 'cloud-allowed' as const };
+  const input = { state: f.state, policy, journal: f.journal, identity: 'Synthetic companion', now: f.input.now, suppressed: () => false };
+  const triggerId = randomUUID(), at = '2026-11-15T09:00:00.000Z';
+  f.state.automationTriggers.push({ id: triggerId, key: `proactive:${triggerId}`, kind: 'proactive', sourceId: triggerId, dueAt: at, policyRevision: 1,
+    status: 'succeeded', jobId: null, messageId: null, createdAt: at, updatedAt: at, publishedAt: at, errorCode: null } as never);
+  f.state.chatMessages.push({ id: randomUUID(), sessionId: f.session.id, role: 'assistant', content: '合成问候复述了日记。', createdAt: at, status: 'complete',
+    errorCode: null, automationTriggerId: triggerId, contextTrace: { ...trace(), diaryReferences: proactiveContext(input).trace.diaryReferences } });
+  const before = proactiveContext(input);
+  expect(before.recent).toEqual(['合成问候复述了日记。']);
+  const material = JSON.stringify({ context: before });
+  if (change === 'edit') await f.journal.edit({ date, revision: 1, text: '主人改写后的日记。' });
+  else await f.journal.remove({ date, revision: 1 });
+  expect(proactiveContext(input).recent).toEqual([]);
+  expect(() => assertProactiveContext(material, input)).toThrow('automation.contextStale');
+});
+
 it.each(['edit', 'delete', 'source-private'] as const)('withdraws a live ChatService request receipt after diary %s, even between tool rounds', async change => {
   const f = await fixture();
   const repository = new DomainRepository(f.path + '.profile', vault); await repository.initialize();
@@ -485,3 +503,26 @@ it.each(['edit', 'remove'] as const)('stops injecting a later diary built on a d
   // The reply itself stays in chat history, as with a corrected memory.
   expect(f.journal.referenceRetained(used[0]!, f.state, () => false)).toBe(true);
 });
+
+it('still treats a diary built on an edited one as superseded after the edited one rolls off the cap', async () => {
+  const f = await fixture();
+  await f.journal.tick(f.input);
+  const used = f.journal.context(f.state, 'remote', () => false).references;
+  const nextDay = '2026-11-15', at = `${nextDay}T12:00:00.000Z`;
+  f.state.chatMessages.push({ ...f.message, id: randomUUID(), createdAt: at, content: '合成第二天的话。' }, { id: randomUUID(), sessionId: f.session.id,
+    role: 'assistant', content: '合成回复复述了第一篇日记。', createdAt: at, status: 'complete', errorCode: null, contextTrace: { ...trace(), diaryReferences: used } });
+  f.complete.mockResolvedValueOnce({ text: '合成第二篇日记。', summary: '合成第二篇摘要。' });
+  await f.journal.tick({ ...f.input, now: Date.parse('2026-11-16T03:01:00Z') });
+  const later = f.journal.context(f.state, 'remote', () => false).references.find(reference => reference.date === nextDay)!;
+  await f.journal.edit({ date, revision: f.journal.list().find(entry => entry.date === date)!.revision, text: '主人改写后的日记。' });
+  expect(f.journal.referenceCurrent(later, f.state, 'remote', () => false)).toBe(false);
+  // 365 more days push the edited diary off the 366-entry cap while the later one stays.
+  for (let day = 1; day <= 365; day += 1) {
+    const iso = new Date(Date.parse(`${nextDay}T12:00:00.000Z`) + day * 86_400_000).toISOString();
+    f.state.chatMessages.push({ ...f.message, id: randomUUID(), createdAt: iso, content: `合成第${day + 2}天。` });
+    await f.journal.tick({ ...f.input, now: Date.parse(iso) + 15 * 3_600_000 + 60_000 });
+  }
+  expect(f.journal.list().some(entry => entry.date === date)).toBe(false);
+  expect(f.journal.list().some(entry => entry.date === nextDay)).toBe(true);
+  expect(f.journal.referenceCurrent(later, f.state, 'remote', () => false)).toBe(false);
+}, 60_000);

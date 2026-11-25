@@ -30,6 +30,10 @@ describe('explicit chat memory requests', () => {
     expect(parseChatMemoryCommand(query)).toBeNull();
   });
   it('still saves after an explicit colon', () => { expect(parseChatMemoryCommand('记住了：我喜欢茶')).toEqual({ kind: 'save', text: '我喜欢茶' }); });
+  it('saves text that itself starts with 了 after the separator', () => {
+    expect(parseChatMemoryCommand('请记住：了不起的盖茨比是我最喜欢的书')).toEqual({ kind: 'save', text: '了不起的盖茨比是我最喜欢的书' });
+    expect(parseChatMemoryCommand('记住，啦啦队是我高中的社团')).toEqual({ kind: 'save', text: '啦啦队是我高中的社团' });
+  });
 
   it.each(['请记住', '帮我记住这些', '请记住刚才的话', '请记住：我的杯子叫蓝莓，然后帮我搜索杯子。'])('asks for concrete content: %s', (query) => {
     expect(parseChatMemoryCommand(query)).toEqual({ kind: 'clarify', reason: 'content' });

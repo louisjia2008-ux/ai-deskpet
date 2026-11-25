@@ -196,7 +196,10 @@ export class CompanionJournal {
   /** The owner edited this diary after the reference was taken, or deleted it. */
   #ownerChanged(reference: DiaryReference): boolean {
     const entry = this.#state.entries.find(item => item.date === reference.date);
-    return entry ? entry.revision > reference.revision : this.#state.retiredProvenance[reference.date]?.removedByOwner === true;
+    if (entry) return entry.revision > reference.revision;
+    // An entry that rolled off the cap keeps its last revision, so an edit made before then still counts.
+    const retired = this.#state.retiredProvenance[reference.date];
+    return retired !== undefined && (retired.removedByOwner === true || retired.revision > reference.revision);
   }
   #sourceStatus(provenance: Provenance, state: PersistentState, suppressed: (id: string) => boolean) {
     return sourceStatus(provenance, state, suppressed, reference => this.#provenance(reference), reference => this.#ownerChanged(reference));

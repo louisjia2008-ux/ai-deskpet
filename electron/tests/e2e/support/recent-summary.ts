@@ -11,9 +11,9 @@ interface Body { messages?: ReadonlyArray<{ role?: string; content?: unknown }> 
 export const isRecentSummary = (body: Body | undefined): boolean =>
   body?.messages?.some((message) => message.role === 'system' && typeof message.content === 'string' && message.content.startsWith(PROMPT)) === true;
 
-/** A neutral streamed summary, so nothing test-specific is injected into later turns. */
-export const answerRecentSummary = (response: ServerResponse): void => {
-  const content = JSON.stringify({ summary: '主人最近在做合成测试。' });
+/** A streamed summary, neutral unless a test passes one, so nothing test-specific is injected into later turns. */
+export const answerRecentSummary = (response: ServerResponse, summary = '主人最近在做合成测试。'): void => {
+  const content = JSON.stringify({ summary });
   response.writeHead(200, { 'content-type': 'text/event-stream' });
   response.end(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] })}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`);
 };
