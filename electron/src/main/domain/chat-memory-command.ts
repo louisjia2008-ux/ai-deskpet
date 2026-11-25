@@ -18,10 +18,11 @@ export const parseChatMemoryCommand = (query: string, history: readonly ChatMess
   // only with nothing but thanks after it: 「记住啦……备用钥匙在鞋柜」 saves what follows.
   const particle = prefix ? input.match(/^(?:请)?(?:(?:帮我|替我|为我|帮忙)\s*)?(?:记下来|记住|记下|保存到(?:长期)?记忆[里中]?|保存为(?:长期)?记忆)(?:了|啦|喽|咯)(?=$|[\s，,。.!！~～：:…⋯])/u) : null;
   const afterVerb = particle ? input.slice(particle[0].length) : '';
-  const afterParticle = afterVerb.replace(/^[\s，,。.!！~～：:…⋯]+/u, '');
   // A colon introduces the text to save, whatever it is: 「请记住啦：谢谢」 saves 「谢谢」.
-  if (particle && !/^\s*[：:]/u.test(afterVerb)
-    && /^(?:(?:谢谢|多谢|谢啦|好的|好|嗯|thanks|thank you)(?:你|您|啦|了)?[\s，,。.!！~～…⋯]*)*$/iu.test(afterParticle)) return null;
+  const colon = /^\s*[：:]/u.test(afterVerb);
+  const afterParticle = colon ? afterVerb.replace(/^\s*[：:]\s*/u, '') : afterVerb.replace(/^[\s，,。.!！~～…⋯]+/u, '');
+  if (particle && !colon
+    && /^(?:(?:(?:谢谢|多谢)(?:你|您|啦)?|谢啦|好的|好|嗯|thanks|thank you)[\s，,。.!！~～…⋯]*)*$/iu.test(afterParticle)) return null;
   if (/[?？]\s*$/u.test(input)) return null;
   // Meta requests and an explicitly non-executing annotation are not consent.
   if (/^(?:请)?(?:翻译|解释|分析|改写|润色|举例|演示|示范|假设|比如|例如|如果我(?:说|写)|他(?:说|写)|她(?:说|写))/u.test(input)

@@ -36,6 +36,8 @@ describe('explicit chat memory requests', () => {
     expect(parseChatMemoryCommand('请保存为长期记忆 了了是我女儿的小名')).toEqual({ kind: 'save', text: '了了是我女儿的小名' });
     expect(parseChatMemoryCommand('请帮我记住啦……家里备用钥匙在鞋柜夹层')).toEqual({ kind: 'save', text: '家里备用钥匙在鞋柜夹层' });
     expect(parseChatMemoryCommand('请记住啦：谢谢')).toEqual({ kind: 'save', text: '谢谢' });
+    expect(parseChatMemoryCommand('请记住啦：……谢谢')).toEqual({ kind: 'save', text: '……谢谢' });
+    expect(parseChatMemoryCommand('请记住啦，好的你')).toEqual({ kind: 'save', text: '好的你' });
   });
 
   it.each(['请记住', '帮我记住这些', '请记住刚才的话', '请记住：我的杯子叫蓝莓，然后帮我搜索杯子。'])('asks for concrete content: %s', (query) => {

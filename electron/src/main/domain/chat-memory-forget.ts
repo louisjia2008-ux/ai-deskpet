@@ -19,11 +19,11 @@ export const parseChatForgetCommand = (input: string, history: readonly ChatMess
   if (!match || /[?？]\s*$/u.test(text)) return null;
   // A quoted target names a memory as plainly as 「请忘记X」.
   // Naming 记忆 in the command itself (「删除长期记忆：…」, 「把X从记忆里删掉」, 「…这条记忆」) counts whatever the target
-  // says; 「关于X」 counts unless it ends like a report: 「忘记关于那段旅行的记忆了」.
+  // says. 记忆 anywhere else, or 「关于X」, counts unless the sentence ends like a report: 「忘记关于那段旅行的记忆了」.
   const target = match[1]!.trim(), framing = text.replace(match[1]!, '');
   const explicit = POLITE.test(text) || /^(?:please)\b/iu.test(text) || /^(?:关于\s*)?[“「『"']/u.test(target)
     || /记忆/u.test(framing) || /(?:这条|这段|的)(?:长期)?记忆[。.!！]*$/u.test(target)
-    || (/^关于/u.test(target) && !BARE_STATEMENT.test(text));
+    || ((/记忆/u.test(target) || /^关于/u.test(target)) && !BARE_STATEMENT.test(text));
   if (!explicit && BARE_STATEMENT.test(text)) return null;
   if (/(?:不要|不用|不需要|别)(?:真的|实际|再)?(?:删除|忘记|忘掉|执行)|(?:仅|只是)(?:引用|示例|演示|举例|翻译)|\b(?:example|translate|do not|don't)\b/iu.test(text)) return null;
   const previous = history.filter((item) => item.role === 'user' && item.status === 'complete').at(-1)?.content ?? '';
