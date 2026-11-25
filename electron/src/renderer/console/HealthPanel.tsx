@@ -12,6 +12,7 @@ const sendDiagnostics = {
   'zh-CN': describeWeChatSendDiagnostics('zh-CN'),
 };
 const isWeChatSendDiagnostic = (code: string | null): boolean => code !== null && Object.hasOwn(sendDiagnostics.en, code);
+const weeklyFailureCounts = new Set<HealthFeature>(['schedules', 'wechat-group-digest', 'wechat-followup', 'wechat-official-brief', 'wechat-friends-moments']);
 const copy = {
   en: {
     title: 'Background status', intro: 'Features that run while you are not watching. A failure here would otherwise go unnoticed.',
@@ -22,7 +23,7 @@ const copy = {
     fixLabel: 'What to do: ', acknowledge: 'Got it', acknowledged: 'Seen',
     acknowledgedNote: 'You marked this as seen. It comes back if it gets worse or a new problem appears.',
     acknowledgeFailed: 'The status changed before it could be marked. Look at the new status and try again.',
-    failures: (feature: HealthFeature, n: number, code: string | null) => feature === 'schedules' ? `${n} failed runs in the last 7 days`
+    failures: (feature: HealthFeature, n: number, code: string | null) => weeklyFailureCounts.has(feature) ? `${n} failures in the last 7 days`
       : code === 'wechat.dropped' ? `${n} messages got no reply`
       : feature === 'wechat' || feature === 'qq' || feature === 'telegram' || feature === 'wechat-friend-reply' ? `${n} messages not confirmed as delivered` : `${n} failures in a row`,
     sinceLaunch: 'Times cover only the period since the app last started.',
@@ -127,7 +128,7 @@ const copy = {
     fixLabel: '怎么处理：', acknowledge: '知道了', acknowledged: '已知道',
     acknowledgedNote: '你已经标记为知道了。情况变严重或出现新问题时会重新提醒。',
     acknowledgeFailed: '状态刚刚变了，没能标记。请看一下新的状态再点。',
-    failures: (feature: HealthFeature, n: number, code: string | null) => feature === 'schedules' ? `近 7 天失败 ${n} 次`
+    failures: (feature: HealthFeature, n: number, code: string | null) => weeklyFailureCounts.has(feature) ? `近 7 天失败 ${n} 次`
       : code === 'wechat.dropped' ? `${n} 条消息没回`
       : feature === 'wechat' || feature === 'qq' || feature === 'telegram' || feature === 'wechat-friend-reply' ? `${n} 条消息未确认送达` : `连续失败 ${n} 次`,
     sinceLaunch: '时间只统计本次启动以来。',
@@ -231,6 +232,8 @@ const wechatWindow = { en: 'Press “Open settings”, then “Restore WeChat wi
   'zh-CN': '点「去设置」，再点「恢复微信窗口」。还不行就打开虚拟机，看看微信是否还登录着、有没有弹窗挡住。' };
 const wechatDrawer = { en: 'In WeChat settings, select “Restore WeChat window”. Open the virtual machine and check the chat details panel in the bound owner chat if the error returns.',
   'zh-CN': '在微信通道设置里点「恢复微信窗口」。如果再次报错，打开虚拟机，检查已绑定主人私聊的聊天详情面板。' };
+const wechatDraft = { en: 'Open WeChat in the virtual machine and check the affected chat. If you see a draft, save it elsewhere or finish it to free up the composer. DeskPet leaves existing drafts in place.',
+  'zh-CN': '打开虚拟机里的微信，检查这次要发送的会话。如果有草稿，先另存或写完发送，腾出输入框。桌宠会保留已有草稿。' };
 /** What the owner can do about each problem, beside why it happened. */
 const fixes: Record<Locale, { code: Record<string, string>; feature: Partial<Record<HealthFeature, string>>; other: string }> = {
   en: {
@@ -239,6 +242,7 @@ const fixes: Record<Locale, { code: Record<string, string>; feature: Partial<Rec
       'wechat.uncertain': checkWeChat.en, 'wechat.friend_send_uncertain': checkWeChat.en, 'wechat.digest_delivery_uncertain': checkWeChat.en,
       'wechat.cronDeliveryUncertain': checkWeChat.en, 'proactive.deliveryUncertain': checkWeChat.en,
       'wechat.drawer_state_unknown': wechatDrawer.en, 'wechat.drawer_not_open': wechatDrawer.en, 'wechat.drawer_not_closed': wechatDrawer.en,
+      'wechat.send_draft_occupied': wechatDraft.en,
       'wechat.momentUncertain': 'Check Moments on your phone. Do not post it again if it is already there. Then press “Got it”.',
       'wechat.momentRestricted': 'Handle the notice in WeChat on your phone, then say 「再发一次」 in the owner chat.',
       'wechat.momentPublishUnconfirmed': 'Check Moments on your phone. Do not post it again if it is already there. Then press “Got it”.',
@@ -271,6 +275,7 @@ const fixes: Record<Locale, { code: Record<string, string>; feature: Partial<Rec
       'wechat.uncertain': checkWeChat['zh-CN'], 'wechat.friend_send_uncertain': checkWeChat['zh-CN'], 'wechat.digest_delivery_uncertain': checkWeChat['zh-CN'],
       'wechat.cronDeliveryUncertain': checkWeChat['zh-CN'], 'proactive.deliveryUncertain': checkWeChat['zh-CN'],
       'wechat.drawer_state_unknown': wechatDrawer['zh-CN'], 'wechat.drawer_not_open': wechatDrawer['zh-CN'], 'wechat.drawer_not_closed': wechatDrawer['zh-CN'],
+      'wechat.send_draft_occupied': wechatDraft['zh-CN'],
       'wechat.momentUncertain': '去手机上看一下朋友圈，已经发了就不要再发。看完点「知道了」。',
       'wechat.momentRestricted': '在手机微信里处理提示，然后在主人私聊回复「再发一次」。',
       'wechat.momentPublishUnconfirmed': '去手机上看一下朋友圈，已经发了就不要再发。看完点「知道了」。',

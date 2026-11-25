@@ -445,6 +445,12 @@ const lastingPromotionRuntime = {
   mainSHA256: 'e0bf94b33790455b911af11a1585ba2e3e9f91aff9d4b5a1c7dd899ac7f13014',
   asarSHA256: 'f5d12f57e157ad7523d00218c6d1171dba11603cc64792a553a6e76af64d064c',
 };
+// Composer preflight and its health guidance, over the installed lasting-promotion build.
+const wechatComposerRuntime = {
+  sourceSHA256: '9807e288dfed20932c2ec05722a2f9800447ab3611594b422ca6df32f0abeeac',
+  mainSHA256: '6d03c6a783307970a7ec5887475124a848a1fd7b670cd6372b5b8065d7a32c2b',
+  asarSHA256: '97b9347031c6f582f70a4d72cd9fc2a90f546f652539c9e0f4e6d0d514860d7d',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -578,6 +584,7 @@ const reviewedRuntimeManifest = [
   { runtime: memoryFollowupsRuntime, previous: recentForgetRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   { runtime: motionFollowupsRuntime, previous: memoryFollowupsRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   { runtime: lastingPromotionRuntime, previous: motionFollowupsRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  { runtime: wechatComposerRuntime, previous: lastingPromotionRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));

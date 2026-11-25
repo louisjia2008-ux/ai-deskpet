@@ -18,13 +18,15 @@ class EditorHintTest(unittest.TestCase):
             self.assertEqual(len(ui.typed_lines([{"text": typed}])), 1)
 
     def test_an_editor_showing_only_the_hint_counts_as_empty(self):
-        settings = {"ocr": "ocr", "draft": (0, 0, 10, 10)}
-        with patch.object(ui, "points", return_value=[{"text": "Hold Ctrl + Superto use voice input"}]):
-            self.assertTrue(ui.editor_shows_only_hint(settings, Path("x")))
-        with patch.object(ui, "points", return_value=[{"text": "Hold Ctrl + Superto use voice input"}, {"text": "草稿"}]):
-            self.assertFalse(ui.editor_shows_only_hint(settings, Path("x")))
-        with patch.object(ui, "points", return_value=[]):
-            self.assertFalse(ui.editor_shows_only_hint(settings, Path("x")))
+        draft = (0, 0, 10, 10)
+        path = Path("x")
+        with patch.object(ui, "recognize", return_value=[{"text": "Hold Ctrl + Superto use voice input"}]) as recognize:
+            self.assertTrue(ui.editor_shows_only_hint("ocr", path, draft))
+        recognize.assert_called_once_with("ocr", path, draft)
+        with patch.object(ui, "recognize", return_value=[{"text": "Hold Ctrl + Superto use voice input"}, {"text": "草稿"}]):
+            self.assertFalse(ui.editor_shows_only_hint("ocr", path, draft))
+        with patch.object(ui, "recognize", return_value=[]):
+            self.assertFalse(ui.editor_shows_only_hint("ocr", path, draft))
 
 
 if __name__ == "__main__":

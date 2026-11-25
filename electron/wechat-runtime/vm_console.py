@@ -267,8 +267,8 @@ def typed_lines(lines):
     return [line for line in lines if not VOICE_INPUT_HINT.fullmatch(normalize(line["text"]))]
 
 
-def editor_shows_only_hint(settings, path):
-    lines = points(settings["ocr"], path, settings["draft"])
+def editor_shows_only_hint(ocr, path, draft):
+    lines = recognize(ocr, path, draft)
     return bool(lines) and not typed_lines(lines)
 
 
@@ -1190,6 +1190,7 @@ def sticker_region_in_frame(image, box):
 
 
 def sticker_editor_ready(settings, path):
+    """Confirm the native editor is empty without reading text above it."""
     x, y, width, height = settings["draft"]
     send_x, send_y = settings["send_click"]
     draft = x + 8, y + 5, width - 14, height - 10
@@ -1200,7 +1201,7 @@ def sticker_editor_ready(settings, path):
                 and image.getpixel(button[:2]) == (237, 237, 237)):
             return False
         blank = editor_pixels_blank(image, draft)
-    return blank or editor_shows_only_hint(settings, path)
+    return blank or editor_shows_only_hint(settings["ocr"], path, draft)
 
 
 def sticker_draft_verified(settings, path, signature):
@@ -1431,7 +1432,9 @@ def run_test(action, target, message, settings, path, quote=None, *, before_send
     ocr = settings["ocr"]
     if before_send is None and matching(points(ocr, path, settings["chat"]), message):
         raise TestError("当前会话已出现同样的测试文字，请核对以免重复发送。", code="send_duplicate")
-    draft = typed_lines(points(ocr, path, settings["draft"]))
+    # Full-frame OCR pads text boxes and can put chat or toolbar lines on the
+    # draft side of the divider. Check the editable pixels and Send button.
+    draft = not sticker_editor_ready(settings, path)
     preview = points(ocr, path, settings["quote_preview"]) if "quote_preview" in settings else []
     original = None
     if resolve_group_quote is not None and (target != "group" or not quote or before_send is None):
@@ -1453,7 +1456,7 @@ def run_test(action, target, message, settings, path, quote=None, *, before_send
         # A quote left by an earlier attempt, with nothing typed: close it and start over.
         if not clear_quote_preview(settings, path):
             raise TestError("输入框上方有无法关闭的引用，请先在虚拟机里核对。", code="send_quote_mismatch")
-        draft = typed_lines(points(ocr, path, settings["draft"]))
+        draft = not sticker_editor_ready(settings, path)
         preview = points(ocr, path, settings["quote_preview"])
     staged = False
     if draft or preview:

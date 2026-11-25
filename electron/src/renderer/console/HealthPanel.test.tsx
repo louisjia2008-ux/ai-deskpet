@@ -72,6 +72,16 @@ describe('background status page', () => {
     expect(f.onOpen).toHaveBeenCalledWith('wechat');
   });
 
+  it('explains how to preserve an occupied WeChat draft and shows the digest failure window', async () => {
+    const f = fixture([entry('wechat-group-digest', 'failing', { errorCode: 'wechat.send_draft_occupied', failures: 6, deliveryProgress: { sent: 0, total: 2 } })]);
+    render(<HealthPanel api={f.api} locale="zh-CN" onOpen={f.onOpen} />);
+    const card = within(await screen.findByRole('article'));
+    expect(card.getByRole('status')).toHaveTextContent('微信输入框已有草稿。');
+    expect(card.getByText(/先另存或写完发送/)).toBeVisible();
+    expect(card.getByText('近 7 天失败 6 次')).toBeVisible();
+    expect(card.getByText('已发 0/2 条')).toBeVisible();
+  });
+
   it('says so when everything that is on works, and shows an unknown code as is', async () => {
     const f = fixture([entry('schedules', 'ok', { lastSuccessAt: '2026-11-14T07:00:00.000Z' })]);
     const { unmount } = render(<HealthPanel api={f.api} locale="en" onOpen={f.onOpen} />);

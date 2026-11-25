@@ -254,6 +254,7 @@ class FriendBindingTest(unittest.TestCase):
             prepared, = state.pending(binding)
             with (patch.object(ui, 'vm_operation', lambda **_: listener.nullcontext()), patch.object(ui, 'open_target'),
                   patch.object(ui, 'verify_title', return_value=True), patch.object(ui, 'active_window_id', return_value=99),
+                  patch.object(ui, 'sticker_editor_ready', return_value=True),
                   patch.object(ui, 'read_draft', return_value=text), patch.object(ui, 'points', return_value=[]),
                   patch.object(ui, 'click'), patch.object(ui, 'paste'), patch.object(ui, 'clear_clipboard'),
                   patch.object(ui.time, 'sleep'), patch.object(ui, 'click_send', side_effect=lambda *_: clicks.append('click')),

@@ -30,8 +30,15 @@ REPLY = VisibleMessage("outgoing", ACCOUNT, ANSWER, False, False, (76, 76, 70, 2
 
 class SendWithDatabaseReceiptTest(unittest.TestCase):
     def setUp(self):
-        self.settings = {"ocr": "fixture", "chat": [0, 0, 1, 1], "draft": [20, 20, 10, 10], "draft_click": [25, 25],
-                         "send": [40, 40, 10, 10], "send_click": [45, 45], "quote_preview": [0, 0, 1, 1]}
+        self.settings = {"ocr": "fixture", "chat": [0, 0, 1, 1], "draft": [20, 20, 50, 28], "draft_click": [25, 25],
+                         "send": [60, 51, 40, 20], "send_click": [82, 63], "quote_preview": [0, 0, 1, 1]}
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.path = Path(temp.name) / "screen.png"
+        self.frame = Image.new("RGB", (120, 100), (247, 247, 247))
+        self.button = (66, 56)
+        self.frame.putpixel(self.button, (237, 237, 237))
+        self.frame.save(self.path)
         self.events = []
         self.current = (ORIGINAL,)
         stack = ExitStack()
@@ -57,7 +64,7 @@ class SendWithDatabaseReceiptTest(unittest.TestCase):
                 self.events.append("database")
                 return found
             return confirm
-        return ui.run_test("send", "group", ANSWER, self.settings, Path("unused.png"),
+        return ui.run_test("send", "group", ANSWER, self.settings, self.path,
                            before_send=lambda: self.events.append("before") or True,
                            receipt=lambda: self.events.append("receipt") or True, database_receipt=prepare)
 
@@ -65,6 +72,35 @@ class SendWithDatabaseReceiptTest(unittest.TestCase):
         self.current = (ORIGINAL, REPLY)
         self.assertTrue(self.send(False)["ok"])
         self.assertEqual(self.events, [("baseline", ANSWER, "text"), "visual", "before", "click", "visual", "receipt"])
+
+    def test_ocr_box_straddling_the_editor_divider_does_not_block_send(self):
+        ImageDraw.Draw(self.frame).rectangle((28, 12, 65, 23), fill=(50, 50, 50))
+        self.frame.save(self.path)
+        spilled = {"text": "Toolbar label", "x": 28, "y": 12, "width": 38, "height": 17}
+        self.current = (ORIGINAL, REPLY)
+        with patch.object(ui, "points", side_effect=lambda _ocr, _path, area: [spilled] if area == self.settings["draft"] else []):
+            self.assertTrue(self.send(False)["ok"])
+        self.assertEqual(self.events.count("click"), 1)
+
+    def test_existing_text_or_unrecognized_media_draft_is_preserved(self):
+        self.frame.putpixel(self.button, (0, 185, 111))
+        self.frame.save(self.path)
+        for manual in ("尚未发送的手写草稿", ""):
+            with self.subTest(manual=manual), patch.object(ui, "read_draft", return_value=manual), \
+                    patch.object(ui, "paste") as paste, self.assertRaises(ui.TestError) as failure:
+                self.send(False)
+            self.assertEqual(failure.exception.code, "send_draft_occupied")
+            paste.assert_not_called()
+        self.assertEqual(self.events, [])
+
+    def test_exact_existing_automated_draft_resumes_without_pasting_again(self):
+        self.frame.putpixel(self.button, (0, 185, 111))
+        self.frame.save(self.path)
+        self.current = (ORIGINAL, REPLY)
+        with patch.object(ui, "paste") as paste:
+            self.assertTrue(self.send(False)["ok"])
+        paste.assert_not_called()
+        self.assertEqual(self.events.count("click"), 1)
 
     def test_database_baseline_precedes_click_and_fallback_follows_visual(self):
         self.assertTrue(self.send(True)["ok"])
@@ -99,7 +135,7 @@ class SendWithDatabaseReceiptTest(unittest.TestCase):
         self.current = (ORIGINAL, REPLY)
         with patch.object(listener.DatabaseReader, "read", return_value={"ok": True, "account_id": "wrong_account"}):
             prepare = listener.database_receipt({"conversation_id": "fixture_owner", "account_id": "fixture_bot"})
-            result = ui.run_test("send", "private", ANSWER, self.settings, Path("unused.png"),
+            result = ui.run_test("send", "private", ANSWER, self.settings, self.path,
                                  before_send=lambda: self.events.append("before"), database_receipt=prepare)
         self.assertTrue(result["ok"])
         self.assertEqual(self.events, ["visual", "before", "click", "visual"])
@@ -108,7 +144,7 @@ class SendWithDatabaseReceiptTest(unittest.TestCase):
         self.current = (ORIGINAL, REPLY)
         stages = {}
         with self.assertRaises(ui.AttemptUncertain) as failure:
-            ui.run_test('send', 'private', ANSWER, self.settings, Path('unused.png'), before_send=lambda: True,
+            ui.run_test('send', 'private', ANSWER, self.settings, self.path, before_send=lambda: True,
                         database_receipt=lambda *_args, **_kwargs: lambda: False,
                         require_database_receipt=True, send_progress=lambda stage, passed: stages.__setitem__(stage, passed))
         self.assertEqual(failure.exception.code, 'self_test_db_unconfirmed')
@@ -118,7 +154,7 @@ class SendWithDatabaseReceiptTest(unittest.TestCase):
 
     def test_self_test_missing_baseline_never_pastes_or_clicks(self):
         with patch.object(ui, 'paste') as paste, self.assertRaises(ui.TestError) as failure:
-            ui.run_test('send', 'private', ANSWER, self.settings, Path('unused.png'), before_send=lambda: True,
+            ui.run_test('send', 'private', ANSWER, self.settings, self.path, before_send=lambda: True,
                         database_receipt=lambda *_args, **_kwargs: None, require_database_receipt=True)
         self.assertEqual(failure.exception.code, 'self_test_db_unavailable')
         self.assertNotIn('click', self.events)
@@ -126,7 +162,7 @@ class SendWithDatabaseReceiptTest(unittest.TestCase):
 
     def test_self_test_database_can_confirm_when_ocr_cannot(self):
         stages = {}
-        result = ui.run_test('send', 'private', ANSWER, self.settings, Path('unused.png'), before_send=lambda: True,
+        result = ui.run_test('send', 'private', ANSWER, self.settings, self.path, before_send=lambda: True,
                              database_receipt=lambda *_args, **_kwargs: lambda: True,
                              require_database_receipt=True, send_progress=lambda stage, passed: stages.__setitem__(stage, passed))
         self.assertTrue(result['ok'])
