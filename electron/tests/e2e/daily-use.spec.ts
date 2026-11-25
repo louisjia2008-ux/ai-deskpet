@@ -7,6 +7,7 @@ import type { ServerResponse } from 'node:http';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 
 interface FixtureRequest {
@@ -39,6 +40,7 @@ const server = createServer((request, response) => {
   request.on('data', (chunk: Buffer) => chunks.push(chunk));
   request.on('end', () => {
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as FixtureRequest;
+    if (isRecentSummary(body)) { answerRecentSummary(response); return; } 
     requests.push(body);
     if (!body.tools?.length || body.tools.some((tool) => !/^[A-Za-z0-9_-]{1,64}$/u.test(tool.function.name))) {
       errors.push('Invalid provider function declaration.');

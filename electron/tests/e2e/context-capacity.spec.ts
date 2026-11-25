@@ -10,6 +10,10 @@ import type * as NodePath from 'node:path';
 import type * as NodeOS from 'node:os';
 import { decryptBytes, encryptJson } from '../../src/main/persistence/encryption';
 import { persistentStateSchema } from '../../src/main/domain/schemas';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
+
+// The background recent summary is accounted too, as scope "other"; these checks cover the chat and job requests.
+const counted = <T extends { events: Array<{ scope: string }> }>(snapshot: T): T => ({ ...snapshot, events: snapshot.events.filter(event => event.scope !== 'other') });
 
 
 interface Wire { model: string; messages: Array<{ role: string; content: string }>; tools?: Array<{ function: { name: string; description: string } }>; tool_choice?: string }
@@ -34,6 +38,7 @@ test('unconfigured capacity carries a full tool result and long job, preserves a
     request.on('end', () => {
       if (!request.url?.endsWith('/chat/completions')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'synthetic-capacity' }] })); return; }
       const bytes = Buffer.concat(chunks), body = JSON.parse(bytes.toString()) as Wire;
+      if (isRecentSummary(body)) { answerRecentSummary(response); return; } 
       wires.push({ body, sha256: createHash('sha256').update(bytes).digest('hex') });
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       const tools = body.messages.filter(message => message.role === 'tool');
@@ -123,7 +128,7 @@ test('unconfigured capacity carries a full tool result and long job, preserves a
     expect(wires[2]!.body.tool_choice).toBe('none');
     expect(wires[2]!.body.tools).toBeUndefined();
     expect(JSON.stringify(wires[2]!.body)).toContain(material.replaceAll('\n', '\\n'));
-    const usage = await page!.evaluate(() => window.deskpet.usage.snapshot());
+    const usage = counted(await page!.evaluate(() => window.deskpet.usage.snapshot()));
     expect(usage.events).toHaveLength(3);
     expect(new Set(usage.events.map(event => event.requestId)).size).toBe(3);
     expect(usage.events.every(event => event.inputTokens === 31 && event.outputTokens === 7 && event.tokenSource === 'provider-reported')).toBe(true);
@@ -176,12 +181,12 @@ test('unconfigured capacity carries a full tool result and long job, preserves a
     await expect(page!.locator('.message.assistant').last()).toHaveAttribute('data-status', 'failed');
     await expect(page!.locator('.message.assistant').last().getByRole('alert')).toContainText('complete tool results exceed');
     expect(wires).toHaveLength(3);
-    const beforeRestartUsage = await page!.evaluate(() => window.deskpet.usage.snapshot());
+    const beforeRestartUsage = counted(await page!.evaluate(() => window.deskpet.usage.snapshot()));
     expect(beforeRestartUsage.events).toHaveLength(3);
     expect(beforeRestartUsage.events.filter(event => event.dispatchedAt === null)).toEqual([]);
     await application!.close(); application = undefined;
     await launch();
-    expect(await page!.evaluate(() => window.deskpet.usage.snapshot())).toEqual(beforeRestartUsage);
+    expect(counted(await page!.evaluate(() => window.deskpet.usage.snapshot()))).toEqual(beforeRestartUsage);
     const sessions = await page!.evaluate(() => window.deskpet.chat.listSessions());
     const restored = await page!.evaluate(id => window.deskpet.chat.listMessages(id), sessions[0]!.id);
     expect(restored.find(message => message.id === reply.id)).toEqual(reply);
@@ -191,7 +196,7 @@ test('unconfigured capacity carries a full tool result and long job, preserves a
     await page!.locator('nav').getByRole('button', { name: 'Tools', exact: true }).click(); await page!.getByRole('tab', { name: 'Tokens and cost', exact: true }).click();
     await expect(page!.getByRole('heading', { name: 'Tokens and cost', exact: true })).toBeVisible();
     await page!.getByRole('button', { name: 'Refresh records', exact: true }).click();
-    expect(await page!.evaluate(() => window.deskpet.usage.snapshot())).toEqual(beforeRestartUsage);
+    expect(counted(await page!.evaluate(() => window.deskpet.usage.snapshot()))).toEqual(beforeRestartUsage);
     expect(wires).toHaveLength(3);
     await page!.screenshot({ path: info.outputPath('token-accounting-after-restart.png'), fullPage: true });
     expect(errors).toEqual([]);

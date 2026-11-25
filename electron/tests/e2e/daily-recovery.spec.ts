@@ -6,6 +6,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 
 test.setTimeout(240_000);
@@ -23,7 +24,7 @@ test('accepts provider switching, a 64-second reply, crash recovery and graceful
     request.on('data', (data: Buffer) => buffers.push(data));
     request.on('end', () => {
       if (!request.url?.endsWith('/chat/completions')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{}'); return; }
-      const body = JSON.parse(Buffer.concat(buffers).toString()) as typeof requests[number]; requests.push(body);
+      const body = JSON.parse(Buffer.concat(buffers).toString()) as typeof requests[number]; if (isRecentSummary(body)) { answerRecentSummary(response); return; } requests.push(body);
       const prompt = body.messages.filter((message) => message.role === 'user').at(-1)?.content;
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       if (prompt === 'A long reply') {
@@ -75,6 +76,9 @@ test('accepts provider switching, a 64-second reply, crash recovery and graceful
     await page!.getByRole('checkbox', { name: 'Enabled Alternate edited', exact: true }).uncheck();
     await expect(page!.getByRole('checkbox', { name: 'Enabled Alternate edited', exact: true })).not.toBeChecked();
     await page!.getByRole('checkbox', { name: 'Enabled Alternate edited', exact: true }).check();
+    // The chat picker chose Alternate for that conversation only; Primary is still the default, so switch away and back.
+    await page!.getByRole('article', { name: 'Alternate edited', exact: true }).getByRole('button', { name: 'Use for chat' }).click();
+    await expect.poll(() => page!.evaluate(() => window.deskpet.app.getState()).then((state) => state.activeProviderId)).toBe(ids.second);
     await page!.getByRole('article', { name: 'Primary fixture', exact: true }).getByRole('button', { name: 'Use for chat' }).click();
     await expect.poll(() => page!.evaluate(() => window.deskpet.app.getState()).then((state) => state.activeProviderId)).toBe(ids.first);
     await navigate('Chat');

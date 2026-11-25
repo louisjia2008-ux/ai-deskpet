@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface ModelRequest { messages: Array<{ role: string; content: string }> }
 
@@ -11,14 +12,16 @@ interface ModelRequest { messages: Array<{ role: string; content: string }> }
 test('forgets from chat, preserves unrelated memories and choices across restart, and never recalls deleted memory in fresh chats', async ({}, info) => {
   test.setTimeout(120_000);
   const profile = await mkdtemp(join(tmpdir(), 'deskpet-chat-forget-e2e-'));
-  const requests: ModelRequest[] = [];
+  const requests: ModelRequest[] = [], summaries: ModelRequest[] = [];
   const secret = '我的验收暗号是青柠山川-5914。'; const retained = '我喜欢中文交流。';
   const question = '我已保存的验收暗号是什么？';
   const server = createServer((request, response) => {
     if (!request.url?.endsWith('/chat/completions')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'fixture' }] })); return; }
     const chunks: Buffer[] = []; request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as ModelRequest; requests.push(body);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as ModelRequest;
+      if (isRecentSummary(body)) { summaries.push(body); answerRecentSummary(response); return; }
+      requests.push(body);
       const content = body.messages.some((message) => message.role === 'system' && message.content.includes(secret)) ? '青柠山川-5914' : '没有';
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       response.end(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] })}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`);
@@ -61,7 +64,7 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     await newChat(); await send(`请记住：${secret}`); await send(`请记住：${retained}`);
     expect(requests).toHaveLength(0); const beforeDelete = await memories();
     await newChat(); await send(question); await expect(page.locator('.chat-reply').last()).toHaveText('青柠山川-5914');
-    await newChat(); const requestCount = requests.length; await send('请忘记我的验收暗号');
+    await newChat(); const requestCount = requests.length; await send('请忘记我的验收暗号'); const summariesBeforeDelete = summaries.length;
     await expect(page.locator('.memory-forget')).toContainText('已删除长期记忆');
     await expect(page.locator('.memory-forget')).toContainText(secret);
     expect(requests).toHaveLength(requestCount); expect((await memories()).map((item) => item.text)).toEqual([retained]);
@@ -99,6 +102,8 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     expect(savedDelete.find((item) => item.role === 'assistant')?.memoryForget).toMatchObject({ kind: 'deleted', text: secret });
     const savedSelection = await page.evaluate((id) => window.deskpet.chat.listMessages(id), choiceSessionId);
     expect(savedSelection.find((item) => item.role === 'assistant')?.memoryForget).toMatchObject({ kind: 'deleted', text: '我的测试饮品乙是咖啡。' });
+    // Background summaries written after the deletion never carry the deleted fact either.
+    expect(JSON.stringify(summaries.slice(summariesBeforeDelete))).not.toContain('青柠山川');
     expect((await page.evaluate(() => window.deskpet.permissions.list())).find((item) => item.capabilityId === 'web.read')?.state).toBe('always');
     await page.screenshot({ path: info.outputPath('chat-memory-forget-after-restart.png') });
     await writeFile(info.outputPath('chat-memory-forget-evidence.json'), JSON.stringify({ profileLaunches: 3, requests, beforeDelete, remainingMemories: await memories(), savedDelete, savedSelection, deletionWithoutModelCall: true, noRecallAcrossNewChatsAndRestart: true, permissionRetained: true }, null, 2));

@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 /** Every image is a small synthetic fixture. Neither purchased artwork nor the
  * daily profile, saved provider credentials, real OpenAI or QQ is accessed. */
@@ -48,6 +49,7 @@ const fixture = async (replies: ReadonlyMap<string, ModelReply> = new Map()) => 
       if (request.url?.endsWith('/models')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"data":[]}'); return; }
       if (!request.url?.endsWith('/chat/completions')) { response.writeHead(404); response.end(); return; }
       const wire = JSON.parse(Buffer.concat(chunks).toString('utf8')) as ModelRequest;
+      if (isRecentSummary(wire)) { answerRecentSummary(response); return; }
       wires.push(wire);
       const userText = wire.messages.filter(message => message.role === 'user').at(-1)?.content;
       const reply = typeof userText === 'string' ? replies.get(userText) ?? REPLY : REPLY;

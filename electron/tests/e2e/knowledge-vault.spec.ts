@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CompanionJournal } from '../../src/main/domain/companion-journal';
 import { DomainRepository } from '../../src/main/domain/repository';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface RequestBody {
   model?: string;
@@ -183,6 +184,7 @@ test('vault indexing, file creation and cloud folder privacy use only synthetic 
       return;
     }
     if (path === '/v1/chat/completions') {
+      if (isRecentSummary(body)) { answerRecentSummary(res); return; }
       if (body.model === 'cloud-alias') {
         try { cloudAnswer(body, res); }
         catch (error) {
@@ -263,7 +265,7 @@ test('vault indexing, file creation and cloud folder privacy use only synthetic 
     await settings.getByRole('combobox', { name: 'Local model for answers' }).selectOption(local.id);
     await settings.getByRole('button', { name: 'Ask local model' }).click();
     await expect(settings.getByText('The note says Hall 7 [1].')).toBeVisible();
-    const chatWires = () => wires.filter((w) => w.path === '/v1/chat/completions');
+    const chatWires = () => wires.filter((w) => w.path === '/v1/chat/completions' && !isRecentSummary(w.body));
     expect(chatWires()).toHaveLength(1);
     const body = chatWires()[0]!.body;
     expect(body.model).toBe('local-gguf');

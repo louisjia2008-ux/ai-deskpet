@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface Post { recipient: string; content: string; replyTo?: string; sequence: number }
 interface Harness { posts: Post[]; tokenCalls: number; emit(sender: string, content: string): void }
@@ -31,7 +32,7 @@ test('isolated QQ settings, desktop pairing, confirmed Cron and emergency stop u
     request.on('end', () => {
       if (request.url?.endsWith('/models')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"data":[{"id":"qq-fixture-model"}]}'); return; }
       if (request.url !== '/v1/chat/completions') { response.writeHead(404).end(); return; }
-      const body = JSON.parse(Buffer.concat(chunks).toString()) as Wire; wires.push(body);
+      const body = JSON.parse(Buffer.concat(chunks).toString()) as Wire; if (isRecentSummary(body)) { answerRecentSummary(response); return; } wires.push(body);
       const text = body.messages.filter(message => message.role === 'user').at(-1)?.content ?? '';
       const toolFinished = body.messages.at(-1)?.role === 'tool';
       const send = (delta: unknown, reason = 'stop') => {
@@ -149,6 +150,8 @@ test('isolated QQ settings, desktop pairing, confirmed Cron and emergency stop u
     expect(await overlay.evaluate(async () => { try { await window.deskpet.qq.getState(); return 'unexpected'; } catch { return 'denied'; } })).toBe('denied');
     await settings();
     await expect(page!.getByRole('button', { name: 'Enable experimental QQ' })).toBeDisabled();
+    // The scheduled-task rules sit in a collapsed section; open it to read them.
+    await page!.getByText('Scheduled task rules and limits', { exact: true }).click();
     await expect(page!.getByText(/QQ tasks pause after restart/u)).toBeVisible();
     expect(await application!.evaluate(() => (globalThis as unknown as { __qqE2E: Harness }).__qqE2E.tokenCalls)).toBe(0);
     const provider = await page!.evaluate(async baseUrl => window.deskpet.providers.upsert({ id: crypto.randomUUID(), kind: 'lm-studio', name: 'Synthetic QQ E2E provider',
@@ -158,7 +161,7 @@ test('isolated QQ settings, desktop pairing, confirmed Cron and emergency stop u
     await page!.getByLabel('AppSecret (leave blank to keep saved secret)').fill(secret);
     await page!.getByRole('combobox', { name: /^QQ provider/u }).selectOption(provider.id);
     await page!.getByRole('button', { name: 'Save QQ settings', exact: true }).click();
-    await expect.poll(() => page!.evaluate(() => window.deskpet.qq.getState())).toMatchObject({ enabled: false, secretConfigured: true, providerId: provider.id, model: provider.model });
+    await expect.poll(() => page!.evaluate(() => window.deskpet.qq.getState())).toMatchObject({ enabled: false, secretConfigured: true, providerId: provider.id, model: null }); // null: follow the provider's default model
     await expect(page!.getByLabel('AppSecret (leave blank to keep saved secret)')).toHaveValue('');
     await page!.getByRole('button', { name: 'Enable experimental QQ', exact: true }).click();
     await expect.poll(() => page!.evaluate(() => window.deskpet.qq.getState())).toMatchObject({ enabled: true, bound: false });
@@ -195,7 +198,7 @@ test('isolated QQ settings, desktop pairing, confirmed Cron and emergency stop u
     expect(declared.some(description => description.includes('Capability: workspace.write.'))).toBe(false);
     await inbound(`/confirm ${code}`, 'intruder');
     await inbound(`/confirm ${code}`);
-    await expect.poll(() => page!.evaluate(id => window.deskpet.chatWork.listCron(id), session.id)).toMatchObject([{ enabled: true, title: 'Synthetic QQ task', model: 'qq-fixture-model' }]);
+    await expect.poll(() => page!.evaluate(id => window.deskpet.chatWork.listCron(id), session.id)).toMatchObject([{ enabled: true, title: 'Synthetic QQ task', model: null }]); // follows the provider default
     const count = wires.length; await inbound(`/confirm ${code}`);
     await expect.poll(async () => (await posts()).some(post => post.content.includes('确认码无效'))).toBe(true);
     expect(wires).toHaveLength(count);
@@ -225,6 +228,7 @@ test('isolated QQ settings, desktop pairing, confirmed Cron and emergency stop u
     await page!.getByRole('button', { name: 'Clear saved AppSecret and stop', exact: true }).click();
     await expect.poll(() => page!.evaluate(() => window.deskpet.qq.getState())).toMatchObject({ secretConfigured: false, enabled: false });
     await page!.evaluate(() => window.deskpet.app.setLocale('zh-CN'));
+    await page!.getByText('定时任务规则与限额', { exact: true }).click();
     await expect(page!.getByText(/重启后 QQ 任务暂停/u)).toBeVisible();
     await page!.screenshot({ path: join(evidenceRoot, 'qq-zh-disabled.png'), fullPage: true });
     expect(pageErrors).toEqual([]); expect(processOutput).not.toContain(secret);

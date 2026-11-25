@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatApprovalRequest, ChatMessage } from '../../src/shared';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface WireMessage { role: string; content: string; tool_call_id?: string }
 interface Wire {
@@ -69,7 +70,7 @@ const inFixture = async (info: TestInfo, model: ModelFixture, verify: (fixture: 
         }
         if (!request.url?.endsWith('/chat/completions')) throw new Error(`Unexpected fixture path ${request.url}`);
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Wire;
-        requests.push(body); model(body, response, requests.length);
+        if (isRecentSummary(body)) { answerRecentSummary(response); return; } requests.push(body); model(body, response, requests.length);
       } catch (error) {
         fixtureErrors.push(error instanceof Error ? error.message : String(error));
         if (!response.headersSent) response.writeHead(500, { 'content-type': 'application/json' });

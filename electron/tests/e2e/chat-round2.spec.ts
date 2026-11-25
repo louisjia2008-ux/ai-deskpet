@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatMessage } from '../../src/shared';
 import type { ChatWorkTask } from '../../src/shared/chat-work';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface WireMessage { role: string; content: string; tool_call_id?: string }
 interface Wire { model: string; messages: WireMessage[]; tools?: Array<{ function: { name: string; description: string } }> }
@@ -74,7 +75,7 @@ test('same conversation research writes real content and records evidence; histo
         }
         if (request.url?.endsWith('/models')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'round2-fixture' }] })); return; }
         if (!request.url?.endsWith('/chat/completions')) throw new Error(`Unexpected fixture route ${request.url}`);
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Wire; requests.push(body);
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Wire; if (isRecentSummary(body)) { answerRecentSummary(response); return; } requests.push(body);
         const prompt = body.messages.slice().reverse().find((message) => message.role === 'user')?.content ?? '';
         if (prompt.includes('ROUND2_RESEARCH:')) {
           if (!result(body, 'r2-plan')) { reply(response, body, { tool: 'task.update', id: 'r2-plan', input: { plan: ['Search the fixture source', 'Read the returned page', 'Save the observed content'], notes: 'Use only returned source text.', nextStep: 'Search the fixture source.' } }); return; }

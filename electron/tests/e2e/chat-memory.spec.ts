@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface ModelRequest { messages: Array<{ role: string; content: string }> }
 
@@ -21,7 +22,7 @@ test('saves explicit chat memory, deduplicates, recalls after restart and respec
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as ModelRequest; requests.push(body);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as ModelRequest; if (isRecentSummary(body)) { answerRecentSummary(response); return; } requests.push(body);
       const saved = body.messages.some((message) => message.role === 'system' && message.content.includes(memoryText));
       const content = body.messages.at(-1)?.content.includes('翻译') ? '这是引用的句子，不会保存。' : saved ? '已保存的验收暗号是银杏月舟-6832。' : '没有';
       response.writeHead(200, { 'content-type': 'text/event-stream' });
