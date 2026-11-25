@@ -4307,13 +4307,15 @@ export class AppController {
     const abort=()=>this.#agent.cancel(runId);lease?.signal.addEventListener('abort',abort,{once:true});
     // The owner's own turns teach the profile; schedules, research and analysis runs do not.
     const learn = !fromMinecraft && !managedMinecraft && !this.#cronContexts.has(runId) && !this.#researchContexts.has(runId) && !lease;
-    const cleanup=():void=>{
+    const cleanup=(outcome?: unknown):void=>{
       const done = this.#workContexts.get(runId);
       // Any finished owner turn, on any private channel, is when they last talked with her.
       if (learn && done && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) void this.#characterSheet.noteOwnerTurn().catch(() => undefined);
-      if (learn && done && done.destination !== 'unknown' && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) {
-        // Only a turn whose answering service is known is read again, and only by that same service.
-        if (done.answeredBy?.providerId === done.providerId) {
+      if (learn && done && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) {
+        // Only a turn a model really answered, with its answering service known, is read again, and only by that service.
+        // Anything else (failed, cancelled, no model call, binding refused) drops the queued read, so an earlier turn's
+        // service never reads this turn; the next answered turn reads everything since the last read.
+        if (outcome === 'succeeded' && done.destination !== 'unknown' && done.answeredBy?.providerId === done.providerId) {
           this.#autoMemory.note(sessionId, { providerId: done.providerId, model: done.model, destination: done.destination, source: done.channel.origin, endpoint: done.answeredBy.identity });
         } else this.#autoMemory.cancel(sessionId);
       }
@@ -4327,7 +4329,7 @@ export class AppController {
     void request.then(({ runId: startedRun }) => {
       const completion = this.#chatRuns.get(startedRun);
       if (completion === undefined) {release();cleanup();}
-      else void completion.then(()=>{release();cleanup();},()=>{release();cleanup();});
+      else void completion.then((outcome)=>{release();cleanup(outcome);},()=>{release();cleanup();});
     }, ()=>{release();cleanup();});
     void request.then(() => this.#chatStarts.delete(request), () => this.#chatStarts.delete(request));
     return request;
