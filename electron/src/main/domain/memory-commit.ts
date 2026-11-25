@@ -29,27 +29,11 @@ export const memoryEventIds = (memory: MemoryItem, state?: PersistentState): str
 };
 
 const bump = (state: PersistentState): void => { state.memoryRevision += 1; };
-/** Memories a nightly cleanup merged into this one (and into those), from the cleanup reports. These outlast
- * the summaries fed into new conversations; undo skips a memory with a guard, so none comes back either. */
-const mergedInto = (state: PersistentState, memoryId: string): MemoryItem[] => {
-  const merged: MemoryItem[] = [], pending = [memoryId], seen = new Set<string>([memoryId]);
-  while (pending.length) {
-    const target = pending.pop()!;
-    for (const report of state.memorySleep.reports) for (const change of report.changes) {
-      if (change.undoneAt || change.kind !== 'merge' || change.resultId !== target) continue;
-      for (const removed of change.removed) if (!seen.has(removed.id)) { seen.add(removed.id); merged.push(removed); pending.push(removed.id); }
-    }
-  }
-  return merged;
-};
-/** Records that a memory's text no longer stands, and the same for each duplicate merged into it, each guard with
- * its own sources, so the owner's words behind any of them stop speaking for them. */
 export const recordMemorySupersession = (state: PersistentState, memory: MemoryItem, kind: 'deleted' | 'corrected', now = new Date()): void => {
-  for (const item of [memory, ...mergedInto(state, memory.id)]) {
-    const textDigest = memoryTextDigest(item.text);
-    if (state.memoryTombstones.some((guard) => guard.memoryId === item.id && guard.kind === kind && guard.textDigest === textDigest && guard.memoryRevision === item.contextMetadata?.revision)) continue;
-    state.memoryTombstones.push({ id: randomUUID(), memoryId: item.id, textDigest, sourceEventIds: memoryEventIds(item, state).slice(0, 256),
-      identityKey: memoryIdentityKey(item.contextMetadata?.identity), scope: structuredClone(memoryScope(item)), deletedAt: now.toISOString(), kind, ...(item.contextMetadata ? { memoryRevision: item.contextMetadata.revision } : {}) });
+  const textDigest = memoryTextDigest(memory.text);
+  if (!state.memoryTombstones.some((item) => item.memoryId === memory.id && item.kind === kind && item.textDigest === textDigest && item.memoryRevision === memory.contextMetadata?.revision)) {
+    state.memoryTombstones.push({ id: randomUUID(), memoryId: memory.id, textDigest, sourceEventIds: memoryEventIds(memory, state),
+      identityKey: memoryIdentityKey(memory.contextMetadata?.identity), scope: structuredClone(memoryScope(memory)), deletedAt: now.toISOString(), kind, ...(memory.contextMetadata ? { memoryRevision: memory.contextMetadata.revision } : {}) });
   }
 };
 

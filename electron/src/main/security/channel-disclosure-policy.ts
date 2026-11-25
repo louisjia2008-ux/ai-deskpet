@@ -83,7 +83,7 @@ const assertChannelDisclosure = (
   check(message.contextTrace);
 };
 
-type DisclosureState = Pick<PersistentState, 'chatSessions' | 'chatMessages' | 'memories' | 'memoryTombstones'> & Partial<Pick<PersistentState, 'companionRecent'>>;
+type DisclosureState = Pick<PersistentState, 'chatSessions' | 'chatMessages' | 'memories' | 'memoryTombstones' | 'memorySleep'> & Partial<Pick<PersistentState, 'companionRecent'>>;
 export const assertDeliverableToQq = (message: {contextTrace?: ContextTrace | undefined}, state?: DisclosureState,
   sessionId?: string, suppressed?: (id: string) => boolean, knowledgePolicyToken?: string | null,
   /** Only the live owner-private binding can supply a cloud-allowed, current diary reference verifier. */

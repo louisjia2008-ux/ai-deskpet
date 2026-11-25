@@ -9,7 +9,7 @@ export const RECENT_WINDOW_MS = 36 * 60 * 60_000;
 export const RECENT_TEXT_LIMIT = 800;
 export const RECENT_ENTRY_LIMIT = 64;
 
-type RecentContextState = Pick<PersistentState, 'chatSessions' | 'chatMessages' | 'companionRecent' | 'memoryTombstones'>;
+type RecentContextState = Pick<PersistentState, 'chatSessions' | 'chatMessages' | 'companionRecent' | 'memoryTombstones' | 'memorySleep'>;
 
 type Superseded = 'deleted' | 'corrected';
 const worse = (left: Superseded | undefined, right: Superseded | undefined): Superseded | undefined =>
@@ -20,13 +20,35 @@ const worse = (left: Superseded | undefined, right: Superseded | undefined): Sup
  * taken from, a remember/correct/forget request whose memory has since changed, and the reply right
  * after each. Chat history keeps them; summaries that are fed into new conversations must not.
  */
-export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'memoryTombstones'>): ReadonlyMap<string, Superseded> {
+// Matches the chat evidence ID that memory-commit records for a chat-sourced memory.
+const chatEvidence = (sessionId: string, messageId: string): string => recentDigest(`chat:${sessionId}:${messageId}`);
+type Memory = PersistentState['memories'][number];
+const evidenceOf = (memory: Memory): string[] => [...(memory.contextMetadata?.sourceEventIds ?? []),
+  ...(memory.contextMetadata?.sourceReferences ?? []).flatMap(reference => reference.kind === 'chat-user' ? [chatEvidence(reference.sessionId, reference.messageId)] : [])];
+
+export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'memoryTombstones' | 'memorySleep'>): ReadonlyMap<string, Superseded> {
   const result = new Map<string, Superseded>();
   if (!state.memoryTombstones.length) return result;
+  // A nightly merge into a kept memory leaves that memory's sources as they were; the duplicates merged into it
+  // (kept in the cleanup reports, which outlast these summaries) stand or fall with it. Read here only, so the
+  // memory guards themselves are unchanged.
+  const merged = new Map<string, Memory[]>();
+  for (const report of state.memorySleep.reports) for (const change of report.changes) {
+    if (change.kind === 'merge' && !change.undoneAt && change.resultId !== null) merged.set(change.resultId, [...(merged.get(change.resultId) ?? []), ...change.removed]);
+  }
   const byEvidence = new Map<string, Superseded>(), byMemory = new Map<string, Superseded>();
   for (const guard of state.memoryTombstones) {
     byMemory.set(guard.memoryId, worse(byMemory.get(guard.memoryId), guard.kind)!);
     for (const source of guard.sourceEventIds) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
+    const pending = [...(merged.get(guard.memoryId) ?? [])], seen = new Set<string>([guard.memoryId]);
+    while (pending.length) {
+      const duplicate = pending.pop()!;
+      if (seen.has(duplicate.id)) continue;
+      seen.add(duplicate.id);
+      byMemory.set(duplicate.id, worse(byMemory.get(duplicate.id), guard.kind)!);
+      for (const source of evidenceOf(duplicate)) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
+      pending.push(...(merged.get(duplicate.id) ?? []));
+    }
   }
   const mark = (id: string, kind: Superseded | undefined): void => { const next = worse(result.get(id), kind); if (next) result.set(id, next); };
   // What a reply's memory request touched, including the candidates it offered (a backup may predate the choice).
@@ -40,8 +62,7 @@ export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'me
   const requests = new Map<string, { ids: string[]; kind: Superseded | undefined }>();
   for (const message of state.chatMessages) {
     if (message.role === 'user') {
-      // Matches the chat evidence ID that memory-commit records for a chat-sourced memory.
-      const kind = byEvidence.get(recentDigest(`chat:${message.sessionId}:${message.id}`));
+      const kind = byEvidence.get(chatEvidence(message.sessionId, message.id));
       mark(message.id, kind);
       const request = requests.get(message.sessionId) ?? { ids: [], kind: undefined };
       request.ids.push(message.id); request.kind = worse(request.kind, kind);
@@ -139,6 +160,6 @@ export function recentForDestination(state: RecentContextState, destination: str
 
 export const recentTraceAllowed = (state: Omit<RecentContextState, 'companionRecent'> & Partial<Pick<RecentContextState, 'companionRecent'>>,
   revision: string, destination: string): boolean => {
-  const { companionRecent, chatSessions, chatMessages, memoryTombstones } = state;
-  return companionRecent !== undefined && recentForDestination({ companionRecent, chatSessions, chatMessages, memoryTombstones }, destination)?.revision === revision;
+  const { companionRecent, chatSessions, chatMessages, memoryTombstones, memorySleep } = state;
+  return companionRecent !== undefined && recentForDestination({ companionRecent, chatSessions, chatMessages, memoryTombstones, memorySleep }, destination)?.revision === revision;
 };

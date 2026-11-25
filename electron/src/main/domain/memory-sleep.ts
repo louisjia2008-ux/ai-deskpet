@@ -269,11 +269,14 @@ export class MemorySleepService {
         if (!memory?.contextMetadata || memory.contextMetadata.layer !== 'deep') throw new Error('sleep.undoStale');
         delete memory.contextMetadata.layer;
       } else {
+        const result = state.memories.find((item) => item.id === change.resultId);
         if (change.created) {
-          const result = state.memories.find((item) => item.id === change.resultId);
           // A merged entry the owner has since edited or deleted is theirs; putting the parts back would duplicate or revive it.
           if (!result || result.text !== change.after || result.contextMetadata?.origin !== 'auto-profile' || result.contextMetadata.layer === undefined) throw new Error('sleep.undoStale');
           state.memories = state.memories.filter((item) => item.id !== result.id);
+        } else if (change.kind === 'merge' && (!result || result.text !== change.after)) {
+          // The same for a kept memory: once the owner deleted or corrected it, its duplicates do not come back.
+          throw new Error('sleep.undoStale');
         }
         for (const item of change.removed) {
           delete state.memorySleep.recallReplacements[item.id];

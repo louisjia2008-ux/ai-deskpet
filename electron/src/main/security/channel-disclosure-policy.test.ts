@@ -1,3 +1,4 @@
+import { createDefaultState } from '../domain/schemas';
 import { describe, expect, it } from 'vitest';
 
 import type { ChatMessage, ChatSession, ContextTrace, MemoryItem } from '../../shared';
@@ -48,7 +49,7 @@ describe('qq delivery disclosure gate', () => {
 
   it('rechecks memory consent, revision and suppression at delivery time', () => {
     const shared = { ...memory({ qqAllowed: true }), id: 'memory' };
-    const state = { chatSessions: [{ id: 'qq' } as ChatSession], chatMessages: [] as ChatMessage[], memories: [shared], memoryTombstones: [] };
+    const state = { chatSessions: [{ id: 'qq' } as ChatSession], chatMessages: [] as ChatMessage[], memories: [shared], memoryTombstones: [], memorySleep: createDefaultState().memorySleep };
     const message = { contextTrace: { ...trace('cloud-allowed'), memoryReferences: [{ id: shared.id, revision: 1 }] } };
     expect(() => assertDeliverableToQq(message, state, 'qq')).not.toThrow();
     expect(() => assertDeliverableToQq(message, state, 'qq', () => true)).toThrow();
@@ -65,7 +66,7 @@ describe('qq delivery disclosure gate', () => {
     const source: ChatMessage = { id: 'source', sessionId: desktop.id, role: 'user', content: 'Synthetic source', status: 'complete', errorCode: null, createdAt: at };
     const ancestor: ChatMessage = { id: 'ancestor', sessionId: owner.id, role: 'assistant', content: 'Synthetic descendant',
       status: 'complete', errorCode: null, createdAt: at, contextTrace: { ...trace('cloud-allowed'), recentRevision: revision } };
-    const state = { chatSessions: [owner, desktop], chatMessages: [source, ancestor], memories: [], memoryTombstones: [],
+    const state = { chatSessions: [owner, desktop], chatMessages: [source, ancestor], memories: [], memoryTombstones: [], memorySleep: createDefaultState().memorySleep,
       companionRecent: { ...defaultCompanionRecent(),
         entries: [{ source: 'desktop' as const, id: source.id, sessionId: desktop.id, at, sha: recentDigest(source.content) }],
         summary: { revision, text: source.content, updatedAt: at, refs: [source.id], localOnly: false },
@@ -84,7 +85,7 @@ describe('qq delivery disclosure gate', () => {
   it('walks ancestors and rejects cross-session, missing, cyclic or newly private history', () => {
     const ancestor: ChatMessage = { id: 'a', sessionId: 'qq', role: 'user', content: 'hello', status: 'complete', errorCode: null, createdAt: '', contextTrace: trace('cloud-allowed') };
     const session = { id: 'qq', historyPrivacy: 'cloud-allowed' } as ChatSession;
-    const state = { chatSessions: [session], chatMessages: [ancestor], memories: [], memoryTombstones: [] };
+    const state = { chatSessions: [session], chatMessages: [ancestor], memories: [], memoryTombstones: [], memorySleep: createDefaultState().memorySleep };
     const message = { contextTrace: { ...trace('cloud-allowed'), historyMessageIds: ['a'] } };
     expect(() => assertDeliverableToQq(message, state, 'qq')).not.toThrow();
     ancestor.sessionId = 'desktop'; expect(() => assertDeliverableToQq(message, state, 'qq')).toThrow();
@@ -127,7 +128,7 @@ describe('qq context exclusion', () => {
 describe('Telegram result disclosure', () => {
   const privateTrace: ContextTrace = { version: 1, privacy: 'local-only', scope: {kind:'global'}, lineage: 'complete', memoryReferences: [], historyMessageIds: [] };
   const needs = (trace: ContextTrace, state: { chatSessions: ChatSession[]; chatMessages: ChatMessage[]; memories: MemoryItem[] }, memoryEnabled = true) =>
-    telegramResultNeedsApproval({contextTrace:trace}, { ...state, memoryTombstones: [] }, 'phone', memoryEnabled, () => false);
+    telegramResultNeedsApproval({contextTrace:trace}, { ...state, memoryTombstones: [], memorySleep: createDefaultState().memorySleep }, 'phone', memoryEnabled, () => false);
   const session = {id:'phone'} as ChatSession;
 
   it('permits one local-result decision only with complete lineage and current per-memory consent', () => {
@@ -156,7 +157,7 @@ describe('Telegram result disclosure', () => {
 });
 
 it('revalidates the knowledge sharing revision at QQ and Telegram delivery', () => {
-  const state = { chatSessions: [{ id: 'channel' } as ChatSession], chatMessages: [], memories: [], memoryTombstones: [] };
+  const state = { chatSessions: [{ id: 'channel' } as ChatSession], chatMessages: [], memories: [], memoryTombstones: [], memorySleep: createDefaultState().memorySleep };
   const token = 'a'.repeat(64);
   const suppress = () => false;
   const message: { contextTrace: ContextTrace } = { contextTrace: { version: 1, memoryReferences: [], historyMessageIds: [],
