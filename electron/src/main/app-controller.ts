@@ -4664,7 +4664,7 @@ export class AppController {
           }
           progress({ phase: 'tool', toolId: 'memory.forget' });
           let result;
-          try { result = await this.#memory.forgetFromChat(assistant.id, forgetCommand.query, signal); }
+          try { result = await this.#memory.forgetFromChat(assistant.id, forgetCommand.query, signal, undefined, forgetCommand.report !== undefined); }
           catch (error) { signal.throwIfAborted(); throw new Error(error instanceof Error && error.message === 'repository.commitUncertain' ? error.message : error instanceof Error && 'memoryRecallSuppressed' in error && error.memoryRecallSuppressed === true ? 'memory.forgetPending' : 'memory.forgetFailed'); }
           if (result.kind === 'deleted') {
             this.windows.send('console', 'memory:changed', this.#memory.list());

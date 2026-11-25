@@ -74,7 +74,8 @@ export class MemoryService {
     });
   }
 
-  async forgetFromChat(messageId: string, query: string, signal?: AbortSignal, now = new Date()): Promise<MemoryForgetResult> {
+  /** `exactOnly`: a report-like request reaches only a memory that is word for word its target, even if that one is gone by now. */
+  async forgetFromChat(messageId: string, query: string, signal?: AbortSignal, now = new Date(), exactOnly = false): Promise<MemoryForgetResult> {
     if (query.trim().length < 2 || query.length > CHAT_MEMORY_MAX_CHARACTERS) throw new Error('memory.forgetFailed');
     let suppressedId: string | undefined;
     try {
@@ -91,7 +92,7 @@ export class MemoryService {
           if (!previous || previous.digest !== digest) throw new Error('memory.operationConflict');
           return structuredClone(message.memoryForget);
         }
-        const matches = matchingMemories(state.memories.filter((item) => memoryInSession(item, message.sessionId)), query);
+        const matches = matchingMemories(state.memories.filter((item) => memoryInSession(item, message.sessionId)), query, exactOnly);
         let result: MemoryForgetResult;
         if (matches.length === 1) {
           const memory = matches[0]!;

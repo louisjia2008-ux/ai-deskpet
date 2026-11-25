@@ -76,6 +76,11 @@ describe('transactional chat memory deletion', () => {
     expect(await f.memory.forgetFromChat((await f.response()).id, '我喜欢茶')).toMatchObject({ kind: 'deleted', memoryId: exact.id });
     expect(f.memory.list()).toEqual([other]);
   });
+  it('keeps a report-like request exact inside the deletion, even if its exact match is gone by then', async () => {
+    const f = await fixture(); const longer = await f.add('备忘：关于蓝鲸的资料找到了，原件在书柜');
+    expect(await f.memory.forgetFromChat((await f.response()).id, '关于蓝鲸的资料找到了', undefined, undefined, true)).toMatchObject({ kind: 'not-found' });
+    expect(f.memory.list()).toEqual([longer]);
+  });
   it('persists ambiguous choices across reload and deletes only the selected unchanged candidate', async () => {
     const f = await fixture(); const one = await f.add('我的测试暗号甲是111'); const two = await f.add('我的测试暗号乙是222');
     const reply = await f.response(); const result = await f.memory.forgetFromChat(reply.id, '我的测试暗号');
