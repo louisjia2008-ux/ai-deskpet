@@ -10,7 +10,7 @@
   --shadow-sm: 0 1px 2px rgb(30 60 100 / 5%), 0 6px 20px rgb(30 60 100 / 6%);
   --shadow-md: 0 2px 6px rgb(30 60 100 / 7%), 0 16px 40px rgb(30 60 100 / 10%);
   --ring: 0 0 0 3px rgb(74 134 212 / 22%);
-  --ease-out: cubic-bezier(.2, .8, .2, 1); --spring: cubic-bezier(.2, 1.3, .4, 1);
+  --ease-out: var(--motion-ease-out);
   background: var(--backdrop); grid-template-columns: 224px minmax(0, 1fr);
 }
 .app-shell[data-theme=dark] {
@@ -39,20 +39,21 @@
 }
 
 /* Controls */
-.app-shell button { border-radius: 11px; transition: transform .16s var(--ease-out), box-shadow .2s var(--ease-out), background-color .18s, color .18s, border-color .18s; }
-.app-shell button:active:not(:disabled) { transform: scale(.97); }
+.app-shell button { border-radius: 11px; transition: scale var(--motion-fast) var(--motion-ease-out), background-color var(--motion-fast), color var(--motion-fast); }
+/* Only solid actions give under the finger; navigation, tabs and icons answer with their background. */
+.app-shell button:not(.secondary, .text-button, .nav-item, .utility-item, .session-item, .icon-button, .brand, .chat-tool-button, .channel-toggle, .conversation-manage-link, [role=tab], [role=radio], [role=menuitem]):active:not(:disabled) { scale: var(--motion-press-scale); transition-duration: var(--motion-press); }
 .app-shell button:not(.secondary, .text-button, .nav-item, .utility-item, .session-item, .icon-button, .brand, .chat-tool-button, .channel-toggle, .conversation-manage-link, [role=tab], [role=radio], [role=menuitem]):not(:disabled) { box-shadow: 0 1px 2px rgb(20 60 120 / 20%), 0 6px 16px rgb(47 109 189 / 22%); }
 .app-shell button:hover:not(:disabled) { filter: none; }
 .app-shell button.secondary { background: var(--surface); border: 1px solid var(--border); }
 .app-shell button.secondary:hover:not(:disabled) { background: var(--tinted); }
-.app-shell input:not([type=checkbox], [type=range], [type=radio]), .app-shell select, .app-shell textarea { border-radius: 11px; border-color: var(--border); background: var(--surface-solid); transition: border-color .18s, box-shadow .18s; }
+.app-shell input:not([type=checkbox], [type=range], [type=radio]), .app-shell select, .app-shell textarea { border-radius: 11px; border-color: var(--border); background: var(--surface-solid); }
 .app-shell input:not([type=checkbox], [type=range], [type=radio]):focus, .app-shell select:focus, .app-shell textarea:focus { outline: 0; border-color: var(--blue); box-shadow: var(--ring); }
 .app-shell :focus-visible { outline-color: var(--blue); }
 .app-shell .check-row input[type=checkbox], .app-shell .switch-row input[type=checkbox], .app-shell .plugin-toggle input[type=checkbox] {
-  appearance: none; flex: 0 0 34px; width: 34px; height: 20px; margin: 0; padding: 0; position: relative; border: 0; border-radius: 99px; background: rgb(120 140 170 / 38%); cursor: pointer; transition: background-color .2s;
+  appearance: none; flex: 0 0 34px; width: 34px; height: 20px; margin: 0; padding: 0; position: relative; border: 0; border-radius: 99px; background: rgb(120 140 170 / 38%); cursor: pointer; transition: background-color var(--motion-fast);
 }
 .app-shell .check-row input[type=checkbox]::after, .app-shell .switch-row input[type=checkbox]::after, .app-shell .plugin-toggle input[type=checkbox]::after {
-  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / 28%); transition: transform .22s var(--spring);
+  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / 28%); transition: transform var(--motion-change) var(--motion-ease-change);
 }
 .app-shell .check-row input[type=checkbox]:checked, .app-shell .switch-row input[type=checkbox]:checked, .app-shell .plugin-toggle input[type=checkbox]:checked { background: var(--blue-strong); }
 .app-shell .check-row input[type=checkbox]:checked::after, .app-shell .switch-row input[type=checkbox]:checked::after, .app-shell .plugin-toggle input[type=checkbox]:checked::after { transform: translateX(14px); }
@@ -66,32 +67,28 @@
 .app-shell .sidebar { padding: 18px 12px 12px; background: var(--sidebar); backdrop-filter: blur(24px) saturate(1.3); border-right: 1px solid var(--border); }
 .app-shell .brand { padding: 2px 6px 14px; gap: 10px; }
 .app-shell .brand strong { font-size: 17px; font-weight: 700; letter-spacing: -.2px; }
-.app-shell .brand .companion-avatar { width: 34px; height: 34px; flex-basis: 34px; border-radius: 12px; box-shadow: var(--shadow-sm); transition: transform .3s var(--spring); }
-.app-shell .brand:hover .companion-avatar { transform: rotate(-6deg) scale(1.06); }
+.app-shell .brand .companion-avatar { width: 34px; height: 34px; flex-basis: 34px; border-radius: 12px; box-shadow: var(--shadow-sm); }
 .app-shell .sidebar nav { overflow: hidden; gap: 0; }
 .new-chat-button { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; height: 38px; margin-bottom: 12px; font-size: 13px; background: linear-gradient(135deg, var(--blue-strong), color-mix(in srgb, var(--blue-strong) 78%, var(--pink))); }
-.new-chat-button:hover:not(:disabled) { transform: translateY(-1px); }
 .app-shell .primary-navigation { gap: 2px; }
 .app-shell .nav-item { position: relative; height: 36px; gap: 10px; padding: 0 10px; border-radius: 10px; font-size: 13px; font-weight: 500; color: var(--muted); }
-.app-shell .nav-item svg { transition: transform .25s var(--spring); }
 .app-shell .nav-item:hover:not(:disabled) { color: var(--strong); background: var(--tinted); }
-.app-shell .nav-item:hover:not(:disabled) svg { transform: scale(1.12); }
 .app-shell .nav-item.active { color: var(--blue-strong); background: var(--selected); font-weight: 600; }
-.app-shell .nav-item.active::before { content: ''; position: absolute; left: -12px; top: 9px; bottom: 9px; width: 3px; border-radius: 0 3px 3px 0; background: linear-gradient(var(--blue), var(--pink)); animation: grow-in .28s var(--spring); }
+.app-shell .nav-item.active::before { content: ''; position: absolute; left: -12px; top: 9px; bottom: 9px; width: 3px; border-radius: 0 3px 3px 0; background: linear-gradient(var(--blue), var(--pink)); animation: motion-fade-in var(--motion-fast) var(--motion-ease-out); }
 .app-shell .nav-item strong { margin-left: auto; min-width: 18px; padding: 0 5px; border-radius: 99px; color: #fff; background: var(--pink); font-size: 11px; line-height: 18px; text-align: center; }
 .app-shell .sidebar-session-heading { margin: 16px 2px 4px 10px; font-size: 11px; }
 .app-shell .sidebar-session-heading .icon-button { width: 24px; height: 24px; }
 .app-shell .sidebar-sessions { flex: 1 1 0; min-height: 40px; gap: 1px; align-content: start; }
 .app-shell .session-item { padding: 7px 8px 7px 10px; font-size: 12.5px; font-weight: 450; border-radius: 9px; }
 .app-shell .session-item.current { color: var(--strong); font-weight: 600; }
-.app-shell .sidebar-session-row { border-radius: 9px; transition: background-color .15s; }
+.app-shell .sidebar-session-row { border-radius: 9px; transition: background-color var(--motion-fast); }
 .app-shell .sidebar-session-row:has(.session-item.current) { background: var(--tinted); }
-.app-shell .sidebar-session-row .conversation-menu-trigger { opacity: 0; transition: opacity .15s; }
+.app-shell .sidebar-session-row .conversation-menu-trigger { opacity: 0; transition: opacity var(--motion-fast); }
 .app-shell .sidebar-session-row:hover .conversation-menu-trigger, .app-shell .sidebar-session-row:focus-within .conversation-menu-trigger { opacity: 1; }
 .app-shell .sidebar-bottom { flex: 0 0 auto; margin-top: 8px; padding-top: 8px; gap: 2px; border-top: 1px solid var(--border); }
 .channel-toggle { display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 8px; padding: 6px 8px 6px 10px; color: var(--muted); background: transparent; font-size: 11px; font-weight: 500; text-align: left; border-radius: 9px; }
 .channel-toggle:hover { color: var(--strong); background: var(--tinted); }
-.channel-toggle .channel-caret { transition: transform .22s var(--ease-out); }
+.channel-toggle .channel-caret { transition: transform var(--motion-change) var(--motion-ease-change); }
 .channel-toggle[aria-expanded=true] .channel-caret { transform: rotate(90deg); }
 .channel-toggle small { margin-left: auto; font-size: 10px; }
 .settings-tab-group { display: grid; gap: 2px; }
@@ -101,7 +98,9 @@
 
 /* Pages */
 .app-shell .content { background: transparent; }
-.app-shell .page-scroll > section { animation: rise-in .32s var(--ease-out) both; }
+/* A page change keeps the header and tabs still and fades in only the new content; returning to chat fades it in
+   once. Content that arrives after loading fades in the same way, a single time. */
+.app-shell .page-scroll > :not(.page-header, .page-tabs), .app-shell .chat-view:not([hidden]) { animation: motion-fade-in var(--motion-enter) var(--motion-ease-out) backwards; }
 .app-shell .panel, .app-shell .stat-card, .app-shell .memory-card, .app-shell .hero-card { border-color: var(--border); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-sm); backdrop-filter: blur(16px); }
 .app-shell .hero-card.companion-card { background: linear-gradient(135deg, var(--blue-soft), var(--surface)); }
 .app-shell .status-pill { border-radius: 99px; }
@@ -113,7 +112,10 @@
 .app-shell .chat-tool-button { color: var(--muted); background: transparent; font-size: 12px; font-weight: 500; padding: 6px 9px; }
 .app-shell .chat-tool-button:hover:not(:disabled) { color: var(--strong); background: var(--tinted); }
 .app-shell .transcript-inner { gap: 20px; padding: 24px 28px 28px; }
-.app-shell .message:nth-last-child(-n+3) { animation: rise-in .3s var(--ease-out) both; }
+/* A short history read shows nothing; only a slow one says it is loading, so no welcome screen flashes in between. */
+.app-shell .chat-loading { margin: auto; animation: motion-fade-in var(--motion-enter) var(--motion-ease-out) 300ms backwards; }
+/* Only a message that really just arrived comes in, from just below, where the conversation grows. */
+.app-shell .message.is-arriving { animation: motion-enter var(--motion-enter) var(--motion-ease-out) backwards; }
 .app-shell .message .companion-avatar { width: 34px; height: 34px; flex-basis: 34px; box-shadow: var(--shadow-sm); border-color: transparent; }
 .app-shell .speaker-name { color: var(--subtle); font-size: 11.5px; }
 .app-shell .message.user .message-body { padding: 10px 15px; border-radius: 18px 18px 5px 18px; color: var(--user-text); background: linear-gradient(135deg, var(--user), color-mix(in srgb, var(--user) 86%, #000)); box-shadow: 0 6px 18px rgb(47 109 189 / 22%); }
@@ -124,26 +126,26 @@
 .app-shell .chat-markdown { font-size: 14.5px; line-height: 1.72; }
 .app-shell .chat-waiting { gap: 9px; color: var(--muted); font-size: 12.5px; }
 .typing-dots { display: inline-flex; gap: 3px; }
-.typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--blue); animation: typing-dot 1.15s ease-in-out infinite; }
-.typing-dots i:nth-child(2) { animation-delay: .15s; background: color-mix(in srgb, var(--blue) 55%, var(--pink)); }
-.typing-dots i:nth-child(3) { animation-delay: .3s; background: var(--pink); }
+.typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--blue); animation: motion-wait var(--motion-loop) ease-in-out infinite; }
+.typing-dots i:nth-child(2) { animation-delay: calc(var(--motion-loop) / 8); background: color-mix(in srgb, var(--blue) 55%, var(--pink)); }
+.typing-dots i:nth-child(3) { animation-delay: calc(var(--motion-loop) / 4); background: var(--pink); }
 .app-shell .composer-region { padding: 6px 28px 16px; }
-.app-shell .composer { padding: 12px 14px 9px; border-color: var(--border); border-radius: 20px; background: var(--surface); backdrop-filter: blur(20px); box-shadow: var(--shadow-md); transition: border-color .2s, box-shadow .25s; }
+.app-shell .composer { padding: 12px 14px 9px; border-color: var(--border); border-radius: 20px; background: var(--surface); backdrop-filter: blur(20px); box-shadow: var(--shadow-md); }
 .app-shell .composer:focus-within { border-color: var(--blue); box-shadow: var(--ring), var(--shadow-md); }
 .app-shell .composer textarea { min-height: 28px; font-size: 14.5px; resize: none; background: transparent; box-shadow: none; }
 .app-shell .composer textarea:focus { box-shadow: none; }
 .app-shell .composer-tools { min-height: 30px; margin-top: 4px; }
 .app-shell .composer-hint { font-size: 11px; }
 .app-shell .composer-actions button { border-radius: 99px; padding: 7px 15px; }
-.app-shell .chat-welcome { max-width: 480px; animation: rise-in .42s var(--ease-out) both; }
-.app-shell .chat-welcome .companion-avatar.large { width: 84px; height: 84px; flex-basis: 84px; border: 0; box-shadow: var(--shadow-md); animation: float-soft 5s ease-in-out infinite; }
+.app-shell .chat-welcome { max-width: 480px; animation: motion-fade-in var(--motion-enter) var(--motion-ease-out) backwards; }
+.app-shell .chat-welcome .companion-avatar.large { width: 84px; height: 84px; flex-basis: 84px; border: 0; box-shadow: var(--shadow-md); }
 .app-shell .chat-welcome h2 { font-size: 23px; font-weight: 650; }
 .app-shell .prompt-list button { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: none; color: var(--text); }
-.app-shell .prompt-list button:hover:not(:disabled) { transform: translateY(-2px); border-color: var(--blue); box-shadow: var(--shadow-sm); }
+.app-shell .prompt-list button:hover:not(:disabled) { border-color: var(--blue); background: var(--tinted); }
 
 /* Companion panel */
 .app-shell .companion-panel { position: relative; overflow: hidden; border-left: 1px solid var(--border); background: linear-gradient(180deg, color-mix(in srgb, var(--blue-soft) 70%, transparent), transparent 62%), color-mix(in srgb, var(--surface-solid) 50%, transparent); backdrop-filter: blur(20px); }
-.app-shell .companion-panel::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .7; background-image: radial-gradient(circle at 18% 22%, #fff 0 1.4px, transparent 2px), radial-gradient(circle at 72% 12%, #fff 0 1px, transparent 1.6px), radial-gradient(circle at 86% 46%, #fff 0 1.6px, transparent 2.2px), radial-gradient(circle at 34% 64%, #fff 0 1px, transparent 1.6px), radial-gradient(circle at 60% 78%, #fff 0 1.3px, transparent 1.9px); background-size: 100% 300px; animation: snow-fall 22s linear infinite; }
+.app-shell .companion-panel::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .7; background-image: radial-gradient(circle at 18% 22%, #fff 0 1.4px, transparent 2px), radial-gradient(circle at 72% 12%, #fff 0 1px, transparent 1.6px), radial-gradient(circle at 86% 46%, #fff 0 1.6px, transparent 2.2px), radial-gradient(circle at 34% 64%, #fff 0 1px, transparent 1.6px), radial-gradient(circle at 60% 78%, #fff 0 1.3px, transparent 1.9px); background-size: 100% 300px; }
 .app-shell[data-theme=dark] .companion-panel::before { opacity: .22; }
 .app-shell .companion-panel > * { position: relative; }
 .app-shell .companion-title h2 { font-size: 22px; font-weight: 700; letter-spacing: 0; }
@@ -154,11 +156,11 @@
 .app-shell .settings-tabs [role=tab] { justify-content: flex-start; height: 36px; padding: 0 12px; border-radius: 10px; color: var(--muted); background: transparent; font-size: 13px; font-weight: 500; text-align: left; }
 .app-shell .settings-tabs [role=tab]:hover { color: var(--strong); background: var(--tinted); }
 .app-shell .settings-tabs [role=tab][aria-selected=true] { color: var(--blue-strong); background: var(--selected); font-weight: 600; }
-.app-shell .settings-panel { padding: 24px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow-sm); backdrop-filter: blur(16px); animation: rise-in .26s var(--ease-out) both; }
+.app-shell .settings-panel { padding: 24px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow-sm); backdrop-filter: blur(16px); }
 .settings-more { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
 .settings-more > summary { padding: 6px 0; color: var(--muted); font-size: 13px; cursor: pointer; }
 .settings-more > summary:hover { color: var(--strong); }
-.settings-more[open] > *:not(summary) { animation: rise-in .22s var(--ease-out) both; }
+.settings-more[open] > *:not(summary) { animation: motion-fade-in var(--motion-change) var(--motion-ease-out) backwards; }
 
 .schedule-when { display: flex; flex-wrap: wrap; gap: 12px; }
 .schedule-when > label { flex: 1 1 160px; }
@@ -166,14 +168,14 @@
 .provider-add { margin-top: 16px; }
 .app-shell .provider-list article { border-color: var(--border); border-radius: 14px; background: var(--surface); }
 
-.app-shell .conversation-popup { z-index: 200; border-radius: 14px; background: var(--surface-solid); box-shadow: var(--shadow-md); animation: rise-in .16s var(--ease-out) both; }
+.app-shell .conversation-popup { z-index: 200; border-radius: 14px; background: var(--surface-solid); box-shadow: var(--shadow-md); animation: motion-enter var(--motion-fast) var(--motion-ease-out) backwards; }
 .app-shell .conversation-popup button { border-radius: 9px; font-size: 12.5px; }
 .app-shell .conversation-dialog { border-radius: 20px; background: var(--surface-solid); box-shadow: var(--shadow-md); overflow-wrap: anywhere; max-height: calc(100dvh - 48px); overflow: auto; }
 
 .plugin-details { margin-top: 2px; }
 .plugin-details > summary { width: fit-content; padding: 4px 0; color: var(--blue-strong); font-size: 13px; cursor: pointer; }
 .plugin-details[open] > summary { margin-bottom: 12px; }
-.plugin-details[open] > *:not(summary) { animation: rise-in .2s var(--ease-out) both; }
+.plugin-details[open] > *:not(summary) { animation: motion-fade-in var(--motion-change) var(--motion-ease-out) backwards; }
 .plugin-details > * + * { margin-top: 12px; }
 
 .schedule-list { display: grid; gap: 14px; }
@@ -266,13 +268,10 @@
   .app-shell .nav-item.active::before { left: -9px; }
 }
 
-@keyframes rise-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-@keyframes grow-in { from { transform: scaleY(.2); opacity: 0; } to { transform: none; opacity: 1; } }
-@keyframes typing-dot { 0%, 60%, 100% { transform: translateY(0); opacity: .55; } 30% { transform: translateY(-4px); opacity: 1; } }
-@keyframes float-soft { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-@keyframes snow-fall { from { background-position-y: 0; } to { background-position-y: 300px; } }
+/* Reduced motion comes from the tokens in motion.css: movement and loops stop, short fades stay. */
 @media (prefers-reduced-motion: reduce) {
-  .app-shell *, .app-shell *::before, .app-shell *::after { animation: none !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  .app-shell * { scroll-behavior: auto !important; }
+  .typing-dots i { animation: none; }
 }
 
 /* Voice input sits with the other composer actions; it is secondary to Send. */
@@ -283,3 +282,26 @@
 .app-shell .confirm-button-group { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .app-shell .confirm-button-group button { white-space: nowrap; }
 .app-shell .button-row .confirm-button-group, .app-shell .button-row > .text-button:last-child { margin-left: auto; }
+
+/* A modal comes over the page and leaves the same way; the drawer slides from the edge it lives on, and the backdrop
+   only fades. Native dialogs keep their top layer until the exit ends. */
+.app-shell dialog, .app-shell dialog::backdrop {
+  opacity: 0;
+  transition: opacity var(--motion-exit) var(--motion-ease-in), translate var(--motion-exit) var(--motion-ease-in),
+    display var(--motion-exit) allow-discrete, overlay var(--motion-exit) allow-discrete;
+}
+.app-shell dialog { translate: 0 var(--motion-distance-near); }
+.app-shell dialog.companion-drawer { translate: var(--motion-distance-layer) 0; }
+.app-shell dialog[open], .app-shell dialog[open]::backdrop { opacity: 1; translate: none; transition-duration: var(--motion-layer); transition-timing-function: var(--motion-ease-out); }
+@starting-style {
+  .app-shell dialog[open], .app-shell dialog[open]::backdrop { opacity: 0; }
+  .app-shell dialog[open] { translate: 0 var(--motion-distance-near); }
+  .app-shell dialog.companion-drawer[open] { translate: var(--motion-distance-layer) 0; }
+}
+
+/* Inline results, errors and notices fade in where they appear instead of popping. */
+.app-shell [role=status], .app-shell [role=alert], .app-shell .inline-error { transition: opacity var(--motion-fast) var(--motion-ease-out); }
+@starting-style { .app-shell [role=status], .app-shell [role=alert], .app-shell .inline-error { opacity: 0; } }
+
+/* Numbers that change in place keep their width, so neighbours never shift. */
+.app-shell .nav-item strong, .app-shell .stat-card strong, .app-shell time, .app-shell .focus-time, .app-shell .usage-summary { font-variant-numeric: tabular-nums; }

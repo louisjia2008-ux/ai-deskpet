@@ -1,0 +1,55 @@
+/* One motion language for the console and the desktop companion. Every state change picks a step by what it
+   explains, never by taste:
+   - direct: drag, resize, sliders, typing, focus rings, disabled. Follows the hand, no animation.
+   - press/fast: a control answering the pointer, a check or icon swap, a short label in place.
+   - change: a switch knob, a caret, a selection or a short section opening.
+   - enter/exit: something new arrives (message, bubble, result) or leaves towards where it came from.
+   - layer: a modal or drawer coming over the page.
+   - loop: only for a real wait the person can see.
+   Motion runs on opacity and transform; height, shadows and blur change without animation. */
+:root {
+  --motion-press: 70ms;
+  --motion-fast: 120ms;
+  --motion-change: 160ms;
+  --motion-enter: 200ms;
+  --motion-exit: 140ms;
+  --motion-layer: 220ms;
+  --motion-loop: 1200ms;
+
+  --motion-ease-in: cubic-bezier(.2, 0, .8, .35);
+  --motion-ease-out: cubic-bezier(.2, .8, .2, 1);
+  --motion-ease-change: cubic-bezier(.4, 0, .2, 1);
+
+  --motion-distance-near: 4px;
+  --motion-distance-content: 8px;
+  --motion-distance-layer: 16px;
+  --motion-press-scale: .98;
+}
+
+/* Reduced motion keeps a short fade where it tells what happened, and drops every movement and loop. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-press: 0ms;
+    --motion-fast: 0ms;
+    --motion-change: 0ms;
+    --motion-enter: 80ms;
+    --motion-exit: 0ms;
+    --motion-layer: 80ms;
+    --motion-loop: 0ms;
+    --motion-distance-near: 0px;
+    --motion-distance-content: 0px;
+    --motion-distance-layer: 0px;
+    --motion-press-scale: 1;
+  }
+}
+
+@keyframes motion-enter {
+  from { opacity: 0; translate: 0 var(--motion-distance-near); }
+}
+@keyframes motion-fade-in {
+  from { opacity: 0; }
+}
+@keyframes motion-wait {
+  0%, 100% { opacity: .35; }
+  50% { opacity: 1; }
+}

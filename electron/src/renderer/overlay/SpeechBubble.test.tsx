@@ -22,6 +22,27 @@ it('can be closed immediately and releases native interaction without a later du
   expect(dismissBubble).toHaveBeenCalledOnce();
 });
 
+it('with motion, hands back the pointer at once and leaves before it is removed, even if replaced mid-exit', async () => {
+  document.documentElement.style.setProperty('--motion-exit', '140ms');
+  try {
+    const { container, rerender } = render(bubble());
+    fireEvent.click(screen.getByRole('button', { name: 'Close speech bubble' }));
+    expect(release).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(container.querySelector('.speech-bubble.is-leaving')).not.toBeNull();
+    expect(dismissBubble).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(140));
+    expect(container.querySelector('.speech-bubble')).toBeNull();
+    expect(dismissBubble).toHaveBeenCalledExactlyOnceWith(1);
+    rerender(bubble(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Close speech bubble' }));
+    rerender(bubble(3));
+    expect(dismissBubble).toHaveBeenLastCalledWith(2);
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    expect(dismissBubble).toHaveBeenCalledTimes(2);
+  } finally { document.documentElement.style.removeProperty('--motion-exit'); }
+});
+
 it('stays readable for one minute, fades, then clears the same bubble', async () => {
   render(bubble());
   await act(async () => vi.advanceTimersByTimeAsync(59_999));

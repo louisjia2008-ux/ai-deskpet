@@ -37,7 +37,7 @@ import { BackgroundJobs } from './BackgroundJobs';
 import { CodingTasks } from './CodingTasks';
 import { MinecraftPage } from './MinecraftPage';
 import { MinecraftDedicatedSettings, MinecraftDedicatedStatus } from './MinecraftDedicatedPanel';
-import { ArrowUp, Bell, BookOpen, CalendarDots, CaretRight, TreeStructure, ChatCircleDots, ClockCounterClockwise, Copy, GearSix, ListChecks, MagnifyingGlass, PushPin, SidebarSimple, Plus, Sparkle, Square, Toolbox } from '@phosphor-icons/react';
+import { ArrowUp, Bell, BookOpen, CalendarDots, CaretRight, Check, TreeStructure, ChatCircleDots, ClockCounterClockwise, Copy, GearSix, ListChecks, MagnifyingGlass, PushPin, SidebarSimple, Plus, Sparkle, Square, Toolbox } from '@phosphor-icons/react';
 import { ChatReply } from './ChatReply';
 import { MediaLibraryPage } from './MediaLibraryPage';
 import { ChatImages } from './ChatImages';
@@ -464,6 +464,11 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
   const [delegationsOpen, setDelegationsOpen] = useState(false);
   useEffect(() => { if (focusDelegationId) setDelegationsOpen(true); }, [focusDelegationId, focusDelegationRevision, sessionId]);
   const [messagesState, setMessages] = useState<ChatMessage[]>([]);
+  // The session whose history has been read. Until then an empty list means "still loading", not "nothing here".
+  const [loadedSession, setLoadedSession] = useState<string | null>(null);
+  // Messages that arrived while this conversation is open come in; its history, as first read, is simply there.
+  const seenMessages = useRef<{ sessionId: string; ids: Set<string> } | null>(null);
+  const [arriving, setArriving] = useState<ReadonlySet<string>>(() => new Set());
   const [progressByMessage, setProgress] = useState<Record<string, ChatProgress>>({});
   const [liveMessageId, setLiveMessageId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -521,8 +526,11 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
   const selectedSession = useRef(sessionId);
   const lastTypingSignal = useRef(0);
   const drawer = useRef<ComponentRef<'dialog'>>(null);
-  const [copied, setCopied] = useState<string | null>(null);
-  const [copyError, setCopyError] = useState(false);
+  // Copy feedback stays on the message that was copied and clears itself; the latest copy wins.
+  const [copied, setCopied] = useState<{ id: string; failed: boolean } | null>(null);
+  const copyReset = useRef<number | null>(null);
+  const latestCopy = useRef<symbol | null>(null);
+  useEffect(() => () => { if (copyReset.current !== null) window.clearTimeout(copyReset.current); }, []);
   useEffect(() => {
     const dialog = drawer.current;
     if (dialog === null) return;
@@ -548,7 +556,7 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
     if (selectedSession.current !== sessionId) {
       selectedSession.current = sessionId;
       followOutput.current = true;
-      setMessages([]);
+      setMessages([]); setLoadedSession(null); setArriving(new Set());
       const externalRun = sessionRuns.current.get(sessionId);
       activeRun.current = externalRun?.runId ?? null;
       setRunning(externalRun?.runId ?? null);
@@ -573,6 +581,16 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
     }
   }, []);
   useLayoutEffect(() => { followLatest(); }, [messagesState, interaction?.approval?.id, followLatest]);
+  useLayoutEffect(() => {
+    if (loadedSession !== sessionId) return;
+    const seen = seenMessages.current;
+    if (seen === null || seen.sessionId !== sessionId) { seenMessages.current = { sessionId, ids: new Set(messagesState.map((message) => message.id)) }; return; }
+    const fresh = messagesState.filter((message) => !seen.ids.has(message.id)).map((message) => message.id);
+    if (fresh.length === 0) return;
+    for (const id of fresh) seen.ids.add(id);
+    setArriving((current) => new Set([...current, ...fresh]));
+  }, [messagesState, sessionId, loadedSession]);
+  const arrived = useCallback((id: string) => setArriving((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; }), []);
   useEffect(() => {
     const list = messageList.current;
     if (list === null || typeof ResizeObserver === 'undefined') return;
@@ -638,8 +656,9 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
       void window.deskpet.chat.listMessages(sessionId).then((loaded) => {
         if (!cancelled && currentRead === sequence && selectedSession.current === sessionId) {
           setMessages((current) => wechatTranscript ? loaded : reconcileChatMessages(loaded, current));
+          setLoadedSession(sessionId);
         }
-      }).catch(() => { if (!cancelled && currentRead === sequence) setSendError(true); });
+      }).catch(() => { if (!cancelled && currentRead === sequence) { setSendError(true); setLoadedSession(sessionId); } });
     };
     load();
     const unsubscribe = wechatTranscript ? window.deskpet.chat.onSessionsChanged(load) : undefined;
@@ -828,8 +847,13 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
   };
   const selectedTitle = snapshot.sessions.find((session) => session.id === sessionId)?.title ?? t('chat.new');
   const copy = async (message: ChatMessage): Promise<void> => {
-    try { await navigator.clipboard.writeText(message.content); setCopied(message.id); setCopyError(false); }
-    catch { setCopyError(true); }
+    const attempt = Symbol('copy'); latestCopy.current = attempt;
+    let failed = false;
+    try { await navigator.clipboard.writeText(message.content); } catch { failed = true; }
+    if (latestCopy.current !== attempt) return;
+    setCopied({ id: message.id, failed });
+    if (copyReset.current !== null) window.clearTimeout(copyReset.current);
+    copyReset.current = window.setTimeout(() => { copyReset.current = null; setCopied(null); }, failed ? 4_000 : 1_600);
   };
   const panel = <CompanionPanel state={snapshot.character} name={name} t={t} close={() => setCompanionOpen(false)} manage={manageCompanion} refresh={refresh} />;
   const showCompanion = companionOpen && !narrow && snapshot.character.modelState === 'ready';
@@ -840,8 +864,9 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
       <div className="message-list" ref={messageList} aria-live="polite" onScroll={(event) => {
         const list = event.currentTarget;
         followOutput.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 40;
-      }}><div className="transcript-inner">{messagesState.length === 0 ? wechatTranscript ? <p className="muted">{t('conversation.wechatEmpty')}</p> : !snapshot.providers.some((provider) => provider.enabled) ? <QuickSetup locale={snapshot.app.resolvedLocale} refresh={refresh} /> : <div className="chat-welcome"><CompanionAvatar name={name} large /><h2>{t('ui.emptyTitle')}</h2><p>{t('ui.emptyDetail')}</p>{!draft.trim() && <div className="prompt-list">{['ui.promptHello', 'ui.promptDay', 'ui.promptFocus'].map((key) => <button type="button" key={key} onClick={() => setDraft(t(key))}>{t(key)}<ArrowUp size={14} /></button>)}</div>}</div> : messagesState.map((message) => <article key={message.id} className={`message ${message.role}`} data-status={message.status} data-followup-to={message.followupToMessageId}>
-        {message.role === 'assistant' ? <CompanionAvatar name={name} /> : null}<div className="message-body">{message.role !== 'user' ? <small className="speaker-name">{message.role === 'assistant' ? name : message.role}</small> : null}{wechatTranscript ? <>{message.role === 'user' && <small className="speaker-name">{message.wechatSender ?? t(wechatTranscript === 'private' ? 'conversation.wechatPrivate' : wechatTranscript === 'friend' ? 'conversation.wechatFriend' : 'conversation.wechatGroup')}</small>}<p className="wechat-message-text">{message.content}</p></> : message.role === 'assistant' ? <ChatReply message={message} progress={progressByMessage[message.id]} animate={message.id === liveMessageId} t={t} onReveal={followLatest} /> : <>{message.followupToMessageId && <small className="chat-followup-label">{t('chat.interaction.followup')}</small>}<p>{message.content}</p></>}<ChatImages attachments={message.attachments} />{interaction?.approval?.messageId === message.id && <ChatApprovalCard key={interaction.approval.id} approval={interaction.approval} disabled={cancellingRun !== null || running !== interaction.runId} t={t} decide={decideApproval} />}{message.timerReceipts?.map((receipt) => <div className="timer-receipt" role="status" key={receipt.timerId}><strong>{t('timer.created')}: {receipt.label || t('timer.title')}</strong><time dateTime={receipt.dueAt}>{formatTimerDeadline(receipt.dueAt, receipt.timeZone)}</time></div>)}{message.memoryReceipts?.map((receipt) => <div className="memory-receipt" role="status" key={receipt.memoryId}><strong>{t(receipt.expiresAt ? 'memory.temporarySaved' : receipt.scope?.kind === 'session' ? 'memory.sessionSaved' : receipt.reused ? 'memory.alreadySaved' : 'memory.saved')}</strong><p>{receipt.text}</p><button type="button" className="secondary" onClick={manageMemory}>{t('memory.view')}</button></div>)}{message.memoryForget && <ChatMemoryForget message={message} disabled={archived || conversationBusy || submitting || running !== null} t={t} select={(memoryId) => forgetMemory(message, memoryId)} view={manageMemory} />}{message.memoryEdit && <ChatMemoryEdit message={message} disabled={archived || conversationBusy || submitting || running !== null} t={t} select={(memoryId) => editMemory(message, memoryId)} view={manageMemory} />}{message.role === 'assistant' && <ChatContextReceipts message={message} t={t} />}{message.status === 'failed' ? <small className="message-error" role="alert">{t(CHAT_ERROR_KEYS[message.errorCode ?? ''] ?? 'chat.runFailed')}</small> : null}{message.status === 'failed' && message.errorCode?.startsWith('tool.permission') ? <button type="button" className="secondary" onClick={managePermissions}>{t('tool.openPermissions')}</button> : null}{message.status === 'cancelled' ? <small className="message-note">{t('ui.stopped')}</small> : null}{message.role === 'assistant' && (message.status === 'failed' || message.status === 'cancelled') ? <button type="button" className="secondary" disabled={archived || conversationBusy || submitting || running !== null || modelSaving || provider === undefined} onClick={() => void retry(message.id)}>{t('chat.retry')}</button> : null}{message.role === 'assistant' && message.status === 'complete' && message.content.length > 0 ? <button type="button" className="copy-message" onClick={() => void copy(message)}><Copy size={12} />{t(copied === message.id ? 'ui.copied' : 'ui.copy')}</button> : null}</div>
+      }}><div className="transcript-inner">{messagesState.length === 0 && sessionId && loadedSession !== sessionId ? <p className="chat-loading muted" role="status">{t('chat.loadingHistory')}</p> : messagesState.length === 0 ? wechatTranscript ? <p className="muted">{t('conversation.wechatEmpty')}</p> : !snapshot.providers.some((provider) => provider.enabled) ? <QuickSetup locale={snapshot.app.resolvedLocale} refresh={refresh} /> : <div className="chat-welcome"><CompanionAvatar name={name} large /><h2>{t('ui.emptyTitle')}</h2><p>{t('ui.emptyDetail')}</p>{!draft.trim() && <div className="prompt-list">{['ui.promptHello', 'ui.promptDay', 'ui.promptFocus'].map((key) => <button type="button" key={key} onClick={() => setDraft(t(key))}>{t(key)}<ArrowUp size={14} /></button>)}</div>}</div> : messagesState.map((message) => <article key={message.id} className={`message ${message.role}${arriving.has(message.id) ? ' is-arriving' : ''}`} data-status={message.status} data-followup-to={message.followupToMessageId}
+          onAnimationEnd={(event) => { if (event.target === event.currentTarget) arrived(message.id); }}>
+        {message.role === 'assistant' ? <CompanionAvatar name={name} /> : null}<div className="message-body">{message.role !== 'user' ? <small className="speaker-name">{message.role === 'assistant' ? name : message.role}</small> : null}{wechatTranscript ? <>{message.role === 'user' && <small className="speaker-name">{message.wechatSender ?? t(wechatTranscript === 'private' ? 'conversation.wechatPrivate' : wechatTranscript === 'friend' ? 'conversation.wechatFriend' : 'conversation.wechatGroup')}</small>}<p className="wechat-message-text">{message.content}</p></> : message.role === 'assistant' ? <ChatReply message={message} progress={progressByMessage[message.id]} animate={message.id === liveMessageId} t={t} onReveal={followLatest} /> : <>{message.followupToMessageId && <small className="chat-followup-label">{t('chat.interaction.followup')}</small>}<p>{message.content}</p></>}<ChatImages attachments={message.attachments} />{interaction?.approval?.messageId === message.id && <ChatApprovalCard key={interaction.approval.id} approval={interaction.approval} disabled={cancellingRun !== null || running !== interaction.runId} t={t} decide={decideApproval} />}{message.timerReceipts?.map((receipt) => <div className="timer-receipt" role="status" key={receipt.timerId}><strong>{t('timer.created')}: {receipt.label || t('timer.title')}</strong><time dateTime={receipt.dueAt}>{formatTimerDeadline(receipt.dueAt, receipt.timeZone)}</time></div>)}{message.memoryReceipts?.map((receipt) => <div className="memory-receipt" role="status" key={receipt.memoryId}><strong>{t(receipt.expiresAt ? 'memory.temporarySaved' : receipt.scope?.kind === 'session' ? 'memory.sessionSaved' : receipt.reused ? 'memory.alreadySaved' : 'memory.saved')}</strong><p>{receipt.text}</p><button type="button" className="secondary" onClick={manageMemory}>{t('memory.view')}</button></div>)}{message.memoryForget && <ChatMemoryForget message={message} disabled={archived || conversationBusy || submitting || running !== null} t={t} select={(memoryId) => forgetMemory(message, memoryId)} view={manageMemory} />}{message.memoryEdit && <ChatMemoryEdit message={message} disabled={archived || conversationBusy || submitting || running !== null} t={t} select={(memoryId) => editMemory(message, memoryId)} view={manageMemory} />}{message.role === 'assistant' && <ChatContextReceipts message={message} t={t} />}{message.status === 'failed' ? <small className="message-error" role="alert">{t(CHAT_ERROR_KEYS[message.errorCode ?? ''] ?? 'chat.runFailed')}</small> : null}{message.status === 'failed' && message.errorCode?.startsWith('tool.permission') ? <button type="button" className="secondary" onClick={managePermissions}>{t('tool.openPermissions')}</button> : null}{message.status === 'cancelled' ? <small className="message-note">{t('ui.stopped')}</small> : null}{message.role === 'assistant' && (message.status === 'failed' || message.status === 'cancelled') ? <button type="button" className="secondary" disabled={archived || conversationBusy || submitting || running !== null || modelSaving || provider === undefined} onClick={() => void retry(message.id)}>{t('chat.retry')}</button> : null}{message.role === 'assistant' && message.status === 'complete' && message.content.length > 0 ? <><button type="button" className={copied?.id === message.id && !copied.failed ? 'copy-message is-copied' : 'copy-message'} onClick={() => void copy(message)}>{copied?.id === message.id && !copied.failed ? <Check key="done" size={12} className="copy-icon" /> : <Copy key="copy" size={12} className="copy-icon" />}{t(copied?.id === message.id && !copied.failed ? 'ui.copied' : 'ui.copy')}</button>{copied?.id === message.id && copied.failed ? <small className="message-error copy-error" role="alert">{t('ui.copyFailed')}</small> : null}</> : null}</div>
       </article>)}{sessionId && !wechatTranscript && window.deskpet.chatWork && <ChatWorkPanel sessionId={sessionId} api={window.deskpet.chatWork} locale={snapshot.app.resolvedLocale} onOpenSession={selectSession} onContinueArtifact={onContinueArtifact} continuationDisabled={conversationBusy || archived} />}</div></div>
       <div className="composer-region">
         {pendingMemoryQuery?.sessionId === sessionId && <div className="chat-interaction-note" role="status">
@@ -853,7 +878,6 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
         {archived && selectedConversation && !wechatTranscript && <div className="archived-conversation-note"><p>{t('conversation.archivedReadOnly')}</p><button type="button" className="secondary" disabled={conversationBusy} onClick={() => onConversationAction('unarchive', selectedConversation)}>{t('conversation.unarchive')}</button></div>}
         {sendError && <p className="inline-error" role="alert">{t('common.error')}</p>}
         {reloadFailed === sessionId && <p className="inline-error" role="status">{snapshot.app.resolvedLocale === 'zh-CN' ? '消息已发出，但对话记录暂时没加载出来。' : 'Your message was sent, but the conversation did not reload.'} <button type="button" className="secondary" onClick={() => void window.deskpet.chat.listMessages(sessionId).then(loaded => { if (selectedSession.current === sessionId) setMessages(current => reconcileChatMessages(loaded, current)); setReloadFailed(null); }).catch(() => undefined)}>{snapshot.app.resolvedLocale === 'zh-CN' ? '重新加载对话' : 'Reload conversation'}</button></p>}
-        {copyError && <p className="inline-error" role="alert">{t('ui.copyFailed')}</p>}
         {followupError && <p className="inline-error" role="alert">{t(followupError)}</p>}
         {restoringInteraction && <p className="chat-interaction-note" role="status">{t('chat.interaction.restoring')}</p>}
         {interactionLoadFailed && <div className="inline-error" role="alert">{t('chat.interaction.restoreFailed')} <button type="button" className="secondary" onClick={() => void restoreInteraction()}>{t('common.retry')}</button></div>}

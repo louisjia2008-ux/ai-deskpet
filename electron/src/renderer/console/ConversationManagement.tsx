@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { usePresence } from './use-presence';
 import type { ComponentRef, FormEvent, JSX, KeyboardEvent } from 'react';
 import { Archive, ArrowCounterClockwise, DotsThree, MagnifyingGlass, PencilSimple, PushPin, Trash, X } from '@phosphor-icons/react';
 
@@ -45,16 +46,17 @@ export const useConversationActions = (t: Translator, onChanged: (session: ChatS
     if (action === 'rename' || action === 'delete') setRequest({ action, session });
     else void perform(action, session);
   };
+  const shown = usePresence(request);
   return {
     act, pending,
     feedback: error !== null && request === null ? <div className="conversation-feedback error-banner" role="alert">{t(error)}<button type="button" className="icon-button" aria-label={t('conversation.dismiss')} onClick={() => setError(null)}><X size={16} /></button></div>
       : notice !== null ? <div className="conversation-feedback" role="status">{t(notice)}<button type="button" className="icon-button" aria-label={t('conversation.dismiss')} onClick={() => setNotice(null)}><X size={16} /></button></div> : null,
-    dialog: request === null ? null : <ConversationDialog key={`${request.action}:${request.session.id}`} request={request} pending={pending !== null} error={error} t={t} close={() => { if (!pendingRef.current) { setRequest(null); setError(null); } }} submit={(title) => perform(request.action, request.session, title)} />,
+    dialog: shown.value === null ? null : <ConversationDialog key={`${shown.value.action}:${shown.value.session.id}`} request={shown.value} leaving={shown.leaving} pending={pending !== null} error={error} t={t} close={() => { if (!pendingRef.current) { setRequest(null); setError(null); } }} submit={(title) => perform(shown.value!.action, shown.value!.session, title)} />,
   };
 };
 
-const ConversationDialog = ({ request, pending, error, t, close, submit }: {
-  request: DialogRequest; pending: boolean; error: string | null; t: Translator; close(): void; submit(title: string): Promise<void>;
+const ConversationDialog = ({ request, leaving, pending, error, t, close, submit }: {
+  request: DialogRequest; leaving: boolean; pending: boolean; error: string | null; t: Translator; close(): void; submit(title: string): Promise<void>;
 }): JSX.Element => {
   const dialog = useRef<ComponentRef<'dialog'>>(null);
   const titleInput = useRef<ComponentRef<'input'>>(null);
@@ -63,8 +65,10 @@ const ConversationDialog = ({ request, pending, error, t, close, submit }: {
     dialog.current?.showModal();
     if (request.action === 'rename') titleInput.current?.select();
   }, [request.action]);
+  // Closing hands focus back at once; the dialog then leaves before it unmounts.
+  useLayoutEffect(() => { if (leaving && dialog.current?.open) dialog.current.close(); }, [leaving]);
   const save = (event: FormEvent): void => { event.preventDefault(); if (!pending && (request.action === 'delete' || title.trim().length > 0)) void submit(title.trim()); };
-  return <dialog className="conversation-dialog" ref={dialog} aria-labelledby="conversation-dialog-title" aria-describedby="conversation-dialog-detail" onCancel={(event) => { event.preventDefault(); if (!pending) close(); }}>
+  return <dialog className="conversation-dialog" ref={dialog} inert={leaving} aria-labelledby="conversation-dialog-title" aria-describedby="conversation-dialog-detail" onCancel={(event) => { event.preventDefault(); if (!pending) close(); }}>
     <form onSubmit={save} aria-busy={pending}>
       <h2 id="conversation-dialog-title">{t(request.action === 'rename' ? 'conversation.rename' : 'conversation.deleteTitle')}</h2>
       <p id="conversation-dialog-detail">{t(request.action === 'rename' ? 'conversation.renameDetail' : 'conversation.deleteDetail')}</p>

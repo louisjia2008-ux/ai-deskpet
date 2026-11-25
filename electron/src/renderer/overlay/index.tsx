@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client';
 
+import '../motion.css';
 import './styles.css';
 import { OverlayApp } from './App';
 

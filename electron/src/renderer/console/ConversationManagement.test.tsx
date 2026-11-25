@@ -12,9 +12,11 @@ const t = (key: string): string => consoleCopy.en[key] ?? (messages.en as Record
 let api: DeskPetApi['chat'];
 const changed = vi.fn(async () => undefined);
 const originalShowModal = Object.getOwnPropertyDescriptor(window.HTMLDialogElement.prototype, 'showModal');
+const originalClose = Object.getOwnPropertyDescriptor(window.HTMLDialogElement.prototype, 'close');
 
 beforeEach(() => {
   Object.defineProperty(window.HTMLDialogElement.prototype, 'showModal', { configurable: true, value: function (this: ComponentRef<'dialog'>) { this.open = true; } });
+  Object.defineProperty(window.HTMLDialogElement.prototype, 'close', { configurable: true, value: function (this: ComponentRef<'dialog'>) { this.open = false; } });
   api = {
     openSession: vi.fn(), onOpenRequested: () => () => undefined,
     getInteraction: vi.fn(async () => null), followup: vi.fn(), resolveApproval: vi.fn(),
@@ -30,6 +32,8 @@ afterEach(() => {
   cleanup(); vi.restoreAllMocks();
   if (originalShowModal) Object.defineProperty(window.HTMLDialogElement.prototype, 'showModal', originalShowModal);
   else Reflect.deleteProperty(window.HTMLDialogElement.prototype, 'showModal');
+  if (originalClose) Object.defineProperty(window.HTMLDialogElement.prototype, 'close', originalClose);
+  else Reflect.deleteProperty(window.HTMLDialogElement.prototype, 'close');
 });
 
 const Harness = ({ disabled = false }: { disabled?: boolean }) => {

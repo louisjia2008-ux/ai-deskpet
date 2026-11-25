@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client';
 
+import '../motion.css';
 import './app.css';
 import { ConsoleApp } from './App';
 import './design.css';
