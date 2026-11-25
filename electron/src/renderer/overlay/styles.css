@@ -54,7 +54,7 @@ body,
 .speech-bubble-reply { display: block; margin-top: 9px; padding: 5px 12px; border: 1px solid #c8d7ec; border-radius: 8px; background: #edf3fc; color: #304d75; font: inherit; cursor: pointer; }
 .speech-bubble-reply:focus-visible { outline: 2px solid #496fad; outline-offset: 2px; }
 
-/* A tap gets a small hop from her feet; with reduced motion the hop is skipped (the state still clears). */
+/* A tap gets a small hop from her feet; with reduced motion the tap is not turned into a hop at all. */
 .live2d-canvas.is-hopping { animation: companion-hop var(--companion-hop) var(--motion-ease-out); transform-origin: 50% 100%; }
 @keyframes companion-hop {
   0% { transform: none; }
@@ -79,6 +79,6 @@ body,
   from { opacity: 0; translate: 0 var(--bubble-from); scale: var(--bubble-scale); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .overlay-root { --companion-hop: 1ms; --bubble-fade: 80ms; --bubble-scale: 1; }
+  .overlay-root { --bubble-fade: 80ms; --bubble-scale: 1; }
 }
 

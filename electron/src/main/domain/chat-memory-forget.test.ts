@@ -99,6 +99,16 @@ describe('transactional chat memory deletion', () => {
     expect(await f.memory.forgetFromChat(reply.id, query!, undefined, undefined, true)).toEqual(deleted);
     expect(f.memory.recordedForgetQuery((await f.response()).id, ['关于备用暗号了'])).toBeUndefined();
   });
+  it('lets a retried command act only on memories as they stood when the owner first sent it', async () => {
+    const f = await fixture(); const sentAt = new Date().toISOString();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await f.add('带伞了');
+    const reply = await f.response();
+    expect(await f.memory.forgetFromChat(reply.id, '带伞了', undefined, undefined, true, sentAt)).toMatchObject({ kind: 'not-found' });
+    expect(f.memory.list().map((item) => item.text)).toEqual(['带伞了']);
+    expect(await f.memory.editFromChat((await f.response()).id, '带伞了', '没带伞', undefined, undefined, sentAt)).toMatchObject({ kind: 'not-found' });
+    expect(f.memory.list().map((item) => item.text)).toEqual(['带伞了']);
+  });
   it('keeps every owner message of a retried turn out of later context when nothing matched', async () => {
     const f = await fixture();
     const user = await f.chat.addMessage({ sessionId: f.session.id, role: 'user', content: '忘记暗号是蓝鲸', status: 'complete', errorCode: null });

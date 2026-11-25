@@ -34,7 +34,8 @@ export const parseChatMemoryCommand = (query: string, history: readonly ChatMess
   const previous = history.filter((item) => item.role === 'user' && item.status === 'complete').at(-1)?.content ?? '';
   if (/(?:下一(?:句|条|个)|接下来)/u.test(previous) && /(?:翻译|示例|演示|引用|不要执行)/u.test(previous)) return { kind: 'clarify', reason: 'context' };
   // 「请记住……：X」: the prefix took no colon, so the lead and its colon go; a colon right after a taken one is text.
-  const quoted = introduced && !particle ? match[1]!.replace(/^[\s，,。.!！~～…⋯]+[：:]\s*/u, '') : match[1]!;
+  const takenColon = /^(?:请)?(?:(?:帮我|替我|为我|帮忙)\s*)?(?:记下来|记住|记下|保存到(?:长期)?记忆[里中]?|保存为(?:长期)?记忆)\s*[：:]/u.test(input);
+  const quoted = introduced && !particle && !takenColon ? match[1]!.replace(/^[\s，,。.!！~～…⋯]+[：:]\s*/u, '') : match[1]!;
   const text = (particle ? afterParticle : quoted).trim().replace(/^(?:以下(?:信息|内容))[：:]\s*/u, '');
   if (text.length > CHAT_MEMORY_MAX_CHARACTERS) return { kind: 'clarify', reason: 'length' };
   if (!text || /^(?:[：:,，。.!！?？\s]*|(?:这|那)(?:些|个|件事|两件事|一点)|(?:刚才|上面|之前|前面)(?:的)?(?:话|内容|信息)?|了吗|了吗[?？]|me|this|it|what I said)[。.!！?？\s]*$/iu.test(text)

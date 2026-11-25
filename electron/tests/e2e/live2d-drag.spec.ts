@@ -59,7 +59,10 @@ const fixture = async (info: TestInfo) => {
     await expect.poll(async () => { const actual = await bounds(); return { x: actual.x, y: actual.y }; }).toEqual(expected);
     await expect.poll(async () => (await state()).position).toMatchObject(expected);
     await expect.poll(async () => {
-      const saved = JSON.parse(await readFile(join(root, 'profile/managed/character-preferences.json'), 'utf8')) as { data: { position: Point } };
+      // The disk follows the window behind the drag, so the file may not exist yet.
+      const raw = await readFile(join(root, 'profile/managed/character-preferences.json'), 'utf8').catch(() => null);
+      if (raw === null) return null;
+      const saved = JSON.parse(raw) as { data: { position: Point } };
       return { x: saved.data.position.x, y: saved.data.position.y };
     }).toEqual(expected);
     // Allow the renderer's previous move acknowledgement/coalescing loop to drain.

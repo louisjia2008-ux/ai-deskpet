@@ -8,7 +8,8 @@ import type { ChatSession, ChatSessionListOptions, ResolvedLocale } from '../../
 
 type Translator = (key: string) => string;
 export type ConversationAction = 'rename' | 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete' | 'restore';
-type DialogRequest = { action: 'rename' | 'delete'; session: ChatSession };
+// Each opening is its own dialog, so reopening one that is still leaving starts fresh instead of reusing the closing node.
+type DialogRequest = { action: 'rename' | 'delete'; session: ChatSession; opening: number };
 
 const actionKeys: Record<ConversationAction, string> = {
   rename: 'conversation.rename', pin: 'conversation.pin', unpin: 'conversation.unpin',
@@ -17,6 +18,7 @@ const actionKeys: Record<ConversationAction, string> = {
 
 export const useConversationActions = (t: Translator, onChanged: (session: ChatSession) => Promise<void>) => {
   const [request, setRequest] = useState<DialogRequest | null>(null);
+  const openings = useRef(0);
   const [pending, setPending] = useState<string | null>(null);
   const pendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +45,7 @@ export const useConversationActions = (t: Translator, onChanged: (session: ChatS
   const act = (action: ConversationAction, session: ChatSession): void => {
     if (pendingRef.current) return;
     setError(null); setNotice(null);
-    if (action === 'rename' || action === 'delete') setRequest({ action, session });
+    if (action === 'rename' || action === 'delete') setRequest({ action, session, opening: ++openings.current });
     else void perform(action, session);
   };
   const shown = usePresence(request);
@@ -51,7 +53,7 @@ export const useConversationActions = (t: Translator, onChanged: (session: ChatS
     act, pending,
     feedback: error !== null && request === null ? <div className="conversation-feedback error-banner" role="alert">{t(error)}<button type="button" className="icon-button" aria-label={t('conversation.dismiss')} onClick={() => setError(null)}><X size={16} /></button></div>
       : notice !== null ? <div className="conversation-feedback" role="status">{t(notice)}<button type="button" className="icon-button" aria-label={t('conversation.dismiss')} onClick={() => setNotice(null)}><X size={16} /></button></div> : null,
-    dialog: shown.value === null ? null : <ConversationDialog key={`${shown.value.action}:${shown.value.session.id}`} request={shown.value} leaving={shown.leaving} pending={pending !== null} error={error} t={t} close={() => { if (!pendingRef.current) { setRequest(null); setError(null); } }} submit={(title) => perform(shown.value!.action, shown.value!.session, title)} />,
+    dialog: shown.value === null ? null : <ConversationDialog key={shown.value.opening} request={shown.value} leaving={shown.leaving} pending={pending !== null} error={error} t={t} close={() => { if (!pendingRef.current) { setRequest(null); setError(null); } }} submit={(title) => perform(shown.value!.action, shown.value!.session, title)} />,
   };
 };
 

@@ -65,6 +65,21 @@ describe('conversation actions', () => {
     expect(changed).toHaveBeenCalledWith(expect.objectContaining({ title: '记忆与会话验收' }));
   });
 
+  it('reopens the same dialog while the previous one is still leaving, with a fresh title', async () => {
+    document.documentElement.style.setProperty('--motion-exit', '140ms');
+    try {
+      render(<Harness />);
+      openMenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'Rename conversation' }));
+      fireEvent.change(within(screen.getByRole('dialog')).getByRole('textbox', { name: 'Title' }), { target: { value: 'draft' } });
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+      openMenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'Rename conversation' }));
+      const open = [...document.querySelectorAll('dialog')].filter((item) => item.open);
+      expect(open).toHaveLength(1);
+      expect(within(open[0]!).getByRole('textbox', { name: 'Title' })).toHaveValue(session.title);
+      await waitFor(() => expect(document.querySelectorAll('dialog')).toHaveLength(1));
+    } finally { document.documentElement.style.removeProperty('--motion-exit'); }
+  });
+
   it('requires the delete confirmation, preserves it on failure, and only reports a completed save', async () => {
     render(<Harness />);
     openMenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));

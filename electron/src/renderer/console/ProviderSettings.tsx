@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { usePresence } from './use-presence';
 import type { FormEvent, JSX } from 'react';
 import type { ProviderConfig, ProviderModel } from '../../shared';
 import { providerDefinitions } from '../../shared';
@@ -49,6 +50,8 @@ export const ProviderSettings = ({ providers, activeId, t, refresh }: { provider
     const catalog = discovery.current;
     return () => { mounted.current = false; catalog.revision++; resolveConfirmation.current?.(null); };
   }, []);
+  // The question stays in the dialog while it leaves.
+  const shownConfirmation = usePresence(confirmation), presented = shownConfirmation.value;
   useEffect(() => {
     if (confirmation && !dialog.current?.open) dialog.current?.showModal();
     if (!confirmation && dialog.current?.open) dialog.current.close();
@@ -168,15 +171,15 @@ export const ProviderSettings = ({ providers, activeId, t, refresh }: { provider
   return <div><h2>{t('provider.title')}</h2>{error && <p className="error-banner" role="alert">{error}</p>}
     {modelNotice && <p role="status">{zh ? `${modelNotice.followers} 个功能会跟着使用新模型。` : `${modelNotice.followers} features will use the new model.`}
       {modelNotice.failed > 0 && (zh ? ` ${modelNotice.failed} 个功能未能改为跟随，请检查各功能的模型设置。` : ` Could not update ${modelNotice.failed} features. Check their model settings.`)}</p>}
-    <dialog ref={dialog} className="provider-model-confirmation" aria-labelledby="provider-model-confirmation-title"
+    <dialog ref={dialog} className="provider-model-confirmation" inert={shownConfirmation.leaving} aria-labelledby="provider-model-confirmation-title"
       onCancel={event => { event.preventDefault(); finishConfirmation(null); }}>
-      {confirmation && <>
+      {presented && <>
         <h3 id="provider-model-confirmation-title">{zh ? '同步单独指定的模型' : 'Update pinned models'}</h3>
-        <p>{zh ? `这些功能固定使用 ${confirmation.impact.previousModel}。勾选要改为跟随默认模型（${confirmation.model}）的功能。`
-          : `These features are pinned to ${confirmation.impact.previousModel}. Select the ones that should follow the default model (${confirmation.model}).`}</p>
+        <p>{zh ? `这些功能固定使用 ${presented.impact.previousModel}。勾选要改为跟随默认模型（${presented.model}）的功能。`
+          : `These features are pinned to ${presented.impact.previousModel}. Select the ones that should follow the default model (${presented.model}).`}</p>
         <div className="provider-model-confirmation-list">
-          {confirmation.impact.pinned.map(binding => <label key={binding.id} className="check-row">
-            <input type="checkbox" checked={confirmation.selected.includes(binding.id)} onChange={event => {
+          {presented.impact.pinned.map(binding => <label key={binding.id} className="check-row">
+            <input type="checkbox" checked={presented.selected.includes(binding.id)} onChange={event => {
               const checked = event.currentTarget.checked;
               setConfirmation(current => current && { ...current, selected: checked
                 ? [...current.selected, binding.id] : current.selected.filter(id => id !== binding.id) });
@@ -185,9 +188,9 @@ export const ProviderSettings = ({ providers, activeId, t, refresh }: { provider
           </label>)}
         </div>
         <div className="button-row">
-          <button type="button" className="secondary" onClick={() => finishConfirmation({ previousModel: confirmation.impact.previousModel, followIds: [] })}>{zh ? '保留' : 'Keep pins'}</button>
-          <button type="button" disabled={confirmation.selected.length === 0}
-            onClick={() => finishConfirmation({ previousModel: confirmation.impact.previousModel, followIds: confirmation.selected })}>{zh ? '一起改' : 'Update selected'}</button>
+          <button type="button" className="secondary" onClick={() => finishConfirmation({ previousModel: presented.impact.previousModel, followIds: [] })}>{zh ? '保留' : 'Keep pins'}</button>
+          <button type="button" disabled={presented.selected.length === 0}
+            onClick={() => finishConfirmation({ previousModel: presented.impact.previousModel, followIds: presented.selected })}>{zh ? '一起改' : 'Update selected'}</button>
         </div>
       </>}
     </dialog>

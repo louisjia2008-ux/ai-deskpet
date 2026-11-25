@@ -315,3 +315,6 @@
 
 /* Two-step confirmations swap in place; the confirm group fades in where the button was. */
 .app-shell .confirm-button-group { animation: motion-fade-in var(--motion-fast) var(--motion-ease-out) backwards; }
+
+/* A closing dialog and its backdrop never catch the next click while they fade. */
+.app-shell dialog:not([open]), .app-shell dialog:not([open])::backdrop { pointer-events: none; }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CSSProperties, JSX } from 'react';
+import type { ComponentRef, CSSProperties, JSX } from 'react';
 import type { ModelBox } from '../live2d';
 import { motionMs } from '../motion';
 
@@ -55,17 +55,20 @@ export const SpeechBubble = ({ text, revision, expiresAt, closeLabel, sessionId,
     void window.deskpet.character.dismissBubble(revision).catch(() => undefined);
   }, [revision]);
 
+  const element = useRef<ComponentRef<'div'>>(null);
   useEffect(() => {
     if (held || opening) { setFading(false); return; }
+    // The fade lasts as long as the page shows it (shorter with reduced motion), and the line is gone when it ends.
+    const fadeMs = motionMs('--bubble-fade', element.current ?? document.documentElement) || FADE_MS;
     const fade = window.setTimeout(() => setFading(true), Math.max(0, deadline - Date.now()));
-    const expire = window.setTimeout(() => dismiss(false), Math.max(0, deadline + FADE_MS - Date.now()));
+    const expire = window.setTimeout(() => dismiss(false), Math.max(0, deadline + fadeMs - Date.now()));
     return () => { window.clearTimeout(fade); window.clearTimeout(expire); };
   }, [deadline, dismiss, held, opening]);
   const extend = (): void => setDeadline(current => Math.max(current, Date.now() + HOLD_GRACE_MS));
 
   if (hidden) return null;
   const placement = bubblePlacement(model);
-  return <div className={`speech-bubble${placement?.above ? ' is-above' : ''}${leaving ? ' is-leaving' : fading ? ' is-fading' : ''}`} style={placement?.style}
+  return <div ref={element} className={`speech-bubble${placement?.above ? ' is-above' : ''}${leaving ? ' is-leaving' : fading ? ' is-fading' : ''}`} style={placement?.style}
     role={leaving ? undefined : 'status'} aria-hidden={leaving || undefined} inert={leaving}
     onPointerEnter={() => setHovered(true)} onPointerLeave={() => { setHovered(false); extend(); }}
     onFocus={() => setFocused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { setFocused(false); extend(); } }}>

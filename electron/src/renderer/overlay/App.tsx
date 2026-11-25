@@ -122,7 +122,8 @@ export const OverlayApp = (): JSX.Element => {
       drainReaction();
     });
     const idle = window.setInterval(() => {
-      if (!loaded.current || document.hidden || Math.random() < 0.5) return;
+      // Unprompted moods are decoration; reduced motion keeps her still until something real happens.
+      if (!loaded.current || document.hidden || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true || Math.random() < 0.5) return;
       const mood = IDLE_MOODS[Math.floor(Math.random() * IDLE_MOODS.length)]!;
       void host.current?.react(mood, true).catch(() => false);
     }, 45_000);
@@ -237,7 +238,8 @@ export const OverlayApp = (): JSX.Element => {
     const distance = Math.abs(event.screenX - current.startX) + Math.abs(event.screenY - current.startY);
     if (event.type === 'pointerup' && current.element.tagName === 'CANVAS') {
       if (distance < TAP_DISTANCE) {
-        setHops((count) => count + 1);
+        // With reduced motion the tap still reaches her; only the hop is skipped.
+        if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches !== true) setHops((count) => count + 1);
         void window.deskpet.character.tap().catch(() => undefined);
       } else void host.current?.react('surprised').catch(() => false);
     }

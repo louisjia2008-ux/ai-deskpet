@@ -4346,21 +4346,24 @@ export class AppController {
     // since the memory it named may have been deleted since and the model must not see its text.
     const commandText = retry?.original ?? content;
     const retryRoute = retry === null ? undefined : (retry.message.requestReceipts?.length ?? 0) > 0 ? 'model' : 'local';
-    const memoryCommand = hostCommands ? null : parseChatMemoryCommand(commandText, history);
+    // A first attempt that called the model was not a memory command of any kind.
+    const commandsAllowed = !hostCommands && retryRoute !== 'model';
+    const memoryCommand = commandsAllowed ? parseChatMemoryCommand(commandText, history) : null;
     // A bare 「忘记X」/「把X改成Y」 is a memory command only when X names a memory;
     // otherwise it is ordinary conversation for the model.
-    const parsedForget = hostCommands ? null : parseChatForgetCommand(commandText, history);
+    const parsedForget = commandsAllowed ? parseChatForgetCommand(commandText, history) : null;
     // A retry after the deletion already committed reuses the query it used; the memory itself is gone by then.
     const reportTarget = parsedForget?.kind === 'forget' && parsedForget.report
       ? (retry === null ? undefined : this.#memory.recordedForgetQuery(retry.message.id, parsedForget.report.exact))
         ?? parsedForget.report.exact.find((query) => this.#memory.matchesInSession(sessionId, query, true)) : undefined;
     const forgetCommand = parsedForget?.kind !== 'forget' || parsedForget.explicit ? parsedForget
-      : retryRoute === 'model' ? null
-        : parsedForget.report ? (reportTarget !== undefined ? { ...parsedForget, query: reportTarget } : retryRoute === 'local' ? parsedForget : null)
-          : retryRoute === 'local' || this.#memory.matchesInSession(sessionId, parsedForget.query) ? parsedForget : null;
-    const parsedEdit = hostCommands ? null : parseChatEditCommand(commandText, history);
+      : parsedForget.report ? (reportTarget !== undefined ? { ...parsedForget, query: reportTarget } : retryRoute === 'local' ? parsedForget : null)
+        : retryRoute === 'local' || this.#memory.matchesInSession(sessionId, parsedForget.query) ? parsedForget : null;
+    const parsedEdit = commandsAllowed ? parseChatEditCommand(commandText, history) : null;
+    // A retry that stays local acts only on memories as they stood when the owner first sent it.
+    const notAfter = retryRoute === 'local' ? retry?.originalAt : undefined;
     const editCommand = parsedEdit?.kind === 'edit' && !parsedEdit.explicit
-      && (retryRoute === 'model' || (retryRoute === undefined && !this.#memory.matchesInSession(sessionId, parsedEdit.query))) ? null : parsedEdit;
+      && retryRoute === undefined && !this.#memory.matchesInSession(sessionId, parsedEdit.query) ? null : parsedEdit;
     const illustrative = !research && isIllustrativeCommand(content);
     const modelTurn = memoryCommand === null && forgetCommand === null && editCommand === null;
     const interactive = !research && (!waitForCompletion || channel.origin === 'telegram' || channel.origin === 'wechat') && !analysisSession;
@@ -4657,7 +4660,7 @@ export class AppController {
           }
           progress({ phase: 'tool', toolId: 'memory.edit' });
           let result;
-          try { result = await this.#memory.editFromChat(assistant.id, editCommand.query, editCommand.replacement, signal); }
+          try { result = await this.#memory.editFromChat(assistant.id, editCommand.query, editCommand.replacement, signal, undefined, notAfter); }
           catch (error) { signal.throwIfAborted(); throw new Error(error instanceof Error && error.message === 'repository.commitUncertain' ? error.message : 'memory.editFailed'); }
           if (result.kind === 'updated') {
             this.windows.send('console', 'memory:changed', this.#memory.list());
@@ -4674,7 +4677,7 @@ export class AppController {
           }
           progress({ phase: 'tool', toolId: 'memory.forget' });
           let result;
-          try { result = await this.#memory.forgetFromChat(assistant.id, forgetCommand.query, signal, undefined, forgetCommand.report !== undefined); }
+          try { result = await this.#memory.forgetFromChat(assistant.id, forgetCommand.query, signal, undefined, forgetCommand.report !== undefined, notAfter); }
           catch (error) { signal.throwIfAborted(); throw new Error(error instanceof Error && error.message === 'repository.commitUncertain' ? error.message : error instanceof Error && 'memoryRecallSuppressed' in error && error.memoryRecallSuppressed === true ? 'memory.forgetPending' : 'memory.forgetFailed'); }
           if (result.kind === 'deleted') {
             this.windows.send('console', 'memory:changed', this.#memory.list());
