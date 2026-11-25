@@ -86,21 +86,23 @@ export interface Completion { text: string; finished: boolean; ms: number }
 
 /** Tokens per model in this suite, from the provider's own usage events, so a report can state what a model cost. */
 const usage = new Map<string, { input: number; output: number; reportedUSD: number; requests: number }>();
-export const recordUsage = (model: string, event: ProviderStreamEvent): void => {
+/** Keyed by role and model, so a model that is both tested and judging is never counted twice. */
+export const recordUsage = (model: string, event: ProviderStreamEvent, role: 'tested' | 'judge' = 'tested'): void => {
   if (event.type !== 'usage') return;
-  const entry = usage.get(model) ?? { input: 0, output: 0, reportedUSD: 0, requests: 0 };
+  const key = `${role} ${model}`;
+  const entry = usage.get(key) ?? { input: 0, output: 0, reportedUSD: 0, requests: 0 };
   entry.input += event.inputTokens ?? 0; entry.output += event.outputTokens ?? 0; entry.reportedUSD += event.reportedCostUSD ?? 0; entry.requests += 1;
-  usage.set(model, entry);
+  usage.set(key, entry);
 };
 
 /** One request exactly as the background tasks send it (official OpenAI: Responses, default sampling). */
-export const complete = async (messages: ProviderChatMessage[], options: { model?: string; executionMode?: ProviderChatRequest['executionMode']; maxOutputTokens?: number } = {}): Promise<Completion> => {
+export const complete = async (messages: ProviderChatMessage[], options: { model?: string; executionMode?: ProviderChatRequest['executionMode']; maxOutputTokens?: number; role?: 'tested' | 'judge' } = {}): Promise<Completion> => {
   const settings = evalSettings(), model = options.model ?? settings.model, started = Date.now();
   let text = '', finished = false;
   const request: ProviderChatRequest = { model, messages, ...(options.executionMode ? { executionMode: options.executionMode } : {}),
     ...(options.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}) };
   for await (const event of adapter(model, settings.baseUrl).streamChat(request, AbortSignal.timeout(240_000))) {
-    recordUsage(model, event);
+    recordUsage(model, event, options.role ?? 'tested');
     if (event.type === 'text') text += event.text;
     if (event.type === 'done' && (event.finishReason === 'stop' || event.finishReason === 'completed')) finished = true;
   }
@@ -116,7 +118,7 @@ export const judge = async (rubric: string, material: unknown, max: number): Pro
     + `Apply the rubric strictly and consistently, point by point. Return ONLY one JSON object {"score":integer 0-${max},"reasons":"one or two short sentences in Chinese naming each point lost"}. No markdown.\n\nRubric:\n${rubric}`;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let reply: Completion;
-    try { reply = await complete([{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(material) }], { model: settings.judgeModel, executionMode: 'background-text' }); }
+    try { reply = await complete([{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(material) }], { model: settings.judgeModel, executionMode: 'background-text', role: 'judge' }); }
     catch { continue; } // A failed judge request leaves the case unjudged, not failed.
     try {
       const parsed = JSON.parse(reply.text.trim().replace(/^```(?:json)?\s*/u, '').replace(/\s*```$/u, '')) as { score?: unknown; reasons?: unknown };
@@ -155,7 +157,7 @@ export const writeReport = (suite: string, results: CaseResult[]): string => {
   const total = results.length === 0 ? 0 : results.reduce((sum, result) => sum + caseScore(result), 0) / results.length;
   const tokens = Object.fromEntries(usage);
   const lines = [`# ${suite} · ${(total * 100).toFixed(1)}%`, '', `model ${settings.model} · judge ${settings.judgeModel} · ${results.length} runs · ${new Date().toISOString()}`, '',
-    ...Object.entries(tokens).map(([model, entry]) => `tokens ${model}: ${entry.requests} requests, ${entry.input} in, ${entry.output} out`), '',
+    ...Object.entries(tokens).map(([key, entry]) => `tokens ${key}: ${entry.requests} requests, ${entry.input} in, ${entry.output} out`), '',
     '| case | run | score | failed checks | judge |', '|---|---|---|---|---|',
     ...results.map((result) => `| ${result.id} ${result.title} | ${result.run} | ${(caseScore(result) * 100).toFixed(0)}% | ${result.error ? `error: ${result.error}` : result.invalid ? `invalid: ${result.invalid}` : result.checks.filter((check) => !check.passed).map((check) => `${check.name}${check.detail ? ` (${check.detail})` : ''}`).join('; ')} | ${result.judge ? (result.judge.unparseable ? 'unjudged' : `${result.judge.score}/${result.judge.max} ${result.judge.reasons}`) : result.modelAnswered === false ? '(filtered before the model)' : ''} |`)];
   const markdown = join(realpathSync(directory), `${stamp}.md`), json = join(realpathSync(directory), `${stamp}.json`);

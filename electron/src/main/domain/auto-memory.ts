@@ -6,6 +6,7 @@ import type { HealthItem } from '../../shared/attention';
 import type { AutoMemoryStatus } from '../../shared/auto-memory';
 import type { CapturedProviderBinding } from '../providers/provider-service';
 import { backgroundTextSampling } from '../providers/chat-request-policy';
+import { providerEndpointIdentity } from '../providers/request-budget';
 import { projectContextMemories, resolveContextDestination, selectAllowedHistory } from './chat-context-policy';
 import type { ContextDestination, DiaryHistoryValidator } from './chat-context-policy';
 import { commitMemoryCandidate, stableMemorySources } from './memory-commit';
@@ -13,7 +14,9 @@ import type { DomainRepository } from './repository';
 import type { PersistentState } from './schemas';
 
 /** The provider that has just answered in a conversation. Only it reads that conversation again. */
-export interface AutoMemoryTurn { providerId: string; model: string; destination: 'local' | 'remote'; source?: 'desktop' | 'qq' | 'wechat' | 'telegram' }
+export interface AutoMemoryTurn { providerId: string; model: string; destination: 'local' | 'remote'; source?: 'desktop' | 'qq' | 'wechat' | 'telegram';
+  /** The service that answered, as kind and address. An entry edited to point elsewhere since then never reads the conversation. */
+  endpoint?: string }
 
 interface Dependencies {
   available(): boolean;
@@ -174,6 +177,9 @@ export class AutoMemoryService {
 
   async #extract(sessionId: string, turn: AutoMemoryTurn, signal: AbortSignal): Promise<{ hasMore: boolean; asked: boolean; invalidResult?: boolean }> {
     const binding = await this.deps.captureBinding(turn.providerId, turn.model);
+    let endpoint: string | null = null;
+    try { endpoint = providerEndpointIdentity(binding.provider); } catch { endpoint = null; }
+    if (turn.endpoint !== undefined && endpoint !== turn.endpoint) return { hasMore: false, asked: false };
     const destination = resolveContextDestination({ providerId: binding.provider.id, kind: binding.provider.kind, baseUrl: binding.provider.baseUrl,
       model: binding.model, localExecutionConfirmed: binding.provider.localExecutionConfirmed === true, serviceExecution: binding.inspection.executionDestination });
     const batch = binding.provider.enabled ? this.#collect(this.repository.snapshot(), sessionId, destination) : null;

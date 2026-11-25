@@ -28,6 +28,9 @@ export const sameProviderEndpoint = (config: ProviderConfig, expectedBaseUrl: st
   catch { return false; }
 };
 
+/** Which service a provider entry points at: editing its kind or address in place makes it a different service. */
+export const providerEndpointIdentity = (config: Pick<ProviderConfig, 'kind' | 'baseUrl'> & ProviderConfig): string => `${config.kind} ${normalizedProviderBaseUrl(config).href}`;
+
 export const normalizedProviderBaseUrl = (config: ProviderConfig): URL => {
   const url = new URL(config.baseUrl);
   const hostname = url.hostname.replace(/^\[|\]$/gu, '').toLowerCase();

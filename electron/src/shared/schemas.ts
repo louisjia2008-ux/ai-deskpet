@@ -14,6 +14,7 @@ import { personaSchema } from './persona';
 import { characterProfileSchema } from './character';
 import { speakingStyleSchema } from './conversation-import';
 import { modelRoutingSchema } from './model-routing';
+import { backgroundModelIdSchema } from './auto-memory';
 import { modelBindingIdSchema, modelChangeConsentSchema } from './model-bindings';
 import { z } from 'zod';
 import { speechInputSettingsSchema, speechPcmSchema } from './speech-input';
@@ -364,7 +365,7 @@ export const invokePayloadSchemas = {
   'companion-recent:local-only': z.strictObject({ localOnly: z.boolean() }),
   'auto-memory:status': z.object({}).strict(),
   'auto-memory:configure': z.object({ enabled: z.boolean() }).strict(),
-  'auto-memory:set-model': z.object({ model: z.object({ providerId: idSchema, model: z.string().trim().min(1).max(200) }).strict().nullable() }).strict(),
+  'auto-memory:set-model': z.object({ model: z.object({ providerId: idSchema, model: backgroundModelIdSchema }).strict().nullable() }).strict(),
   'memory-sleep:status': z.object({}).strict(),
   'memory-sleep:configure': z.object({ enabled: z.boolean(), hour: z.number().int().min(0).max(23), timezone: z.string().min(1).max(128) }).strict(),
   'memory-sleep:run': z.object({}).strict(),

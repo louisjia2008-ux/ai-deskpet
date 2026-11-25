@@ -12,6 +12,7 @@ import { AutoMemoryService } from './auto-memory';
 import { ChatService } from './chat-service';
 import { MemoryService } from './memory-service';
 import { DomainRepository } from './repository';
+import { providerEndpointIdentity } from '../providers/request-budget';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -73,6 +74,19 @@ it('keeps what the owner said once the conversation is quiet, and reads each mes
   f.service.note(f.session.id, turn);
   await f.quiet();
   expect(sent(f.requests[1]!)).toEqual({ known: ['用户是高三学生，在准备美国大学申请'], messages: [{ n: 1, text: '顺便说一下我更喜欢简短的回答' }] });
+});
+
+it('never reads a queued conversation with a provider entry since edited to point at another service', async () => {
+  const f = await fixture(() => '{"memories":[{"text":"用户是高三学生","evidence":[1]}]}');
+  await f.say('我现在高三');
+  f.service.note(f.session.id, { ...turn, endpoint: providerEndpointIdentity(provider) });
+  f.setProvider({ baseUrl: 'https://another-service.invalid/v1' });
+  await f.quiet();
+  expect(f.requests).toHaveLength(0); expect(f.memories()).toEqual([]);
+  f.setProvider({ baseUrl: provider.baseUrl });
+  f.service.note(f.session.id, { ...turn, endpoint: providerEndpointIdentity(provider) });
+  await f.quiet();
+  expect(f.requests).toHaveLength(1);
 });
 
 it('never sends or keeps secrets, commands, or facts without a real source', async () => {

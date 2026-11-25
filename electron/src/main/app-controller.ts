@@ -81,7 +81,7 @@ import { AutomaticTaskCoordinator } from './domain/automatic-task-coordinator';
 import { UsageLedger } from './domain/usage-ledger';
 import { referenceUsagePrice, usageRatesFromModels } from './providers/usage-pricing';
 import { CatalogPriceRefresh } from './providers/catalog-price-refresh';
-import { canReleaseOllamaForVaultTools, normalizedProviderBaseUrl, providerBindingFingerprint, sameProviderEndpoint } from './providers/request-budget';
+import { canReleaseOllamaForVaultTools, normalizedProviderBaseUrl, providerBindingFingerprint, providerEndpointIdentity, sameProviderEndpoint } from './providers/request-budget';
 import { AttentionService } from './domain/attention-service';
 import { buildHealth, proactiveHealth } from './domain/health';
 import { HealthReceipts } from './domain/health-receipts';
@@ -655,7 +655,10 @@ export class AppController {
     this.#autoMemory = new AutoMemoryService(this.#repository, {
       available: () => !this.#closing && !this.#profileMaintenance && !this.#suspended && this.#chatStarts.size === 0 && this.#chatRuns.size === 0,
       // A background model chosen for this provider replaces the chat model; the conversation stays with the provider that answered it.
-      captureBinding: (id, model) => this.#autoMemoryBinding(id, this.#backgroundModel.modelFor(id) ?? model),
+      captureBinding: (id, model) => {
+        const provider = this.#providers.list().find((item) => item.id === id);
+        return this.#autoMemoryBinding(id, (provider && this.#backgroundModel.modelFor(provider)) ?? model);
+      },
       channelSessionAllowed: sessionId => sessionId === this.#qq.bindingSessionId() || sessionId === this.#telegram.currentAuthority()?.sessionId,
       diaryRetained: this.#diaryRetained,
       saved: () => this.windows.send('console', 'memory:changed', this.#memory.list()),
@@ -675,10 +678,11 @@ export class AppController {
       provider: () => {
         const provider = this.#activeProvider();
         if (!provider?.enabled) return null;
-        const model = this.#backgroundModel.modelFor(provider.id) ?? provider.model;
+        const model = this.#backgroundModel.modelFor(provider) ?? provider.model;
         const destination = resolveContextDestination({ providerId: provider.id, kind: provider.kind, baseUrl: provider.baseUrl, model,
           localExecutionConfirmed: provider.localExecutionConfirmed === true, serviceExecution: 'unknown' });
-        return { provider, model, destination: destination === 'local' ? 'local' : 'remote' };
+        // A model other than the one confirmed as local may be a cloud alias on the same server: never show it local-only memories.
+        return { provider, model, destination: destination === 'local' && model === provider.model ? 'local' : 'remote' };
       },
       adapter: id => this.#providers.adapter(id),
       changed: () => this.windows.send('console', 'memory:changed', this.#memory.list()),
@@ -2756,13 +2760,20 @@ export class AppController {
     this.#ipc.register('companion-recent:status', consoleOnly, () => this.#recent.status());
     this.#ipc.register('companion-recent:clear', consoleOnly, () => this.#recent.clear());
     this.#ipc.register('companion-recent:local-only', consoleOnly, ({ localOnly }) => this.#recent.setLocalOnly(localOnly));
-    const autoMemoryStatus = (status: AutoMemoryStatus): AutoMemoryStatus => ({ ...status, model: this.#backgroundModel.get(), activeProviderId: this.#activeProvider()?.id ?? null });
+    const autoMemoryStatus = (status: AutoMemoryStatus): AutoMemoryStatus => {
+      const active = this.#activeProvider();
+      return { ...status, model: this.#backgroundModel.get(), activeProviderId: active?.id ?? null, activeProviderName: active?.name ?? null };
+    };
     this.#ipc.register('auto-memory:status', consoleOnly, () => autoMemoryStatus(this.#autoMemory.status()));
     this.#ipc.register('auto-memory:configure', consoleOnly, async ({ enabled }) => autoMemoryStatus(await this.#autoMemory.configure(enabled)));
-    this.#ipc.register('auto-memory:set-model', consoleOnly, ({ model }) => {
-      // Only a model of an enabled provider; null goes back to the chat model.
-      if (model !== null && !this.#providers.list().some((provider) => provider.id === model.providerId && provider.enabled)) throw new Error('provider.notFound');
-      this.#backgroundModel.set(model);
+    this.#ipc.register('auto-memory:set-model', consoleOnly, async ({ model }) => {
+      if (model === null) { this.#backgroundModel.set(null); return autoMemoryStatus(this.#autoMemory.status()); }
+      // Only a model the enabled provider lists right now; null always goes back to the chat model.
+      const provider = this.#providers.list().find((item) => item.id === model.providerId && item.enabled);
+      if (!provider) throw new Error('provider.notFound');
+      const listed = await this.#listModelsWithPrices(provider.id);
+      if (!listed.some((item) => item.id === model.model)) throw new Error('provider.modelUnavailable');
+      this.#backgroundModel.set(provider, model.model);
       return autoMemoryStatus(this.#autoMemory.status());
     });
     this.#ipc.register('memory-sleep:status', consoleOnly, () => this.#sleep.status());
@@ -4293,7 +4304,10 @@ export class AppController {
       // Any finished owner turn, on any private channel, is when they last talked with her.
       if (learn && done && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) void this.#characterSheet.noteOwnerTurn().catch(() => undefined);
       if (learn && done && done.destination !== 'unknown' && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) {
-        this.#autoMemory.note(sessionId, { providerId: done.providerId, model: done.model, destination: done.destination, source: done.channel.origin });
+        const answered = this.#providers.list().find((provider) => provider.id === done.providerId);
+        let endpoint: string | undefined;
+        try { endpoint = answered ? providerEndpointIdentity(answered) : undefined; } catch { endpoint = undefined; }
+        this.#autoMemory.note(sessionId, { providerId: done.providerId, model: done.model, destination: done.destination, source: done.channel.origin, ...(endpoint ? { endpoint } : {}) });
       }
       if (learn) void this.#recent.tick().catch(() => undefined);
       lease?.signal.removeEventListener('abort',abort);lease?.release();this.#reaChatGuards.delete(runId);this.#workContexts.delete(runId);this.#notesScopes.delete(runId);this.#skillTools.release(runId);this.#qqWebBudget.release(runId);};

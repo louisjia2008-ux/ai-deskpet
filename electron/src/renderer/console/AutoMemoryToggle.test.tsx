@@ -27,3 +27,14 @@ it('hides the picker when the provider cannot list its models', async () => {
   await screen.findByText('Learn about me from conversations');
   expect(screen.queryByRole('combobox')).toBeNull();
 });
+
+it('keeps the chosen model and the way back to the chat model when the catalog cannot be read', async () => {
+  let status: AutoMemoryStatus = { enabled: true, model: { providerId, model: 'gpt-6-luna' }, activeProviderId: providerId, activeProviderName: 'OpenAI' };
+  const setModel = vi.fn(async ({ model }: { model: { providerId: string; model: string } | null }) => (status = { ...status, model }));
+  render(<AutoMemoryToggle api={{ status: async () => status, configure: async () => status, setModel }} locale="zh-CN" listModels={async () => { throw new Error('offline'); }} />);
+  const select = await screen.findByRole('combobox', { name: /后台记忆用的模型/u });
+  expect(select).toHaveValue('gpt-6-luna');
+  expect(screen.getByText(/只对「OpenAI」生效/u)).toBeInTheDocument();
+  fireEvent.change(select, { target: { value: '' } });
+  await waitFor(() => expect(setModel).toHaveBeenLastCalledWith({ model: null }));
+});
