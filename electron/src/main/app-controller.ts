@@ -456,6 +456,8 @@ export class AppController {
   #closing = false;
   readonly #chatStarts = new Set<Promise<{ runId: string }>>();
   readonly #chatRuns = new Map<string, Promise<unknown>>();
+  /** How each finished run ended, until its turn's cleanup reads it (a caller that waited sees the run already gone). */
+  readonly #runOutcomes = new Map<string, unknown>();
   readonly #commands = new ChatCommands({
     providers: () => this.#providers.list().filter(provider => provider.enabled),
     activeProvider: () => this.#activeProvider(),
@@ -4307,8 +4309,10 @@ export class AppController {
     const abort=()=>this.#agent.cancel(runId);lease?.signal.addEventListener('abort',abort,{once:true});
     // The owner's own turns teach the profile; schedules, research and analysis runs do not.
     const learn = !fromMinecraft && !managedMinecraft && !this.#cronContexts.has(runId) && !this.#researchContexts.has(runId) && !lease;
-    const cleanup=(outcome?: unknown):void=>{
+    const cleanup=(reported?: unknown):void=>{
       const done = this.#workContexts.get(runId);
+      const outcome = reported ?? this.#runOutcomes.get(runId);
+      this.#runOutcomes.delete(runId);
       // Any finished owner turn, on any private channel, is when they last talked with her.
       if (learn && done && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) void this.#characterSheet.noteOwnerTurn().catch(() => undefined);
       if (learn && done && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) {
@@ -5268,7 +5272,12 @@ export class AppController {
       } finally { writer.stop(); this.#chatInteractions.finish(runId); }
     })();
     this.#chatRuns.set(runId, completion);
-    void completion.then(() => this.#chatRuns.delete(runId), () => this.#chatRuns.delete(runId));
+    void completion.then((outcome) => {
+      this.#runOutcomes.set(runId, outcome);
+      // Runs started elsewhere never read theirs; keep only the most recent few.
+      for (const old of this.#runOutcomes.keys()) { if (this.#runOutcomes.size <= 256) break; this.#runOutcomes.delete(old); }
+      this.#chatRuns.delete(runId);
+    }, () => this.#chatRuns.delete(runId));
     if (waitForCompletion) {
       const status = await completion;
       if (status !== 'succeeded') throw new Error(`Scheduled agent run ended with status ${status}.`);
