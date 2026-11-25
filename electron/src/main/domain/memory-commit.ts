@@ -240,13 +240,14 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
     result.memories.push(memory);
   }
   result.memories = result.memories.filter(protect);
-  // A merge undone after this backup was taken, whose duplicate the restore does not bring back, is in effect
-  // again: the restored profile holds the merged result.
+  // The merges follow the restored memories. A duplicate the restore brings back stands on its own again, so its
+  // merge counts as undone; a merge undone after the backup, whose duplicate does not come back, is in effect again.
   const linkKey = (link: { memoryId: string; resultId: string; at: string }): string => `${link.memoryId}>${link.resultId}@${link.at}`;
   const activeInBackup = new Set(mergeLinks(restored.memorySleep).filter((link) => !link.undoneAt).map(linkKey));
-  const present = new Set(result.memories.map((memory) => memory.id));
+  const present = new Set(result.memories.map((memory) => memory.id)), restoredAt = new Date().toISOString();
   result.memorySleep.mergeLineage = result.memorySleep.mergeLineage.map((link) => {
-    if (!link.undoneAt || present.has(link.memoryId) || !activeInBackup.has(linkKey(link))) return link;
+    if (!link.undoneAt) return present.has(link.memoryId) ? { ...link, undoneAt: restoredAt } : link;
+    if (present.has(link.memoryId) || !activeInBackup.has(linkKey(link))) return link;
     const active = { ...link }; delete active.undoneAt; return active;
   });
   // Deletions newer than the backup may rest on cleanup history it never saw; the recent summary covers only the

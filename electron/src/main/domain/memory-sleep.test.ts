@@ -286,3 +286,20 @@ it('restoring a backup taken while merged puts the merge back in effect when its
   expect(restored.memorySleep.mergeLineage[0]!.memoryId).toBe(duplicate);
   expect(supersededChat(deleted).get(source.id)).toBe('deleted');
 });
+
+it('lets a duplicate brought back by a pre-merge restore stand on its own again', async () => {
+  const { reconcileMemoryProtection } = await import('./memory-commit');
+  const { supersededChat } = await import('./companion-recent-state');
+  const f = await fixture((entries) => entries.length >= 2 ? { merge: [{ ids: [f.n(entries, '我对花生过敏'), f.n(entries, '用户对花生过敏')], text: 'unused' }] } : {});
+  const kept = await f.write('我对花生过敏'); const duplicate = await f.learn('用户对花生过敏');
+  const source = f.repo.snapshot().chatMessages.find((message) => message.content === '用户对花生过敏')!;
+  const beforeMerge = f.repo.snapshot();
+  await f.service.runNow();
+  const restored = reconcileMemoryProtection(beforeMerge, f.repo.snapshot());
+  expect(restored.memories.map((item) => item.id).sort()).toEqual([kept, duplicate].sort());
+  expect(restored.memorySleep.mergeLineage).toMatchObject([{ memoryId: duplicate, undoneAt: expect.any(String) }]);
+  // Deleting the kept memory afterwards leaves the duplicate's chat alone.
+  const deleted = { ...restored, memoryTombstones: [...restored.memoryTombstones, { id: crypto.randomUUID(), memoryId: kept, textDigest: 'a'.repeat(64),
+    sourceEventIds: [], identityKey: null, scope: { kind: 'global' as const }, deletedAt: new Date(Date.now() + 1000).toISOString(), kind: 'deleted' as const }] };
+  expect(supersededChat(deleted).get(source.id)).toBeUndefined();
+});

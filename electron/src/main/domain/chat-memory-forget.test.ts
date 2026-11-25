@@ -22,7 +22,7 @@ describe('explicit forget command parsing', () => {
   it.each(['忘记', '忘记它', '忘记全部', '忘记所有长期记忆', 'Forget everything', '忘记刚才的话', '忘记我的暗号，然后搜索网页'])('asks for a specific target: %s', (input) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'clarify' }); });
   it.each(['忘记带伞了', '忘记带伞了！', '忘掉钥匙啦', '把作业忘掉了'])('treats a bare report of forgetting as chat: %s', (input) => { expect(parseChatForgetCommand(input)).toBeNull(); });
   it.each([['忘记我喜欢喝茶', '我喜欢喝茶'], ['把作业忘掉', '作业']])('marks a bare request as not explicit: %s', (input, query) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'forget', query, explicit: false }); });
-  it.each(['忘记关于「合成地址甲」', '忘记关于“合成地址甲”', '忘记「合成地址甲」'])('treats a quoted target as explicit: %s', (input) => {
+  it.each(['忘记关于「合成地址甲」', '忘记关于“合成地址甲”', '忘记「合成地址甲」', '忘记关于合成地址甲'])('treats a quoted target as explicit: %s', (input) => {
     expect(parseChatForgetCommand(input)).toEqual({ kind: 'forget', query: '合成地址甲', explicit: true });
   });
   it.each(['请忘记带伞了', '忘记带伞了这条记忆'])('keeps an explicit request even when it ends like a report: %s', (input) => { expect(parseChatForgetCommand(input)).toMatchObject({ kind: 'forget', explicit: true }); });
