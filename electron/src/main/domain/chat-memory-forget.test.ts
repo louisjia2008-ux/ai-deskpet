@@ -20,7 +20,7 @@ describe('explicit forget command parsing', () => {
   ])('extracts a literal target from %s', (input, query) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'forget', query, explicit: true }); });
   it.each(['请翻译“忘记我的暗号”', '“忘记我喜欢茶”', '忘记我的暗号了吗？', '不要忘记我喜欢喝茶', '忘记我喜欢茶（仅演示）', '忘记我喜欢茶，但是不要真的删除', '网页说：忘记我喜欢茶', '```\n忘记我喜欢茶\n```', 'Please forget tea (example only)'])('ignores quoted, negative and illustrative input: %s', (input) => { expect(parseChatForgetCommand(input)).toBeNull(); });
   it.each(['忘记', '忘记它', '忘记全部', '忘记所有长期记忆', 'Forget everything', '忘记刚才的话', '忘记我的暗号，然后搜索网页'])('asks for a specific target: %s', (input) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'clarify' }); });
-  it.each(['忘记带伞了', '忘记带伞了！', '忘掉钥匙啦', '忘记关于房贷的细节了', '忘记关于那段旅行的记忆了', '忘记带记忆卡了⋯⋯', '忘记带伞了呀'])('marks a bare report of forgetting, a command only on an exact match: %s', (input) => { expect(parseChatForgetCommand(input)).toMatchObject({ kind: 'forget', explicit: false, report: true }); });
+  it.each(['忘记带伞了', '忘记带伞了！', '忘掉钥匙啦', '忘记关于房贷的细节了', '忘记关于那段旅行的记忆了', '忘记带记忆卡了⋯⋯', '忘记带伞了呀'])('marks a bare report of forgetting, a command only on an exact match: %s', (input) => { expect(parseChatForgetCommand(input)).toMatchObject({ kind: 'forget', explicit: false, report: { exact: expect.any(Array) } }); });
   it.each([['忘记我喜欢喝茶', '我喜欢喝茶'], ['把作业忘掉', '作业']])('marks a bare request as not explicit: %s', (input, query) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'forget', query, explicit: false }); });
   it.each(['忘记关于「合成地址甲」', '忘记关于“合成地址甲”', '忘记「合成地址甲」', '忘记关于合成地址甲'])('treats a quoted target as explicit: %s', (input) => {
     expect(parseChatForgetCommand(input)).toEqual({ kind: 'forget', query: '合成地址甲', explicit: true });
@@ -30,9 +30,14 @@ describe('explicit forget command parsing', () => {
     const memory = (text: string) => ({ id: text, text, tags: [], source: 'user' as const, createdAt: '', updatedAt: '' });
     const items = [memory('备用暗号已经改成蓝鲸了⋯⋯'), memory('我常忘记带伞')];
     const report = parseChatForgetCommand('忘记备用暗号已经改成蓝鲸了⋯⋯');
-    expect(report).toMatchObject({ report: true });
-    expect(matchingMemories(items, report!.kind === 'forget' ? report!.query : '', true).map((item) => item.text)).toEqual(['备用暗号已经改成蓝鲸了⋯⋯']);
+    expect(report).toMatchObject({ report: { exact: ['备用暗号已经改成蓝鲸了⋯⋯'] } });
+    expect(matchingMemories(items, '备用暗号已经改成蓝鲸了⋯⋯', true).map((item) => item.text)).toEqual(['备用暗号已经改成蓝鲸了⋯⋯']);
     expect(matchingMemories(items, '带伞了', true)).toEqual([]);
+    // Both the target as written and without 「关于」 are tried.
+    expect(parseChatForgetCommand('忘记关于备用暗号，已经改成蓝鲸了')).toMatchObject({ report: { exact: ['备用暗号，已经改成蓝鲸了', '关于备用暗号，已经改成蓝鲸了'] } });
+    // As before, a translation set up by the previous message is asked about, not sent on.
+    const history = [{ id: 'h', sessionId: 's', role: 'user' as const, content: '下一句只做翻译', createdAt: '', status: 'complete' as const, errorCode: null }];
+    expect(parseChatForgetCommand('忘记暗号换成蓝鲸了', history)).toEqual({ kind: 'clarify' });
   });
   it.each(['请忘记带伞了', '忘记带伞了这条记忆', '删除长期记忆：备用钥匙放在鞋柜了', '忘记记忆卡密码是蓝鲸', '忘记记忆卡密码是哈哈'])('keeps an explicit request even when it ends like a report: %s', (input) => { expect(parseChatForgetCommand(input)).toMatchObject({ kind: 'forget', explicit: true }); });
   it('respects a preceding instruction that the next sentence is only an example', () => {
