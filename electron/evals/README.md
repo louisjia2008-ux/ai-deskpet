@@ -31,7 +31,10 @@ Settings (environment variables):
   outside the repository. Without it the persona suite uses a made-up companion.
 - `DESKPET_EVAL_OUT`: where reports go (default `eval-results/`, ignored by git). Each run writes a Markdown table and
   the full JSON, including every model output.
-- `OPENAI_API_KEY` works instead of the keychain item.
+- `OPENAI_API_KEY` works instead of the keychain item. It is only ever sent to api.openai.com.
+- `DESKPET_EVAL_BASE_URL`: another OpenAI-compatible endpoint. It uses its own key: `DESKPET_EVAL_API_KEY`, or the
+  keychain item `deskpet-eval` with the endpoint's host name as account.
+- Behind a proxy, Node's fetch does not use the system setting: add `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://host:port`.
 
 The suites cost a few dozen requests each and are not part of `npm test`. All cases are synthetic; add real ones
 only to a local copy.

@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { characterProfileSchema, defaultCharacterProfile } from '../src/shared/character';
 import type { CharacterProfile } from '../src/shared/character';
 import { defaultPersona, personaSchema } from '../src/shared/persona';
@@ -23,7 +25,15 @@ const synthetic = (): EvalProfile => ({
 export const evalProfile = (): EvalProfile => {
   const path = process.env.DESKPET_EVAL_PROFILE;
   if (!path) return synthetic();
-  const raw = JSON.parse(readFileSync(path, 'utf8')) as { persona?: Partial<Persona>; character?: Partial<CharacterProfile> };
+  // A real character sheet must never sit where git would pick it up.
+  const absolute = resolve(path);
+  let tracked = false;
+  try { execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: dirname(absolute), stdio: 'pipe' }); tracked = true; } catch { /* Outside any repository. */ }
+  if (tracked) {
+    try { execFileSync('git', ['check-ignore', '-q', absolute], { cwd: dirname(absolute), stdio: 'pipe' }); }
+    catch { throw new Error('DESKPET_EVAL_PROFILE is inside a git repository and not ignored; keep the real profile outside it.'); }
+  }
+  const raw = JSON.parse(readFileSync(absolute, 'utf8')) as { persona?: Partial<Persona>; character?: Partial<CharacterProfile> };
   return {
     source: 'local',
     persona: personaSchema.parse({ ...defaultPersona(), ...raw.persona }),

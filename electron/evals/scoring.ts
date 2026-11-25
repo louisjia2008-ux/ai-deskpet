@@ -3,54 +3,51 @@ import type { SleepCase } from './cases/memory-sleep';
 import type { PersonaCase } from './cases/persona';
 
 export interface Check { name: string; passed: boolean; detail?: string }
-type Found = Array<{ text: string; evidence: number[] }>;
-
-export const autoMemoryChecks = (item: AutoMemoryCase, reply: { finished: boolean }, found: Found | null, accepted: Found): Check[] => {
-  const texts = accepted.map((entry) => entry.text);
+/** Judged on what the app saved, after its own filters and de-duplication. */
+export const autoMemoryChecks = (item: AutoMemoryCase, saved: readonly string[]): Check[] => {
   const checks: Check[] = [
-    { name: '完整回复', passed: reply.finished },
-    { name: '可解析 JSON', passed: found !== null },
+    { name: '格式：一句话，用户/The user 开头，≤120 字', passed: saved.every((text) => /^(?:用户|The user)/u.test(text) && text.length <= 120) },
   ];
-  if (found === null) return checks;
-  checks.push({ name: '全部通过主程序过滤', passed: accepted.length === found.length, detail: `${found.length - accepted.length} 条被过滤` });
-  checks.push({ name: '格式：一句话，用户/The user 开头，≤120 字', passed: texts.every((text) => /^(?:用户|The user)/u.test(text) && text.length <= 120) });
-  if (item.none) checks.push({ name: '不该保存', passed: texts.length === 0, detail: texts.join(' / ') });
-  for (const capture of item.capture ?? []) checks.push({ name: `应记住：${capture.name}`, passed: texts.some((text) => capture.pattern.test(text)) });
-  for (const forbid of item.forbid ?? []) checks.push({ name: `不应记住：${forbid.name}`, passed: !texts.some((text) => forbid.pattern.test(text)) });
+  if (item.none) checks.push({ name: '不该保存', passed: saved.length === 0, detail: saved.join(' / ') });
+  for (const capture of item.capture ?? []) checks.push({ name: `应记住：${capture.name}`, passed: saved.some((text) => capture.pattern.test(text)) });
+  for (const forbid of item.forbid ?? []) checks.push({ name: `不应记住：${forbid.name}`, passed: !saved.some((text) => forbid.pattern.test(text)) });
   return checks;
 };
 
-export interface SleepPlan { merge: Array<{ ids: number[]; text: string; deep: boolean }>; promote: number[]; drop: number[] }
+export interface SleepChange { kind: 'merge' | 'promote' | 'drop' | 'expire'; before: string[]; after: string | null }
 
-export const sleepChecks = (item: SleepCase, reply: { finished: boolean }, plan: SleepPlan | null): Check[] => {
-  const checks: Check[] = [{ name: '完整回复', passed: reply.finished }, { name: '可解析 JSON', passed: plan !== null }];
-  if (plan === null) return checks;
-  const listed = new Set(item.entries.map((_, index) => index + 1));
-  const used = [...plan.merge.flatMap((group) => group.ids), ...plan.promote, ...plan.drop];
-  const kind = (n: number): string | undefined => item.entries[n - 1]?.kind;
-  checks.push({ name: '编号合法且只用一次', passed: used.every((n) => listed.has(n)) && new Set(used).size === used.length });
-  checks.push({ name: '每组至多一条 fixed', passed: plan.merge.every((group) => group.ids.filter((n) => kind(n) === 'fixed').length <= 1) });
-  checks.push({ name: '只提升、删除 shallow', passed: [...plan.promote, ...plan.drop].every((n) => kind(n) === 'shallow') });
-  const groupOf = (n: number) => plan.merge.find((group) => group.ids.includes(n));
+/** Judged on the changes the app applied and the memories it kept, not on the model's raw plan. */
+export const sleepChecks = (item: SleepCase, changes: readonly SleepChange[], final: ReadonlyArray<{ text: string; layer: string }>): Check[] => {
+  const checks: Check[] = [];
+  const text = (n: number): string => item.entries[n - 1]!.text;
+  const merges = changes.filter((change) => change.kind === 'merge');
+  const removed = (n: number): boolean => changes.some((change) => (change.kind === 'drop' || change.kind === 'expire') && change.before.includes(text(n)));
+  const members = (change: SleepChange): string[] => [...change.before, ...(change.after ? [change.after] : [])];
   for (const expected of item.merge ?? []) {
-    const group = groupOf(expected.ids[0]!);
-    const together = group !== undefined && expected.ids.every((n) => group.ids.includes(n));
-    checks.push({ name: `应合并：${expected.name}`, passed: together });
-    if (together && !expected.ids.some((n) => kind(n) === 'fixed')) {
-      for (const pattern of expected.text ?? []) checks.push({ name: `合并后保留：${pattern.name}`, passed: pattern.pattern.test(group.text), detail: group.text });
-      for (const pattern of expected.notText ?? []) checks.push({ name: `合并后不应写：${pattern.name}`, passed: !pattern.pattern.test(group.text), detail: group.text });
-      checks.push({ name: '合并文本格式', passed: /^(?:用户|The user)/u.test(group.text) && group.text.length <= 160, detail: group.text });
+    const fixed = expected.ids.filter((n) => item.entries[n - 1]!.kind === 'fixed').map(text);
+    const loose = expected.ids.filter((n) => item.entries[n - 1]!.kind !== 'fixed').map(text);
+    const change = merges.find((candidate) => loose.every((entry) => candidate.before.includes(entry)) && fixed.every((entry) => candidate.after === entry));
+    checks.push({ name: `应合并：${expected.name}`, passed: change !== undefined });
+    if (change && fixed.length === 0) {
+      const after = change.after ?? '';
+      for (const pattern of expected.text ?? []) checks.push({ name: `合并后保留：${pattern.name}`, passed: pattern.pattern.test(after), detail: after });
+      for (const pattern of expected.notText ?? []) checks.push({ name: `合并后不应写：${pattern.name}`, passed: !pattern.pattern.test(after), detail: after });
+      checks.push({ name: '合并文本格式', passed: /^(?:用户|The user)/u.test(after) && after.length <= 160, detail: after });
     }
   }
   for (const [a, b] of item.separate ?? []) {
-    const group = groupOf(a);
-    checks.push({ name: `不应合并：${a} 与 ${b}`, passed: !(group?.ids.includes(b) ?? false) });
+    checks.push({ name: `不应合并：${a} 与 ${b}`, passed: !merges.some((change) => members(change).includes(text(a)) && members(change).includes(text(b))) });
   }
-  for (const n of item.promote ?? []) checks.push({ name: `应提升：${n}`, passed: plan.promote.includes(n) || (groupOf(n)?.deep ?? false) });
-  for (const n of item.drop ?? []) checks.push({ name: `应删除：${n}`, passed: plan.drop.includes(n) });
-  for (const n of item.keep ?? []) checks.push({ name: `应保留：${n}`, passed: !plan.drop.includes(n) });
-  if (item.maxPromote !== undefined) checks.push({ name: `提升不超过 ${item.maxPromote} 条`, passed: plan.promote.length <= item.maxPromote, detail: `${plan.promote.length} 条` });
-  if (item.idle) checks.push({ name: '无需合并或删除', passed: plan.merge.length === 0 && plan.drop.length === 0 });
+  const deep = (n: number): boolean => final.some((memory) => memory.layer === 'deep' && (memory.text === text(n)
+    || merges.some((change) => change.before.includes(text(n)) && change.after === memory.text)));
+  for (const n of item.promote ?? []) checks.push({ name: `应提升：${n}`, passed: deep(n) });
+  for (const n of item.drop ?? []) checks.push({ name: `应删除：${n}`, passed: removed(n) });
+  for (const n of item.keep ?? []) checks.push({ name: `应保留：${n}`, passed: !removed(n) });
+  if (item.maxPromote !== undefined) {
+    const before = item.entries.filter((entry) => entry.kind === 'deep').length, after = final.filter((memory) => memory.layer === 'deep').length;
+    checks.push({ name: `深层新增不超过 ${item.maxPromote} 条`, passed: after - before <= item.maxPromote, detail: `${after - before} 条` });
+  }
+  if (item.idle) checks.push({ name: '无需合并或删除', passed: !changes.some((change) => change.kind !== 'promote') });
   return checks;
 };
 
@@ -60,8 +57,8 @@ export const personaChecks = (item: PersonaCase, reply: { text: string; finished
   const text = reply.text.trim();
   const checks: Check[] = [
     { name: '完整回复', passed: reply.finished && text.length > 0 },
-    { name: '不说“作为AI”套话', passed: !DISCLAIMER.test(text) },
-    { name: '不带情绪标签残留', passed: !/^\s*\[(?:mood|心情)[:：]/iu.test(text) },
+    { name: '不说“作为AI”套话', passed: item.selfDisclosure === true || !DISCLAIMER.test(text) },
+    { name: '正文不带控制标签', passed: !/\[(?:mood|sticker)[:：]/iu.test(text) },
   ];
   if (!item.code) checks.push({ name: '聊天不用标题格式', passed: !/^#{1,6}\s/mu.test(text) });
   if (item.maxChars !== undefined) checks.push({ name: `长度 ≤ ${item.maxChars} 字`, passed: text.length <= item.maxChars, detail: `${text.length} 字` });
