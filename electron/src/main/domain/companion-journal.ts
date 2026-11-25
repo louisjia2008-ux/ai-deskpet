@@ -199,7 +199,11 @@ export class CompanionJournal {
     if (entry) return entry.revision > reference.revision;
     // An entry that rolled off the cap keeps its last revision, so an edit made before then still counts.
     const retired = this.#state.retiredProvenance[reference.date];
-    return retired !== undefined && (retired.removedByOwner === true || retired.revision > reference.revision);
+    if (retired === undefined) return false;
+    // Entries roll off oldest first, so a retired date newer than a kept entry was deleted by the owner. This also
+    // covers deletions recorded before `removedByOwner` existed.
+    return retired.removedByOwner === true || retired.revision > reference.revision
+      || this.#state.entries.some(item => item.date < reference.date);
   }
   #sourceStatus(provenance: Provenance, state: PersistentState, suppressed: (id: string) => boolean) {
     return sourceStatus(provenance, state, suppressed, reference => this.#provenance(reference), reference => this.#ownerChanged(reference));

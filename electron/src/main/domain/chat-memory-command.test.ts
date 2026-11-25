@@ -26,7 +26,7 @@ describe('explicit chat memory requests', () => {
     expect(parseChatMemoryCommand(query)).toBeNull();
   });
 
-  it.each(['记住了', '记住啦', '记下了', '记住了，谢谢'])('treats an acknowledgment as chat: %s', (query) => {
+  it.each(['记住了', '记住啦', '记下了', '记住了，谢谢', '保存为长期记忆了，谢谢', '保存到记忆里啦'])('treats an acknowledgment as chat: %s', (query) => {
     expect(parseChatMemoryCommand(query)).toBeNull();
   });
   it('still saves after an explicit colon', () => { expect(parseChatMemoryCommand('记住了：我喜欢茶')).toEqual({ kind: 'save', text: '我喜欢茶' }); });

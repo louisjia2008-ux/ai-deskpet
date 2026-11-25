@@ -249,3 +249,40 @@ it('drops the parts of a corrected merged memory restored from before the merge,
   expect(restored.map((item) => item.id)).not.toContain(second);
   expect(restored.map((item) => item.text)).toContain('用户现在住在杭州');
 });
+
+it('records an undo of a merge known only from its report, so an old backup cannot revive it once the report expires', async () => {
+  const { reconcileMemoryProtection } = await import('./memory-commit');
+  const f = await fixture((entries) => entries.length >= 2 ? { merge: [{ ids: [f.n(entries, '我对花生过敏'), f.n(entries, '用户对花生过敏')], text: 'unused' }] } : {});
+  const kept = await f.write('我对花生过敏'); const duplicate = await f.learn('用户对花生过敏');
+  const status = await f.service.runNow();
+  // As if merged by a version without the lineage.
+  await f.repo.transaction((state) => { state.memorySleep.mergeLineage = []; });
+  const afterMerge = f.repo.snapshot();
+  await f.service.undo({ reportId: status.reports[0]!.id, changeId: status.reports[0]!.changes[0]!.id });
+  expect(f.repo.snapshot().memorySleep.mergeLineage).toMatchObject([{ memoryId: duplicate, resultId: kept, undoneAt: expect.any(String) }]);
+  f.later(1); await f.memory.remove(kept);
+  await f.memory.upsert({ id: duplicate, text: '用户对花生和芝麻过敏', tags: [] });
+  f.later(40); await f.service.runNow();
+  expect(f.repo.snapshot().memorySleep.reports).toEqual([]);
+  expect(reconcileMemoryProtection(afterMerge, f.repo.snapshot()).memories.map((item) => item.text)).toEqual(['用户对花生和芝麻过敏']);
+});
+
+it('restoring a backup taken while merged puts the merge back in effect when its duplicate does not come back', async () => {
+  const { reconcileMemoryProtection } = await import('./memory-commit');
+  const { supersededChat } = await import('./companion-recent-state');
+  const f = await fixture((entries) => entries.length >= 2 ? { merge: [{ ids: [f.n(entries, '我对花生过敏'), f.n(entries, '用户对花生过敏')], text: 'unused' }] } : {});
+  const kept = await f.write('我对花生过敏'); const duplicate = await f.learn('用户对花生过敏');
+  const source = f.repo.snapshot().chatMessages.find((message) => message.content === '用户对花生过敏')!;
+  const status = await f.service.runNow();
+  const afterMerge = f.repo.snapshot();
+  await f.service.undo({ reportId: status.reports[0]!.id, changeId: status.reports[0]!.changes[0]!.id });
+  const restored = reconcileMemoryProtection(afterMerge, f.repo.snapshot());
+  expect(restored.memories.map((item) => item.id)).toEqual([kept]);
+  expect(restored.memorySleep.mergeLineage).toEqual([expect.not.objectContaining({ undoneAt: expect.anything() })]);
+  // Deleting the kept memory afterwards still reaches the duplicate's chat.
+  const deletedAt = new Date(Date.parse(restored.memorySleep.mergeLineage[0]!.at) + 1).toISOString();
+  const deleted = { ...restored, memoryTombstones: [...restored.memoryTombstones, { id: crypto.randomUUID(), memoryId: kept, textDigest: 'a'.repeat(64),
+    sourceEventIds: [], identityKey: null, scope: { kind: 'global' as const }, deletedAt, kind: 'deleted' as const }] };
+  expect(restored.memorySleep.mergeLineage[0]!.memoryId).toBe(duplicate);
+  expect(supersededChat(deleted).get(source.id)).toBe('deleted');
+});

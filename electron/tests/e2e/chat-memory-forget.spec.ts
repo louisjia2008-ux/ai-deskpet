@@ -65,6 +65,8 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     await newChat(); await send(`请记住：${secret}`); await send(`请记住：${retained}`);
     expect(requests).toHaveLength(0); const beforeDelete = await memories();
     await newChat(); await send(question); await expect(page.locator('.chat-reply').last()).toHaveText('青柠山川-5914');
+    // The background summary has really carried the secret before the deletion.
+    await expect.poll(() => JSON.stringify(summaries).includes('青柠山川')).toBe(true);
     await newChat(); const requestCount = requests.length; await send('请忘记我的验收暗号'); const summariesBeforeDelete = summaries.length;
     await expect(page.locator('.memory-forget')).toContainText('已删除长期记忆');
     await expect(page.locator('.memory-forget')).toContainText(secret);
@@ -86,8 +88,9 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     await page.getByRole('listitem', { name: '我的测试饮品乙是咖啡。', exact: true }).getByRole('button', { name: '删除这条记忆' }).click();
     await expect(page.locator('.memory-forget')).toContainText('已删除长期记忆');
     expect((await memories()).map((item) => item.text)).toEqual([retained, '我的测试饮品甲是绿茶。']);
-    await newChat(); await send('忘记不存在的记忆内容');
+    await newChat(); await send('忘记关于「合成地址甲」');
     await expect(page.locator('.chat-reply').last()).toContainText('没有找到匹配');
+    const summariesAfterMiss = summaries.length;
     // A bare 「忘记X」 that names no memory, or a report of forgetting, is ordinary chat.
     for (const chat of ['忘记带伞，淋成落汤鸡', '忘记带伞了']) {
       await send(chat); await expect(page.locator('.chat-reply').last()).toHaveText('没有');
@@ -95,6 +98,7 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     }
     await send('忘记全部'); await expect(page.locator('.chat-reply').last()).toContainText('这次尚未删除记忆');
     expect(await memories()).toHaveLength(2);
+    const freshChats = requests.length;
     await newChat(); await send('请翻译“忘记我喜欢中文交流”'); expect(await memories()).toHaveLength(2);
     await stop();
 
@@ -104,8 +108,12 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     const savedSelection = await page.evaluate((id) => window.deskpet.chat.listMessages(id), choiceSessionId);
     expect(savedSelection.find((item) => item.role === 'assistant')?.memoryForget).toMatchObject({ kind: 'deleted', text: '我的测试饮品乙是咖啡。' });
     // Background summaries written after the deletion never carry the deleted fact either, and one was written.
-    await expect.poll(() => summaries.length - summariesBeforeDelete).toBeGreaterThan(0);
+    await expect.poll(() => summaries.length - summariesAfterMiss).toBeGreaterThan(0);
     expect(JSON.stringify(summaries.slice(summariesBeforeDelete))).not.toContain('青柠山川');
+    // Nor does a request to forget something that was never saved; it names what the owner wants gone.
+    expect(JSON.stringify(summaries)).not.toContain('合成地址甲');
+    // That chat's own later turns keep it as history; fresh chats never see it.
+    expect(JSON.stringify(requests.slice(freshChats))).not.toContain('合成地址甲');
     expect((await page.evaluate(() => window.deskpet.permissions.list())).find((item) => item.capabilityId === 'web.read')?.state).toBe('always');
     await page.screenshot({ path: info.outputPath('chat-memory-forget-after-restart.png') });
     await writeFile(info.outputPath('chat-memory-forget-evidence.json'), JSON.stringify({ profileLaunches: 3, requests, beforeDelete, remainingMemories: await memories(), savedDelete, savedSelection, deletionWithoutModelCall: true, noRecallAcrossNewChatsAndRestart: true, permissionRetained: true }, null, 2));

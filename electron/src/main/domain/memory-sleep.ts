@@ -289,6 +289,12 @@ export class MemorySleepService {
         for (const link of state.memorySleep.mergeLineage) {
           if (link.resultId === change.resultId && link.at === report!.at && undone.has(link.memoryId)) link.undoneAt = now;
         }
+        // A merge from before the lineage existed is only in this report, which expires; record the undo durably.
+        if (change.kind === 'merge' && change.resultId !== null) for (const item of change.removed) {
+          if (state.memorySleep.mergeLineage.some((link) => link.memoryId === item.id && link.resultId === change.resultId && link.at === report!.at)) continue;
+          state.memorySleep.mergeLineage.push({ memoryId: item.id, resultId: change.resultId, at: report!.at, eventIds: evidenceOf(item).slice(0, 320), undoneAt: now });
+        }
+        state.memorySleep.mergeLineage = state.memorySleep.mergeLineage.slice(-MERGE_LINEAGE_LIMIT);
         for (const item of change.removed) {
           delete state.memorySleep.recallReplacements[item.id];
           if (state.memories.some((memory) => memory.id === item.id) || state.memoryTombstones.some((tombstone) => tombstone.memoryId === item.id)) continue;

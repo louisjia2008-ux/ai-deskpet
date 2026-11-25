@@ -5161,7 +5161,9 @@ export class AppController {
         if (trackWork) await this.#chatWork.finish(runId,message.status==='cancelled'?'cancelled':result.status==='failed'?'failed':result.limitReached?'interrupted':'completed',message.content.slice(0,8000));
         reactions.finish(message.status === 'complete' ? message.content : null);
         if (!this.#standaloneWeChat && !managedMinecraft && this.#minecraftGameRun?.sessionId !== sessionId
-          && !scheduled && !research && !analysisSession && isOwnerDiaryChannel(channel) && message.status === 'complete') {
+          && !scheduled && !research && !analysisSession && isOwnerDiaryChannel(channel) && message.status === 'complete'
+          // A request to forget or change a memory names what the owner wants gone, found or not; it is not recent news.
+          && forgetCommand === null && editCommand === null) {
           const source = channel.origin;
           if (source !== 'telegram') await this.#recent.note(source, sessionId, [...turnUserMessageIds,
             ...this.#chatInteractions.consumedFollowupIds(runId)]).catch(() => undefined);
