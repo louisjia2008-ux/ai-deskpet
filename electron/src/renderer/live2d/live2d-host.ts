@@ -65,7 +65,9 @@ export class Live2DHost {
   #voice: (() => number | null) | null = null;
   #mouth = 0;
   #lifeMs = 0;
-  readonly #reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+  // Read on every frame, so turning the system setting on stops the drift at once.
+  readonly #reducedMotionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+  get #reducedMotion(): boolean { return this.#reducedMotionQuery?.matches === true; }
   #reaction: { name: string; expression: FacialExpression; elapsed: number; remainingMs: number | null } | null = null;
   #lastReactionAt = -Infinity;
 

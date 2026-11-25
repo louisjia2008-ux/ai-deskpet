@@ -25,6 +25,7 @@ export class OverlayPositionCoordinator {
   #latest: Position | undefined;
   #signature: string | null = null;
   #writes: Promise<void> = Promise.resolve();
+  #generation = 0;
   #closing = false;
   #shutdown: Promise<void> | null = null;
   constructor(private readonly dependencies: Dependencies) {}
@@ -38,8 +39,9 @@ export class OverlayPositionCoordinator {
     this.#latest = structuredClone(position);
     if (signature === this.#signature) return this.#writes;
     this.#signature = signature;
-    const snapshot = structuredClone(position);
-    const write = this.#writes.catch(() => undefined).then(() => this.dependencies.preferences.savePosition(snapshot));
+    const snapshot = structuredClone(position), generation = ++this.#generation;
+    // A drag asks for many positions; only the newest still waiting is written.
+    const write = this.#writes.catch(() => undefined).then(() => generation === this.#generation ? this.dependencies.preferences.savePosition(snapshot) : undefined);
     this.#writes = write;
     void write.catch(() => { if (this.#signature === signature) this.#signature = null; });
     return write;
@@ -73,7 +75,8 @@ export class OverlayPositionCoordinator {
   async move(position: Position): Promise<void> {
     if (this.#closing) throw new Error('character.movementClosing');
     const actual = position === null ? null : this.dependencies.windows.moveOverlayTo(position.x, position.y);
-    await this.#save(actual);
+    // The window follows the pointer at once; the disk catches up behind it, and shutdown waits for it.
+    void this.#save(actual).catch(error => this.dependencies.failed(error));
   }
   shutdown(): Promise<void> {
     if (this.#shutdown !== null) return this.#shutdown;

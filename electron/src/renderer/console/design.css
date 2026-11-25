@@ -305,3 +305,13 @@
 
 /* Numbers that change in place keep their width, so neighbours never shift. */
 .app-shell .nav-item strong, .app-shell .stat-card strong, .app-shell time, .app-shell .focus-time, .app-shell .usage-summary { font-variant-numeric: tabular-nums; }
+
+/* Switching a tab keeps the tabs still and fades in only the new content. */
+.app-shell .settings-panel > *, .app-shell .memory-tabs ~ * { animation: motion-fade-in var(--motion-change) var(--motion-ease-out) backwards; }
+
+/* A row that joins a list fades in where it lands; rows already there stay still. */
+.app-shell .memory-card, .app-shell .simple-list > li, .app-shell .background-job-list > article, .app-shell .attention-card,
+.app-shell .conversation-row, .app-shell .coding-task, .app-shell .delegation-child-card { animation: motion-fade-in var(--motion-fast) var(--motion-ease-out) backwards; }
+
+/* Two-step confirmations swap in place; the confirm group fades in where the button was. */
+.app-shell .confirm-button-group { animation: motion-fade-in var(--motion-fast) var(--motion-ease-out) backwards; }

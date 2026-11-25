@@ -29,7 +29,7 @@ describe('native companion position lifecycle', () => {
     const f = fixture(); f.coordinator.attach(); f.coordinator.attach();
     expect(f.window.getBounds()).toMatchObject({ x: 100, y: 120 }); expect(f.window.listenerCount('moved')).toBe(1);
     await f.coordinator.move({ displayId: 'renderer-is-not-authority', x: 200, y: 150 });
-    expect(f.save).toHaveBeenCalledOnce(); expect(f.saved()).toEqual({ displayId: '7', x: 200, y: 150 });
+    await vi.waitFor(() => expect(f.save).toHaveBeenCalledOnce()); expect(f.saved()).toEqual({ displayId: '7', x: 200, y: 150 });
     f.window.close(); expect(f.window.listenerCount('moved')).toBe(0);
     const replacement = f.replace(); f.coordinator.attach(); f.coordinator.attach();
     expect(replacement.getBounds()).toMatchObject({ x: 200, y: 150 }); expect(replacement.listenerCount('moved')).toBe(1);
@@ -49,6 +49,16 @@ describe('native companion position lifecycle', () => {
     expect(f.move).toHaveBeenCalledOnce(); release.resolve(); await Promise.all([moving, shutdown]);
     expect(f.save).toHaveBeenLastCalledWith({ displayId: '7', x: 250, y: 170 }); expect(f.saved()).toEqual({ displayId: '7', x: 250, y: 170 });
     expect(f.window.listenerCount('moved')).toBe(0); expect(f.coordinator.shutdown()).toBeInstanceOf(Promise);
+  });
+
+  it('follows the pointer while a save is slow, writing only the newest position once it is free', async () => {
+    const f = fixture(), entered = deferred(), release = deferred(); f.coordinator.attach();
+    f.save.mockImplementationOnce(async () => { entered.resolve(); await release.promise; });
+    await f.coordinator.move({ displayId: '7', x: 200, y: 150 }); await entered.promise;
+    for (let x = 201; x <= 260; x += 1) await f.coordinator.move({ displayId: '7', x, y: 150 });
+    expect(f.move).toHaveBeenCalledTimes(61); expect(f.window.getBounds()).toMatchObject({ x: 260 });
+    release.resolve(); await f.coordinator.shutdown();
+    expect(f.save).toHaveBeenCalledTimes(2); expect(f.saved()).toEqual({ displayId: '7', x: 260, y: 150 });
   });
 
   it('restores the latest requested position to a replacement even while its previous disk save is delayed', async () => {

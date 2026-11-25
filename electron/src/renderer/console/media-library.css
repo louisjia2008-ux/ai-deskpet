@@ -34,3 +34,8 @@
 .media-preview>img { max-width: min(85vw,900px); max-height: 72vh; object-fit: contain; }
 .media-preview>p { margin: 0; overflow-wrap: anywhere; }
 @media(max-width:700px) { .media-library .page-header { flex-wrap: wrap; } .media-grid { grid-template-columns: repeat(auto-fill,minmax(180px,1fr)); } .media-card>img { height: 160px; } .media-library-controls>label { min-width: 100%; } }
+/* The preview comes over the page from the image that opened it; the backdrop only fades. */
+.media-preview-backdrop { animation: motion-fade-in var(--motion-layer) var(--motion-ease-out) backwards; }
+.media-preview { animation: media-preview-in var(--motion-layer) var(--motion-ease-out) backwards; }
+@keyframes media-preview-in { from { opacity: 0; scale: var(--media-preview-scale, .97); } }
+@media (prefers-reduced-motion: reduce) { .media-preview { --media-preview-scale: 1; } }
