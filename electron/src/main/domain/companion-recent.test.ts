@@ -11,6 +11,7 @@ import { prepareChatContext } from './chat-context';
 import { CompanionRecentService, recentPrompt } from './companion-recent-service';
 import { currentRecent, recentForDestination, recentTraceAllowed, RECENT_WINDOW_MS } from './companion-recent-state';
 import { DomainRepository } from './repository';
+import { MemoryService } from './memory-service';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -138,17 +139,26 @@ it('rebuilds a cloud view from shareable sources when the local view includes Mi
   expect(recentForDestination(f.repo.snapshot(), 'remote', f.now())?.text).toBe(exam);
 });
 
-it('leaves memory commands to memory, so a forgotten fact never returns through the recent summary', async () => {
+it('drops a remember, correct and forget exchange once its memory is deleted, and keeps a request that found nothing', async () => {
   const f = await fixture();
-  await f.note('desktop', '请记住：我住在 SYNTHETIC_CITY');
-  await f.note('desktop', '把“SYNTHETIC_CITY”改成“SYNTHETIC_TOWN”');
-  await f.note('desktop', '忘记：SYNTHETIC_TOWN');
+  const chat = new ChatService(f.repo), memory = new MemoryService(f.repo);
+  const session = await chat.createSession('Synthetic fixture', 'normal', new Date(f.now()));
+  await f.repo.transaction(state => { state.chatSessions.find(item => item.id === session.id)!.companionScope = 'owner'; });
+  const turn = async (content: string, handle: (assistantId: string) => Promise<unknown>) => {
+    const user = await chat.addMessage({ sessionId: session.id, role: 'user', content, status: 'complete', errorCode: null }, new Date(f.now()));
+    const reply = await chat.addMessage({ sessionId: session.id, role: 'assistant', content: '好的。', status: 'complete', errorCode: null }, new Date(f.now()));
+    await handle(reply.id);
+    await f.service.note('desktop', session.id, [user.id]);
+  };
+  await turn('请记住：我住在 SYNTHETIC_CITY', id => memory.saveFromChat(id, '我住在 SYNTHETIC_CITY'));
+  await turn('把“SYNTHETIC_CITY”改成“SYNTHETIC_TOWN”', id => memory.editFromChat(id, 'SYNTHETIC_CITY', 'SYNTHETIC_TOWN'));
+  await turn('忘记：SYNTHETIC_TOWN', id => memory.forgetFromChat(id, 'SYNTHETIC_TOWN'));
+  await turn('忘记带伞了', id => memory.forgetFromChat(id, '带伞了'));
+  expect(f.repo.snapshot().memoryTombstones.map(guard => guard.kind)).toEqual(['corrected', 'deleted']);
   await f.service.tick();
-  expect(f.requests).toHaveLength(0);
-  expect(f.service.status().text).toBe('');
-  await f.note('desktop', exam);
-  await f.service.tick();
-  expect(JSON.stringify(f.requests.at(-1)!.messages)).not.toContain('SYNTHETIC_');
+  const sent = JSON.stringify(f.requests.at(-1)!.messages);
+  expect(sent).not.toContain('SYNTHETIC_');
+  expect(sent).toContain('忘记带伞了');
 });
 
 it('drops an ordinary message once the memory taken from it is deleted, and withdraws the summary built on it', async () => {

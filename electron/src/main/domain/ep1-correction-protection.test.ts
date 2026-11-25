@@ -60,6 +60,17 @@ describe('E-P1 ordinary correction preserves deletion and unknown protection', (
     expect(JSON.stringify(f.context(reopened))).not.toContain(deleted.text);
   });
 
+  it('starts the recent summary again when restored data has unknown protection', async () => {
+    const f = await fixture();
+    await f.repository.transaction((state) => {
+      state.companionRecent.entries = [{ id: randomUUID(), source: 'minecraft', text: 'EP1_RESTORED_RECENT', at: new Date().toISOString() }];
+      quarantineRestoredMemories(state);
+    });
+    const recent = f.repository.snapshot().companionRecent;
+    expect(recent).toMatchObject({ entries: [], summary: null, sharedSummary: null });
+    expect(recent.clearedAt).not.toBeNull();
+  });
+
   for (const temporary of [false, true]) {
     it(`rejects ${temporary ? 'temporary overlay' : 'ordinary'} chat correction of protection-unknown restored data without implicit review`, async () => {
       const f = await fixture();

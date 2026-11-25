@@ -78,6 +78,8 @@ export const quarantineRestoredMemories = (state: PersistentState): void => {
     if (message.contextTrace) message.contextTrace.lineage = 'unknown';
   }
   for (const record of state.conversationImports) if (record.draft) record.draft.baseMemoryRevision = state.memoryRevision;
+  // The recent summary may rest on a deletion this backup never saw. It covers only the last day and a half; start it again.
+  state.companionRecent = { ...state.companionRecent, entries: [], summary: null, sharedSummary: null, clearedAt: new Date().toISOString() };
   state.memoryRevision += 1;
 };
 

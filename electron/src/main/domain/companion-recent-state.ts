@@ -1,9 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { PersistentState } from './schemas';
-import { parseChatMemoryCommand } from './chat-memory-command';
-import { parseChatEditCommand } from './chat-memory-edit';
-import { parseChatForgetCommand } from './chat-memory-forget';
 
 const key = z.string().min(1).max(128);
 const date = z.iso.datetime();
@@ -14,11 +11,50 @@ export const RECENT_ENTRY_LIMIT = 64;
 
 type RecentContextState = Pick<PersistentState, 'chatSessions' | 'chatMessages' | 'companionRecent' | 'memoryTombstones'>;
 
-// Matches the chat evidence ID that memory-commit records for a chat-sourced memory.
-const chatEvidenceId = (sessionId: string, messageId: string): string => recentDigest(`chat:${sessionId}:${messageId}`);
-/** Remember, correct and forget requests are owned by memory, which honours deletion; the recent summary never repeats them. */
-const memoryCommand = (text: string): boolean =>
-  parseChatMemoryCommand(text) !== null || parseChatEditCommand(text) !== null || parseChatForgetCommand(text) !== null;
+type Superseded = 'deleted' | 'corrected';
+const worse = (left: Superseded | undefined, right: Superseded | undefined): Superseded | undefined =>
+  left === 'deleted' || right === 'deleted' ? 'deleted' : left ?? right;
+
+/**
+ * Chat messages that speak for a memory the owner later deleted or corrected: a message a memory was
+ * taken from, a remember/correct/forget request whose memory has since changed, and the reply right
+ * after each. Chat history keeps them; summaries that are fed into new conversations must not.
+ */
+// Snapshots are fresh clones, so this only spares repeated checks over one snapshot (each diary entry).
+// The lengths guard against a transaction draft that grew in place.
+const supersededCache = new WeakMap<object, { tombstones: object; messages: number; guards: number; result: ReadonlyMap<string, Superseded> }>();
+export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'memoryTombstones'>): ReadonlyMap<string, Superseded> {
+  const cached = supersededCache.get(state.chatMessages);
+  if (cached && cached.tombstones === state.memoryTombstones && cached.messages === state.chatMessages.length
+    && cached.guards === state.memoryTombstones.length) return cached.result;
+  const result = new Map<string, Superseded>();
+  supersededCache.set(state.chatMessages, { tombstones: state.memoryTombstones, messages: state.chatMessages.length, guards: state.memoryTombstones.length, result });
+  if (!state.memoryTombstones.length) return result;
+  const byEvidence = new Map<string, Superseded>(), byMemory = new Map<string, Superseded>();
+  for (const guard of state.memoryTombstones) {
+    byMemory.set(guard.memoryId, worse(byMemory.get(guard.memoryId), guard.kind)!);
+    for (const source of guard.sourceEventIds) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
+  }
+  const mark = (id: string, kind: Superseded | undefined): void => { const next = worse(result.get(id), kind); if (next) result.set(id, next); };
+  const lastUser = new Map<string, { id: string; kind: Superseded | undefined }>();
+  for (const message of state.chatMessages) {
+    if (message.role === 'user') {
+      // Matches the chat evidence ID that memory-commit records for a chat-sourced memory.
+      const kind = byEvidence.get(recentDigest(`chat:${message.sessionId}:${message.id}`));
+      lastUser.set(message.sessionId, { id: message.id, kind });
+      mark(message.id, kind);
+    } else if (message.role === 'assistant') {
+      const request = lastUser.get(message.sessionId);
+      const forget = message.memoryForget?.kind === 'deleted' ? message.memoryForget.memoryId : undefined;
+      const edit = message.memoryEdit?.kind === 'updated' ? message.memoryEdit.memoryId : undefined;
+      const handled = forget ?? edit ?? message.memoryReceipts?.[0]?.memoryId;
+      const outcome = handled === undefined ? undefined : byMemory.get(handled);
+      if (request && outcome) { request.kind = worse(request.kind, outcome); mark(request.id, outcome); }
+      mark(message.id, worse(request?.kind, outcome));
+    }
+  }
+  return result;
+}
 
 const common = { id: key, at: date };
 const entry = z.discriminatedUnion('source', [
@@ -60,18 +96,17 @@ export function recentSources(state: RecentContextState, now: number): RecentSou
   const sessions = new Map(state.chatSessions.map(session => [session.id, session]));
   const messages = new Map(state.chatMessages.map(message => [message.id, message]));
   const clearedAt = Date.parse(state.companionRecent.clearedAt ?? '');
-  // A message whose memory was later deleted or corrected no longer speaks for the owner.
-  const superseded = new Set(state.memoryTombstones.flatMap(guard => guard.sourceEventIds));
+  const superseded = supersededChat(state);
   return state.companionRecent.entries.flatMap<RecentSource>(entry => {
     const at = Date.parse(entry.at);
     if (at > now || at <= now - RECENT_WINDOW_MS || at <= clearedAt) return [];
-    if (entry.source === 'minecraft') return memoryCommand(entry.text) ? [] : [{ id: entry.id, source: entry.source, text: entry.text, localOnly: true }];
+    if (entry.source === 'minecraft') return [{ id: entry.id, source: entry.source, text: entry.text, localOnly: true }];
     const session = sessions.get(entry.sessionId), message = messages.get(entry.id);
     if (!session || session.deletedAt || session.archivedAt || session.analysisSource || session.companionScope === 'group'
       || session.wechatTranscript === 'group' || session.wechatTranscript === 'friend'
       || !message || message.sessionId !== session.id || message.role !== 'user' || message.status !== 'complete'
       || message.automationTriggerId || message.wechatFriend || message.wechatDigest || recentDigest(message.content) !== entry.sha
-      || superseded.has(chatEvidenceId(session.id, message.id)) || memoryCommand(message.content)) return [];
+      || superseded.has(message.id)) return [];
     return [{ id: entry.id, source: entry.source, text: message.content,
       localOnly: session.historyPrivacy === 'local-only' || message.contextTrace?.privacy === 'local-only' }];
   });

@@ -356,3 +356,28 @@ it('stops injecting a diary built on a memory that was later corrected, while re
   expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
   expect(f.journal.referenceRetained(reference!, f.state, () => false)).toBe(true);
 });
+
+it('leaves a message out of new diaries once the memory taken from it is deleted, and withdraws a diary written from it', async () => {
+  const f = await fixture();
+  await f.journal.tick(f.input);
+  const [reference] = f.journal.context(f.state, 'remote', () => false).references;
+  f.state.memoryTombstones.push({ id: randomUUID(), memoryId: randomUUID(), textDigest: 'c'.repeat(64),
+    sourceEventIds: [recentDigest(`chat:${f.session.id}:${f.message.id}`)], identityKey: null, scope: { kind: 'global' }, deletedAt: stamp, kind: 'deleted' });
+  expect(diaryMaterial(f.state, date, 'UTC', () => false).sources).toEqual([]);
+  expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
+  expect(f.journal.referenceRetained(reference!, f.state, () => false)).toBe(false);
+});
+
+it('stops injecting a diary whose memory was merged into one that was corrected afterwards', async () => {
+  const f = await fixture();
+  const merged = globalMemory('主人喜欢合成旧茶。');
+  f.state.memories.push(merged);
+  await f.journal.tick(f.input);
+  const into = globalMemory('主人喜欢合成茶。');
+  f.state.memories = f.state.memories.filter(item => item.id !== merged.id).concat(into);
+  f.state.memorySleep.recallReplacements[merged.id] = into.id;
+  expect(f.journal.context(f.state, 'remote', () => false).summaries).toHaveLength(1);
+  f.state.memoryTombstones.push({ id: randomUUID(), memoryId: into.id, textDigest: 'd'.repeat(64), sourceEventIds: [], identityKey: null,
+    scope: { kind: 'global' }, deletedAt: stamp, kind: 'corrected', memoryRevision: 1 });
+  expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
+});

@@ -11,7 +11,7 @@ import type { PersistentState } from './schemas';
 import type { ContextTrace } from '../../shared';
 import { projectContextMemories, selectAllowedHistory } from './chat-context-policy';
 import { isExcludedFromMemory } from './context-provenance';
-import { recentTraceAllowed } from './companion-recent-state';
+import { recentTraceAllowed, supersededChat } from './companion-recent-state';
 import { proactiveDayKey, proactiveMinuteOfDay } from './proactive-policy';
 
 const provenanceSchema = diaryEntrySchema.pick({ sources: true, memories: true, revision: true });
@@ -28,6 +28,7 @@ const previousDate = (date: string): string => new Date(Date.parse(date + 'T12:0
 /** A cloud diary only ever sees proven owner sessions with complete, currently allowed lineage. */
 export function diaryMaterial(state: PersistentState, date: string, timezone: string, suppressed: (id: string) => boolean, diaryAllowed?: (reference: DiaryReference) => boolean) {
   const memories = state.memories.filter(memory => !suppressed(memory.id));
+  const superseded = supersededChat(state);
   const sources: Array<{ id: string; digest: string; text: string; role: string }> = [];
   let used = 0;
   for (const session of state.chatSessions) {
@@ -36,7 +37,8 @@ export function diaryMaterial(state: PersistentState, date: string, timezone: st
     const allowed = selectAllowedHistory({ sessionId: session.id, history, memories, destination: 'remote', historyPrivacy: session.historyPrivacy ?? 'cloud-allowed',
       ...(diaryAllowed ? { diaryAllowed } : {}) });
     for (const message of allowed) {
-      if (proactiveDayKey(Date.parse(message.createdAt), timezone) !== date || !message.content.trim() || sources.length >= 120 || used + message.content.length > 24_000) continue;
+      if (proactiveDayKey(Date.parse(message.createdAt), timezone) !== date || !message.content.trim() || superseded.has(message.id)
+        || sources.length >= 120 || used + message.content.length > 24_000) continue;
       sources.push({ id: message.id, digest: digest(message.content + JSON.stringify(message.contextTrace)), text: message.content, role: message.role }); used += message.content.length;
     }
   }
@@ -64,10 +66,10 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
   const memorySources = new Map<string, number>();
   const relyOn = (id: string, revision: number): void => { memorySources.set(id, Math.min(revision, memorySources.get(id) ?? revision)); };
   for (const item of entry.memories) relyOn(item.id, item.revision);
+  const superseded = supersededChat(state);
   const correctedAt = new Map<string, number>();
   for (const guard of state.memoryTombstones) {
-    if (guard.kind === 'corrected' && guard.memoryRevision !== undefined)
-      correctedAt.set(guard.memoryId, Math.max(guard.memoryRevision, correctedAt.get(guard.memoryId) ?? 0));
+    if (guard.kind === 'corrected') correctedAt.set(guard.memoryId, Math.max(guard.memoryRevision ?? 0, correctedAt.get(guard.memoryId) ?? 0));
   }
   const seenDiaries = new Set<Provenance>([entry]);
   const seenMessages = new Set<string>();
@@ -81,6 +83,10 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
       || (message.contextTrace.recentRevision !== undefined && !recentTraceAllowed(state, message.contextTrace.recentRevision, 'remote'))) return 'withdrawn';
     if (seenMessages.has(id)) continue;
     seenMessages.add(id);
+    // A deleted memory withdraws what was written from its message; a correction only stops new use.
+    const changed = superseded.get(id);
+    if (changed === 'deleted') return 'withdrawn';
+    if (changed === 'corrected') retired = true;
     if (session.archivedAt || session.analysisSource) retired = true;
     for (const reference of message.contextTrace.memoryReferences) relyOn(reference.id, reference.revision);
     for (const id of message.contextTrace.historyMessageIds) pending.push({ id, owner: false });
@@ -102,6 +108,8 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
     const seen = new Set<string>();
     while (!checkedMemories.has(current)) {
       if (seen.has(current) || suppressed(current) || deletedMemories.has(current)) return 'withdrawn';
+      // A memory this one was merged into, corrected since, no longer says what the diary used.
+      if (current !== id && correctedAt.has(current)) retired = true;
       seen.add(current);
       const memory = memories.get(current);
       if (memory) {
