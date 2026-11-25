@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { commitMemoryCandidate, memoryDigest, memoryEventIds, reconcileMemoryProtection, recordMemorySupersession } from './memory-commit';
 import { createDefaultState } from './schemas';
+import type { MemoryItem } from '../../shared';
 import { DomainRepository } from './repository';
 import { MemoryService } from './memory-service';
 import { ChatService } from './chat-service';
@@ -95,6 +96,26 @@ describe('E-P1 stable evidence and deterministic fact commits', () => {
     recordMemorySupersession(newer, latest, 'corrected', new Date('2026-10-27T01:00:00Z'));
     latest.text = '用户：喜欢水'; latest.contextMetadata!.sourceEventIds = [memoryDigest('correction-3')]; latest.contextMetadata!.revision = 3;
     expect(reconcileMemoryProtection(newer, current).memories.map((item) => item.text)).toEqual(['用户：喜欢水']);
+  });
+  it('restore keeps another fact from the same message after a merge holding its sibling is corrected', () => {
+    const current = createDefaultState();
+    commitMemoryCandidate(current, candidate('event-1', '用户：住北京')); commitMemoryCandidate(current, candidate('event-1', '用户：猫叫小白'));
+    commitMemoryCandidate(current, candidate('event-2', '用户：搬家了'));
+    const backup = structuredClone(current);
+    const [home, cat, moved] = current.memories as [MemoryItem, MemoryItem, MemoryItem];
+    const merged: MemoryItem = { ...structuredClone(home), id: randomUUID(), text: '用户：住北京，搬家了' };
+    merged.contextMetadata!.sourceEventIds = [...memoryEventIds(home), ...memoryEventIds(moved)];
+    const at = '2026-10-27T01:00:00.000Z';
+    current.memorySleep.mergeLineage.push(...[home, moved].map((item) => ({ memoryId: item.id, resultId: merged.id, at, eventIds: memoryEventIds(item) })));
+    current.memories = [cat, merged];
+    recordMemorySupersession(current, merged, 'corrected', new Date('2026-10-27T02:00:00Z'));
+    merged.text = '用户：住杭州'; merged.contextMetadata!.sourceEventIds = [memoryDigest('correction')]; merged.contextMetadata!.revision = 2;
+    const restored = reconcileMemoryProtection(backup, current);
+    expect(restored.memories.map((item) => item.text).sort()).toEqual(['用户：住杭州', '用户：猫叫小白'].sort());
+    expect(restored.memories.find((item) => item.id === cat.id)?.contextMetadata?.reviewReason).toBeUndefined();
+    // A sibling the owner removed since the backup stays out.
+    const withoutCat = structuredClone(current); withoutCat.memories = withoutCat.memories.filter((item) => item.id !== cat.id);
+    expect(reconcileMemoryProtection(backup, withoutCat).memories.map((item) => item.text)).toEqual(['用户：住杭州']);
   });
   it('formal restore keeps newer tombstones and correction rows, and permits a later explicit new source', () => {
     const original = createDefaultState(); commitMemoryCandidate(original, candidate()); const backup = structuredClone(original);

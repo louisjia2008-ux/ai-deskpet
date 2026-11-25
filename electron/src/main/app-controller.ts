@@ -4346,11 +4346,13 @@ export class AppController {
     // otherwise it is ordinary conversation for the model.
     const parsedForget = hostCommands ? null : parseChatForgetCommand(content, history);
     const reportTarget = parsedForget?.kind === 'forget' ? parsedForget.report?.exact.find((query) => this.#memory.matchesInSession(sessionId, query, true)) : undefined;
+    // A retry keeps that shape local: the memory it named may have been deleted since the first attempt, and the
+    // model must not see its text. With nothing to match, it answers not found.
     const forgetCommand = parsedForget?.kind !== 'forget' || parsedForget.explicit ? parsedForget
-      : parsedForget.report ? (reportTarget === undefined ? null : { ...parsedForget, query: reportTarget })
-        : this.#memory.matchesInSession(sessionId, parsedForget.query) ? parsedForget : null;
+      : parsedForget.report ? (reportTarget !== undefined ? { ...parsedForget, query: reportTarget } : retry !== null ? parsedForget : null)
+        : retry !== null || this.#memory.matchesInSession(sessionId, parsedForget.query) ? parsedForget : null;
     const parsedEdit = hostCommands ? null : parseChatEditCommand(content, history);
-    const editCommand = parsedEdit?.kind === 'edit' && !parsedEdit.explicit && !this.#memory.matchesInSession(sessionId, parsedEdit.query) ? null : parsedEdit;
+    const editCommand = parsedEdit?.kind === 'edit' && !parsedEdit.explicit && retry === null && !this.#memory.matchesInSession(sessionId, parsedEdit.query) ? null : parsedEdit;
     const illustrative = !research && isIllustrativeCommand(content);
     const modelTurn = memoryCommand === null && forgetCommand === null && editCommand === null;
     const interactive = !research && (!waitForCompletion || channel.origin === 'telegram' || channel.origin === 'wechat') && !analysisSession;

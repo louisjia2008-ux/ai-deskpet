@@ -23,7 +23,10 @@ export const parseChatMemoryCommand = (query: string, history: readonly ChatMess
   const afterParticle = colon ? afterVerb.replace(/^[\s，,。.!！~～…⋯]*[：:]\s*/u, '') : afterVerb.replace(/^[\s，,。.!！~～…⋯]+/u, '');
   if (particle && !colon
     && /^(?:(?:(?:谢谢|多谢)(?:你|您|啦)?|谢啦|好的|好|嗯|thanks|thank you)[\s，,。.!！~～…⋯]*)*$/iu.test(afterParticle)) return null;
-  if (/[?？]\s*$/u.test(input)) return null;
+  // A colon right after the verb introduces the text verbatim, so a question there is the text, not a question to answer:
+  // 「请记住：提示语为你是谁？」.
+  const introduced = prefix !== null && /^(?:请)?(?:(?:帮我|替我|为我|帮忙)\s*)?(?:记下来|记住|记下|保存到(?:长期)?记忆[里中]?|保存为(?:长期)?记忆)(?:了|啦|喽|咯)?[\s，,。.!！~～…⋯]*[：:]/u.test(input);
+  if (!introduced && /[?？]\s*$/u.test(input)) return null;
   // Meta requests and an explicitly non-executing annotation are not consent.
   if (/^(?:请)?(?:翻译|解释|分析|改写|润色|举例|演示|示范|假设|比如|例如|如果我(?:说|写)|他(?:说|写)|她(?:说|写))/u.test(input)
     || /[（(](?:仅|只|只是)(?:演示|示范|举例|示例|翻译)(?:这句话|一下)?[）)]/u.test(input)
@@ -33,7 +36,7 @@ export const parseChatMemoryCommand = (query: string, history: readonly ChatMess
   const text = (particle ? afterParticle : match[1]!).trim().replace(/^(?:以下(?:信息|内容))[：:]\s*/u, '');
   if (text.length > CHAT_MEMORY_MAX_CHARACTERS) return { kind: 'clarify', reason: 'length' };
   if (!text || /^(?:[：:,，。.!！?？\s]*|(?:这|那)(?:些|个|件事|两件事|一点)|(?:刚才|上面|之前|前面)(?:的)?(?:话|内容|信息)?|了吗|了吗[?？]|me|this|it|what I said)[。.!！?？\s]*$/iu.test(text)
-    || (!particle && /^(?:住|下|下来)?(?:了吗|什么|怎么|如何)/u.test(text))
+    || (!particle && !introduced && /^(?:住|下|下来)?(?:了吗|什么|怎么|如何)/u.test(text))
     || /[，,。；;]\s*(?:然后|顺便|同时|再|另外)(?:请|帮我|告诉我|查|搜索|打开|创建|设置|提醒|删除|修改)/u.test(text)) return { kind: 'clarify', reason: 'content' };
   return { kind: 'save', text };
 };

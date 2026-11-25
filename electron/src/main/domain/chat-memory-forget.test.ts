@@ -81,6 +81,15 @@ describe('transactional chat memory deletion', () => {
     expect(await f.memory.forgetFromChat((await f.response()).id, '关于蓝鲸的资料找到了', undefined, undefined, true)).toMatchObject({ kind: 'not-found' });
     expect(f.memory.list()).toEqual([longer]);
   });
+  it('keeps a command that matched nothing, and the owner sentence before it, out of later model context', async () => {
+    const f = await fixture(); await f.add('旧暗号是蓝鲸了，已作废');
+    const user = await f.chat.addMessage({ sessionId: f.session.id, role: 'user', content: '忘记暗号是蓝鲸了', status: 'complete', errorCode: null });
+    const reply = await f.response();
+    expect(await f.memory.forgetFromChat(reply.id, '暗号是蓝鲸了', undefined, undefined, true)).toMatchObject({ kind: 'not-found' });
+    const messages = f.repository.snapshot().chatMessages;
+    for (const id of [user.id, reply.id]) expect(messages.find((item) => item.id === id)?.contextTrace).toMatchObject({ lineage: 'unknown', privacy: 'local-only' });
+    expect(f.repository.snapshot().chatSessions[0]?.historyPrivacy).not.toBe('local-only');
+  });
   it('persists ambiguous choices across reload and deletes only the selected unchanged candidate', async () => {
     const f = await fixture(); const one = await f.add('我的测试暗号甲是111'); const two = await f.add('我的测试暗号乙是222');
     const reply = await f.response(); const result = await f.memory.forgetFromChat(reply.id, '我的测试暗号');

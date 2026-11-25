@@ -4,10 +4,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type { ChatMessage, ChatSession, ContextTrace, MemoryItem, ProviderConfig } from '../../shared';
 import { birthdayPrompt, defaultCharacterProfile } from '../../shared/character';
 import { qqGroupSender } from '../../shared/qq-channel';
 import type { ProviderAdapter, ProviderChatRequest } from '../providers/types';
+import { EncryptedJsonStore } from '../persistence/encrypted-json-store';
 import { CompanionJournal, diaryMaterial } from './companion-journal';
 import { createDefaultState } from './schemas';
 import { prepareChatContext } from './chat-context';
@@ -502,6 +504,26 @@ it.each(['edit', 'remove'] as const)('stops injecting a later diary built on a d
   expect(f.journal.exportableCopies(f.state, () => false)?.map(copy => copy.date)).toContain(nextDay);
   // The reply itself stays in chat history, as with a corrected memory.
   expect(f.journal.referenceRetained(used[0]!, f.state, () => false)).toBe(true);
+});
+
+it('treats a diary deleted before deletions were marked as changed, since it could not have rolled off', async () => {
+  const f = await fixture();
+  await f.journal.tick(f.input);
+  const used = f.journal.context(f.state, 'remote', () => false).references;
+  const nextDay = '2026-11-15', at = `${nextDay}T12:00:00.000Z`;
+  f.state.chatMessages.push({ ...f.message, id: randomUUID(), createdAt: at, content: '合成第二天的话。' }, { id: randomUUID(), sessionId: f.session.id,
+    role: 'assistant', content: '合成回复复述了第一篇日记。', createdAt: at, status: 'complete', errorCode: null, contextTrace: { ...trace(), diaryReferences: used } });
+  f.complete.mockResolvedValueOnce({ text: '合成第二篇日记。', summary: '合成第二篇摘要。' });
+  await f.journal.tick({ ...f.input, now: Date.parse('2026-11-16T03:01:00Z') });
+  const later = f.journal.context(f.state, 'remote', () => false).references.find(reference => reference.date === nextDay)!;
+  await f.journal.remove({ date, revision: f.journal.list().find(entry => entry.date === date)!.revision });
+  // An older build recorded the same deletion without `removedByOwner`.
+  type Raw = { retiredProvenance: Record<string, { removedByOwner?: true }> };
+  const raw = new EncryptedJsonStore<Raw>({ path: f.path, vault, schema: z.any() as z.ZodType<Raw>, defaultValue: () => ({ retiredProvenance: {} }) });
+  const stored = await raw.load(); delete stored.retiredProvenance[date]!.removedByOwner; await raw.save(stored);
+  const reopened = new CompanionJournal(f.path, vault); await reopened.initialize();
+  expect(reopened.referenceCurrent(later, f.state, 'remote', () => false)).toBe(false);
+  expect(reopened.context(f.state, 'remote', () => false).summaries).toEqual([]);
 });
 
 it('still treats a diary built on an edited one as superseded after the edited one rolls off the cap', async () => {

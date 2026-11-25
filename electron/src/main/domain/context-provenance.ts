@@ -65,6 +65,15 @@ export const chatMemorySource = (state: PersistentState, assistant: ChatMessage)
     : { origin: 'manual-user', sourceReferences: [{ kind: 'manual-user', actionId: randomUUID() }] };
 };
 
+/** A memory command that matched nothing stays out of later model context: its target can name text that left memory mid-command. */
+export const withholdMemoryCommandTrace = (state: PersistentState, assistant: ChatMessage): void => {
+  const trace: ContextTrace = { version: 1, memoryReferences: [], historyMessageIds: [], privacy: 'local-only',
+    scope: { kind: 'session', sessionId: assistant.sessionId }, lineage: 'unknown' };
+  assistant.contextTrace = structuredClone(trace);
+  const source = sourceUserBefore(state, assistant);
+  if (source) source.contextTrace = structuredClone(trace);
+};
+
 /** Keep source commands and receipts under the same restriction as the fact they mention. */
 export const stampMemoryCommandTrace = (state: PersistentState, assistant: ChatMessage, input: MemoryItem | MemoryItem[], sourceMemory?: MemoryItem): void => {
   const memories = Array.isArray(input) ? input : [input];

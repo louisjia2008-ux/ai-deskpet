@@ -67,10 +67,14 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     await newChat(); await send(question); await expect(page.locator('.chat-reply').last()).toHaveText('青柠山川-5914');
     // The background summary has really carried the secret before the deletion.
     await expect.poll(() => JSON.stringify(summaries).includes('青柠山川')).toBe(true);
+    // ...and the saved summary holds it, so the deletion has something to clear.
+    const recentText = () => page.evaluate(async () => (await window.deskpet.companionRecent.status()).text);
+    await expect.poll(recentText).toContain('青柠山川');
     await newChat(); const requestCount = requests.length; await send('请忘记我的验收暗号'); const summariesBeforeDelete = summaries.length;
     await expect(page.locator('.memory-forget')).toContainText('已删除长期记忆');
     await expect(page.locator('.memory-forget')).toContainText(secret);
     expect(requests).toHaveLength(requestCount); expect((await memories()).map((item) => item.text)).toEqual([retained]);
+    expect(await recentText()).not.toContain('青柠山川');
     const deleteSessionId = await page.locator('.session-control select').inputValue();
     await page.screenshot({ path: info.outputPath('chat-memory-forgotten.png') });
     await assertForgotten();
@@ -110,6 +114,7 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     // Background summaries written after the deletion never carry the deleted fact either, and one was written.
     await expect.poll(() => summaries.length - summariesAfterMiss).toBeGreaterThan(0);
     expect(JSON.stringify(summaries.slice(summariesBeforeDelete))).not.toContain('青柠山川');
+    expect(await recentText()).not.toContain('青柠山川');
     // Nor does a request to forget something that was never saved; it names what the owner wants gone.
     expect(JSON.stringify(summaries)).not.toContain('合成地址甲');
     // That chat's own later turns keep it as history; fresh chats never see it.

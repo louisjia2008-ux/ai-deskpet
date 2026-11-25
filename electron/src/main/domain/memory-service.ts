@@ -7,7 +7,7 @@ const isTemporary = (text: string): boolean => /(?:今天|这次|本次|本轮|�
 import { CHAT_MEMORY_MAX_CHARACTERS } from './chat-memory-command';
 import { matchingMemories } from './chat-memory-forget';
 import type { DomainRepository } from './repository';
-import { chatMemorySource, confirmedMemoryMetadata, memoryInSession, memoryPrivacy, memoryScope, sameContextScope, stampMemoryCommandTrace } from './context-provenance';
+import { chatMemorySource, confirmedMemoryMetadata, memoryInSession, memoryPrivacy, memoryScope, sameContextScope, stampMemoryCommandTrace, withholdMemoryCommandTrace } from './context-provenance';
 
 export class MemoryService {
   constructor(private readonly repository: DomainRepository) {}
@@ -49,7 +49,8 @@ export class MemoryService {
       message.memoryEdit = result;
       state.memoryOperations.push({ operationId, digest, status: 'committed', memoryId: result.kind === 'updated' ? result.memoryId : null, revision: state.memoryRevision, committedAt: now.toISOString() });
       const affected = result.kind === 'updated' ? state.memories.filter((item) => item.id === result.memoryId) : matches.slice(0, 5);
-      stampMemoryCommandTrace(state, message, affected, previousMemory);
+      if (result.kind === 'not-found') withholdMemoryCommandTrace(state, message);
+      else stampMemoryCommandTrace(state, message, affected, previousMemory);
       return structuredClone(result);
     });
   }
@@ -102,7 +103,7 @@ export class MemoryService {
           state.memoryRevision += 1;
           state.memories = state.memories.filter((item) => item.id !== memory.id);
           result = { kind: 'deleted', memoryId: memory.id, text: memory.text, deletedAt: now.toISOString() };
-        } else if (matches.length === 0) result = { kind: 'not-found', query };
+        } else if (matches.length === 0) { result = { kind: 'not-found', query }; withholdMemoryCommandTrace(state, message); }
         else result = { kind: 'choices', query, candidates: matches.slice(0, 5).map((item) => ({ id: item.id, text: item.text, updatedAt: item.updatedAt, revision: item.contextMetadata?.revision ?? 0 })), totalMatches: matches.length };
         message.memoryForget = result;
         state.memoryOperations.push({ operationId, digest, status: 'committed', memoryId: result.kind === 'deleted' ? result.memoryId : null, revision: state.memoryRevision, committedAt: now.toISOString() });

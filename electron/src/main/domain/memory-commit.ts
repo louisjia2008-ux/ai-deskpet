@@ -211,6 +211,14 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
   // memory share its sources, so the source rule below drops them once the merged memory is deleted or corrected,
   // and a correction carries on as the current row.
   const folded = new Set<string>();
+  // A row the current profile still holds unchanged was kept by the owner after every guard there; another fact drawn
+  // from the same message as a deleted or corrected one is not dropped with it.
+  const live = new Map(current.memories.map((memory) => [memory.id, memory]));
+  const keptLive = (memory: MemoryItem, sources: string[]): boolean => {
+    const row = live.get(memory.id);
+    return row !== undefined && memoryTextDigest(row.text) === memoryTextDigest(memory.text)
+      && JSON.stringify(memoryEventIds(row, current).sort()) === JSON.stringify([...sources].sort());
+  };
   const protect = (memory: MemoryItem): boolean => {
     for (const guard of foldedGuards(memory)) {
       folded.add(memory.id);
@@ -220,8 +228,8 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
     const sources = memoryEventIds(memory, result);
     for (const guard of result.memoryTombstones) {
       // Source identity and deleted row identity dominate clocks and revisions.
-      if (guard.sourceEventIds.some((source) => sources.includes(source))
-        || (guard.memoryId === memory.id && guard.kind === 'deleted')) return false;
+      if (guard.memoryId === memory.id && guard.kind === 'deleted') return false;
+      if (guard.sourceEventIds.some((source) => sources.includes(source)) && (guard.memoryId === memory.id || !keptLive(memory, sources))) return false;
       const sameRow = guard.memoryId === memory.id;
       if (!sameRow && !sameContextScope(guard.scope, memoryScope(memory))) continue;
       if (sameRow && guard.memoryRevision !== undefined && (memory.contextMetadata?.revision ?? 0) <= guard.memoryRevision) return false;
