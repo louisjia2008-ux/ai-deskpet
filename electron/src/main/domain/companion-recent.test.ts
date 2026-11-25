@@ -210,3 +210,22 @@ it('treats the source of a duplicate merged into a kept memory as superseded whe
   recordMemorySupersession(state, kept, 'deleted');
   expect(supersededChat(state).get(user.id)).toBe('deleted');
 });
+
+it('marks a request whose offered choices named a duplicate later merged into a deleted memory, and undo does not revive it', async () => {
+  const state = createDefaultState(), at = new Date().toISOString(), sessionId = randomUUID();
+  const memory = (text: string): MemoryItem => ({ id: randomUUID(), text, tags: [], source: 'user', createdAt: at, updatedAt: at,
+    contextMetadata: confirmedMemoryMetadata({ origin: 'manual-user', sourceReferences: [{ kind: 'manual-user', actionId: randomUUID() }] }) });
+  const loose = memory('SYNTHETIC_DUPLICATE'), kept = memory('SYNTHETIC_KEPT');
+  const request: ChatMessage = { id: randomUUID(), sessionId, role: 'user', content: '忘记：SYNTHETIC', createdAt: at, status: 'complete', errorCode: null };
+  const reply: ChatMessage = { id: randomUUID(), sessionId, role: 'assistant', content: 'x', createdAt: at, status: 'complete', errorCode: null,
+    memoryForget: { kind: 'choices', query: 'SYNTHETIC', totalMatches: 2, candidates: [{ id: loose.id, text: loose.text, updatedAt: at }, { id: randomUUID(), text: 'other', updatedAt: at }] } };
+  state.chatMessages.push(request, reply);
+  state.memories.push(kept);
+  const change = { id: randomUUID(), kind: 'merge' as const, removed: [loose], resultId: kept.id, created: false, after: kept.text, undoneAt: null };
+  state.memorySleep.reports.push({ id: randomUUID(), at, provider: 'fixture', changes: [change] });
+  state.memorySleep.recallReplacements[loose.id] = kept.id;
+  recordMemorySupersession(state, kept, 'deleted');
+  state.memories = [];
+  expect(supersededChat(state).get(request.id)).toBe('deleted');
+  expect(state.memoryTombstones.map(guard => guard.memoryId).sort()).toEqual([kept.id, loose.id].sort());
+});
