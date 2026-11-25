@@ -4345,7 +4345,14 @@ export class AppController {
     // for a bare 「忘记X」/「把X改成Y」: a model call already made goes to the model again; otherwise it stays local,
     // since the memory it named may have been deleted since and the model must not see its text.
     const commandText = retry?.original ?? content;
-    const retryRoute = retry === null ? undefined : (retry.message.requestReceipts?.length ?? 0) > 0 ? 'model' : 'local';
+    // The first attempt reached the model if a request was actually sent or partial reply text came back (an imported
+    // native turn keeps its text without receipts). A request only prepared, or queued and cancelled, did not.
+    const reachedModel = (receipt: NonNullable<ChatMessage['requestReceipts']>[number]): boolean => receipt.phase === 'fetch-invoked'
+      || receipt.phase === 'response-received' || receipt.observations.some((item) => item.phase === 'fetch-invoked' || item.phase === 'response-received');
+    // A memory receipt on the reply means the first attempt was a command, whatever text it had appended.
+    const retryRoute = retry === null ? undefined
+      : retry.message.memoryForget || retry.message.memoryEdit || retry.message.memoryReceipts?.length ? 'local'
+        : retry.message.content.trim().length > 0 || (retry.message.requestReceipts ?? []).some(reachedModel) ? 'model' : 'local';
     // A first attempt that called the model was not a memory command of any kind.
     const commandsAllowed = !hostCommands && retryRoute !== 'model';
     const memoryCommand = commandsAllowed ? parseChatMemoryCommand(commandText, history) : null;

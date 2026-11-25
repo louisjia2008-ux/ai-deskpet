@@ -58,11 +58,15 @@ export const SpeechBubble = ({ text, revision, expiresAt, closeLabel, sessionId,
   const element = useRef<ComponentRef<'div'>>(null);
   useEffect(() => {
     if (held || opening) { setFading(false); return; }
-    // The fade lasts as long as the page shows it (shorter with reduced motion), and the line is gone when it ends.
-    const fadeMs = motionMs('--bubble-fade', element.current ?? document.documentElement) || FADE_MS;
-    const fade = window.setTimeout(() => setFading(true), Math.max(0, deadline - Date.now()));
-    const expire = window.setTimeout(() => dismiss(false), Math.max(0, deadline + fadeMs - Date.now()));
-    return () => { window.clearTimeout(fade); window.clearTimeout(expire); };
+    // The fade lasts as long as the page shows it when it starts (shorter with reduced motion), and the line is gone
+    // when it ends.
+    let expire: number | undefined;
+    const fade = window.setTimeout(() => {
+      setFading(true);
+      const fadeMs = motionMs('--bubble-fade', element.current ?? document.documentElement) || FADE_MS;
+      expire = window.setTimeout(() => dismiss(false), Math.max(0, deadline + fadeMs - Date.now()));
+    }, Math.max(0, deadline - Date.now()));
+    return () => { window.clearTimeout(fade); if (expire !== undefined) window.clearTimeout(expire); };
   }, [deadline, dismiss, held, opening]);
   const extend = (): void => setDeadline(current => Math.max(current, Date.now() + HOLD_GRACE_MS));
 

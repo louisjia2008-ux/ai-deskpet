@@ -560,7 +560,7 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
     if (selectedSession.current !== sessionId) {
       selectedSession.current = sessionId;
       followOutput.current = true;
-      setMessages([]); setLoadedSession(null); setHistoryRead(null); setArriving(new Set());
+      setMessages([]); setLoadedSession(null); setHistoryRead(null); setArriving(new Set()); seenMessages.current = null;
       const externalRun = sessionRuns.current.get(sessionId);
       activeRun.current = externalRun?.runId ?? null;
       setRunning(externalRun?.runId ?? null);
@@ -803,7 +803,8 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
       if (!completedRuns.current.has(result.runId)) { activeRun.current = result.runId; setRunning(result.runId); }
       const reload = async (): Promise<void> => {
         const loaded = await window.deskpet.chat.listMessages(activeSession);
-        if (selectedSession.current === activeSession) setMessages((current) => reconcileChatMessages(loaded, current));
+        // A read that succeeds after a failed first one becomes the baseline; later messages still come in.
+        if (selectedSession.current === activeSession) { setMessages((current) => reconcileChatMessages(loaded, current)); setLoadedSession(activeSession); setHistoryRead(activeSession); }
       };
       // The message is already accepted; a failed reload is retried quietly, then offered as a reload, never as a resend.
       await reload().catch(() => new Promise<void>(resolve => window.setTimeout(resolve, 1_000)).then(reload)).catch(() => setReloadFailed(activeSession));
@@ -823,8 +824,9 @@ const ChatPage = ({ memoryDraftRequest, artifactDraftRequest, onContinueArtifact
     try {
       const result = await window.deskpet.chat.retry(messageId);
       if (!completedRuns.current.has(result.runId)) { activeRun.current = result.runId; setRunning(result.runId); }
-      const loaded = await window.deskpet.chat.listMessages(selectedSession.current);
+      const retried = selectedSession.current, loaded = await window.deskpet.chat.listMessages(retried);
       setMessages((current) => reconcileChatMessages(loaded, current));
+      if (selectedSession.current === retried) { setLoadedSession(retried); setHistoryRead(retried); }
     } catch { setSendError(true); }
     finally { sending.current = false; setSubmitting(false); }
   };
