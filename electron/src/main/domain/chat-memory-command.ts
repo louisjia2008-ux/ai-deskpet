@@ -15,7 +15,7 @@ export const parseChatMemoryCommand = (query: string, history: readonly ChatMess
   if (match === null) return null;
   // 「记住了」「记下啦，谢谢」 acknowledge; they are not a request to save 「了」. Only a particle right after the
   // verb and before punctuation counts: 「记住：了不起的盖茨比…」 and 「保存为长期记忆 了了是…」 save their text.
-  const particle = prefix ? input.match(/^(?:请)?(?:(?:帮我|替我|为我|帮忙)\s*)?(?:记下来|记住|记下|保存到(?:长期)?记忆[里中]?|保存为(?:长期)?记忆)(?:了|啦|喽|咯)(?=$|[\s，,。.!！~～：:])(\s*[：:])?/u) : null;
+  const particle = prefix ? input.match(/^(?:请)?(?:(?:帮我|替我|为我|帮忙)\s*)?(?:记下来|记住|记下|保存到(?:长期)?记忆[里中]?|保存为(?:长期)?记忆)(?:了|啦|喽|咯)(?=$|[\s，,。.!！~～：:…⋯])(\s*[：:])?/u) : null;
   if (particle && !particle[1]) return null;
   if (/[?？]\s*$/u.test(input)) return null;
   // Meta requests and an explicitly non-executing annotation are not consent.

@@ -303,3 +303,34 @@ it('lets a duplicate brought back by a pre-merge restore stand on its own again'
     sourceEventIds: [], identityKey: null, scope: { kind: 'global' as const }, deletedAt: new Date(Date.now() + 1000).toISOString(), kind: 'deleted' as const }] };
   expect(supersededChat(deleted).get(source.id)).toBeUndefined();
 });
+
+it('keeps the merge of a duplicate restored for review, so the correction still covers its chat', async () => {
+  const { reconcileMemoryProtection } = await import('./memory-commit');
+  const { supersededChat } = await import('./companion-recent-state');
+  const f = await fixture((entries) => entries.length >= 2 ? { merge: [{ ids: [f.n(entries, '我对花生过敏'), f.n(entries, '用户对花生过敏')], text: 'unused' }] } : {});
+  const kept = await f.write('我对花生过敏'); const duplicate = await f.learn('用户对花生过敏');
+  const source = f.repo.snapshot().chatMessages.find((message) => message.content === '用户对花生过敏')!;
+  const beforeMerge = f.repo.snapshot();
+  await f.service.runNow();
+  f.later(1); await f.memory.upsert({ id: kept, text: '我对花生不过敏', tags: [] });
+  const restored = reconcileMemoryProtection(beforeMerge, f.repo.snapshot());
+  expect(restored.memories.find((item) => item.id === duplicate)?.contextMetadata?.reviewReason).toBe('protection-conflict');
+  expect(restored.memorySleep.mergeLineage).toEqual([expect.not.objectContaining({ undoneAt: expect.anything() })]);
+  expect(supersededChat(restored).get(source.id)).toBe('corrected');
+});
+
+it('does not put a merge back in effect when the memory it was folded into is gone', async () => {
+  const { reconcileMemoryProtection } = await import('./memory-commit');
+  const f = await fixture((entries) => entries.length >= 2 ? { merge: [{ ids: [f.n(entries, '我对花生过敏'), f.n(entries, '用户对花生过敏')], text: 'unused' }] } : {});
+  const kept = await f.write('我对花生过敏'); const duplicate = await f.learn('用户对花生过敏');
+  const beforeMerge = f.repo.snapshot();
+  await f.service.runNow();
+  const afterMerge = f.repo.snapshot();
+  // Back to before the merge, delete only the kept memory, then to after the merge and before it again.
+  await f.repo.transaction((state) => { Object.assign(state, reconcileMemoryProtection(beforeMerge, f.repo.snapshot())); });
+  f.later(1); await f.memory.remove(kept);
+  await f.repo.transaction((state) => { Object.assign(state, reconcileMemoryProtection(afterMerge, f.repo.snapshot())); });
+  expect(f.repo.snapshot().memories.map((item) => item.id)).toEqual([]);
+  const last = reconcileMemoryProtection(beforeMerge, f.repo.snapshot());
+  expect(last.memories.map((item) => item.id)).toEqual([duplicate]);
+});

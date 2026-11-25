@@ -198,8 +198,10 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
   // Folded guards cover a duplicate with sources of its own (folded into a handwritten memory). Parts of a merged
   // memory share its sources, so the source rule below drops them once the merged memory is deleted or corrected,
   // and a correction carries on as the current row.
+  const folded = new Set<string>();
   const protect = (memory: MemoryItem): boolean => {
     for (const guard of foldedGuards(memory)) {
+      folded.add(memory.id);
       if (guard.kind === 'deleted') return false;
       if (!memory.contextMetadata?.protectionAcknowledgements?.includes(guard.id)) requireMemoryReview(memory, 'protection-conflict');
     }
@@ -240,14 +242,16 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
     result.memories.push(memory);
   }
   result.memories = result.memories.filter(protect);
-  // The merges follow the restored memories. A duplicate the restore brings back stands on its own again, so its
-  // merge counts as undone; a merge undone after the backup, whose duplicate does not come back, is in effect again.
+  // The merges follow the restored memories. A duplicate the restore brings back untouched stands on its own again,
+  // so its merge counts as undone; one brought back for review because what it was folded into changed keeps the
+  // merge, so that change still covers its chat. A merge undone after the backup is in effect again when the
+  // restored profile holds the merged result: the kept memory without the duplicate.
   const linkKey = (link: { memoryId: string; resultId: string; at: string }): string => `${link.memoryId}>${link.resultId}@${link.at}`;
   const activeInBackup = new Set(mergeLinks(restored.memorySleep).filter((link) => !link.undoneAt).map(linkKey));
   const present = new Set(result.memories.map((memory) => memory.id)), restoredAt = new Date().toISOString();
   result.memorySleep.mergeLineage = result.memorySleep.mergeLineage.map((link) => {
-    if (!link.undoneAt) return present.has(link.memoryId) ? { ...link, undoneAt: restoredAt } : link;
-    if (present.has(link.memoryId) || !activeInBackup.has(linkKey(link))) return link;
+    if (!link.undoneAt) return present.has(link.memoryId) && !folded.has(link.memoryId) ? { ...link, undoneAt: restoredAt } : link;
+    if (present.has(link.memoryId) || !present.has(link.resultId) || !activeInBackup.has(linkKey(link))) return link;
     const active = { ...link }; delete active.undoneAt; return active;
   });
   // Deletions newer than the backup may rest on cleanup history it never saw; the recent summary covers only the
