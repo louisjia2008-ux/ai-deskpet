@@ -4394,6 +4394,8 @@ export class AppController {
           && (channel.origin === 'telegram' || isOwnerDiaryChannel(channel)) ? { companionSource: channel.origin } : {}),
       })).id]
       : retry.userMessageIds;
+    // A retry records its route before its old reply is cleared, so a failed write leaves the reply and its evidence.
+    if (retry !== null && modelTurn && commandShaped) await this.#memory.recordModelRoute(retry.message.id);
     const assistant = retry === null
       ? await this.#chat.addMessage({ sessionId, role: 'assistant', content: '', status: 'streaming', errorCode: null })
       : await this.#chat.updateMessage(retry.message.id, { content: '', status: 'streaming', errorCode: null });
@@ -4401,7 +4403,7 @@ export class AppController {
       await this.#chat.updateMessage(assistant.id, { content: '', status: 'cancelled', errorCode: null });
       throw new Error('chat.interrupted');
     }
-    if (modelTurn && commandShaped) await this.#memory.recordModelRoute(assistant.id);
+    if (retry === null && modelTurn && commandShaped) await this.#memory.recordModelRoute(assistant.id);
     this.windows.send('console', 'chat:event', { type: 'started', runId, sessionId, messageId: assistant.id } satisfies ChatEvent);
     this.#chatInteractions.start(runId, sessionId, assistant.id, interactive && modelTurn && !illustrative && !managedMinecraft);
     let binding: Awaited<ReturnType<ProviderService['captureBinding']>> | null;
