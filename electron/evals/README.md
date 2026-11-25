@@ -16,7 +16,9 @@ with the production instructions, so they match what the app sends.
 
 ```sh
 # once: store an OpenAI API key in the login keychain (it prompts for the key)
-security add-generic-password -s deskpet-eval -a openai -w
+# (macOS's prompt cuts input at 128 characters, too short for an sk-proj key, so read it from the clipboard;
+#  the key is briefly visible to other local processes as an argument)
+security add-generic-password -U -s deskpet-eval -a openai -w "$(pbpaste)"; pbcopy </dev/null
 
 npm run eval:memory      # auto-memory + memory-sleep
 npm run eval:persona     # persona
@@ -33,7 +35,7 @@ Settings (environment variables):
   the full JSON, including every model output.
 - `OPENAI_API_KEY` works instead of the keychain item. It is only ever sent to api.openai.com.
 - `DESKPET_EVAL_BASE_URL`: another OpenAI-compatible endpoint. It uses its own key: `DESKPET_EVAL_API_KEY`, or the
-  keychain item `deskpet-eval` with the endpoint's host name as account.
+  keychain item `deskpet-eval-endpoint` with the endpoint's host name as account.
 - Behind a proxy, Node's fetch does not use the system setting: add `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://host:port`.
 
 The suites cost a few dozen requests each and are not part of `npm test`. All cases are synthetic; add real ones

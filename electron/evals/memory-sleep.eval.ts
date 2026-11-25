@@ -38,8 +38,10 @@ it('tidies memory without losing or inventing facts, as the app applies it', asy
       const final = repository.snapshot().memories.map((memory) => ({ text: memory.text, layer: memory.contextMetadata?.layer ?? 'fixed' }));
       const checks = sleepChecks(item, changes, final);
       const listed = JSON.parse(recorder.requests[0]?.messages[1]?.content ?? '{"entries":[]}') as { entries: unknown[] };
-      const fixedTexts = new Set(item.entries.filter((entry) => entry.kind === 'fixed').map((entry) => entry.text));
-      const shown = changes.map((change) => change.kind === 'merge' && change.after !== null && fixedTexts.has(change.after) ? { ...change, into: 'owner entry' } : change);
+      // A merge into an owner entry is one the app applied to that existing entry, not a new entry that happens to read the same.
+      const fixedIds = new Set(seeded.filter((_, index) => item.entries[index]!.kind === 'fixed').map((memory) => memory.id));
+      const applied = repository.snapshot().memorySleep.reports.at(-1)?.changes ?? [];
+      const shown = changes.map((change, index) => { const raw = applied[index]; return change.kind === 'merge' && raw && !raw.created && raw.resultId !== null && fixedIds.has(raw.resultId) ? { ...change, into: 'owner entry' } : change; });
       const verdict = invalid ? undefined : await judge(RUBRIC, { entries: listed.entries, changes: shown }, 4);
       return { checks, ...(verdict ? { judge: verdict } : {}), ...(invalid ? { invalid } : {}),
         output: { raw: reply?.text ?? null, plan, changes, lastError: status.lastError ?? null }, ms: Date.now() - started };

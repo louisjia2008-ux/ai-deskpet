@@ -45,7 +45,8 @@ it('saves lasting facts and nothing else, as the app does', async () => {
       if (reply) { try { proposed = parseAutoMemoryOutput(reply.text).map((entry) => entry.text); } catch { /* Invalid below. */ } }
       const invalid = !reply ? undefined : !reply.finished ? 'reply cut off' : proposed === null ? 'not the requested JSON' : undefined;
       const checks = autoMemoryChecks(item, saved);
-      const verdict = invalid ? undefined : await judge(RUBRIC, { sent, saved }, 4);
+      // Filtered before the model, a case tests the host alone: its checks score it, not the judge.
+      const verdict = invalid || !request ? undefined : await judge(RUBRIC, { sent, saved }, 4);
       return { checks, modelAnswered: Boolean(request), ...(verdict ? { judge: verdict } : {}), ...(invalid ? { invalid } : {}),
         output: { sent: Boolean(request), raw: reply?.text ?? null, proposed, saved, status: service.attempts().errorCode ?? null }, ms: Date.now() - started };
     } finally { await dispose(); }

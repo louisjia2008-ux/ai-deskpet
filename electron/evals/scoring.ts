@@ -41,6 +41,7 @@ export const sleepChecks = (item: SleepCase, changes: readonly SleepChange[], fi
   const deep = (n: number): boolean => final.some((memory) => memory.layer === 'deep' && (memory.text === text(n)
     || merges.some((change) => change.before.includes(text(n)) && change.after === memory.text)));
   for (const n of item.promote ?? []) checks.push({ name: `应提升：${n}`, passed: deep(n) });
+  for (const n of item.shallow ?? []) checks.push({ name: `应留在浅层：${n}`, passed: !deep(n) });
   for (const n of item.drop ?? []) checks.push({ name: `应删除：${n}`, passed: removed(n) });
   // Kept means still there as written (a promotion keeps the text); being merged into something else is not keeping it.
   for (const n of item.keep ?? []) checks.push({ name: `应保留：${n}`, passed: final.some((memory) => memory.text === text(n)) });

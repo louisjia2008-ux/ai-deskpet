@@ -58,13 +58,16 @@ it('speaks in character and stays useful and honest', async () => {
     const projected = new Set([...prepared.projection.memoryReferences.map((reference) => reference.id), ...prepared.projection.historyMessageIds]);
     const given = { moment, history: history.filter((turn) => projected.has(turn.id)).map(({ role, content }) => ({ role, content })),
       memories: memories.filter((item) => projected.has(item.id)).map((item) => item.text) };
+    // These cases expect their full history; an excerpt instead of the original would mislead the judge.
+    if ((prepared.projection.summaryReferences ?? []).length > 0) throw new Error('history was sent as an excerpt');
     const reply = await complete(request);
     const filter = new QqStickerReplyFilter(), text = (filter.push(reply.text) + filter.flush()).trim();
     const checks = [{ name: '心情标签可用', passed: filter.mood !== null },
       { name: '上下文完整送达', passed: given.history.length === history.length && given.memories.length === memories.length },
       ...personaChecks(item, { text, finished: reply.finished }, profile.persona.addressUser)];
-    const verdict = await judge(rubric(sheet) + item.focus, { query: item.query, ...given, reply: text }, 5);
-    return { checks, judge: verdict, ...(reply.finished ? {} : { invalid: 'reply cut off' }), output: { reply: text, mood: filter.mood, given }, ms: reply.ms };
+    const invalid = !reply.finished ? 'reply cut off' : text === '' ? 'empty reply' : undefined;
+    const verdict = invalid ? undefined : await judge(rubric(sheet) + item.focus, { query: item.query, ...given, reply: text }, 5);
+    return { checks, ...(verdict ? { judge: verdict } : {}), ...(invalid ? { invalid } : {}), output: { reply: text, mood: filter.mood, given }, ms: reply.ms };
   });
   expect(results.length).toBeGreaterThan(0);
 });

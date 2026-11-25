@@ -44,7 +44,7 @@ export const SLEEP_INSTRUCTION = 'You tidy the long-term memory a personal assis
   + 'merge: entries that say the same thing, or where a newer one corrects an older one. Write one sentence that keeps every detail still true; the newer statement wins. '
   + 'When the group contains a fixed entry the others are only duplicates of it and text is ignored; a group has at most one fixed entry. Set deep to true when the result is a stable trait. '
   + 'promote: shallow entries that are stable facts about who the user is, or lasting preferences worth having in every conversation. Be selective; the deep profile stays under a dozen entries. '
-  + 'Current activities, plans and phases (something being learned or prepared for, other people\'s present circumstances) stay shallow. '
+  + 'Keep time-limited plans, temporary activities, short-lived phases and other people\'s passing circumstances shallow. An established role, enduring routine or sustained commitment can be deep even when phrased as something the user is doing now; ongoing activity alone is not evidence of stability. This applies to promote and to merge deep alike. '
   + 'drop: shallow entries that are trivial, one-off, about a finished task, or no longer true. When unsure, keep. '
   + 'Never invent facts and never use a number that is not listed; a number appears at most once in the whole answer. '
   + 'Merged text is in the user\'s language, starts with "用户" or "The user", and has at most 160 characters. If nothing needs doing return empty arrays. No markdown and no tool calls.';
