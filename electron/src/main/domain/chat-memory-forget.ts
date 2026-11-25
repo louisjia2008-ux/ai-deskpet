@@ -5,7 +5,8 @@ import { CHAT_MEMORY_MAX_CHARACTERS } from './chat-memory-command';
 // reported. A bare 「忘记X」 that matches nothing is ordinary chat instead.
 export type ChatForgetCommand = { kind: 'forget'; query: string; explicit: boolean } | { kind: 'clarify' };
 // 「忘记带伞了」 reports something the user forgot; it is not a request.
-export const BARE_STATEMENT = /(?:了|啦|呢|呀|嘛|哈)[。.!！~～…]*$/u;
+// Only a completed-action particle (optionally softened) marks one: 「…是哈哈」 is not a report.
+export const BARE_STATEMENT = /(?:了|啦)(?:呢|呀|嘛|哈)?[。.!！~～…⋯]*$/u;
 const POLITE = /^(?:请|帮我|替我|为我|帮忙)/u;
 
 // Only an explicit current-user instruction can reach deletion. Matching stays

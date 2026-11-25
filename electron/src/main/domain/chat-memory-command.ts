@@ -19,8 +19,8 @@ export const parseChatMemoryCommand = (query: string, history: readonly ChatMess
   const particle = prefix ? input.match(/^(?:请)?(?:(?:帮我|替我|为我|帮忙)\s*)?(?:记下来|记住|记下|保存到(?:长期)?记忆[里中]?|保存为(?:长期)?记忆)(?:了|啦|喽|咯)(?=$|[\s，,。.!！~～：:…⋯])/u) : null;
   const afterVerb = particle ? input.slice(particle[0].length) : '';
   // A colon introduces the text to save, whatever it is: 「请记住啦：谢谢」 saves 「谢谢」.
-  const colon = /^\s*[：:]/u.test(afterVerb);
-  const afterParticle = colon ? afterVerb.replace(/^\s*[：:]\s*/u, '') : afterVerb.replace(/^[\s，,。.!！~～…⋯]+/u, '');
+  const colon = /^[\s，,。.!！~～…⋯]*[：:]/u.test(afterVerb);
+  const afterParticle = colon ? afterVerb.replace(/^[\s，,。.!！~～…⋯]*[：:]\s*/u, '') : afterVerb.replace(/^[\s，,。.!！~～…⋯]+/u, '');
   if (particle && !colon
     && /^(?:(?:(?:谢谢|多谢)(?:你|您|啦)?|谢啦|好的|好|嗯|thanks|thank you)[\s，,。.!！~～…⋯]*)*$/iu.test(afterParticle)) return null;
   if (/[?？]\s*$/u.test(input)) return null;
