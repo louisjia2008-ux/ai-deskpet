@@ -36,6 +36,7 @@ electron/out/
 electron/coverage/
 electron/playwright-report/
 electron/test-results/
+electron/eval-results/
 electron/.cache/
 __pycache__/
 *.py[cod]
