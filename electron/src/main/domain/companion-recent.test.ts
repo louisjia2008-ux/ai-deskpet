@@ -256,3 +256,19 @@ it('does not carry a correction made before a merge onto the duplicate merged in
   state.memoryTombstones.push(guard(later));
   expect(supersededChat(state).get(user.id)).toBe('corrected');
 });
+
+it('keeps a request that re-saves the corrected fact, though the save reuses the corrected memory', async () => {
+  const f = await fixture();
+  const chat = new ChatService(f.repo), memory = new MemoryService(f.repo);
+  const kept = await memory.upsert({ id: randomUUID(), text: 'SYNTHETIC_OLD_WORDS', tags: [] });
+  f.advance(1_000);
+  await memory.upsert({ id: kept.id, text: 'SYNTHETIC_NEW_WORDS', tags: [] });
+  f.advance(1_000);
+  const session = await chat.createSession('Synthetic fixture', 'normal', new Date(f.now()));
+  const user = await chat.addMessage({ sessionId: session.id, role: 'user', content: '请记住：SYNTHETIC_NEW_WORDS', status: 'complete', errorCode: null }, new Date(f.now()));
+  const reply = await chat.addMessage({ sessionId: session.id, role: 'assistant', content: '好的。', status: 'complete', errorCode: null }, new Date(f.now()));
+  const receipt = await memory.saveFromChat(reply.id, 'SYNTHETIC_NEW_WORDS', undefined, new Date(f.now()));
+  expect(receipt.memoryId).toBe(kept.id);
+  expect(f.repo.snapshot().memoryTombstones.map(guard => guard.kind)).toEqual(['corrected']);
+  expect(supersededChat(f.repo.snapshot()).has(user.id)).toBe(false);
+});

@@ -355,6 +355,8 @@ it('stops injecting a diary built on a memory that was later corrected, while re
   memory.text = '主人住在合成新城。'; memory.contextMetadata!.revision = 2;
   expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
   expect(f.journal.referenceRetained(reference!, f.state, () => false)).toBe(true);
+  // Still the owner's diary of that day: the synced copy stays.
+  expect(f.journal.exportableCopies(f.state, () => false)).toHaveLength(1);
 });
 
 it('leaves a message out of new diaries once the memory taken from it is deleted, and withdraws a diary written from it', async () => {

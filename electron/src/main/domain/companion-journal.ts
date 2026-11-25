@@ -58,7 +58,7 @@ export function diaryMaterial(state: PersistentState, date: string, timezone: st
 
 /** Housekeeping can retire a summary without retracting previously approved text. */
 function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id: string) => boolean,
-  resolveDiary: (reference: DiaryReference) => Provenance | undefined): 'current' | 'retired' | 'withdrawn' {
+  resolveDiary: (reference: DiaryReference) => Provenance | undefined): 'current' | 'superseded' | 'retired' | 'withdrawn' {
   const sessions = new Map(state.chatSessions.map(session => [session.id, session]));
   const messages = new Map(state.chatMessages.map(message => [message.id, message]));
   const memories = new Map(state.memories.map(memory => [memory.id, memory]));
@@ -72,6 +72,8 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
     }
   }
   let retired = false;
+  // A later correction: the entry is no longer fed into new conversations, but it is still the owner's diary of that day.
+  let corrected = false;
   // Each memory with the oldest revision any source relied on.
   const memorySources = new Map<string, number>();
   const relyOn = (id: string, revision: number): void => { memorySources.set(id, Math.min(revision, memorySources.get(id) ?? revision)); };
@@ -96,7 +98,7 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
     // A deleted memory withdraws what was written from its message; a correction only stops new use.
     const changed = superseded.get(id);
     if (changed === 'deleted') return 'withdrawn';
-    if (changed === 'corrected') retired = true;
+    if (changed === 'corrected') corrected = true;
     if (session.archivedAt || session.analysisSource) retired = true;
     for (const reference of message.contextTrace.memoryReferences) relyOn(reference.id, reference.revision);
     for (const id of message.contextTrace.historyMessageIds) pending.push({ id, owner: false });
@@ -115,11 +117,11 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
   const checkedMemories = new Set<string>();
   for (const [id, revision] of memorySources) {
     // A later correction leaves the old wording out of new conversations without retracting past replies.
-    if ((correctedAt.get(id) ?? -1) >= revision) retired = true;
+    if ((correctedAt.get(id) ?? -1) >= revision) corrected = true;
     // So does a correction anywhere along what it was merged into. Walked on its own, whatever was checked first.
     for (let next = replacementOf(id), walked = new Set<string>(); typeof next === 'string' && !walked.has(next);
       walked.add(next), next = memories.has(next) ? null : replacementOf(next)) {
-      if (correctedAt.has(next)) retired = true;
+      if (correctedAt.has(next)) corrected = true;
     }
     let current = id;
     const seen = new Set<string>();
@@ -140,7 +142,7 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
     }
     for (const checked of seen) checkedMemories.add(checked);
   }
-  return retired ? 'retired' : 'current';
+  return retired ? 'retired' : corrected ? 'superseded' : 'current';
 }
 
 export class CompanionJournal {
@@ -197,7 +199,7 @@ export class CompanionJournal {
   /** An unreadable journal cannot establish that any existing copy was withdrawn. */
   exportableCopies(state: PersistentState, suppressed: (id: string) => boolean): KnowledgeDiaryCopy[] | null {
     if (this.#loadFailed) return null;
-    return this.#state.entries.filter(entry => this.#sourceStatus(entry, state, suppressed) === 'current')
+    return this.#state.entries.filter(entry => ['current', 'superseded'].includes(this.#sourceStatus(entry, state, suppressed)))
       .map(({ date, createdAt, text }) => ({ date, createdAt, text }));
   }
   context(state: PersistentState, destination: 'local' | 'remote', suppressed: (id: string) => boolean) {

@@ -763,13 +763,15 @@ export class WeChatCloud {
         await authorize();
         if (await this.providers.credentialReference(route.providerId) !== credentialRef)
           throw Error('wechat.unavailable');
-        assertCurrent();
+        // A reply written from context the owner has since withdrawn (a memory deleted meanwhile) is not delivered.
+        assertSendable();
         if (!complete) return { error: 'reply.invalid' };
         this.controls.modelSucceeded?.(scope, route);
         const result = visibleReply(text, input, context?.name ?? 'DeskPet');
         if (result) {
           const { reply, sticker, mood } = result;
           await this.#completed(input, { reply, mood, route, localModel: null, destination: 'remote' });
+          assertSendable();
           return { reply, sticker, routeFingerprint, ...(context?.recent && input.target === 'private' ? { privateContext: true } : {}) };
         }
       }

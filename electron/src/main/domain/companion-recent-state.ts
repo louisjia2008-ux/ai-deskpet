@@ -37,9 +37,10 @@ export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'me
     if (change.kind === 'merge' && !change.undoneAt && change.resultId !== null)
       merged.set(change.resultId, [...(merged.get(change.resultId) ?? []), ...change.removed.map(memory => ({ memory, at: Date.parse(report.at) }))]);
   }
-  const byEvidence = new Map<string, Superseded>(), byMemory = new Map<string, Superseded>();
+  const byEvidence = new Map<string, Superseded>(), byMemory = new Map<string, Array<{ kind: Superseded; at: number }>>();
+  const guarded = (id: string, kind: Superseded, at: number): void => { byMemory.set(id, [...(byMemory.get(id) ?? []), { kind, at }]); };
   for (const guard of state.memoryTombstones) {
-    byMemory.set(guard.memoryId, worse(byMemory.get(guard.memoryId), guard.kind)!);
+    guarded(guard.memoryId, guard.kind, Date.parse(guard.deletedAt));
     for (const source of guard.sourceEventIds) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
     // Only a guard recorded after the merge speaks for what was merged; an earlier correction predates it.
     const after = Date.parse(guard.deletedAt), mergedBefore = (id: string): Memory[] =>
@@ -49,18 +50,27 @@ export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'me
       const duplicate = pending.pop()!;
       if (seen.has(duplicate.id)) continue;
       seen.add(duplicate.id);
-      byMemory.set(duplicate.id, worse(byMemory.get(duplicate.id), guard.kind)!);
+      guarded(duplicate.id, guard.kind, Date.parse(guard.deletedAt));
       for (const source of evidenceOf(duplicate)) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
       pending.push(...mergedBefore(duplicate.id));
     }
   }
   const mark = (id: string, kind: Superseded | undefined): void => { const next = worse(result.get(id), kind); if (next) result.set(id, next); };
   // What a reply's memory request touched, including the candidates it offered (a backup may predate the choice).
+  // Only what happened to the memory at or after the request acted on it: a fact re-saved after an earlier
+  // correction is the new fact (the save reuses the memory), not the corrected one.
   const outcome = (message: PersistentState['chatMessages'][number]): Superseded | undefined => {
-    const ids = [message.memoryReceipts?.[0]?.memoryId,
-      ...(message.memoryForget?.kind === 'deleted' ? [message.memoryForget.memoryId] : message.memoryForget?.kind === 'choices' ? message.memoryForget.candidates.map(item => item.id) : []),
-      ...(message.memoryEdit?.kind === 'updated' ? [message.memoryEdit.memoryId] : message.memoryEdit?.kind === 'choices' ? message.memoryEdit.candidates.map(item => item.id) : [])];
-    return ids.reduce<Superseded | undefined>((kind, id) => worse(kind, id === undefined ? undefined : byMemory.get(id)), undefined);
+    const touched: Array<[string, string]> = [];
+    const receipt = message.memoryReceipts?.[0];
+    if (receipt) touched.push([receipt.memoryId, receipt.savedAt]);
+    const forget = message.memoryForget, edit = message.memoryEdit;
+    if (forget?.kind === 'deleted') touched.push([forget.memoryId, forget.deletedAt]);
+    if (forget?.kind === 'choices') for (const item of forget.candidates) touched.push([item.id, message.createdAt]);
+    if (edit?.kind === 'updated') touched.push([edit.memoryId, edit.updatedAt]);
+    if (edit?.kind === 'choices') for (const item of edit.candidates) touched.push([item.id, message.createdAt]);
+    let kind: Superseded | undefined;
+    for (const [id, at] of touched) for (const guard of byMemory.get(id) ?? []) if (guard.at >= Date.parse(at)) kind = worse(kind, guard.kind);
+    return kind;
   };
   // A request is every user message since the previous reply (follow-ups sit before the reply they join).
   const requests = new Map<string, { ids: string[]; kind: Superseded | undefined }>();
