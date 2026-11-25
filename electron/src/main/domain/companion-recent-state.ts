@@ -65,7 +65,7 @@ export function recentSources(state: RecentContextState, now: number): RecentSou
   return state.companionRecent.entries.flatMap<RecentSource>(entry => {
     const at = Date.parse(entry.at);
     if (at > now || at <= now - RECENT_WINDOW_MS || at <= clearedAt) return [];
-    if (entry.source === 'minecraft') return [{ id: entry.id, source: entry.source, text: entry.text, localOnly: true }];
+    if (entry.source === 'minecraft') return memoryCommand(entry.text) ? [] : [{ id: entry.id, source: entry.source, text: entry.text, localOnly: true }];
     const session = sessions.get(entry.sessionId), message = messages.get(entry.id);
     if (!session || session.deletedAt || session.archivedAt || session.analysisSource || session.companionScope === 'group'
       || session.wechatTranscript === 'group' || session.wechatTranscript === 'friend'

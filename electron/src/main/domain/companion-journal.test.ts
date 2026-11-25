@@ -341,3 +341,18 @@ it.each(['edit', 'delete', 'source-private'] as const)('withdraws a live ChatSer
     expect(() => chat.assertPreparedRequest(nextAnswer.id, next.requestId)).not.toThrow();
   }
 });
+
+it('stops injecting a diary built on a memory that was later corrected, while replies that used it stay valid', async () => {
+  const f = await fixture();
+  const memory = globalMemory('主人住在合成旧城。');
+  f.state.memories.push(memory);
+  await f.journal.tick(f.input);
+  expect(f.journal.list()[0]!.memories.map(item => item.id)).toContain(memory.id);
+  const [reference] = f.journal.context(f.state, 'remote', () => false).references;
+  // As MemoryService records a correction: the guard holds the revision the old text had.
+  f.state.memoryTombstones.push({ id: randomUUID(), memoryId: memory.id, textDigest: 'b'.repeat(64), sourceEventIds: [], identityKey: null,
+    scope: { kind: 'global' }, deletedAt: stamp, kind: 'corrected', memoryRevision: 1 });
+  memory.text = '主人住在合成新城。'; memory.contextMetadata!.revision = 2;
+  expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
+  expect(f.journal.referenceRetained(reference!, f.state, () => false)).toBe(true);
+});

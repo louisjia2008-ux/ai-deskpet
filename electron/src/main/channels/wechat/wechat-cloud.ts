@@ -714,6 +714,12 @@ export class WeChatCloud {
       const credentialRef = captured.credentialRef;
       const context = contextFor('remote');
       expectedContext = contextKey(context);
+      // The last synchronous check before sending: a memory deleted or corrected while the
+      // request was waiting for the profile to settle must not leave in the prepared context.
+      const assertSendable = (): void => {
+        assertCurrent();
+        if (contextKey(contextFor('remote')) !== expectedContext) throw Error('wechat.unavailable');
+      };
       const identity = input.target === 'private' ? context?.identity ?? [] : [];
       const system = [
         ...(identity.length === 0 && context?.persona ? [context.persona] : []),
@@ -746,7 +752,7 @@ export class WeChatCloud {
           model: route.model, executionMode: 'background-text',
           messages: [...identity.map(content => ({ role: 'system' as const, content })),
             { role: 'system', content: prompt }, { role: 'user', content: message }],
-        }, budget, { assertCurrent, validateBeforeSend: authorize })) {
+        }, budget, { assertCurrent: assertSendable, validateBeforeSend: authorize })) {
           if (event.type === 'tool-call') return { error: 'reply.invalid' };
           if (event.type === 'text') {
             text += event.text;

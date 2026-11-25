@@ -143,6 +143,16 @@ async function fixture(extensions: Partial<Pick<Controls, 'readTool' | 'selectSt
   };
 }
 
+it('does not send a private reply whose recent context changed while the request waited to be sent', async () => {
+  let calls = 0;
+  // Built (1), confirmed by the pre-send authorization (2), then a deletion lands before the final check (3).
+  const f = await fixture({ context: () => ({ name: 'Fixture', persona: null, memories: [], ...(++calls <= 2 ? { recent: 'FORGOTTEN_RECENT_FACT' } : {}) }) });
+  await f.bridge.configure({ private: f.route, groups: {} });
+  expect(await send(f.socket, request())).toEqual(failure);
+  expect(calls).toBe(3);
+  expect(f.inputs).toHaveLength(0);
+});
+
 it('projects exact owner identity and recent context with sixteen owner messages, and keeps that context out of group and friend prompts', async () => {
   const identity = ['Fixture character identity\nline two', 'Fixture persona'];
   const recent = '主人明天考试';

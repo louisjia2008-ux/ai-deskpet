@@ -60,7 +60,15 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
     }
   }
   let retired = false;
-  const memorySources = new Set(entry.memories.map(item => item.id));
+  // Each memory with the oldest revision any source relied on.
+  const memorySources = new Map<string, number>();
+  const relyOn = (id: string, revision: number): void => { memorySources.set(id, Math.min(revision, memorySources.get(id) ?? revision)); };
+  for (const item of entry.memories) relyOn(item.id, item.revision);
+  const correctedAt = new Map<string, number>();
+  for (const guard of state.memoryTombstones) {
+    if (guard.kind === 'corrected' && guard.memoryRevision !== undefined)
+      correctedAt.set(guard.memoryId, Math.max(guard.memoryRevision, correctedAt.get(guard.memoryId) ?? 0));
+  }
   const seenDiaries = new Set<Provenance>([entry]);
   const seenMessages = new Set<string>();
   const pending = entry.sources.map(source => ({ id: source.id, owner: true }));
@@ -74,7 +82,7 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
     if (seenMessages.has(id)) continue;
     seenMessages.add(id);
     if (session.archivedAt || session.analysisSource) retired = true;
-    for (const reference of message.contextTrace.memoryReferences) memorySources.add(reference.id);
+    for (const reference of message.contextTrace.memoryReferences) relyOn(reference.id, reference.revision);
     for (const id of message.contextTrace.historyMessageIds) pending.push({ id, owner: false });
     for (const reference of message.contextTrace.historyLookupReferences ?? []) pending.push({ id: reference.messageId, owner: false });
     for (const reference of message.contextTrace.diaryReferences ?? []) {
@@ -83,11 +91,13 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
       if (seenDiaries.has(diary)) continue;
       seenDiaries.add(diary);
       for (const source of diary.sources) pending.push({ id: source.id, owner: true });
-      for (const memory of diary.memories) memorySources.add(memory.id);
+      for (const memory of diary.memories) relyOn(memory.id, memory.revision);
     }
   }
   const checkedMemories = new Set<string>();
-  for (const id of memorySources) {
+  for (const [id, revision] of memorySources) {
+    // A later correction leaves the old wording out of new conversations without retracting past replies.
+    if ((correctedAt.get(id) ?? -1) >= revision) retired = true;
     let current = id;
     const seen = new Set<string>();
     while (!checkedMemories.has(current)) {
