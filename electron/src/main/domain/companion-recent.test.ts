@@ -4,12 +4,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import type { ProviderConfig } from '../../shared';
+import type { ChatMessage, ProviderConfig } from '../../shared';
 import type { ProviderAdapter, ProviderChatRequest } from '../providers/types';
 import { ChatService } from './chat-service';
 import { prepareChatContext } from './chat-context';
 import { CompanionRecentService, recentPrompt } from './companion-recent-service';
-import { currentRecent, recentForDestination, recentTraceAllowed, RECENT_WINDOW_MS } from './companion-recent-state';
+import { currentRecent, recentForDestination, recentTraceAllowed, RECENT_WINDOW_MS, supersededChat } from './companion-recent-state';
 import { DomainRepository } from './repository';
 import { MemoryService } from './memory-service';
 
@@ -176,4 +176,17 @@ it('drops an ordinary message once the memory taken from it is deleted, and with
   expect(currentRecent(f.repo.snapshot(), f.now())).toBeNull();
   expect(recentTraceAllowed(f.repo.snapshot(), summary.revision, 'remote')).toBe(false);
   expect(recentForDestination(f.repo.snapshot(), 'local')).toBeNull();
+});
+
+it('pairs a reply with its follow-ups, reads offered choices, and does not pass a mark on to later replies', async () => {
+  const sessionId = randomUUID(), at = new Date().toISOString(), deletedId = randomUUID();
+  const message = (role: 'user' | 'assistant', extra: Partial<ChatMessage> = {}): ChatMessage =>
+    ({ id: randomUUID(), sessionId, role, content: 'x', createdAt: at, status: 'complete', errorCode: null, ...extra });
+  const request = message('user'), followup = message('user', { followupToMessageId: 'reply' });
+  const choices = message('assistant', { memoryForget: { kind: 'choices', query: 'SYNTHETIC', totalMatches: 2,
+    candidates: [{ id: deletedId, text: 'a', updatedAt: at }, { id: randomUUID(), text: 'b', updatedAt: at }] } });
+  const later = message('assistant');
+  const marked = supersededChat({ chatMessages: [request, followup, choices, later], memoryTombstones: [{ id: randomUUID(), memoryId: deletedId,
+    textDigest: 'e'.repeat(64), sourceEventIds: [], identityKey: null, scope: { kind: 'global' }, deletedAt: at, kind: 'deleted' }] });
+  expect([...marked.keys()].sort()).toEqual([request.id, followup.id, choices.id].sort());
 });

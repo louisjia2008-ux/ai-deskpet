@@ -37,7 +37,10 @@ export function diaryMaterial(state: PersistentState, date: string, timezone: st
     const allowed = selectAllowedHistory({ sessionId: session.id, history, memories, destination: 'remote', historyPrivacy: session.historyPrivacy ?? 'cloud-allowed',
       ...(diaryAllowed ? { diaryAllowed } : {}) });
     for (const message of allowed) {
-      if (proactiveDayKey(Date.parse(message.createdAt), timezone) !== date || !message.content.trim() || superseded.has(message.id)
+      // A reply that had a superseded message in its context may repeat it too.
+      const dependsOnSuperseded = superseded.has(message.id) || (message.contextTrace?.historyMessageIds ?? []).some(id => superseded.has(id))
+        || (message.contextTrace?.historyLookupReferences ?? []).some(reference => superseded.has(reference.messageId));
+      if (proactiveDayKey(Date.parse(message.createdAt), timezone) !== date || !message.content.trim() || dependsOnSuperseded
         || sources.length >= 120 || used + message.content.length > 24_000) continue;
       sources.push({ id: message.id, digest: digest(message.content + JSON.stringify(message.contextTrace)), text: message.content, role: message.role }); used += message.content.length;
     }
@@ -100,16 +103,20 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
       for (const memory of diary.memories) relyOn(memory.id, memory.revision);
     }
   }
+  const replacementOf = (id: string): string | null | undefined => Object.hasOwn(state.memorySleep.recallReplacements, id)
+    ? state.memorySleep.recallReplacements[id] : recentReplacements.get(id);
   const checkedMemories = new Set<string>();
   for (const [id, revision] of memorySources) {
     // A later correction leaves the old wording out of new conversations without retracting past replies.
     if ((correctedAt.get(id) ?? -1) >= revision) retired = true;
+    // So does a correction anywhere along what it was merged into. Walked on its own, whatever was checked first.
+    for (let next = replacementOf(id), hops = 0; typeof next === 'string' && hops < 64; next = memories.has(next) ? null : replacementOf(next), hops++) {
+      if (correctedAt.has(next)) retired = true;
+    }
     let current = id;
     const seen = new Set<string>();
     while (!checkedMemories.has(current)) {
       if (seen.has(current) || suppressed(current) || deletedMemories.has(current)) return 'withdrawn';
-      // A memory this one was merged into, corrected since, no longer says what the diary used.
-      if (current !== id && correctedAt.has(current)) retired = true;
       seen.add(current);
       const memory = memories.get(current);
       if (memory) {
@@ -118,8 +125,7 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
         if (metadata.expiresAt && Date.parse(metadata.expiresAt) <= Date.now()) retired = true;
         break;
       }
-      const replacement = Object.hasOwn(state.memorySleep.recallReplacements, current)
-        ? state.memorySleep.recallReplacements[current] : recentReplacements.get(current);
+      const replacement = replacementOf(current);
       if (replacement === undefined) return 'withdrawn';
       if (replacement === null) { retired = true; break; }
       current = replacement;

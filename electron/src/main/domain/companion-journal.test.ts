@@ -381,3 +381,33 @@ it('stops injecting a diary whose memory was merged into one that was corrected 
     scope: { kind: 'global' }, deletedAt: stamp, kind: 'corrected', memoryRevision: 1 });
   expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
 });
+
+it('leaves out of a new diary a later reply that had a superseded message in its context', async () => {
+  const f = await fixture();
+  const reply: ChatMessage = { id: randomUUID(), sessionId: f.session.id, role: 'assistant', content: '合成回复里复述了那件事。', createdAt: stamp,
+    status: 'complete', errorCode: null, contextTrace: { ...trace(), historyMessageIds: [f.message.id] } };
+  // An unrelated exchange in between, so the reply is not simply the one right after the superseded message.
+  const between = (role: 'user' | 'assistant'): ChatMessage => ({ id: randomUUID(), sessionId: f.session.id, role, content: `合成${role}`, createdAt: stamp,
+    status: 'complete', errorCode: null, contextTrace: trace() });
+  f.state.chatMessages.push(between('assistant'), between('user'), reply);
+  expect(diaryMaterial(f.state, date, 'UTC', () => false).sources.map(source => source.id)).toContain(reply.id);
+  f.state.memoryTombstones.push({ id: randomUUID(), memoryId: randomUUID(), textDigest: 'f'.repeat(64),
+    sourceEventIds: [recentDigest(`chat:${f.session.id}:${f.message.id}`)], identityKey: null, scope: { kind: 'global' }, deletedAt: stamp, kind: 'deleted' });
+  expect(diaryMaterial(f.state, date, 'UTC', () => false).sources.map(source => source.id)).not.toContain(reply.id);
+});
+
+it('retires a diary for a correction along a merge chain whichever memory is checked first', async () => {
+  const f = await fixture();
+  const into = globalMemory('主人喜欢合成茶。'), merged = globalMemory('主人喜欢合成旧茶。');
+  f.state.memories.push(into, merged);
+  await f.journal.tick(f.input);
+  expect(f.journal.list()[0]!.memories.map(item => item.id)).toEqual(expect.arrayContaining([into.id, merged.id]));
+  f.state.memories = f.state.memories.filter(item => item.id !== merged.id);
+  f.state.memorySleep.recallReplacements[merged.id] = into.id;
+  // The direct reference to the current memory is checked first and does not retire (the guard predates its revision),
+  // so only the walk from the merged memory can.
+  f.state.memoryTombstones.push({ id: randomUUID(), memoryId: into.id, textDigest: '0'.repeat(64), sourceEventIds: [], identityKey: null,
+    scope: { kind: 'global' }, deletedAt: stamp, kind: 'corrected', memoryRevision: 0 });
+  expect(f.journal.list()[0]!.memories[0]!.id).toBe(into.id);
+  expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
+});

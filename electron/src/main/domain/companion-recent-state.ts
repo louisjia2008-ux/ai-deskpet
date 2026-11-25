@@ -20,15 +20,8 @@ const worse = (left: Superseded | undefined, right: Superseded | undefined): Sup
  * taken from, a remember/correct/forget request whose memory has since changed, and the reply right
  * after each. Chat history keeps them; summaries that are fed into new conversations must not.
  */
-// Snapshots are fresh clones, so this only spares repeated checks over one snapshot (each diary entry).
-// The lengths guard against a transaction draft that grew in place.
-const supersededCache = new WeakMap<object, { tombstones: object; messages: number; guards: number; result: ReadonlyMap<string, Superseded> }>();
 export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'memoryTombstones'>): ReadonlyMap<string, Superseded> {
-  const cached = supersededCache.get(state.chatMessages);
-  if (cached && cached.tombstones === state.memoryTombstones && cached.messages === state.chatMessages.length
-    && cached.guards === state.memoryTombstones.length) return cached.result;
   const result = new Map<string, Superseded>();
-  supersededCache.set(state.chatMessages, { tombstones: state.memoryTombstones, messages: state.chatMessages.length, guards: state.memoryTombstones.length, result });
   if (!state.memoryTombstones.length) return result;
   const byEvidence = new Map<string, Superseded>(), byMemory = new Map<string, Superseded>();
   for (const guard of state.memoryTombstones) {
@@ -36,21 +29,28 @@ export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'me
     for (const source of guard.sourceEventIds) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
   }
   const mark = (id: string, kind: Superseded | undefined): void => { const next = worse(result.get(id), kind); if (next) result.set(id, next); };
-  const lastUser = new Map<string, { id: string; kind: Superseded | undefined }>();
+  // What a reply's memory request touched, including the candidates it offered (a backup may predate the choice).
+  const outcome = (message: PersistentState['chatMessages'][number]): Superseded | undefined => {
+    const ids = [message.memoryReceipts?.[0]?.memoryId,
+      ...(message.memoryForget?.kind === 'deleted' ? [message.memoryForget.memoryId] : message.memoryForget?.kind === 'choices' ? message.memoryForget.candidates.map(item => item.id) : []),
+      ...(message.memoryEdit?.kind === 'updated' ? [message.memoryEdit.memoryId] : message.memoryEdit?.kind === 'choices' ? message.memoryEdit.candidates.map(item => item.id) : [])];
+    return ids.reduce<Superseded | undefined>((kind, id) => worse(kind, id === undefined ? undefined : byMemory.get(id)), undefined);
+  };
+  // A request is every user message since the previous reply (follow-ups sit before the reply they join).
+  const requests = new Map<string, { ids: string[]; kind: Superseded | undefined }>();
   for (const message of state.chatMessages) {
     if (message.role === 'user') {
       // Matches the chat evidence ID that memory-commit records for a chat-sourced memory.
       const kind = byEvidence.get(recentDigest(`chat:${message.sessionId}:${message.id}`));
-      lastUser.set(message.sessionId, { id: message.id, kind });
       mark(message.id, kind);
+      const request = requests.get(message.sessionId) ?? { ids: [], kind: undefined };
+      request.ids.push(message.id); request.kind = worse(request.kind, kind);
+      requests.set(message.sessionId, request);
     } else if (message.role === 'assistant') {
-      const request = lastUser.get(message.sessionId);
-      const forget = message.memoryForget?.kind === 'deleted' ? message.memoryForget.memoryId : undefined;
-      const edit = message.memoryEdit?.kind === 'updated' ? message.memoryEdit.memoryId : undefined;
-      const handled = forget ?? edit ?? message.memoryReceipts?.[0]?.memoryId;
-      const outcome = handled === undefined ? undefined : byMemory.get(handled);
-      if (request && outcome) { request.kind = worse(request.kind, outcome); mark(request.id, outcome); }
-      mark(message.id, worse(request?.kind, outcome));
+      const request = requests.get(message.sessionId), result = outcome(message);
+      requests.delete(message.sessionId);
+      if (request && result) for (const id of request.ids) mark(id, result);
+      mark(message.id, worse(request?.kind, result));
     }
   }
   return result;
