@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface Request { model: string; messages: Array<{ role: string; content: string }> }
 // Isolated profile and provider fixture; real main/preload/renderer and persistence.
@@ -16,7 +17,7 @@ test('answers /model and /provider in desktop chat without a model request, then
     if (request.url === '/v1/models') { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'alpha' }, { id: 'beta' }] })); return; }
     const chunks: Buffer[] = []; request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Request; requests.push(body);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Request; if (isRecentSummary(body)) { answerRecentSummary(response); return; } requests.push(body);
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `Reply from ${body.model}.` }, finish_reason: null }] })}\n\n`);
       response.end('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
@@ -56,7 +57,9 @@ test('answers /model and /provider in desktop chat without a model request, then
     expect(requests.at(-1)?.model).toBe('beta');
     expect(JSON.stringify(requests.at(-1)?.messages)).not.toContain('Switched:');
     await say('/provider second', 'Switched: Second service · alpha');
-    await expect.poll(() => page.evaluate(async () => (await window.deskpet.app.getState()).activeProviderId)).toBe(ids.second);
+    // A switch applies only to this conversation; the default provider stays as it was.
+    await expect.poll(() => page.evaluate(async () => (await window.deskpet.chat.listSessions()).find((session) => session.modelSelection)?.modelSelection?.providerId)).toBe(ids.second);
+    expect(await page.evaluate(async () => (await window.deskpet.app.getState()).activeProviderId)).toBe(ids.first);
     await say('Hello again', 'Reply from alpha.');
     expect(requests).toHaveLength(2);
     await say('/model gamma', 'Second service has no such model');

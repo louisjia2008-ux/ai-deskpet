@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface Request { model: string; messages: Array<{ role: string; content: string }> }
 // Isolated profile and provider fixture; real main/preload/renderer, and auto memory's real quiet period.
@@ -18,6 +19,7 @@ test('a provider that refuses auto memory shows up on the status page with its r
     const chunks: Buffer[] = []; request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Request;
+      if (isRecentSummary(body)) { answerRecentSummary(response); return; } 
       // What api.openai.com answered every auto memory read with until 2026-11-14.
       if (body.messages[0]?.content.startsWith('You keep the long-term profile')) {
         refused++;

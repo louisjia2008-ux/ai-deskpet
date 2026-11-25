@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 // Real host timers, durable event/job publication and UI; synthetic time, model
 // and window-geometry boolean only. Never inspects the user's screen.
@@ -12,8 +13,9 @@ test('automatic greetings respect two-hour cooldown, fullscreen, unanswered rest
   test.setTimeout(120_000);
   const root = await mkdtemp(join(tmpdir(), 'deskpet-restraint-e2e-')), profile = join(root, 'profile'), entry = join(root, 'boot.cjs');
   let requests = 0;
-  const server = createServer((request, response) => { request.resume(); request.on('end', () => {
+  const server = createServer((request, response) => { const chunks: Buffer[] = []; request.on('data', (chunk: Buffer) => chunks.push(chunk)); request.on('end', () => {
     if (!request.url?.endsWith('/chat/completions')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"data":[]}'); return; }
+    if (isRecentSummary(JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messages?: Array<{ role?: string; content?: unknown }> })) { answerRecentSummary(response); return; }
     requests++; response.writeHead(200, { 'content-type': 'text/event-stream' });
     response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: `合成问候第${requests}条，慢慢来就好。` }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
   }); });

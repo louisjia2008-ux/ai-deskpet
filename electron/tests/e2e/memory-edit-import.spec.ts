@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface Request { messages: Array<{ role: string; content: string }>; tools?: unknown[] }
 const harness = async (reply: (request: Request) => string) => {
@@ -12,7 +13,7 @@ const harness = async (reply: (request: Request) => string) => {
     if (!request.url?.endsWith('/chat/completions')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'fixture' }] })); return; }
     const chunks: Buffer[] = []; request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
-      const data = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Request; requests.push(data);
+      const data = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Request; if (isRecentSummary(data)) { answerRecentSummary(response); return; } requests.push(data);
       const content = reply(data); response.writeHead(200, { 'content-type': 'text/event-stream' });
       response.end(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] })}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`);
     });

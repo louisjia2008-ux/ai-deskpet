@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatMessage } from '../../src/shared';
 import type { ChatWorkTask } from '../../src/shared/chat-work';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface WireMessage { role: string; content: string; tool_call_id?: string }
 interface Wire { messages: WireMessage[]; tools?: Array<{ function: { name: string; description: string } }> }
@@ -79,7 +80,7 @@ for (const scenario of ['allow', 'deny', 'followup', 'missing-receipt'] as const
           }
           if (request.url?.endsWith('/models')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"data":[]}'); return; }
           if (!request.url?.endsWith('/chat/completions')) throw new Error(`Unexpected fixture route ${request.url}`);
-          const body = JSON.parse(Buffer.concat(chunks).toString()) as Wire; requests.push(body);
+          const body = JSON.parse(Buffer.concat(chunks).toString()) as Wire; if (isRecentSummary(body)) { answerRecentSummary(response); return; } requests.push(body);
           if (requests.length > 12) throw new Error('Bounded closeout exceeded the fixture request limit');
           const source = result<Source>(body, 'source-read');
           if (!source) { call(response, body, titles.read, 'source-read', { url: sourceUrl, maxCharacters: 4000 }); return; }

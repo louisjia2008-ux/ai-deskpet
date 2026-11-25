@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatMessage, ProviderConfig } from '../../src/shared';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface WireMessage { role: string; content: string; tool_call_id?: string }
 interface Wire { model: string; messages: WireMessage[]; tools?: Array<{ function: { name: string; description: string } }> }
@@ -61,6 +62,7 @@ async function withFixture(info: TestInfo, respond: (request: Request, response:
         if (request.url?.endsWith('/models')) { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"data":[]}'); return; }
         if (!request.url?.endsWith('/chat/completions')) throw new Error(`Unexpected fixture route ${request.url}`);
         const item = { body: JSON.parse(Buffer.concat(chunks).toString()) as Wire, path: request.url };
+        if (isRecentSummary(item.body)) { answerRecentSummary(response); return; } 
         requests.push(item);
         if (requests.length > 40) throw new Error('Synthetic fixture request limit exceeded');
         respond(item, response);

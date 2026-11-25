@@ -6,6 +6,7 @@ import { estimateSerializedInputTokens } from '../../src/main/providers/input-to
 import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface Wire {
   model:string; messages:Array<{role:string; content:string; tool_call_id?:string}>;
@@ -28,7 +29,7 @@ test('desktop routing requires a cloud choice, protects private chats, and budge
     if (req.url === '/api/show') { res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({remote_host:'https://synthetic-cloud.invalid'}));return; }
     if (!req.url?.endsWith('/chat/completions')) {res.writeHead(200,{'content-type':'application/json'});res.end('{"data":[]}');return;}
     const data:Buffer[]=[]; for await (const chunk of req) data.push(Buffer.from(chunk));
-    const wire:Wire=JSON.parse(Buffer.concat(data).toString()); wires.push(wire);
+    const wire:Wire=JSON.parse(Buffer.concat(data).toString()); if (isRecentSummary(wire)) { answerRecentSummary(res); return; } wires.push(wire);
     const input = wire.messages.filter(m=>m.role==='user').at(-1)?.content;
     const results = wire.messages.filter(m=>m.role==='tool');
     let delta:Record<string,unknown>={content:'Fixture reply: '+wire.model};
@@ -123,7 +124,10 @@ test('desktop routing requires a cloud choice, protects private chats, and budge
     expect(JSON.stringify(cloud())).not.toContain(firstPage.slice(0,64));
     for(let i=1;i<=5;i++)await send(ids.long,'Transcript fixture '+i);
     const last=wires.at(-1)!;
-    expect(last.messages.some(m=>m.role==='assistant' && m.content.startsWith('Earlier conversation excerpts') && m.content.includes('Transcript fixture 1'))).toBe(true);
+    // Over budget, older turns are folded into excerpts; the first turn still reaches the model, folded or verbatim.
+    const excerpts=last.messages.find(m=>m.role==='assistant' && m.content.startsWith('Earlier conversation excerpts'));
+    expect(excerpts?.content).toContain('Transcript fixture');
+    expect(last.messages.some(m=>m.content.includes('Transcript fixture 1'))).toBe(true);
     await page.evaluate(id=>window.deskpet.chat.openSession(id),ids.long);
     await expect(page.getByText(/older messages are represented by quoted excerpts/).last()).toBeVisible();
   } finally {

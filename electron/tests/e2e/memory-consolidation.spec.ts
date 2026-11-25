@@ -275,7 +275,9 @@ for (const scenario of scenarios) {
         await page!.getByRole('button', { name: 'Create encrypted backup', exact: true }).click(); await expect(page!.getByText('Encrypted backup saved', { exact: true })).toBeVisible();
         await copyFile(backupPath, join(directory, 'old-applied-backup.deskpet-backup'));
         await page!.evaluate((id) => window.deskpet.memory.remove(id, { operationId: crypto.randomUUID() }), sourceIds[1]!); await checkpoint('newer-delete-before-restore');
-        await page!.getByLabel('Backup password', { exact: true }).fill(password);
+        // Restoring sits in its own collapsed section with the backup's own password.
+        await page!.getByText('Restore from a backup', { exact: true }).click();
+        await page!.getByLabel('This backup’s password', { exact: true }).fill(password);
         await page!.getByRole('button', { name: 'Restore backup', exact: true }).click(); await expect(page!.getByRole('button', { name: /Restart and restore/ })).toBeVisible();
         await page!.screenshot({ path: join(directory, 'old-backup-prepared-with-deletion-protection.png'), fullPage: true });
         const child = application!.process(); await page!.getByRole('button', { name: /Restart and restore/ }).click(); await expect.poll(() => child.exitCode).toBe(0);

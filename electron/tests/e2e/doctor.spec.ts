@@ -53,7 +53,7 @@ test('the doctor tab shows its switch and checks, and a run that was killed is r
     await expect(page.getByLabel('自动修复')).toBeEnabled();
     await expect(page.getByLabel('自动修复')).not.toBeChecked();
     await page.getByRole('button', { name: '立即检查', exact: true }).click();
-    await expect(page.locator('.doctor-panel')).toContainText('还没有记录到问题');
+    await expect(page.locator('.doctor-panel')).toContainText('没有未恢复的问题');
     await expect(page.locator('.doctor-panel')).not.toContainText('上次检查：还没有');
     await page.getByLabel('医生开启').uncheck();
     await expect(page.getByRole('button', { name: '立即检查', exact: true })).toBeDisabled();

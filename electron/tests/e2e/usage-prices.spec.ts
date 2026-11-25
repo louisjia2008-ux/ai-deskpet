@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ProviderConfig, UsageEvent, UsageSnapshot } from '../../src/shared';
 import { projectUsage } from '../../src/main/domain/usage-projection';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 
 // Real renderer, preload, IPC, host ledger, utility transport and encrypted
@@ -37,6 +38,7 @@ test('prices repair unknown records, freeze new requests and survive a normal pa
       if (prompt.includes('COST_REPORTED')) { usage.cost = 0.5; usage.cost_currency = 'USD'; }
       if (prompt.includes('COST_ZERO')) { usage.cost = 0; usage.cost_currency = 'USD'; }
       if (prompt.includes('COST_NO_OUTPUT')) { delete usage.completion_tokens; delete usage.completion_tokens_details; }
+      if (isRecentSummary(body)) { answerRecentSummary(response); return; } 
       wires.push({ prompt, bodySHA256: createHash('sha256').update(bytes).digest('hex'), usage });
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: `SYNTHETIC_DONE_${prompt}` }, finish_reason: 'stop' }], usage })}\n\ndata: [DONE]\n\n`);
@@ -75,7 +77,8 @@ test('prices repair unknown records, freeze new requests and survive a normal pa
     await expect(page.locator('.usage-page')).toBeVisible();
     await expect(page.locator('.usage-page .usage-summary').first()).toBeVisible();
   };
-  const readUsage = (): Promise<UsageSnapshot> => page.evaluate(() => window.deskpet.usage.snapshot());
+  // The background recent summary is accounted as scope "other"; these checks cover the priced chat requests.
+  const readUsage = async (): Promise<UsageSnapshot> => { const snapshot = await page.evaluate(() => window.deskpet.usage.snapshot()); return { ...snapshot, events: snapshot.events.filter(event => event.scope !== 'other') }; };
   const eventFor = async (prompt: string): Promise<UsageEvent> => {
     const snapshot = await readUsage(), wire = wires.find(item => item.prompt === prompt)!;
     expect(wire).toBeDefined();

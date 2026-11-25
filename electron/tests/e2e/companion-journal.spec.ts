@@ -49,7 +49,7 @@ require(${JSON.stringify(join(process.cwd(), '.webpack', process.arch, 'main/ind
     expect(await readFile(path, 'utf8')).not.toContain('合成编辑');
     await application!.close(); application = undefined; await launch();
     await page!.getByRole('button', { name: '2026-11-14', exact: true }).click(); await expect(page!.getByRole('textbox', { name: '日记正文' })).toHaveValue('合成编辑：明天也慢慢来。');
-    await page!.getByRole('button', { name: '删除日记' }).click(); await expect(page!.getByRole('button', { name: '2026-11-14', exact: true })).toHaveCount(0);
+    await page!.getByRole('button', { name: '删除日记' }).click(); await page!.getByRole('button', { name: '确认删除 2026-11-14 的日记' }).click(); await expect(page!.getByRole('button', { name: '2026-11-14', exact: true })).toHaveCount(0);
     expect(await page!.evaluate(() => window.deskpet.journal!.list())).toEqual([]);
     await page!.evaluate(() => window.deskpet.app.setLocale('en')); await page!.reload(); await expect(page!.locator('.app-shell')).toBeVisible();
     await page!.locator('nav').getByRole('button', { name: 'Companion', exact: true }).click(); await page!.getByRole('tab', { name: 'Diary', exact: true }).click();

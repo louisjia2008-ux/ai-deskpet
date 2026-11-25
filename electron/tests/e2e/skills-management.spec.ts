@@ -7,6 +7,7 @@ import type { ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SkillCatalogEntry, SkillReference } from '../../src/shared/desktop-extensions';
+import { answerRecentSummary, isRecentSummary } from './support/recent-summary';
 
 interface WireMessage { role: string; content: string; tool_call_id?: string }
 interface Wire {
@@ -85,11 +86,12 @@ test(title, async ({}, info) => {
         }
         if (request.url !== '/v1/chat/completions') throw new Error(`Unexpected fixture route ${request.url}`);
         const raw = Buffer.concat(chunks).toString('utf8'), wire = JSON.parse(raw) as Wire;
-        modelWires.push(raw); requests.push(wire);
         expect(wire.model).toBe('skills-management-fixture');
         expect(raw).not.toContain('sourceDirectory');
         for (const privatePath of [root,primaryFolder,unusedFolder]) expect(raw).not.toContain(privatePath);
         expect(raw).not.toContain(unusedBody); expect(raw).not.toContain(updatedBody);
+        if (isRecentSummary(wire)) { answerRecentSummary(response); return; } 
+        modelWires.push(raw); requests.push(wire);
         expect(wire.messages.filter(item => item.role === 'user').at(-1)?.content).toContain('SKILLS_MANAGEMENT_E2E:');
         const discovered = result<{loaded:string}>(wire,'skills-discover');
         if (!discovered) {
