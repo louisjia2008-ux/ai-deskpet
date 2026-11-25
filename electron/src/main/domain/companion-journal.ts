@@ -15,8 +15,10 @@ import { recentTraceAllowed, supersededChat } from './companion-recent-state';
 import { proactiveDayKey, proactiveMinuteOfDay } from './proactive-policy';
 
 const provenanceSchema = diaryEntrySchema.pick({ sources: true, memories: true, revision: true });
+// `removedByOwner` tells an owner deletion apart from the oldest entries rolling off the 366-day cap.
+const retiredSchema = provenanceSchema.extend({ removedByOwner: z.literal(true).optional() });
 const schema = z.object({ preferences: companionPreferencesSchema, entries: z.array(diaryEntrySchema).max(366), lastDate: z.string().nullable(),
-  retiredProvenance: z.record(z.string(), provenanceSchema).default({}),
+  retiredProvenance: z.record(z.string(), retiredSchema).default({}),
   lastSuccessAt: z.string().nullable(), lastFailureAt: z.string().nullable(), errorCode: z.string().nullable() }).strict();
 type State = z.infer<typeof schema>;
 type Provenance = z.infer<typeof provenanceSchema>;
@@ -58,7 +60,8 @@ export function diaryMaterial(state: PersistentState, date: string, timezone: st
 
 /** Housekeeping can retire a summary without retracting previously approved text. */
 function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id: string) => boolean,
-  resolveDiary: (reference: DiaryReference) => Provenance | undefined): 'current' | 'superseded' | 'retired' | 'withdrawn' {
+  resolveDiary: (reference: DiaryReference) => Provenance | undefined,
+  ownerChanged: (reference: DiaryReference) => boolean = () => false): 'current' | 'superseded' | 'retired' | 'withdrawn' {
   const sessions = new Map(state.chatSessions.map(session => [session.id, session]));
   const messages = new Map(state.chatMessages.map(message => [message.id, message]));
   const memories = new Map(state.memories.map(memory => [memory.id, memory]));
@@ -106,6 +109,8 @@ function sourceStatus(entry: Provenance, state: PersistentState, suppressed: (id
     for (const reference of message.contextTrace.diaryReferences ?? []) {
       const diary = resolveDiary(reference);
       if (!diary) return 'withdrawn';
+      // The owner later rewrote or deleted that diary: like a corrected memory, its old wording stops spreading.
+      if (ownerChanged(reference)) corrected = true;
       if (seenDiaries.has(diary)) continue;
       seenDiaries.add(diary);
       for (const source of diary.sources) pending.push({ id: source.id, owner: true });
@@ -172,7 +177,7 @@ export class CompanionJournal {
     await this.#update(state => {
       const entry = state.entries.find(item => item.date === input.date);
       if (!entry || entry.revision !== input.revision) throw new Error('diary.stale');
-      state.retiredProvenance[entry.date] = provenanceSchema.parse({ sources: entry.sources, memories: entry.memories, revision: entry.revision });
+      state.retiredProvenance[entry.date] = retiredSchema.parse({ sources: entry.sources, memories: entry.memories, revision: entry.revision, removedByOwner: true });
       state.entries = state.entries.filter(item => item !== entry);
     });
   }
@@ -188,8 +193,13 @@ export class CompanionJournal {
       && (!entry || entry.revision !== reference.revision || digest(entry.summary) === reference.summarySHA256)
       ? provenance : undefined;
   }
+  /** The owner edited this diary after the reference was taken, or deleted it. */
+  #ownerChanged(reference: DiaryReference): boolean {
+    const entry = this.#state.entries.find(item => item.date === reference.date);
+    return entry ? entry.revision > reference.revision : this.#state.retiredProvenance[reference.date]?.removedByOwner === true;
+  }
   #sourceStatus(provenance: Provenance, state: PersistentState, suppressed: (id: string) => boolean) {
-    return sourceStatus(provenance, state, suppressed, reference => this.#provenance(reference));
+    return sourceStatus(provenance, state, suppressed, reference => this.#provenance(reference), reference => this.#ownerChanged(reference));
   }
   /** Completed turns already carry their own privacy mark and can outlive the summary revision. */
   referenceRetained(reference: DiaryReference, state: PersistentState, suppressed: (id: string) => boolean): boolean {

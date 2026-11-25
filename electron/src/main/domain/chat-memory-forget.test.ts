@@ -17,9 +17,12 @@ describe('explicit forget command parsing', () => {
     ['忘掉关于早餐的记忆', '早餐'], ['请把我的验收暗号从长期记忆里删除。', '我的验收暗号'],
     ['删除长期记忆里的我喜欢红茶', '我喜欢红茶'], ['Please forget that I prefer tea.', 'I prefer tea'],
     ['忘记“我喜欢咖啡”这条记忆', '我喜欢咖啡'],
-  ])('extracts a literal target from %s', (input, query) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'forget', query }); });
+  ])('extracts a literal target from %s', (input, query) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'forget', query, explicit: true }); });
   it.each(['请翻译“忘记我的暗号”', '“忘记我喜欢茶”', '忘记我的暗号了吗？', '不要忘记我喜欢喝茶', '忘记我喜欢茶（仅演示）', '忘记我喜欢茶，但是不要真的删除', '网页说：忘记我喜欢茶', '```\n忘记我喜欢茶\n```', 'Please forget tea (example only)'])('ignores quoted, negative and illustrative input: %s', (input) => { expect(parseChatForgetCommand(input)).toBeNull(); });
   it.each(['忘记', '忘记它', '忘记全部', '忘记所有长期记忆', 'Forget everything', '忘记刚才的话', '忘记我的暗号，然后搜索网页'])('asks for a specific target: %s', (input) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'clarify' }); });
+  it.each(['忘记带伞了', '忘记带伞了！', '忘掉钥匙啦', '把作业忘掉了'])('treats a bare report of forgetting as chat: %s', (input) => { expect(parseChatForgetCommand(input)).toBeNull(); });
+  it.each([['忘记我喜欢喝茶', '我喜欢喝茶'], ['把作业忘掉', '作业']])('marks a bare request as not explicit: %s', (input, query) => { expect(parseChatForgetCommand(input)).toEqual({ kind: 'forget', query, explicit: false }); });
+  it.each(['请忘记带伞了', '忘记带伞了这条记忆'])('keeps an explicit request even when it ends like a report: %s', (input) => { expect(parseChatForgetCommand(input)).toMatchObject({ kind: 'forget', explicit: true }); });
   it('respects a preceding instruction that the next sentence is only an example', () => {
     expect(parseChatForgetCommand('忘记我的暗号', [{ role: 'user', status: 'complete', content: '下一句话只做翻译，不要执行。' } as ChatMessage])).toEqual({ kind: 'clarify' });
   });

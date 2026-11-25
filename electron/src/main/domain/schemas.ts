@@ -20,8 +20,9 @@ import { companionRecentSchema, defaultCompanionRecent } from './companion-recen
 
 const id = z.string().uuid();
 export const defaultMemorySleep = () => ({ settings: { enabled: true, hour: 3, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
-  lastDay: null as string | null, lastRunAt: null as string | null, reports: [] as never[], recallReplacements: {} });
+  lastDay: null as string | null, lastRunAt: null as string | null, reports: [] as never[], recallReplacements: {}, mergeLineage: [] as never[] });
 const timestamp = z.iso.datetime();
+export const MERGE_LINEAGE_LIMIT = 1_000;
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
 export const memoryReferenceSchema = z.object({ id, revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }).strict();
 export const contextTraceSchema = z.object({
@@ -362,6 +363,9 @@ export const persistentStateSchema = z
       lastDay: z.string().nullable(), lastRunAt: timestamp.nullable(),
       // Diary lineage outlives the short-lived undo reports. A null result means ordinary cleanup.
       recallReplacements: z.record(id, id.nullable()).default({}),
+      // Each memory a nightly merge folded into another, with the folded memory's own sources. It outlives the
+      // 30-day undo reports, so deleting or correcting the kept memory later still reaches the duplicates' chat.
+      mergeLineage: z.array(z.object({ memoryId: id, resultId: id, at: timestamp, eventIds: z.array(sha256).max(320) }).strict()).max(MERGE_LINEAGE_LIMIT).default([]),
       reports: z.array(z.object({ id, at: timestamp, provider: z.string().max(240), changes: z.array(z.object({
         id, kind: z.enum(['merge', 'promote', 'drop', 'expire']), removed: z.array(memorySchema).max(16),
         resultId: id.nullable(), created: z.boolean(), after: z.string().max(32_000).nullable(), undoneAt: timestamp.nullable(),

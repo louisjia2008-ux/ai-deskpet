@@ -84,6 +84,11 @@ test('forgets from chat, preserves unrelated memories and choices across restart
     expect((await memories()).map((item) => item.text)).toEqual([retained, '我的测试饮品甲是绿茶。']);
     await newChat(); await send('忘记不存在的记忆内容');
     await expect(page.locator('.chat-reply').last()).toContainText('没有找到匹配');
+    // A bare 「忘记X」 that names no memory, or a report of forgetting, is ordinary chat.
+    for (const chat of ['忘记带伞，淋成落汤鸡', '忘记带伞了']) {
+      await send(chat); await expect(page.locator('.chat-reply').last()).toHaveText('没有');
+      expect(requests.some((body) => body.messages.some((message) => message.role === 'user' && message.content === chat))).toBe(true);
+    }
     await send('忘记全部'); await expect(page.locator('.chat-reply').last()).toContainText('这次尚未删除记忆');
     expect(await memories()).toHaveLength(2);
     await newChat(); await send('请翻译“忘记我喜欢中文交流”'); expect(await memories()).toHaveLength(2);

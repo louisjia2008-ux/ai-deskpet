@@ -15,43 +15,56 @@ type Superseded = 'deleted' | 'corrected';
 const worse = (left: Superseded | undefined, right: Superseded | undefined): Superseded | undefined =>
   left === 'deleted' || right === 'deleted' ? 'deleted' : left ?? right;
 
+// Matches the chat evidence ID that memory-commit records for a chat-sourced memory.
+const chatEvidence = (sessionId: string, messageId: string): string => recentDigest(`chat:${sessionId}:${messageId}`);
+type Memory = PersistentState['memories'][number];
+/** The chat evidence a memory stands on: its recorded source events and the owner messages it was taken from. */
+export const evidenceOf = (memory: Memory): string[] => [...new Set([...(memory.contextMetadata?.sourceEventIds ?? []),
+  ...(memory.contextMetadata?.sourceReferences ?? []).flatMap(reference => reference.kind === 'chat-user' ? [chatEvidence(reference.sessionId, reference.messageId)] : [])])];
+
+/** Kept memory → what nightly merges folded into it, from the durable lineage and, for older merges, the undo reports. */
+export function mergedInto(sleep: PersistentState['memorySleep']): ReadonlyMap<string, ReadonlyArray<{ id: string; evidence: readonly string[]; at: number }>> {
+  const merged = new Map<string, Array<{ id: string; evidence: readonly string[]; at: number }>>();
+  const seen = new Set<string>();
+  const add = (resultId: string, id: string, evidence: readonly string[], at: number): void => {
+    const key = `${id}>${resultId}@${at}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.set(resultId, [...(merged.get(resultId) ?? []), { id, evidence, at }]);
+  };
+  for (const link of sleep.mergeLineage) add(link.resultId, link.memoryId, link.eventIds, Date.parse(link.at));
+  for (const report of sleep.reports) for (const change of report.changes) {
+    if (change.kind === 'merge' && !change.undoneAt && change.resultId !== null)
+      for (const memory of change.removed) add(change.resultId, memory.id, evidenceOf(memory), Date.parse(report.at));
+  }
+  return merged;
+}
+
 /**
  * Chat messages that speak for a memory the owner later deleted or corrected: a message a memory was
  * taken from, a remember/correct/forget request whose memory has since changed, and the reply right
  * after each. Chat history keeps them; summaries that are fed into new conversations must not.
  */
-// Matches the chat evidence ID that memory-commit records for a chat-sourced memory.
-const chatEvidence = (sessionId: string, messageId: string): string => recentDigest(`chat:${sessionId}:${messageId}`);
-type Memory = PersistentState['memories'][number];
-const evidenceOf = (memory: Memory): string[] => [...(memory.contextMetadata?.sourceEventIds ?? []),
-  ...(memory.contextMetadata?.sourceReferences ?? []).flatMap(reference => reference.kind === 'chat-user' ? [chatEvidence(reference.sessionId, reference.messageId)] : [])];
-
 export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'memoryTombstones' | 'memorySleep'>): ReadonlyMap<string, Superseded> {
   const result = new Map<string, Superseded>();
   if (!state.memoryTombstones.length) return result;
   // A nightly merge into a kept memory leaves that memory's sources as they were; the duplicates merged into it
-  // (kept in the cleanup reports, which outlast these summaries) stand or fall with it. Read here only, so the
-  // memory guards themselves are unchanged.
-  const merged = new Map<string, Array<{ memory: Memory; at: number }>>();
-  for (const report of state.memorySleep.reports) for (const change of report.changes) {
-    if (change.kind === 'merge' && !change.undoneAt && change.resultId !== null)
-      merged.set(change.resultId, [...(merged.get(change.resultId) ?? []), ...change.removed.map(memory => ({ memory, at: Date.parse(report.at) }))]);
-  }
+  // stand or fall with it. Read here only, so the memory guards themselves are unchanged.
+  const merged = mergedInto(state.memorySleep);
   const byEvidence = new Map<string, Superseded>(), byMemory = new Map<string, Array<{ kind: Superseded; at: number }>>();
   const guarded = (id: string, kind: Superseded, at: number): void => { byMemory.set(id, [...(byMemory.get(id) ?? []), { kind, at }]); };
   for (const guard of state.memoryTombstones) {
     guarded(guard.memoryId, guard.kind, Date.parse(guard.deletedAt));
     for (const source of guard.sourceEventIds) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
     // Only a guard recorded after the merge speaks for what was merged; an earlier correction predates it.
-    const after = Date.parse(guard.deletedAt), mergedBefore = (id: string): Memory[] =>
-      (merged.get(id) ?? []).filter(item => item.at <= after).map(item => item.memory);
+    const after = Date.parse(guard.deletedAt), mergedBefore = (id: string) => (merged.get(id) ?? []).filter(item => item.at <= after);
     const pending = mergedBefore(guard.memoryId), seen = new Set<string>([guard.memoryId]);
     while (pending.length) {
       const duplicate = pending.pop()!;
       if (seen.has(duplicate.id)) continue;
       seen.add(duplicate.id);
       guarded(duplicate.id, guard.kind, Date.parse(guard.deletedAt));
-      for (const source of evidenceOf(duplicate)) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
+      for (const source of duplicate.evidence) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
       pending.push(...mergedBefore(duplicate.id));
     }
   }

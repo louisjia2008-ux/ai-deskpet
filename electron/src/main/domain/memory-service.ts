@@ -16,6 +16,11 @@ export class MemoryService {
     return this.repository.read('memories');
   }
 
+  /** Whether a chat forget/edit query names at least one memory visible in this session. */
+  matchesInSession(sessionId: string, query: string): boolean {
+    return matchingMemories(this.repository.read('memories').filter((item) => memoryInSession(item, sessionId)), query).length > 0;
+  }
+
   async editFromChat(messageId: string, query: string, replacement: string, signal?: AbortSignal, now = new Date()): Promise<MemoryEditResult> {
     if (query.trim().length < 2 || query.length > CHAT_MEMORY_MAX_CHARACTERS || !replacement.trim() || replacement.length > CHAT_MEMORY_MAX_CHARACTERS) throw new Error('memory.editFailed');
     return this.repository.transaction((state) => {

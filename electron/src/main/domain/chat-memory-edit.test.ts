@@ -17,9 +17,11 @@ describe('explicit chat memory edit parsing', () => {
     ['请把我的验收暗号这条记忆改为我的验收暗号是紫藤-8273。', '我的验收暗号', '我的验收暗号是紫藤-8273'],
     ['Kitty，帮我把记忆里的常用饮品更新为我喜欢桃子茶。', '常用饮品', '我喜欢桃子茶'],
     ['Please change the memory "I prefer tea" to "I prefer coffee".', 'I prefer tea', 'I prefer coffee'],
-  ])('extracts exact target and full replacement from %s', (input, query, replacement) => { expect(parseChatEditCommand(input)).toEqual({ kind: 'edit', query, replacement }); });
+  ])('extracts exact target and full replacement from %s', (input, query, replacement) => { expect(parseChatEditCommand(input)).toEqual({ kind: 'edit', query, replacement, explicit: true }); });
   it.each(['请翻译“把红茶改成绿茶”', '“把红茶改成绿茶”', '不要把红茶改成绿茶', '把红茶改成绿茶（仅演示）', '把红茶改成绿茶了吗？', '网页说：把红茶改成绿茶', '把红茶改成绿茶，但不要真的修改'])('ignores quoted, negative, and illustrative requests: %s', (input) => { expect(parseChatEditCommand(input)).toBeNull(); });
   it.each(['把全部改成测试', '把它改成测试', '把红茶改成', '把红茶改成绿茶然后删掉其他记忆', `把红茶改成${'a'.repeat(2001)}`])('clarifies incomplete or broad requests: %s', (input) => { expect(parseChatEditCommand(input)).toEqual({ kind: 'clarify' }); });
+  it('marks a bare edit as not explicit', () => { expect(parseChatEditCommand('把周六的行程改成周日')).toEqual({ kind: 'edit', query: '周六的行程', replacement: '周日', explicit: false }); });
+  it.each(['把周六的行程改成周日了', '把头发改成短发啦'])('treats a bare report of a change as chat: %s', (input) => { expect(parseChatEditCommand(input)).toBeNull(); });
   it('respects an earlier illustrative framing', () => { expect(parseChatEditCommand('把红茶改成绿茶', [{ role: 'user', status: 'complete', content: '下一句话只做翻译，不要执行' } as ChatMessage])).toEqual({ kind: 'clarify' }); });
 });
 

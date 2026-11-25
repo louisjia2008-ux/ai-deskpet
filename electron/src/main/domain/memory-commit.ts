@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ContextScope, MemoryContextMetadata, MemoryItem, MemorySourceReference } from '../../shared';
 import { confirmedMemoryMetadata, DEFAULT_MEMORY_PRIVACY, isExcludedFromMemory, memoryPrivacy, memoryScope, sameContextScope } from './context-provenance';
-import type { PersistentState } from './schemas';
+import { MERGE_LINEAGE_LIMIT, type PersistentState } from './schemas';
 import { importedMessageSourceEventId } from './conversation-import-parser';
+
+type MemoryTombstone = PersistentState['memoryTombstones'][number];
 
 export const memoryDigest = (value: string): string => createHash('sha256').update(value).digest('hex');
 export const normalizeMemoryText = (value: string): string => value.normalize('NFKC').trim().replace(/\s+/gu, ' ').replace(/[。.!！]+$/u, '');
@@ -172,7 +174,32 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
     operations.set(operation.operationId, structuredClone(operation));
   }
   result.memoryOperations = [...operations.values()];
+  // A backup from before a nightly merge holds the duplicate as an ordinary memory. Keep the merges both sides
+  // know of, so a deletion or correction of the memory it was folded into still reaches it.
+  const lineage = new Map([...result.memorySleep.mergeLineage, ...current.memorySleep.mergeLineage]
+    .map((link) => [`${link.memoryId}>${link.resultId}@${link.at}`, structuredClone(link)]));
+  result.memorySleep.mergeLineage = [...lineage.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-MERGE_LINEAGE_LIMIT);
+  // The guards on whatever this memory was folded into, recorded after every merge along the way.
+  const foldedGuards = (memory: MemoryItem): MemoryTombstone[] => {
+    const found: MemoryTombstone[] = [], seen = new Set<string>();
+    const pending: Array<{ id: string; since: number }> = [{ id: memory.id, since: -Infinity }];
+    while (pending.length) {
+      const { id, since } = pending.pop()!;
+      for (const link of result.memorySleep.mergeLineage) {
+        if (link.memoryId !== id || seen.has(`${link.resultId}@${link.at}`)) continue;
+        seen.add(`${link.resultId}@${link.at}`);
+        const after = Math.max(since, Date.parse(link.at));
+        found.push(...result.memoryTombstones.filter((guard) => guard.memoryId === link.resultId && Date.parse(guard.deletedAt) >= after));
+        pending.push({ id: link.resultId, since: after });
+      }
+    }
+    return found;
+  };
   const protect = (memory: MemoryItem): boolean => {
+    for (const guard of foldedGuards(memory)) {
+      if (guard.kind === 'deleted') return false;
+      if (!memory.contextMetadata?.protectionAcknowledgements?.includes(guard.id)) requireMemoryReview(memory, 'protection-conflict');
+    }
     const sources = memoryEventIds(memory, result);
     for (const guard of result.memoryTombstones) {
       // Source identity and deleted row identity dominate clocks and revisions.

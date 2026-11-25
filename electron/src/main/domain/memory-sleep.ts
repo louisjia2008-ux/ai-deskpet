@@ -9,7 +9,8 @@ import { confirmedMemoryMetadata, isExcludedFromMemory, memoryPrivacy, memorySco
 import { memoryEventIds } from './memory-commit';
 import { proactiveDayKey, proactiveMinuteOfDay } from './proactive-policy';
 import type { DomainRepository } from './repository';
-import type { PersistentState } from './schemas';
+import { MERGE_LINEAGE_LIMIT, type PersistentState } from './schemas';
+import { evidenceOf } from './companion-recent-state';
 
 interface Dependencies {
   available(): boolean;
@@ -190,6 +191,10 @@ export class MemorySleepService {
         if (change.kind !== 'promote') {
           for (const memory of change.removed) store.recallReplacements[memory.id] = change.resultId;
         }
+        if (change.kind === 'merge' && change.resultId !== null) {
+          for (const memory of change.removed) store.mergeLineage.push({ memoryId: memory.id, resultId: change.resultId, at: now.toISOString(), eventIds: evidenceOf(memory).slice(0, 320) });
+          store.mergeLineage = store.mergeLineage.slice(-MERGE_LINEAGE_LIMIT);
+        }
       };
       let deep = state.memories.filter((memory) => eligible(memory) && layerOf(memory) === 'deep').length;
       for (const group of plan.merge) {
@@ -280,6 +285,9 @@ export class MemorySleepService {
           // The same for a kept memory: once the owner deleted or corrected it (even back to the same words), its duplicates do not come back.
           throw new Error('sleep.undoStale');
         }
+        const undone = new Set(change.removed.map((item) => item.id));
+        state.memorySleep.mergeLineage = state.memorySleep.mergeLineage.filter((link) =>
+          !(link.resultId === change.resultId && link.at === report!.at && undone.has(link.memoryId)));
         for (const item of change.removed) {
           delete state.memorySleep.recallReplacements[item.id];
           if (state.memories.some((memory) => memory.id === item.id) || state.memoryTombstones.some((tombstone) => tombstone.memoryId === item.id)) continue;

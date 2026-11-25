@@ -171,3 +171,37 @@ it('runs once per night at its hour, catches up after a missed night, and gives 
   f.later(1); await f.service.tick();
   expect(f.seen).toHaveLength(runs);
 });
+
+it('keeps what a duplicate was folded into after the undo reports expire, and undo forgets it', async () => {
+  const { supersededChat } = await import('./companion-recent-state');
+  const { reconcileMemoryProtection } = await import('./memory-commit');
+  const f = await fixture((entries) => entries.length >= 2 && entries.some((entry) => entry.text === '用户对花生过敏')
+    ? { merge: [{ ids: [f.n(entries, '我对花生过敏'), f.n(entries, '用户对花生过敏')], text: 'unused', deep: true }] } : {});
+  const kept = await f.write('我对花生过敏'); const duplicate = await f.learn('用户对花生过敏');
+  const source = f.repo.snapshot().chatMessages.find((message) => message.content === '用户对花生过敏')!;
+  const beforeMerge = f.repo.snapshot();
+  const status = await f.service.runNow();
+  expect(f.repo.snapshot().memorySleep.mergeLineage).toMatchObject([{ memoryId: duplicate, resultId: kept }]);
+  // Undo forgets the link; merge again for the rest of the test.
+  await f.service.undo({ reportId: status.reports[0]!.id, changeId: status.reports[0]!.changes[0]!.id });
+  expect(f.repo.snapshot().memorySleep.mergeLineage).toEqual([]);
+  await f.repo.transaction((state) => { state.memories.find((item) => item.id === duplicate)!.contextMetadata!.layer = 'shallow'; });
+  f.later(1); await f.service.runNow();
+  f.later(40); await f.service.runNow();
+  expect(f.repo.snapshot().memorySleep.reports).toEqual([]);
+  await f.memory.remove(kept);
+  expect(supersededChat(f.repo.snapshot()).get(source.id)).toBe('deleted');
+  // A backup from before the merge brings the duplicate back as an ordinary memory; the deletion still reaches it.
+  expect(reconcileMemoryProtection(beforeMerge, f.repo.snapshot()).memories.map((item) => item.id)).not.toContain(duplicate);
+});
+
+it('asks for review of a duplicate restored from before the merge when the memory it was folded into was corrected', async () => {
+  const { reconcileMemoryProtection } = await import('./memory-commit');
+  const f = await fixture((entries) => entries.length >= 2 ? { merge: [{ ids: [f.n(entries, '我对花生过敏'), f.n(entries, '用户对花生过敏')], text: 'unused' }] } : {});
+  const kept = await f.write('我对花生过敏'); const duplicate = await f.learn('用户对花生过敏');
+  const beforeMerge = f.repo.snapshot();
+  await f.service.runNow();
+  f.later(1); await f.memory.upsert({ id: kept, text: '我对花生不过敏', tags: [] });
+  const restored = reconcileMemoryProtection(beforeMerge, f.repo.snapshot()).memories.find((item) => item.id === duplicate);
+  expect(restored?.contextMetadata).toMatchObject({ trust: 'unverified', reviewReason: 'protection-conflict' });
+});

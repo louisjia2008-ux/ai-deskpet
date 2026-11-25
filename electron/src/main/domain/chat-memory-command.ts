@@ -13,6 +13,8 @@ export const parseChatMemoryCommand = (query: string, history: readonly ChatMess
   const suffix = input.match(/^([\s\S]+?)[，,。.!！\n]\s*(?:请)?(?:(?:帮我|替我)\s*)?(?:记下来|记住|记下)(?:这些信息|这些内容|这两件事|这件事|这一点|这些|它)?[。.!！]*$/u);
   const match = prefix ?? english ?? suffix;
   if (match === null) return null;
+  // 「记住了」「记下啦，谢谢」 acknowledge; they are not a request to save 「了」.
+  if (prefix && /^(?:了|啦|喽|咯)(?!\s*[：:])/u.test(prefix[1]!.trim())) return null;
   if (/[?？]\s*$/u.test(input)) return null;
   // Meta requests and an explicitly non-executing annotation are not consent.
   if (/^(?:请)?(?:翻译|解释|分析|改写|润色|举例|演示|示范|假设|比如|例如|如果我(?:说|写)|他(?:说|写)|她(?:说|写))/u.test(input)
@@ -20,7 +22,7 @@ export const parseChatMemoryCommand = (query: string, history: readonly ChatMess
     || /(?:不要|不用|不需要|别)(?:真的|实际|再)?(?:保存|记住|记下|写入)|(?:仅|只是)(?:引用|示例|演示|举例)/u.test(input)) return null;
   const previous = history.filter((item) => item.role === 'user' && item.status === 'complete').at(-1)?.content ?? '';
   if (/(?:下一(?:句|条|个)|接下来)/u.test(previous) && /(?:翻译|示例|演示|引用|不要执行)/u.test(previous)) return { kind: 'clarify', reason: 'context' };
-  const text = match[1]!.trim().replace(/^(?:以下(?:信息|内容))[：:]\s*/u, '');
+  const text = match[1]!.trim().replace(/^(?:了|啦|喽|咯)\s*[：:]\s*/u, '').replace(/^(?:以下(?:信息|内容))[：:]\s*/u, '');
   if (text.length > CHAT_MEMORY_MAX_CHARACTERS) return { kind: 'clarify', reason: 'length' };
   if (!text || /^(?:[：:,，。.!！?？\s]*|(?:这|那)(?:些|个|件事|两件事|一点)|(?:刚才|上面|之前|前面)(?:的)?(?:话|内容|信息)?|了吗|了吗[?？]|me|this|it|what I said)[。.!！?？\s]*$/iu.test(text)
     || /^(?:住|下|下来)?(?:了吗|什么|怎么|如何)/u.test(text)

@@ -4342,8 +4342,12 @@ export class AppController {
     // the deterministic memory/direct-tool shortcuts.
     const hostCommands = managedMinecraft || analysisSession || scheduled || research !== undefined || !(directChatCommandsAllowed(channel) || (channel.origin === 'wechat' && !channel.group));
     const memoryCommand = hostCommands ? null : parseChatMemoryCommand(content, history);
-    const forgetCommand = hostCommands ? null : parseChatForgetCommand(content, history);
-    const editCommand = hostCommands ? null : parseChatEditCommand(content, history);
+    // A bare 「忘记X」/「把X改成Y」 is a memory command only when X names a memory;
+    // otherwise it is ordinary conversation for the model.
+    const parsedForget = hostCommands ? null : parseChatForgetCommand(content, history);
+    const forgetCommand = parsedForget?.kind === 'forget' && !parsedForget.explicit && !this.#memory.matchesInSession(sessionId, parsedForget.query) ? null : parsedForget;
+    const parsedEdit = hostCommands ? null : parseChatEditCommand(content, history);
+    const editCommand = parsedEdit?.kind === 'edit' && !parsedEdit.explicit && !this.#memory.matchesInSession(sessionId, parsedEdit.query) ? null : parsedEdit;
     const illustrative = !research && isIllustrativeCommand(content);
     const modelTurn = memoryCommand === null && forgetCommand === null && editCommand === null;
     const interactive = !research && (!waitForCompletion || channel.origin === 'telegram' || channel.origin === 'wechat') && !analysisSession;

@@ -464,3 +464,24 @@ it('follows a long merge chain to a correction at its end', async () => {
     scope: { kind: 'global' }, deletedAt: stamp, kind: 'corrected', memoryRevision: 1 });
   expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
 });
+
+it.each(['edit', 'remove'] as const)('stops injecting a later diary built on a diary the owner then chose to %s, and keeps its copy', async (change) => {
+  const f = await fixture();
+  await f.journal.tick(f.input);
+  const used = f.journal.context(f.state, 'remote', () => false).references;
+  const nextDay = '2026-11-15', at = `${nextDay}T12:00:00.000Z`;
+  const reply: ChatMessage = { id: randomUUID(), sessionId: f.session.id, role: 'assistant', content: '合成回复复述了第一篇日记。', createdAt: at,
+    status: 'complete', errorCode: null, contextTrace: { ...trace(), diaryReferences: used } };
+  f.state.chatMessages.push({ ...f.message, id: randomUUID(), createdAt: at, content: '合成第二天的话。' }, reply);
+  f.complete.mockResolvedValueOnce({ text: '合成第二篇日记。', summary: '合成第二篇摘要。' });
+  await f.journal.tick({ ...f.input, now: Date.parse('2026-11-16T03:01:00Z') });
+  expect(JSON.stringify(f.complete.mock.calls.at(-1))).toContain('合成回复复述了第一篇日记');
+  expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([`${nextDay}: 合成第二篇摘要。`, `${date}: 主人完成了测试，明天想散步。`]);
+  const first = f.journal.list().find(entry => entry.date === date)!;
+  if (change === 'edit') await f.journal.edit({ date, revision: first.revision, text: '主人改写后的日记。' });
+  else await f.journal.remove({ date, revision: first.revision });
+  expect(f.journal.context(f.state, 'remote', () => false).summaries).toEqual([]);
+  expect(f.journal.exportableCopies(f.state, () => false)?.map(copy => copy.date)).toContain(nextDay);
+  // The reply itself stays in chat history, as with a corrected memory.
+  expect(f.journal.referenceRetained(used[0]!, f.state, () => false)).toBe(true);
+});
