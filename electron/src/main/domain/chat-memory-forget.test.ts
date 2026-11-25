@@ -90,6 +90,24 @@ describe('transactional chat memory deletion', () => {
     for (const id of [user.id, reply.id]) expect(messages.find((item) => item.id === id)?.contextTrace).toMatchObject({ lineage: 'unknown', privacy: 'local-only' });
     expect(f.repository.snapshot().chatSessions[0]?.historyPrivacy).not.toBe('local-only');
   });
+  it('names the query a committed deletion used, so a retry after the memory is gone gets the same receipt', async () => {
+    const f = await fixture(); await f.add('关于备用暗号了'); const reply = await f.response();
+    const deleted = await f.memory.forgetFromChat(reply.id, '关于备用暗号了', undefined, undefined, true);
+    expect(deleted).toMatchObject({ kind: 'deleted' });
+    const query = f.memory.recordedForgetQuery(reply.id, ['备用暗号了', '关于备用暗号了']);
+    expect(query).toBe('关于备用暗号了');
+    expect(await f.memory.forgetFromChat(reply.id, query!, undefined, undefined, true)).toEqual(deleted);
+    expect(f.memory.recordedForgetQuery((await f.response()).id, ['关于备用暗号了'])).toBeUndefined();
+  });
+  it('keeps every owner message of a retried turn out of later context when nothing matched', async () => {
+    const f = await fixture();
+    const user = await f.chat.addMessage({ sessionId: f.session.id, role: 'user', content: '忘记暗号是蓝鲸', status: 'complete', errorCode: null });
+    const reply = await f.chat.addMessage({ sessionId: f.session.id, role: 'assistant', content: '', status: 'streaming', errorCode: null });
+    const added = await f.chat.addFollowup(reply.id, randomUUID(), '按原话处理', () => undefined);
+    expect(await f.memory.forgetFromChat(reply.id, '暗号是蓝鲸', undefined, undefined, true)).toMatchObject({ kind: 'not-found' });
+    const messages = f.repository.snapshot().chatMessages;
+    for (const id of [user.id, added.id, reply.id]) expect(messages.find((item) => item.id === id)?.contextTrace).toMatchObject({ lineage: 'unknown' });
+  });
   it('persists ambiguous choices across reload and deletes only the selected unchanged candidate', async () => {
     const f = await fixture(); const one = await f.add('我的测试暗号甲是111'); const two = await f.add('我的测试暗号乙是222');
     const reply = await f.response(); const result = await f.memory.forgetFromChat(reply.id, '我的测试暗号');

@@ -17,6 +17,12 @@ export class MemoryService {
   }
 
   /** Whether a chat forget/edit query names at least one memory visible in this session. */
+  /** The candidate a committed chat deletion used, so a retry of its reply finds the same receipt. */
+  recordedForgetQuery(messageId: string, candidates: readonly string[]): string | undefined {
+    const operation = this.repository.read('memoryOperations').find((item) => item.operationId === `chat-forget:${messageId}`);
+    return operation && candidates.find((query) => memoryDigest(query.trim()) === operation.digest);
+  }
+
   matchesInSession(sessionId: string, query: string, exactOnly = false): boolean {
     return matchingMemories(this.repository.read('memories').filter((item) => memoryInSession(item, sessionId)), query, exactOnly).length > 0;
   }

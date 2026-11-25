@@ -46,6 +46,7 @@ describe('explicit chat memory requests', () => {
     expect(parseChatMemoryCommand('请记住啦：提示语为你是谁？')).toEqual({ kind: 'save', text: '提示语为你是谁？' });
     expect(parseChatMemoryCommand('记住：如何辨别蓝鲸？先看喷气')).toEqual({ kind: 'save', text: '如何辨别蓝鲸？先看喷气' });
     expect(parseChatMemoryCommand('请记住：怎么称呼我？叫我小鲸')).toEqual({ kind: 'save', text: '怎么称呼我？叫我小鲸' });
+    expect(parseChatMemoryCommand('请记住……：如何辨别蓝鲸？')).toEqual({ kind: 'save', text: '如何辨别蓝鲸？' });
     for (const query of ['你记住了吗？', '记住了吗？', '记住什么？', '请记住我的暗号了吗？']) expect(parseChatMemoryCommand(query)).toBeNull();
   });
 

@@ -4345,7 +4345,10 @@ export class AppController {
     // A bare 「忘记X」/「把X改成Y」 is a memory command only when X names a memory;
     // otherwise it is ordinary conversation for the model.
     const parsedForget = hostCommands ? null : parseChatForgetCommand(content, history);
-    const reportTarget = parsedForget?.kind === 'forget' ? parsedForget.report?.exact.find((query) => this.#memory.matchesInSession(sessionId, query, true)) : undefined;
+    // A retry after the deletion already committed reuses the query it used; the memory itself is gone by then.
+    const reportTarget = parsedForget?.kind === 'forget' && parsedForget.report
+      ? (retry === null ? undefined : this.#memory.recordedForgetQuery(retry.message.id, parsedForget.report.exact))
+        ?? parsedForget.report.exact.find((query) => this.#memory.matchesInSession(sessionId, query, true)) : undefined;
     // A retry keeps that shape local: the memory it named may have been deleted since the first attempt, and the
     // model must not see its text. With nothing to match, it answers not found.
     const forgetCommand = parsedForget?.kind !== 'forget' || parsedForget.explicit ? parsedForget

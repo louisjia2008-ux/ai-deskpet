@@ -524,6 +524,8 @@ it('treats a diary deleted before deletions were marked as changed, since it cou
   const reopened = new CompanionJournal(f.path, vault); await reopened.initialize();
   expect(reopened.referenceCurrent(later, f.state, 'remote', () => false)).toBe(false);
   expect(reopened.context(f.state, 'remote', () => false).summaries).toEqual([]);
+  // The answer is stored, so later diaries cannot turn it back into a roll-off.
+  const after = await raw.load(); expect(after.retiredProvenance[date]?.removedByOwner).toBe(true);
 });
 
 it('still treats a diary built on an edited one as superseded after the edited one rolls off the cap', async () => {

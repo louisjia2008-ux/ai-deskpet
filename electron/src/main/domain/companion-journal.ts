@@ -158,7 +158,19 @@ export class CompanionJournal {
   constructor(path: string, vault: VaultKeyProvider) { this.#store = new EncryptedJsonStore({ path, vault, schema, defaultValue: initial }); }
   async initialize(): Promise<void> {
     try { this.#state = await this.#store.load(); }
-    catch { this.#loadFailed = true; this.#state.errorCode = 'diary.storage'; this.#state.lastFailureAt = new Date().toISOString(); }
+    catch { this.#loadFailed = true; this.#state.errorCode = 'diary.storage'; this.#state.lastFailureAt = new Date().toISOString(); return; }
+    // Builds before `removedByOwner` recorded an owner deletion like a roll-off. Entries roll off oldest first and only
+    // once 366 newer dates exist, and retired records are never pruned, so a retired date older than a kept entry, or
+    // with fewer newer dates, was deleted by the owner. Decide once and store it: later diaries must not turn the
+    // answer back into a roll-off.
+    const legacy = (state: State): string[] => Object.entries(state.retiredProvenance).filter(([date, record]) => record.removedByOwner !== true
+      && (state.entries.some(item => item.date < date) || state.entries.filter(item => item.date > date).length
+        + Object.keys(state.retiredProvenance).filter(other => other > date).length < 366)).map(([date]) => date);
+    if (legacy(this.#state).length > 0) {
+      await this.#update(state => { for (const date of legacy(state)) state.retiredProvenance[date]!.removedByOwner = true; }).catch(() => {
+        for (const date of legacy(this.#state)) this.#state.retiredProvenance[date]!.removedByOwner = true;
+      });
+    }
   }
   status() { return { enabled: this.#loadFailed || this.#state.preferences.diaryEnabled, running: this.#running !== null, lastSuccessAt: this.#state.lastSuccessAt, lastFailureAt: this.#state.lastFailureAt, errorCode: this.#state.errorCode }; }
   preferences(): CompanionPreferences { return structuredClone(this.#state.preferences); }
@@ -200,14 +212,8 @@ export class CompanionJournal {
     // An entry that rolled off the cap keeps its last revision, so an edit made before then still counts.
     const retired = this.#state.retiredProvenance[reference.date];
     if (retired === undefined) return false;
-    // Entries roll off oldest first, and only once 366 newer dates exist; retired records are never pruned. A retired
-    // date older than a kept entry, or with fewer than 366 newer dates kept or retired, was deleted by the owner. This
-    // also covers deletions recorded before `removedByOwner` existed.
-    if (retired.removedByOwner === true || retired.revision > reference.revision) return true;
-    if (this.#state.entries.some(item => item.date < reference.date)) return true;
-    const newer = this.#state.entries.filter(item => item.date > reference.date).length
-      + Object.keys(this.#state.retiredProvenance).filter(date => date > reference.date).length;
-    return newer < 366;
+    // Deletions recorded before `removedByOwner` existed are marked on load.
+    return retired.removedByOwner === true || retired.revision > reference.revision;
   }
   #sourceStatus(provenance: Provenance, state: PersistentState, suppressed: (id: string) => boolean) {
     return sourceStatus(provenance, state, suppressed, reference => this.#provenance(reference), reference => this.#ownerChanged(reference));

@@ -116,6 +116,9 @@ describe('E-P1 stable evidence and deterministic fact commits', () => {
     // A sibling the owner removed since the backup stays out.
     const withoutCat = structuredClone(current); withoutCat.memories = withoutCat.memories.filter((item) => item.id !== cat.id);
     expect(reconcileMemoryProtection(backup, withoutCat).memories.map((item) => item.text)).toEqual(['用户：住杭州']);
+    // So does one the owner changed since, here made local-only: the backup's cloud-allowed copy never returns.
+    const privateCat = structuredClone(current); privateCat.memories.find((item) => item.id === cat.id)!.contextMetadata!.privacy = 'local-only';
+    expect(reconcileMemoryProtection(backup, privateCat).memories.map((item) => item.text)).toEqual(['用户：住杭州']);
   });
   it('formal restore keeps newer tombstones and correction rows, and permits a later explicit new source', () => {
     const original = createDefaultState(); commitMemoryCandidate(original, candidate()); const backup = structuredClone(original);

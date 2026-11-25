@@ -55,6 +55,16 @@ export const sourceUserBefore = (state: PersistentState, assistant: ChatMessage)
     && message.role === 'user' && message.status === 'complete').at(-1);
 };
 
+/** The owner's messages for one assistant turn: the request and any requirements added to it before a retry. */
+const turnUsers = (state: PersistentState, assistant: ChatMessage): ChatMessage[] => {
+  const index = state.chatMessages.findIndex((message) => message.id === assistant.id);
+  if (index < 0) return [];
+  const before = state.chatMessages.slice(0, index).filter((message) => message.sessionId === assistant.sessionId);
+  let request = before.length - 1;
+  while (request >= 0 && (before[request]!.role !== 'user' || before[request]!.followupToMessageId !== undefined)) request -= 1;
+  return [...(request >= 0 ? [before[request]!] : []), ...before.filter((message) => message.role === 'user' && message.followupToMessageId === assistant.id)];
+};
+
 export const chatMemorySource = (state: PersistentState, assistant: ChatMessage): {
   origin: 'chat-user' | 'manual-user'; sourceReferences: MemorySourceReference[];
 } => {
@@ -70,8 +80,7 @@ export const withholdMemoryCommandTrace = (state: PersistentState, assistant: Ch
   const trace: ContextTrace = { version: 1, memoryReferences: [], historyMessageIds: [], privacy: 'local-only',
     scope: { kind: 'session', sessionId: assistant.sessionId }, lineage: 'unknown' };
   assistant.contextTrace = structuredClone(trace);
-  const source = sourceUserBefore(state, assistant);
-  if (source) source.contextTrace = structuredClone(trace);
+  for (const user of new Set([sourceUserBefore(state, assistant), ...turnUsers(state, assistant)])) if (user) user.contextTrace = structuredClone(trace);
 };
 
 /** Keep source commands and receipts under the same restriction as the fact they mention. */
@@ -91,8 +100,9 @@ export const stampMemoryCommandTrace = (state: PersistentState, assistant: ChatM
   };
   if (privacy === 'local-only') session.historyPrivacy = 'local-only';
   assistant.contextTrace = structuredClone(trace);
-  const source = sourceUserBefore(state, assistant);
-  if (source) {
+  // Every message of the turn names the same fact, including requirements added before a retry.
+  for (const source of new Set([sourceUserBefore(state, assistant), ...turnUsers(state, assistant)])) {
+    if (!source) continue;
     source.contextTrace = sourceMemory
       ? { ...structuredClone(trace), memoryReferences: [{ id: sourceMemory.id, revision: sourceMemory.contextMetadata?.revision ?? 1 }],
         lineage: sourceMemory.contextMetadata?.trust === 'host-confirmed' ? 'complete' : 'unknown' }
