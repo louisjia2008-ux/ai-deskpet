@@ -39,3 +39,17 @@ Settings (environment variables):
 
 The suites cost a few dozen requests each and are not part of `npm test`. All cases are synthetic; add real ones
 only to a local copy.
+
+## Comparing models
+
+Run the suites once per model with the judge held fixed, and keep each model's reports apart:
+
+```sh
+for m in gpt-6-luna gpt-6.1-terra gpt-6.2-sol gpt-6-astra; do
+  DESKPET_EVAL_MODEL=$m DESKPET_EVAL_JUDGE_MODEL=gpt-6.2-sol DESKPET_EVAL_REPEAT=3 \
+    DESKPET_EVAL_OUT=$PWD/eval-results/compare/$m npm run eval
+done
+```
+
+Each report lists the tokens the model under test used, so cost can be compared too. The 2026-11-25 results are in the
+repository README ("Choosing models, measured").

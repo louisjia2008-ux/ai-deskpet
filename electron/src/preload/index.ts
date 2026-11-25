@@ -224,6 +224,7 @@ const api: DeskPetApi = {
   autoMemory: {
     status: () => invoke('auto-memory:status', {}),
     configure: (input) => invoke('auto-memory:configure', input),
+    setModel: (input) => invoke('auto-memory:set-model', input),
   },
   memorySleep: {
     status: () => invoke('memory-sleep:status', {}),

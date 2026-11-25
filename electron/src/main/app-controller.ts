@@ -9,6 +9,8 @@ import { MemorySleepService } from './domain/memory-sleep';
 import { CompanionRecentService, recentPrompt } from './domain/companion-recent-service';
 import { recentForDestination, recentTraceAllowed } from './domain/companion-recent-state';
 import { AutoMemoryService } from './domain/auto-memory';
+import type { AutoMemoryStatus } from '../shared/auto-memory';
+import { BackgroundMemoryModelStore } from './background-memory-model';
 import { MediaLibraryService } from './media/media-library';
 import type { ChatImageAttachment, MediaImportResult } from '../shared/media';
 import { complexRequest, routingDestination } from '../shared/model-routing';
@@ -294,6 +296,7 @@ const PERMISSION_DESCRIPTORS: ReadonlyArray<Omit<PermissionDescriptor, 'state' |
 
 export class AppController {
   readonly #dataRoot: string;
+  readonly #backgroundModel: BackgroundMemoryModelStore;
   readonly #managedRoot: string;
   readonly #settings: AppSettingsService;
   readonly #proactive: EventProactiveService;
@@ -473,6 +476,7 @@ export class AppController {
     this.#persona = new PersonaStore(join(this.#dataRoot, 'persona.enc.json'), this.#qqVault);
     this.#characterSheet = new CharacterStore(join(this.#dataRoot, 'character.enc.json'), this.#qqVault);
     this.#journal = new CompanionJournal(join(this.#dataRoot, 'diary.enc.json'), this.#qqVault);
+    this.#backgroundModel = new BackgroundMemoryModelStore(join(this.#dataRoot, 'background-memory-model.json'));
     this.#voice = new VoiceService({
       settingsPath: join(this.#dataRoot, 'voice-settings.json'),
       workerScript: join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'voice-runtime', 'tts_worker.py'),
@@ -650,7 +654,8 @@ export class AppController {
       (job, error) => this.#automaticModelResult(job, error));
     this.#autoMemory = new AutoMemoryService(this.#repository, {
       available: () => !this.#closing && !this.#profileMaintenance && !this.#suspended && this.#chatStarts.size === 0 && this.#chatRuns.size === 0,
-      captureBinding: (id, model) => this.#autoMemoryBinding(id, model),
+      // A background model chosen for this provider replaces the chat model; the conversation stays with the provider that answered it.
+      captureBinding: (id, model) => this.#autoMemoryBinding(id, this.#backgroundModel.modelFor(id) ?? model),
       channelSessionAllowed: sessionId => sessionId === this.#qq.bindingSessionId() || sessionId === this.#telegram.currentAuthority()?.sessionId,
       diaryRetained: this.#diaryRetained,
       saved: () => this.windows.send('console', 'memory:changed', this.#memory.list()),
@@ -670,9 +675,10 @@ export class AppController {
       provider: () => {
         const provider = this.#activeProvider();
         if (!provider?.enabled) return null;
-        const destination = resolveContextDestination({ providerId: provider.id, kind: provider.kind, baseUrl: provider.baseUrl, model: provider.model,
+        const model = this.#backgroundModel.modelFor(provider.id) ?? provider.model;
+        const destination = resolveContextDestination({ providerId: provider.id, kind: provider.kind, baseUrl: provider.baseUrl, model,
           localExecutionConfirmed: provider.localExecutionConfirmed === true, serviceExecution: 'unknown' });
-        return { provider, model: provider.model, destination: destination === 'local' ? 'local' : 'remote' };
+        return { provider, model, destination: destination === 'local' ? 'local' : 'remote' };
       },
       adapter: id => this.#providers.adapter(id),
       changed: () => this.windows.send('console', 'memory:changed', this.#memory.list()),
@@ -2750,8 +2756,15 @@ export class AppController {
     this.#ipc.register('companion-recent:status', consoleOnly, () => this.#recent.status());
     this.#ipc.register('companion-recent:clear', consoleOnly, () => this.#recent.clear());
     this.#ipc.register('companion-recent:local-only', consoleOnly, ({ localOnly }) => this.#recent.setLocalOnly(localOnly));
-    this.#ipc.register('auto-memory:status', consoleOnly, () => this.#autoMemory.status());
-    this.#ipc.register('auto-memory:configure', consoleOnly, ({ enabled }) => this.#autoMemory.configure(enabled));
+    const autoMemoryStatus = (status: AutoMemoryStatus): AutoMemoryStatus => ({ ...status, model: this.#backgroundModel.get(), activeProviderId: this.#activeProvider()?.id ?? null });
+    this.#ipc.register('auto-memory:status', consoleOnly, () => autoMemoryStatus(this.#autoMemory.status()));
+    this.#ipc.register('auto-memory:configure', consoleOnly, async ({ enabled }) => autoMemoryStatus(await this.#autoMemory.configure(enabled)));
+    this.#ipc.register('auto-memory:set-model', consoleOnly, ({ model }) => {
+      // Only a model of an enabled provider; null goes back to the chat model.
+      if (model !== null && !this.#providers.list().some((provider) => provider.id === model.providerId && provider.enabled)) throw new Error('provider.notFound');
+      this.#backgroundModel.set(model);
+      return autoMemoryStatus(this.#autoMemory.status());
+    });
     this.#ipc.register('memory-sleep:status', consoleOnly, () => this.#sleep.status());
     this.#ipc.register('memory-sleep:configure', consoleOnly, input => this.#sleep.configure(input));
     this.#ipc.register('memory-sleep:run', consoleOnly, () => this.#sleep.runNow());

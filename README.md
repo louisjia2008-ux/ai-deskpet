@@ -132,6 +132,25 @@ The first-edition tools are current time, bounded system overview, application t
 
 Streaming text, cancellation, retry/error mapping, model listing, and declared tool calls are implemented. Default CI uses a local fixture server and no real credential. Live OpenAI validation for this change is `NOT_RUN_NO_CREDENTIAL` because no key was created or supplied.
 
+### Choosing models, measured
+
+`electron/evals` holds quality evals for the three model-driven memory and persona features (see
+[`electron/evals/README.md`](electron/evals/README.md)). A comparison run on 2026-11-25 (OpenAI, 3 runs per case, judge
+fixed to `gpt-6.2-sol`, persona cases against a real character sheet):
+
+| Model | Auto memory | Nightly tidy-up | Persona | List price per 1M tokens (in / out) |
+|---|---|---|---|---|
+| `gpt-6-luna` | 99.2% | 99.4% | 95.5% | $0.1 / $0.5 |
+| `gpt-6.1-terra` | 99.7% | 96.6% (one invalid plan) | 97.9% | $1 / $5 |
+| `gpt-6.2-sol` | 99.5% | 99.6% | 98.5% | about $2 / $10 |
+| `gpt-6-astra` | 99.0% | 100% | 97.3% | $10 / $50 |
+
+The background memory tasks score about the same on every model, so a small model is enough for them at a fraction of
+the cost; chat in character is where a larger model shows. **Memory → Model for background memory** picks
+the model those tasks use with the provider you chat with (default: same as chat). Diary and recent-summary have no
+evals yet, so they keep following chat. The judge shares a family with `gpt-6.2-sol`, which may favour its style in the
+persona column.
+
 ## Native macOS data migration
 
 On macOS, Settings → Migration can import selected data from `~/Library/Application Support/DeskPet` into an empty Electron profile.
