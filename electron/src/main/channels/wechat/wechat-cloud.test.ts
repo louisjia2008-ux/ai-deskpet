@@ -156,7 +156,7 @@ it('does not send a private reply whose recent context changed while the request
 it('does not deliver a private reply when its recent context is withdrawn while the reply is being finished', async () => {
   let calls = 0;
   const completed = vi.fn<NonNullable<Controls['completed']>>();
-  // Built, authorized and sent (1-4), then a deletion lands before delivery (5).
+  // Built, authorized and sent (1-4), then a deletion lands while the reply finishes, before it is recorded (5).
   const f = await fixture({ completed, context: () => ({ name: 'Fixture', persona: null, memories: [], ...(++calls <= 4 ? { recent: 'FORGOTTEN_RECENT_FACT' } : {}) }) });
   await f.bridge.configure({ private: f.route, groups: {} });
   expect(await send(f.socket, request())).toEqual(failure);

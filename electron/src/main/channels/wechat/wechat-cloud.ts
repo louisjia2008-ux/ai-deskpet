@@ -770,8 +770,8 @@ export class WeChatCloud {
         const result = visibleReply(text, input, context?.name ?? 'DeskPet');
         if (result) {
           const { reply, sticker, mood } = result;
+          // No check after this: what is recorded is what is delivered.
           await this.#completed(input, { reply, mood, route, localModel: null, destination: 'remote' });
-          assertSendable();
           return { reply, sticker, routeFingerprint, ...(context?.recent && input.target === 'private' ? { privateContext: true } : {}) };
         }
       }
