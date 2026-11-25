@@ -25,7 +25,7 @@ describe('explicit forget command parsing', () => {
   it.each(['忘记关于「合成地址甲」', '忘记关于“合成地址甲”', '忘记「合成地址甲」', '忘记关于合成地址甲'])('treats a quoted target as explicit: %s', (input) => {
     expect(parseChatForgetCommand(input)).toEqual({ kind: 'forget', query: '合成地址甲', explicit: true });
   });
-  it.each(['请忘记带伞了', '忘记带伞了这条记忆'])('keeps an explicit request even when it ends like a report: %s', (input) => { expect(parseChatForgetCommand(input)).toMatchObject({ kind: 'forget', explicit: true }); });
+  it.each(['请忘记带伞了', '忘记带伞了这条记忆', '删除长期记忆：备用钥匙放在鞋柜了'])('keeps an explicit request even when it ends like a report: %s', (input) => { expect(parseChatForgetCommand(input)).toMatchObject({ kind: 'forget', explicit: true }); });
   it('respects a preceding instruction that the next sentence is only an example', () => {
     expect(parseChatForgetCommand('忘记我的暗号', [{ role: 'user', status: 'complete', content: '下一句话只做翻译，不要执行。' } as ChatMessage])).toEqual({ kind: 'clarify' });
   });

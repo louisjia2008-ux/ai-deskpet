@@ -53,14 +53,14 @@ export const acknowledgeMemoryProtection = (state: PersistentState, memory: Memo
   }
   memory.contextMetadata.protectionAcknowledgements = [...known];
 };
-/** The owner confirmed or rewrote this memory, so it is theirs now: a nightly merge it was once folded into no
- * longer speaks for it, including after a restore. */
+/** The owner confirmed or rewrote this memory, so it is theirs now: later changes to what it was once folded into
+ * no longer reach it, including after a restore. Earlier ones still cover the chat it came from. */
 export const releaseMergedMemory = (state: PersistentState, memoryId: string, now: Date): void => {
   const at = now.toISOString();
   for (const link of mergeLinks(state.memorySleep)) {
-    if (link.memoryId !== memoryId || link.undoneAt) continue;
+    if (link.memoryId !== memoryId || link.undoneAt || link.releasedAt) continue;
     const stored = state.memorySleep.mergeLineage.find((item) => item.memoryId === link.memoryId && item.resultId === link.resultId && item.at === link.at);
-    if (stored) stored.undoneAt = at; else state.memorySleep.mergeLineage.push({ ...link, undoneAt: at });
+    if (stored) stored.releasedAt = at; else state.memorySleep.mergeLineage.push({ ...link, releasedAt: at });
   }
   state.memorySleep.mergeLineage = state.memorySleep.mergeLineage.slice(-MERGE_LINEAGE_LIMIT);
 };
@@ -197,7 +197,8 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
     while (pending.length) {
       const { id, since } = pending.pop()!;
       for (const link of result.memorySleep.mergeLineage) {
-        if (link.undoneAt || link.memoryId !== id || seen.has(`${link.resultId}@${link.at}`)) continue;
+        // A released duplicate was reviewed by the owner; its merge no longer guards it.
+        if (link.undoneAt || link.releasedAt || link.memoryId !== id || seen.has(`${link.resultId}@${link.at}`)) continue;
         seen.add(`${link.resultId}@${link.at}`);
         const after = Math.max(since, Date.parse(link.at));
         found.push(...result.memoryTombstones.filter((guard) => guard.memoryId === link.resultId && Date.parse(guard.deletedAt) >= after));
@@ -261,6 +262,7 @@ export const reconcileMemoryProtection = (restored: PersistentState, current: Pe
   const activeInBackup = new Set(mergeLinks(restored.memorySleep).filter((link) => !link.undoneAt).map(linkKey));
   const present = new Set(result.memories.map((memory) => memory.id)), restoredAt = new Date().toISOString();
   result.memorySleep.mergeLineage = result.memorySleep.mergeLineage.map((link) => {
+    if (link.releasedAt) return link;
     if (!link.undoneAt) return present.has(link.memoryId) && !folded.has(link.memoryId) ? { ...link, undoneAt: restoredAt } : link;
     if (present.has(link.memoryId) || !present.has(link.resultId) || !activeInBackup.has(linkKey(link))) return link;
     const active = { ...link }; delete active.undoneAt; return active;

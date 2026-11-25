@@ -30,7 +30,8 @@ export function mergeLinks(...sleeps: ReadonlyArray<PersistentState['memorySleep
   const add = (link: MergeLink): void => {
     const key = `${link.memoryId}>${link.resultId}@${link.at}`, prior = links.get(key);
     const undoneAt = prior?.undoneAt ?? link.undoneAt;
-    links.set(key, { ...structuredClone(prior ?? link), ...(undoneAt ? { undoneAt } : {}) });
+    const released = [prior?.releasedAt, link.releasedAt].filter((value): value is string => value !== undefined).sort()[0];
+    links.set(key, { ...structuredClone(prior ?? link), ...(undoneAt ? { undoneAt } : {}), ...(released ? { releasedAt: released } : {}) });
   };
   for (const sleep of sleeps) {
     for (const link of sleep.mergeLineage) add(link);
@@ -43,12 +44,14 @@ export function mergeLinks(...sleeps: ReadonlyArray<PersistentState['memorySleep
   return [...links.values()].sort((a, b) => a.at.localeCompare(b.at));
 }
 
-/** Kept memory → what nightly merges (not undone) folded into it. */
-export function mergedInto(sleep: PersistentState['memorySleep']): ReadonlyMap<string, ReadonlyArray<{ id: string; evidence: readonly string[]; at: number }>> {
-  const merged = new Map<string, Array<{ id: string; evidence: readonly string[]; at: number }>>();
+type Folded = { id: string; evidence: readonly string[]; at: number; until: number };
+/** Kept memory → what nightly merges (not undone) folded into it, and until when (the owner releasing the duplicate). */
+export function mergedInto(sleep: PersistentState['memorySleep']): ReadonlyMap<string, ReadonlyArray<Folded>> {
+  const merged = new Map<string, Folded[]>();
   for (const link of mergeLinks(sleep)) {
     if (link.undoneAt) continue;
-    merged.set(link.resultId, [...(merged.get(link.resultId) ?? []), { id: link.memoryId, evidence: link.eventIds, at: Date.parse(link.at) }]);
+    merged.set(link.resultId, [...(merged.get(link.resultId) ?? []), { id: link.memoryId, evidence: link.eventIds, at: Date.parse(link.at),
+      until: link.releasedAt ? Date.parse(link.releasedAt) : Infinity }]);
   }
   return merged;
 }
@@ -70,7 +73,7 @@ export function supersededChat(state: Pick<PersistentState, 'chatMessages' | 'me
     guarded(guard.memoryId, guard.kind, Date.parse(guard.deletedAt));
     for (const source of guard.sourceEventIds) byEvidence.set(source, worse(byEvidence.get(source), guard.kind)!);
     // Only a guard recorded after the merge speaks for what was merged; an earlier correction predates it.
-    const after = Date.parse(guard.deletedAt), mergedBefore = (id: string) => (merged.get(id) ?? []).filter(item => item.at <= after);
+    const after = Date.parse(guard.deletedAt), mergedBefore = (id: string) => (merged.get(id) ?? []).filter(item => item.at <= after && after < item.until);
     const pending = mergedBefore(guard.memoryId), seen = new Set<string>([guard.memoryId]);
     while (pending.length) {
       const duplicate = pending.pop()!;

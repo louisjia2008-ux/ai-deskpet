@@ -337,8 +337,10 @@ it('does not put a merge back in effect when the memory it was folded into is go
 
 it('lets a duplicate the owner confirmed after a restore stand on its own through later restores', async () => {
   const { reconcileMemoryProtection } = await import('./memory-commit');
+  const { supersededChat } = await import('./companion-recent-state');
   const f = await fixture((entries) => entries.length >= 2 ? { merge: [{ ids: [f.n(entries, '我对花生过敏'), f.n(entries, '用户对花生过敏')], text: 'unused' }] } : {});
   const kept = await f.write('我对花生过敏'); const duplicate = await f.learn('用户对花生过敏');
+  const source = f.repo.snapshot().chatMessages.find((message) => message.content === '用户对花生过敏')!;
   const beforeMerge = f.repo.snapshot();
   await f.service.runNow();
   f.later(1); await f.memory.upsert({ id: kept, text: '我对花生不过敏', tags: [] });
@@ -346,10 +348,14 @@ it('lets a duplicate the owner confirmed after a restore stand on its own throug
   const review = f.memory.list().find((item) => item.id === duplicate)!;
   expect(review.contextMetadata?.reviewReason).toBe('protection-conflict');
   await f.memory.upsert({ id: duplicate, text: review.text, tags: review.tags, confirmForChat: true });
-  expect(f.repo.snapshot().memorySleep.mergeLineage).toMatchObject([{ memoryId: duplicate, undoneAt: expect.any(String) }]);
+  expect(f.repo.snapshot().memorySleep.mergeLineage).toMatchObject([{ memoryId: duplicate, releasedAt: expect.any(String) }]);
+  // The correction made before the owner confirmed it still covers the chat it came from.
+  expect(supersededChat(f.repo.snapshot()).get(source.id)).toBe('corrected');
   const confirmed = f.repo.snapshot();
   f.later(1); await f.memory.remove(kept);
   const restored = reconcileMemoryProtection(confirmed, f.repo.snapshot()).memories.find((item) => item.id === duplicate);
   expect(restored?.text).toBe('用户对花生过敏');
   expect(restored?.contextMetadata?.reviewReason).toBeUndefined();
+  // Still the earlier correction, not the later deletion.
+  expect(supersededChat(f.repo.snapshot()).get(source.id)).toBe('corrected');
 });
