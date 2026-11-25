@@ -439,6 +439,12 @@ const motionFollowupsRuntime = {
   mainSHA256: 'feac7afb449a33086f3bf05e4df0c95e9b3ad773628ef6968289a4f1e511ec61',
   asarSHA256: 'd61c0ab4706e606ab256e87081721c776ecc8dc6d9892f14dfcca01c02097c46',
 };
+// Nightly tidy-up promotes by how lasting a fact is, plus the quality evals (main b82ccbe), over the installed motion build.
+const lastingPromotionRuntime = {
+  sourceSHA256: '60031d69b1992c7b8ff208ff55fff76d18f74255d1f4c8bdf3d58554fee52278',
+  mainSHA256: 'e0bf94b33790455b911af11a1585ba2e3e9f91aff9d4b5a1c7dd899ac7f13014',
+  asarSHA256: 'f5d12f57e157ad7523d00218c6d1171dba11603cc64792a553a6e76af64d064c',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -571,6 +577,7 @@ const reviewedRuntimeManifest = [
   // Memory follow-ups (narrower chat commands, owner diary edits stop dependents, durable merge lineage), over the installed forgotten-memory build (2026-11-25).
   { runtime: memoryFollowupsRuntime, previous: recentForgetRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   { runtime: motionFollowupsRuntime, previous: memoryFollowupsRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  { runtime: lastingPromotionRuntime, previous: motionFollowupsRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
