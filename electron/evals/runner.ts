@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'no
 import { dirname, join, resolve } from 'node:path';
 import { OpenAICompatibleAdapter } from '../src/main/providers/openai-compatible';
 import { normalizedProviderBaseUrl } from '../src/main/providers/request-budget';
-import type { ProviderChatMessage, ProviderChatRequest } from '../src/main/providers/types';
+import type { ProviderChatMessage, ProviderChatRequest, ProviderStreamEvent } from '../src/main/providers/types';
 import type { ProviderConfig } from '../src/shared';
 
 /**
@@ -84,6 +84,15 @@ export const adapter = (model: string, baseUrl: string): OpenAICompatibleAdapter
 
 export interface Completion { text: string; finished: boolean; ms: number }
 
+/** Tokens per model in this suite, from the provider's own usage events, so a report can state what a model cost. */
+const usage = new Map<string, { input: number; output: number; reportedUSD: number; requests: number }>();
+export const recordUsage = (model: string, event: ProviderStreamEvent): void => {
+  if (event.type !== 'usage') return;
+  const entry = usage.get(model) ?? { input: 0, output: 0, reportedUSD: 0, requests: 0 };
+  entry.input += event.inputTokens ?? 0; entry.output += event.outputTokens ?? 0; entry.reportedUSD += event.reportedCostUSD ?? 0; entry.requests += 1;
+  usage.set(model, entry);
+};
+
 /** One request exactly as the background tasks send it (official OpenAI: Responses, default sampling). */
 export const complete = async (messages: ProviderChatMessage[], options: { model?: string; executionMode?: ProviderChatRequest['executionMode']; maxOutputTokens?: number } = {}): Promise<Completion> => {
   const settings = evalSettings(), model = options.model ?? settings.model, started = Date.now();
@@ -91,6 +100,7 @@ export const complete = async (messages: ProviderChatMessage[], options: { model
   const request: ProviderChatRequest = { model, messages, ...(options.executionMode ? { executionMode: options.executionMode } : {}),
     ...(options.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}) };
   for await (const event of adapter(model, settings.baseUrl).streamChat(request, AbortSignal.timeout(240_000))) {
+    recordUsage(model, event);
     if (event.type === 'text') text += event.text;
     if (event.type === 'done' && (event.finishReason === 'stop' || event.finishReason === 'completed')) finished = true;
   }
@@ -143,13 +153,15 @@ export const writeReport = (suite: string, results: CaseResult[]): string => {
   assertUntracked(directory, 'DESKPET_EVAL_OUT');
   mkdirSync(directory, { recursive: true });
   const total = results.length === 0 ? 0 : results.reduce((sum, result) => sum + caseScore(result), 0) / results.length;
+  const tokens = Object.fromEntries(usage);
   const lines = [`# ${suite} · ${(total * 100).toFixed(1)}%`, '', `model ${settings.model} · judge ${settings.judgeModel} · ${results.length} runs · ${new Date().toISOString()}`, '',
+    ...Object.entries(tokens).map(([model, entry]) => `tokens ${model}: ${entry.requests} requests, ${entry.input} in, ${entry.output} out`), '',
     '| case | run | score | failed checks | judge |', '|---|---|---|---|---|',
     ...results.map((result) => `| ${result.id} ${result.title} | ${result.run} | ${(caseScore(result) * 100).toFixed(0)}% | ${result.error ? `error: ${result.error}` : result.invalid ? `invalid: ${result.invalid}` : result.checks.filter((check) => !check.passed).map((check) => `${check.name}${check.detail ? ` (${check.detail})` : ''}`).join('; ')} | ${result.judge ? (result.judge.unparseable ? 'unjudged' : `${result.judge.score}/${result.judge.max} ${result.judge.reasons}`) : result.modelAnswered === false ? '(filtered before the model)' : ''} |`)];
   const markdown = join(realpathSync(directory), `${stamp}.md`), json = join(realpathSync(directory), `${stamp}.json`);
   for (const file of [markdown, json]) assertUntracked(file, 'DESKPET_EVAL_OUT');
   writeFileSync(markdown, `${lines.join('\n')}\n`, { flag: 'wx' });
-  writeFileSync(json, JSON.stringify({ suite, settings: { ...settings, out: undefined }, total, results }, null, 2), { flag: 'wx' });
+  writeFileSync(json, JSON.stringify({ suite, settings: { ...settings, out: undefined }, total, usage: tokens, results }, null, 2), { flag: 'wx' });
   return `${(total * 100).toFixed(1)}% → ${markdown}`;
 };
 

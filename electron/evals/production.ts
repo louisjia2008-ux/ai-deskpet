@@ -6,7 +6,7 @@ import { confirmedMemoryMetadata } from '../src/main/domain/context-provenance';
 import { DomainRepository } from '../src/main/domain/repository';
 import type { ProviderAdapter, ProviderChatRequest, ProviderDispatchOptions } from '../src/main/providers/types';
 import type { MemoryItem } from '../src/shared';
-import { adapter, evalSettings } from './runner';
+import { adapter, evalSettings, recordUsage } from './runner';
 
 /** A throwaway encrypted profile, as the app keeps one; removed by `dispose`. */
 export const scratchRepository = async (): Promise<{ repository: DomainRepository; dispose(): Promise<void> }> => {
@@ -27,6 +27,7 @@ export const recordingAdapter = (): { adapter: ProviderAdapter; requests: Provid
       const reply = { text: '', finished: false };
       replies.push(reply);
       for await (const event of real.streamChat(request, signal)) {
+        recordUsage(settings.model, event);
         if (event.type === 'text') reply.text += event.text;
         if (event.type === 'done' && (event.finishReason === 'stop' || event.finishReason === 'completed')) reply.finished = true;
         yield event;
