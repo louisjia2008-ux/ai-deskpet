@@ -17,6 +17,19 @@ export class MemoryService {
   }
 
   /** Whether a chat forget/edit query names at least one memory visible in this session. */
+  /** A message shaped like a memory command that the host gave to the model. Recorded before the request, so a retry
+   * of its reply goes to the model again however far the first attempt got. */
+  async recordModelRoute(assistantId: string, now = new Date()): Promise<void> {
+    const operationId = `chat-model-route:${assistantId}`;
+    await this.repository.transaction((state) => {
+      if (state.memoryOperations.some((item) => item.operationId === operationId)) return;
+      state.memoryOperations.push({ operationId, digest: memoryDigest('model'), status: 'committed', memoryId: null, revision: state.memoryRevision, committedAt: now.toISOString() });
+    });
+  }
+  routedToModel(assistantId: string): boolean {
+    return this.repository.read('memoryOperations').some((item) => item.operationId === `chat-model-route:${assistantId}`);
+  }
+
   /** The candidate a committed chat deletion used, so a retry of its reply finds the same receipt. */
   recordedForgetQuery(messageId: string, candidates: readonly string[]): string | undefined {
     const operation = this.repository.read('memoryOperations').find((item) => item.operationId === `chat-forget:${messageId}`);

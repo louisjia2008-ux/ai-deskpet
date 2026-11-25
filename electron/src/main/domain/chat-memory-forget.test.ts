@@ -99,6 +99,14 @@ describe('transactional chat memory deletion', () => {
     expect(await f.memory.forgetFromChat(reply.id, query!, undefined, undefined, true)).toEqual(deleted);
     expect(f.memory.recordedForgetQuery((await f.response()).id, ['关于备用暗号了'])).toBeUndefined();
   });
+  it('records a model route once and reads it back after reload, for retries of command-shaped chat', async () => {
+    const f = await fixture(); const reply = await f.response();
+    expect(f.memory.routedToModel(reply.id)).toBe(false);
+    await f.memory.recordModelRoute(reply.id); await f.memory.recordModelRoute(reply.id);
+    expect(f.memory.routedToModel(reply.id)).toBe(true);
+    const reopened = await f.reopen();
+    expect(reopened.snapshot().memoryOperations.filter((item) => item.operationId === `chat-model-route:${reply.id}`)).toHaveLength(1);
+  });
   it('lets a retried command act only on memories as they stood when the owner first sent it', async () => {
     const f = await fixture(); const sentAt = new Date().toISOString();
     await new Promise((resolve) => setTimeout(resolve, 5));

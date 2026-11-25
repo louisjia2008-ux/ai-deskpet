@@ -4349,8 +4349,9 @@ export class AppController {
     // native turn keeps its text without receipts). A request only prepared, or queued and cancelled, did not.
     const reachedModel = (receipt: NonNullable<ChatMessage['requestReceipts']>[number]): boolean => receipt.phase === 'fetch-invoked'
       || receipt.phase === 'response-received' || receipt.observations.some((item) => item.phase === 'fetch-invoked' || item.phase === 'response-received');
-    // A memory receipt on the reply means the first attempt was a command, whatever text it had appended.
-    const retryRoute = retry === null ? undefined
+    // A recorded model route decides; a memory receipt on the reply means the first attempt was a command, whatever
+    // text it had appended. Only replies from before routes were recorded fall back to the request evidence.
+    const retryRoute = retry === null ? undefined : this.#memory.routedToModel(retry.message.id) ? 'model'
       : retry.message.memoryForget || retry.message.memoryEdit || retry.message.memoryReceipts?.length ? 'local'
         : retry.message.content.trim().length > 0 || (retry.message.requestReceipts ?? []).some(reachedModel) ? 'model' : 'local';
     // A first attempt that called the model was not a memory command of any kind.
@@ -4373,6 +4374,8 @@ export class AppController {
       && retryRoute === undefined && !this.#memory.matchesInSession(sessionId, parsedEdit.query) ? null : parsedEdit;
     const illustrative = !research && isIllustrativeCommand(content);
     const modelTurn = memoryCommand === null && forgetCommand === null && editCommand === null;
+    // Text that reads like a memory command but goes to the model has its route recorded before the request.
+    const commandShaped = !hostCommands && (parseChatMemoryCommand(commandText, history) ?? parseChatForgetCommand(commandText, history) ?? parseChatEditCommand(commandText, history)) !== null;
     const interactive = !research && (!waitForCompletion || channel.origin === 'telegram' || channel.origin === 'wechat') && !analysisSession;
     const cron = this.#cronContexts.get(runId);
     // Desktop chat with the owner present to approve; never a schedule, a research task, a phone
@@ -4398,6 +4401,7 @@ export class AppController {
       await this.#chat.updateMessage(assistant.id, { content: '', status: 'cancelled', errorCode: null });
       throw new Error('chat.interrupted');
     }
+    if (modelTurn && commandShaped) await this.#memory.recordModelRoute(assistant.id);
     this.windows.send('console', 'chat:event', { type: 'started', runId, sessionId, messageId: assistant.id } satisfies ChatEvent);
     this.#chatInteractions.start(runId, sessionId, assistant.id, interactive && modelTurn && !illustrative && !managedMinecraft);
     let binding: Awaited<ReturnType<ProviderService['captureBinding']>> | null;
