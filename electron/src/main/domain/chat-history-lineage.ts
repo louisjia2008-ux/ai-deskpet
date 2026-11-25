@@ -8,7 +8,7 @@ import { isExcludedFromMemory } from './context-provenance';
 import { recentTraceAllowed } from './companion-recent-state';
 
 export type HistoryLookupReference = NonNullable<ContextTrace['historyLookupReferences']>[number];
-export type HistoryLookupState = Pick<PersistentState, 'profileId' | 'memories' | 'chatMessages' | 'chatSessions' | 'conversationImports' | 'consolidationBatches'>
+export type HistoryLookupState = Pick<PersistentState, 'profileId' | 'memories' | 'memoryTombstones' | 'chatMessages' | 'chatSessions' | 'conversationImports' | 'consolidationBatches'>
   & Partial<Pick<PersistentState, 'automationTriggers' | 'chatWorkTasks' | 'companionRecent'>>;
 
 export const historyLookupReference = (message: ChatMessage): HistoryLookupReference => ({

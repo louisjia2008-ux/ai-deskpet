@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { PersistentState } from './schemas';
+import { parseChatMemoryCommand } from './chat-memory-command';
+import { parseChatEditCommand } from './chat-memory-edit';
+import { parseChatForgetCommand } from './chat-memory-forget';
 
 const key = z.string().min(1).max(128);
 const date = z.iso.datetime();
@@ -9,7 +12,13 @@ export const RECENT_WINDOW_MS = 36 * 60 * 60_000;
 export const RECENT_TEXT_LIMIT = 800;
 export const RECENT_ENTRY_LIMIT = 64;
 
-type RecentContextState = Pick<PersistentState, 'chatSessions' | 'chatMessages' | 'companionRecent'>;
+type RecentContextState = Pick<PersistentState, 'chatSessions' | 'chatMessages' | 'companionRecent' | 'memoryTombstones'>;
+
+// Matches the chat evidence ID that memory-commit records for a chat-sourced memory.
+const chatEvidenceId = (sessionId: string, messageId: string): string => recentDigest(`chat:${sessionId}:${messageId}`);
+/** Remember, correct and forget requests are owned by memory, which honours deletion; the recent summary never repeats them. */
+const memoryCommand = (text: string): boolean =>
+  parseChatMemoryCommand(text) !== null || parseChatEditCommand(text) !== null || parseChatForgetCommand(text) !== null;
 
 const common = { id: key, at: date };
 const entry = z.discriminatedUnion('source', [
@@ -51,6 +60,8 @@ export function recentSources(state: RecentContextState, now: number): RecentSou
   const sessions = new Map(state.chatSessions.map(session => [session.id, session]));
   const messages = new Map(state.chatMessages.map(message => [message.id, message]));
   const clearedAt = Date.parse(state.companionRecent.clearedAt ?? '');
+  // A message whose memory was later deleted or corrected no longer speaks for the owner.
+  const superseded = new Set(state.memoryTombstones.flatMap(guard => guard.sourceEventIds));
   return state.companionRecent.entries.flatMap<RecentSource>(entry => {
     const at = Date.parse(entry.at);
     if (at > now || at <= now - RECENT_WINDOW_MS || at <= clearedAt) return [];
@@ -59,7 +70,8 @@ export function recentSources(state: RecentContextState, now: number): RecentSou
     if (!session || session.deletedAt || session.archivedAt || session.analysisSource || session.companionScope === 'group'
       || session.wechatTranscript === 'group' || session.wechatTranscript === 'friend'
       || !message || message.sessionId !== session.id || message.role !== 'user' || message.status !== 'complete'
-      || message.automationTriggerId || message.wechatFriend || message.wechatDigest || recentDigest(message.content) !== entry.sha) return [];
+      || message.automationTriggerId || message.wechatFriend || message.wechatDigest || recentDigest(message.content) !== entry.sha
+      || superseded.has(chatEvidenceId(session.id, message.id)) || memoryCommand(message.content)) return [];
     return [{ id: entry.id, source: entry.source, text: message.content,
       localOnly: session.historyPrivacy === 'local-only' || message.contextTrace?.privacy === 'local-only' }];
   });
@@ -92,6 +104,6 @@ export function recentForDestination(state: RecentContextState, destination: str
 
 export const recentTraceAllowed = (state: Omit<RecentContextState, 'companionRecent'> & Partial<Pick<RecentContextState, 'companionRecent'>>,
   revision: string, destination: string): boolean => {
-  const { companionRecent, chatSessions, chatMessages } = state;
-  return companionRecent !== undefined && recentForDestination({ companionRecent, chatSessions, chatMessages }, destination)?.revision === revision;
+  const { companionRecent, chatSessions, chatMessages, memoryTombstones } = state;
+  return companionRecent !== undefined && recentForDestination({ companionRecent, chatSessions, chatMessages, memoryTombstones }, destination)?.revision === revision;
 };

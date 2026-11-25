@@ -165,6 +165,13 @@ const harness = async (name: string, info: TestInfo) => {
     page: () => page, app: () => application!, profile, output, wires, order, checkpoint: (value: unknown) => checkpoints.push(value) };
 };
 
+// The background recent summary is its own model request; the reply under test is the chat request.
+const RECENT_SUMMARY = 'Summarize the owner’s recent plans';
+const chatCalls = <T extends { path: string; body: string }>(wires: readonly T[]) => {
+  const calls = wires.filter((wire) => wire.path.endsWith('/chat/completions'));
+  return { all: calls, replies: calls.filter((wire) => !wire.body.includes(RECENT_SUMMARY)) };
+};
+
 // eslint-disable-next-line no-empty-pattern
 test('quarantines old backup memories through real corrupt-profile recovery and rejects restored old intents before final HTTP', async ({}, info) => {
   test.setTimeout(180_000); const h = await harness('corrupt-authority', info); let failure: unknown;
@@ -225,8 +232,8 @@ test('quarantines old backup memories through real corrupt-profile recovery and 
     expect(afterOrdinaryCorrection.memories).toEqual(restored.memories);
     await h.screenshot('ordinary-unknown-correction-rejected');
     const beforeFresh = h.wires.length; await h.newChat(); await h.send('Give a short synthetic answer for this independent fresh chat.');
-    const final = h.wires.slice(beforeFresh).filter((wire) => wire.path.endsWith('/chat/completions')); expect(final).toHaveLength(1);
-    for (const marker of [a, b, c, pendingFact, replacement, unknownCorrection]) expect(final[0]!.body).not.toContain(marker);
+    const calls = chatCalls(h.wires.slice(beforeFresh)); const final = calls.replies; expect(final).toHaveLength(1);
+    for (const wire of calls.all) for (const marker of [a, b, c, pendingFact, replacement, unknownCorrection]) expect(wire.body).not.toContain(marker);
     const finalState = await h.snapshot('fresh-chat-final-state');
     const receipt = finalState.chatMessages.flatMap((message) => message.requestReceipts ?? []).find((item) => item.expectedBodySHA256 === final[0]!.bodySHA256);
     expect(receipt).toMatchObject({ phase: 'terminal', contextTrace: { memoryReferences: [] } });
@@ -257,8 +264,9 @@ test('preserves readable newer deletion guards through Settings restore and excl
     expect(restored.memories.some((memory) => memory.id === fact.id)).toBe(false);
     expect(restored.memoryTombstones).toEqual(deleted.memoryTombstones);
     const before = h.wires.length; await h.newChat(); await h.send('Give a short synthetic answer and consider the remaining independent saved context.');
-    const final = h.wires.slice(before).filter((wire) => wire.path.endsWith('/chat/completions')); expect(final).toHaveLength(1);
-    expect(final[0]!.body).not.toContain(a); expect(final[0]!.body).not.toContain(b); expect(final[0]!.body).toContain(c);
+    const calls = chatCalls(h.wires.slice(before)); const final = calls.replies; expect(final).toHaveLength(1);
+    for (const wire of calls.all) { expect(wire.body).not.toContain(a); expect(wire.body).not.toContain(b); }
+    expect(final[0]!.body).toContain(c);
     const state = await h.snapshot('readable-final-state');
     const receipt = state.chatMessages.flatMap((message) => message.requestReceipts ?? []).find((item) => item.expectedBodySHA256 === final[0]!.bodySHA256);
     expect(receipt).toMatchObject({ phase: 'terminal' }); expect(receipt?.contextTrace.memoryReferences).toHaveLength(1);
@@ -295,8 +303,9 @@ test('restoring a backup with a newer deletion never appends the older current c
     const restored = await h.snapshot('new-process-backup-newer-deletion');
     expect(restored.memories.some((memory) => memory.id === fact.id)).toBe(false);
     const before = h.wires.length; await h.newChat(); await h.send('Give a short synthetic answer for the restored independent context.');
-    const final = h.wires.slice(before).filter((wire) => wire.path.endsWith('/chat/completions')); expect(final).toHaveLength(1);
-    expect(final[0]!.body).not.toContain(a); expect(final[0]!.body).not.toContain(b); expect(final[0]!.body).toContain(c);
+    const calls = chatCalls(h.wires.slice(before)); const final = calls.replies; expect(final).toHaveLength(1);
+    for (const wire of calls.all) { expect(wire.body).not.toContain(a); expect(wire.body).not.toContain(b); }
+    expect(final[0]!.body).toContain(c);
     const finalState = await h.snapshot('backup-newer-deletion-final-state');
     const receipt = finalState.chatMessages.flatMap((message) => message.requestReceipts ?? []).find((item) => item.expectedBodySHA256 === final[0]!.bodySHA256);
     expect(receipt).toMatchObject({ phase: 'terminal' }); expect(receipt?.contextTrace.memoryReferences).toHaveLength(1);

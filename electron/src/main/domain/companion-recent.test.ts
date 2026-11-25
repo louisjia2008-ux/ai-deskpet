@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -136,4 +136,34 @@ it('rebuilds a cloud view from shareable sources when the local view includes Mi
   expect(JSON.stringify(f.requests[0]?.messages)).not.toContain('星期天一起盖木屋');
   expect(f.service.status().text).toContain('星期天一起盖木屋');
   expect(recentForDestination(f.repo.snapshot(), 'remote', f.now())?.text).toBe(exam);
+});
+
+it('leaves memory commands to memory, so a forgotten fact never returns through the recent summary', async () => {
+  const f = await fixture();
+  await f.note('desktop', '请记住：我住在 SYNTHETIC_CITY');
+  await f.note('desktop', '把“SYNTHETIC_CITY”改成“SYNTHETIC_TOWN”');
+  await f.note('desktop', '忘记：SYNTHETIC_TOWN');
+  await f.service.tick();
+  expect(f.requests).toHaveLength(0);
+  expect(f.service.status().text).toBe('');
+  await f.note('desktop', exam);
+  await f.service.tick();
+  expect(JSON.stringify(f.requests.at(-1)!.messages)).not.toContain('SYNTHETIC_');
+});
+
+it('drops an ordinary message once the memory taken from it is deleted, and withdraws the summary built on it', async () => {
+  const f = await fixture();
+  const session = await f.note('desktop', exam);
+  await f.service.tick();
+  const summary = currentRecent(f.repo.snapshot(), f.now())!;
+  expect(summary.text).toBe(exam);
+  const messageId = f.repo.snapshot().chatMessages.find(item => item.sessionId === session.id)!.id;
+  await f.repo.transaction(state => {
+    state.memoryTombstones.push({ id: randomUUID(), memoryId: randomUUID(), textDigest: 'a'.repeat(64),
+      sourceEventIds: [createHash('sha256').update(`chat:${session.id}:${messageId}`).digest('hex')],
+      identityKey: null, scope: { kind: 'global' }, deletedAt: new Date(f.now()).toISOString(), kind: 'deleted' });
+  });
+  expect(currentRecent(f.repo.snapshot(), f.now())).toBeNull();
+  expect(recentTraceAllowed(f.repo.snapshot(), summary.revision, 'remote')).toBe(false);
+  expect(recentForDestination(f.repo.snapshot(), 'local')).toBeNull();
 });
