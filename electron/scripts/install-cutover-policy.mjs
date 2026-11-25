@@ -428,6 +428,11 @@ const recentForgetRuntime = {
   mainSHA256: '2e62c7fb3dbbbfbafb0dc4232c1b100e46f93abfe50e7b4a2044a2671c288f56',
   asarSHA256: '70a8ee0343c29e6b0755f5f47f048a98b6a9524935b3745901c65992d8059252',
 };
+const memoryFollowupsRuntime = {
+  sourceSHA256: '5caed8c520518e70bf59e0bd534dbadd379b52cc16dfe5c2c382d93d5e4f1268',
+  mainSHA256: 'cef70b8f52a849c6497c2576b1ed3153d78c4387c52d37a8eeecc781fa3d304d',
+  asarSHA256: '62edaa850169363d595aae387f69719902750c004982ec91b7032764db7ddf96',
+};
 const wechatProfileWrapRuntime = {
   sourceSHA256: 'd20d3713c214720022be9197aa34d2e7295eacc90e3363b231f27f89e2020138',
   mainSHA256: 'bf2b6f5d0a608d121e75b2f6ae6c6d65537c08feb90b40924d98e3b833b14285',
@@ -557,6 +562,8 @@ const reviewedRuntimeManifest = [
   { runtime: uxDeferredRuntime, previous: uxPrinciplesRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
   // The deferred items plus forgotten memories leaving the recent summary and diaries, over the installed UX build, diary still on (2026-11-25).
   { runtime: recentForgetRuntime, previous: uxPrinciplesRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
+  // Memory follow-ups (narrower chat commands, owner diary edits stop dependents, durable merge lineage), over the installed forgotten-memory build (2026-11-25).
+  { runtime: memoryFollowupsRuntime, previous: recentForgetRuntime, futureCron: true, nightlyDisabled: true, supplemental: true, dormantTelegram: true, diaryEnabled: true },
 ];
 const matchesRuntime = (runtime, reviewed) => Object.entries(reviewed).every(([key, value]) => runtime?.[key] === value);
 const exactReviewed = runtime => reviewedRuntimeManifest.find(entry => matchesRuntime(runtime, entry.runtime));
