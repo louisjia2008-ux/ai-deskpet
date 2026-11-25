@@ -8,11 +8,10 @@ import type { ProviderAdapter, ProviderChatRequest, ProviderDispatchOptions, Pro
 import { ProviderService } from '../providers/provider-service';
 import type { ProviderUtilityClient } from '../providers/utility-client';
 import type { SafeStorageVault } from '../security';
-import { AutoMemoryService } from './auto-memory';
+import { answeringServiceIdentity, AutoMemoryService } from './auto-memory';
 import { ChatService } from './chat-service';
 import { MemoryService } from './memory-service';
 import { DomainRepository } from './repository';
-import { providerEndpointIdentity } from '../providers/request-budget';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -79,14 +78,22 @@ it('keeps what the owner said once the conversation is quiet, and reads each mes
 it('never reads a queued conversation with a provider entry since edited to point at another service', async () => {
   const f = await fixture(() => '{"memories":[{"text":"用户是高三学生","evidence":[1]}]}');
   await f.say('我现在高三');
-  f.service.note(f.session.id, { ...turn, endpoint: providerEndpointIdentity(provider) });
+  f.service.note(f.session.id, { ...turn, endpoint: answeringServiceIdentity({ provider })! });
   f.setProvider({ baseUrl: 'https://another-service.invalid/v1' });
   await f.quiet();
   expect(f.requests).toHaveLength(0); expect(f.memories()).toEqual([]);
   f.setProvider({ baseUrl: provider.baseUrl });
-  f.service.note(f.session.id, { ...turn, endpoint: providerEndpointIdentity(provider) });
+  f.service.note(f.session.id, { ...turn, endpoint: answeringServiceIdentity({ provider })! });
   await f.quiet();
   expect(f.requests).toHaveLength(1);
+});
+
+it('treats another address, kind or credential behind the same provider entry as another recipient', () => {
+  const base = answeringServiceIdentity({ provider, credentialRef: 'key-1' });
+  expect(answeringServiceIdentity({ provider, credentialRef: 'key-1' })).toBe(base);
+  expect(answeringServiceIdentity({ provider, credentialRef: 'key-2' })).not.toBe(base);
+  expect(answeringServiceIdentity({ provider: { ...provider, baseUrl: 'https://another-service.invalid/v1' }, credentialRef: 'key-1' })).not.toBe(base);
+  expect(answeringServiceIdentity({ provider: { ...provider, kind: 'deepseek' }, credentialRef: 'key-1' })).not.toBe(base);
 });
 
 it('never sends or keeps secrets, commands, or facts without a real source', async () => {

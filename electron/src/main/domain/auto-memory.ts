@@ -13,6 +13,11 @@ import { commitMemoryCandidate, stableMemorySources } from './memory-commit';
 import type { DomainRepository } from './repository';
 import type { PersistentState } from './schemas';
 
+/** Kind, address and credential of the service a binding reaches: if any of them changed, it is another recipient. */
+export const answeringServiceIdentity = (binding: Pick<CapturedProviderBinding, 'provider' | 'credentialRef'>): string | null => {
+  try { return `${providerEndpointIdentity(binding.provider)}|${binding.credentialRef ?? ''}`; } catch { return null; }
+};
+
 /** The provider that has just answered in a conversation. Only it reads that conversation again. */
 export interface AutoMemoryTurn { providerId: string; model: string; destination: 'local' | 'remote'; source?: 'desktop' | 'qq' | 'wechat' | 'telegram';
   /** The service that answered, as kind and address. An entry edited to point elsewhere since then never reads the conversation. */
@@ -20,7 +25,7 @@ export interface AutoMemoryTurn { providerId: string; model: string; destination
 
 interface Dependencies {
   available(): boolean;
-  captureBinding(id: string, model: string): Promise<Pick<CapturedProviderBinding, 'provider' | 'model' | 'inspection' | 'adapter'>>;
+  captureBinding(id: string, model: string): Promise<Pick<CapturedProviderBinding, 'provider' | 'model' | 'inspection' | 'adapter' | 'credentialRef'>>;
   /** A conversation bound to a channel counts only when the owner is its sole speaker. */
   channelSessionAllowed(sessionId: string): boolean;
   diaryRetained?: DiaryHistoryValidator;
@@ -177,9 +182,7 @@ export class AutoMemoryService {
 
   async #extract(sessionId: string, turn: AutoMemoryTurn, signal: AbortSignal): Promise<{ hasMore: boolean; asked: boolean; invalidResult?: boolean }> {
     const binding = await this.deps.captureBinding(turn.providerId, turn.model);
-    let endpoint: string | null = null;
-    try { endpoint = providerEndpointIdentity(binding.provider); } catch { endpoint = null; }
-    if (turn.endpoint !== undefined && endpoint !== turn.endpoint) return { hasMore: false, asked: false };
+    if (turn.endpoint !== undefined && answeringServiceIdentity(binding) !== turn.endpoint) return { hasMore: false, asked: false };
     const destination = resolveContextDestination({ providerId: binding.provider.id, kind: binding.provider.kind, baseUrl: binding.provider.baseUrl,
       model: binding.model, localExecutionConfirmed: binding.provider.localExecutionConfirmed === true, serviceExecution: binding.inspection.executionDestination });
     const batch = binding.provider.enabled ? this.#collect(this.repository.snapshot(), sessionId, destination) : null;

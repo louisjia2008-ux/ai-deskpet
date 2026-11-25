@@ -14,12 +14,15 @@ import { evidenceOf } from './companion-recent-state';
 
 interface Dependencies {
   available(): boolean;
-  /** The model the owner is using now, and whether it runs on this computer. */
-  provider(): { provider: ProviderConfig; model: string; destination: 'local' | 'remote' } | null;
+  /** The model the owner is using now, and whether it runs on this computer. When it comes with the adapter it was
+   * judged by, that adapter sends the request, so the memories chosen for a destination go to that destination. */
+  provider(): SleepTurn | null | Promise<SleepTurn | null>;
   adapter(id: string): Promise<ProviderAdapter>;
   changed?(): void;
   now?(): Date;
 }
+
+type SleepTurn = { provider: ProviderConfig; model: string; destination: 'local' | 'remote'; adapter?: ProviderAdapter };
 
 const DAY = 86_400_000;
 const SHALLOW_DAYS = 30;
@@ -154,14 +157,14 @@ export class MemorySleepService {
   }
 
   async #tidy(day: string, signal: AbortSignal): Promise<void> {
-    const turn = this.deps.provider();
+    const turn = await this.deps.provider();
     if (!turn) throw new Error('sleep.noProvider');
     const now = this.#now(), before = this.repository.snapshot();
     const listed = this.#list(before, turn.destination);
     let plan: z.infer<typeof sleepPlanSchema> = { merge: [], promote: [], drop: [] };
     if (listed.some((item) => item.kind === 'shallow')) {
       const ages = new Map(before.memories.map((memory) => [memory.id, Math.max(0, Math.floor((now.getTime() - Date.parse(memory.updatedAt)) / DAY))]));
-      const adapter = await this.deps.adapter(turn.provider.id);
+      const adapter = turn.adapter ?? await this.deps.adapter(turn.provider.id);
       const combined = AbortSignal.any([signal, AbortSignal.timeout(240_000)]);
       let output = '', finished = false;
       for await (const event of adapter.streamChat({ model: turn.model, ...backgroundTextSampling(turn.provider), messages: [

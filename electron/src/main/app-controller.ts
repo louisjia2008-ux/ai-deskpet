@@ -8,7 +8,7 @@ import type { ResearchTask, ResearchTaskInput, ResearchBinding, ResearchExecutio
 import { MemorySleepService } from './domain/memory-sleep';
 import { CompanionRecentService, recentPrompt } from './domain/companion-recent-service';
 import { recentForDestination, recentTraceAllowed } from './domain/companion-recent-state';
-import { AutoMemoryService } from './domain/auto-memory';
+import { AutoMemoryService, answeringServiceIdentity } from './domain/auto-memory';
 import type { AutoMemoryStatus } from '../shared/auto-memory';
 import { BackgroundMemoryModelStore } from './background-memory-model';
 import { MediaLibraryService } from './media/media-library';
@@ -81,7 +81,7 @@ import { AutomaticTaskCoordinator } from './domain/automatic-task-coordinator';
 import { UsageLedger } from './domain/usage-ledger';
 import { referenceUsagePrice, usageRatesFromModels } from './providers/usage-pricing';
 import { CatalogPriceRefresh } from './providers/catalog-price-refresh';
-import { canReleaseOllamaForVaultTools, normalizedProviderBaseUrl, providerBindingFingerprint, providerEndpointIdentity, sameProviderEndpoint } from './providers/request-budget';
+import { canReleaseOllamaForVaultTools, normalizedProviderBaseUrl, providerBindingFingerprint, sameProviderEndpoint } from './providers/request-budget';
 import { AttentionService } from './domain/attention-service';
 import { buildHealth, proactiveHealth } from './domain/health';
 import { HealthReceipts } from './domain/health-receipts';
@@ -388,7 +388,9 @@ export class AppController {
   #chatCronTimer: NodeJS.Timeout | null = null;
   readonly #cronNotifications = new Set<Notification>();
   readonly #notesScopes = new Map<string, () => NotesScope>();
-  readonly #workContexts = new Map<string, {sessionId: string; providerId: string; model: string; modelSelection: string | null; destination: 'local'|'remote'|'unknown'; channel: ChannelContext}>();
+  readonly #workContexts = new Map<string, {sessionId: string; providerId: string; model: string; modelSelection: string | null; destination: 'local'|'remote'|'unknown'; channel: ChannelContext;
+    /** The service that actually answered, as captured for the request; background memory reads only with the same one. */
+    answeredBy?: { providerId: string; identity: string }}>();
   readonly #skillTools: SkillToolAccess;
   /** A skill the owner chose with /skill, held from the desktop send until its run starts. */
   readonly #skillChoices = new Map<string, SkillCatalogEntry>();
@@ -675,14 +677,17 @@ export class AppController {
     this.#sleep = new MemorySleepService(this.#repository, {
       available: () => !this.#closing && !this.#profileMaintenance && !this.#suspended && !this.#jobs.active && !this.#autoMemory.active
         && !this.#chatStarts.size && !this.#chatRuns.size && !this.#agent.activeRuns,
-      provider: () => {
-        const provider = this.#activeProvider();
-        if (!provider?.enabled) return null;
-        const model = this.#backgroundModel.modelFor(provider) ?? provider.model;
+      provider: async () => {
+        const configured = this.#activeProvider();
+        if (!configured?.enabled) return null;
+        const model = this.#backgroundModel.modelFor(configured) ?? configured.model;
+        // Judge where the request goes by the binding that will send it, model probe included, then send with that binding.
+        const binding = await this.#providers.captureBinding(configured.id, model, configured);
+        const { provider } = binding;
         const destination = resolveContextDestination({ providerId: provider.id, kind: provider.kind, baseUrl: provider.baseUrl, model,
-          localExecutionConfirmed: provider.localExecutionConfirmed === true, serviceExecution: 'unknown' });
+          localExecutionConfirmed: provider.localExecutionConfirmed === true, serviceExecution: binding.inspection.executionDestination });
         // A model other than the one confirmed as local may be a cloud alias on the same server: never show it local-only memories.
-        return { provider, model, destination: destination === 'local' && model === provider.model ? 'local' : 'remote' };
+        return { provider, model, adapter: binding.adapter, destination: destination === 'local' && model === provider.model ? 'local' : 'remote' };
       },
       adapter: id => this.#providers.adapter(id),
       changed: () => this.windows.send('console', 'memory:changed', this.#memory.list()),
@@ -4304,10 +4309,10 @@ export class AppController {
       // Any finished owner turn, on any private channel, is when they last talked with her.
       if (learn && done && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) void this.#characterSheet.noteOwnerTurn().catch(() => undefined);
       if (learn && done && done.destination !== 'unknown' && !isQqGroupChannel(done.channel) && !(done.channel.origin === 'wechat' && done.channel.group)) {
-        const answered = this.#providers.list().find((provider) => provider.id === done.providerId);
-        let endpoint: string | undefined;
-        try { endpoint = answered ? providerEndpointIdentity(answered) : undefined; } catch { endpoint = undefined; }
-        this.#autoMemory.note(sessionId, { providerId: done.providerId, model: done.model, destination: done.destination, source: done.channel.origin, ...(endpoint ? { endpoint } : {}) });
+        // Only a turn whose answering service is known is read again, and only by that same service.
+        if (done.answeredBy?.providerId === done.providerId) {
+          this.#autoMemory.note(sessionId, { providerId: done.providerId, model: done.model, destination: done.destination, source: done.channel.origin, endpoint: done.answeredBy.identity });
+        }
       }
       if (learn) void this.#recent.tick().catch(() => undefined);
       lease?.signal.removeEventListener('abort',abort);lease?.release();this.#reaChatGuards.delete(runId);this.#workContexts.delete(runId);this.#notesScopes.delete(runId);this.#skillTools.release(runId);this.#qqWebBudget.release(runId);};
@@ -4460,6 +4465,9 @@ export class AppController {
       return { runId };
     }
     const workContext=this.#workContexts.get(runId)!;
+    const answeredIdentity = binding ? answeringServiceIdentity(binding) : null;
+    if (binding && answeredIdentity) workContext.answeredBy = { providerId: binding.provider.id, identity: answeredIdentity };
+    else delete workContext.answeredBy;
     const contextBinding = { providerId: provider.id, kind: provider.kind, baseUrl: provider.baseUrl, model,
       localExecutionConfirmed: provider.localExecutionConfirmed === true, serviceExecution: binding?.inspection.executionDestination ?? 'unknown' as const };
     // QQ is a distinct disclosure destination: local-only history, memories and
